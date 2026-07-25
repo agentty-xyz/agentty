@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_message (session_id, position, kind, content, created_at)\nSELECT ?, position, kind, content, created_at\nFROM session_message\nWHERE session_id = ?\nORDER BY position, id\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "0655849e8ac4d3ad51c9dfde4b3ecb26488ac387c1880916c36282d0667021cb"
+}

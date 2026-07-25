@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT id AS session_id,\n       focused_review_diff_hash AS \"diff_hash!: String\",\n       focused_review_text AS \"text!: String\"\nFROM session\nWHERE project_id = ?\n  AND focused_review_diff_hash IS NOT NULL\n  AND focused_review_text IS NOT NULL\n  AND focused_review_text <> ''\nORDER BY updated_at DESC, id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "diff_hash!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "focused_review_diff_hash"
+          }
+        }
+      },
+      {
+        "name": "text!: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "focused_review_text"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "3ddc45808c8b9743f0797bf687680d3244f3154d2a80d77bd15c36ac08921d7e"
+}

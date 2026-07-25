@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET agent = ?,\n    model = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "0c31ddbc0152c9d57019c14a8f4b10d0185c5199a63f6729dcd41366dee520e5"
+}

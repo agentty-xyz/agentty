@@ -1,10 +1,10 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT session.base_branch AS \"base_branch!\",\n       session.added_lines AS \"added_lines!\",\n       session.agent AS \"agent!\",\n       session.created_at AS \"created_at!\",\n       session.deleted_lines AS \"deleted_lines!\",\n       session.id AS \"id!\",\n       session.in_progress_started_at,\n       session.in_progress_total_seconds AS \"in_progress_total_seconds!\",\n       session.input_tokens AS \"input_tokens!\",\n       session.is_draft AS \"is_draft!: bool\",\n       session.model AS \"model!\",\n       session.output_tokens AS \"output_tokens!\",\n       session.parent_session_id,\n       session.project_id,\n       session.reasoning_level AS \"reasoning_level_override?\",\n       session.published_upstream_ref,\n       session_review_request.display_id AS \"review_request_display_id?\",\n       session_review_request.forge_kind AS \"review_request_forge_kind?\",\n       session_review_request.last_refreshed_at AS \"review_request_last_refreshed_at?\",\n       session_review_request.source_branch AS \"review_request_source_branch?\",\n       session_review_request.state AS \"review_request_state?\",\n       session_review_request.status_summary AS \"review_request_status_summary?\",\n       session_review_request.target_branch AS \"review_request_target_branch?\",\n       session_review_request.title AS \"review_request_title?\",\n       session_review_request.web_url AS \"review_request_web_url?\",\n       session.size AS \"size!\",\n       session.status AS \"status!\",\n       session.title,\n       session.updated_at AS \"updated_at!\"\nFROM session\nLEFT JOIN session_review_request\nON session_review_request.session_id = session.id\nWHERE session.project_id = ?\nORDER BY session.updated_at DESC, session.id\n",
+  "query": "\nSELECT session.base_branch AS base_branch,\n       session.added_lines AS added_lines,\n       session.agent AS agent,\n       session.created_at AS created_at,\n       session.deleted_lines AS deleted_lines,\n       session.has_diff AS \"has_diff: bool\",\n       session.id AS id,\n       session.in_progress_started_at,\n       session.in_progress_total_seconds AS in_progress_total_seconds,\n       session.input_tokens AS input_tokens,\n       session.is_draft AS \"is_draft: bool\",\n       session.model AS model,\n       session.output_tokens AS output_tokens,\n       session.parent_session_id,\n       session.personality_id,\n       session.project_id,\n       session.prompt AS prompt,\n       session.reasoning_level AS reasoning_level_override,\n       session.published_upstream_ref,\n       session.questions,\n       session_review_request.display_id AS review_request_display_id,\n       session_review_request.forge_kind AS review_request_forge_kind,\n       session_review_request.last_refreshed_at AS review_request_last_refreshed_at,\n       session_review_request.source_branch AS review_request_source_branch,\n       session_review_request.state AS review_request_state,\n       session_review_request.status_summary AS review_request_status_summary,\n       session_review_request.target_branch AS review_request_target_branch,\n       session_review_request.title AS review_request_title,\n       session_review_request.web_url AS review_request_web_url,\n       session.size AS size,\n       session.status AS status,\n       session.summary,\n       session.title,\n       session.updated_at AS updated_at\nFROM session\nLEFT JOIN session_review_request\nON session_review_request.session_id = session.id\nORDER BY session.updated_at DESC, session.created_at DESC, session.id\n",
   "describe": {
     "columns": [
       {
-        "name": "base_branch!",
+        "name": "base_branch",
         "ordinal": 0,
         "type_info": "Text",
         "origin": {
@@ -15,7 +15,7 @@
         }
       },
       {
-        "name": "added_lines!",
+        "name": "added_lines",
         "ordinal": 1,
         "type_info": "Integer",
         "origin": {
@@ -26,7 +26,7 @@
         }
       },
       {
-        "name": "agent!",
+        "name": "agent",
         "ordinal": 2,
         "type_info": "Text",
         "origin": {
@@ -37,7 +37,7 @@
         }
       },
       {
-        "name": "created_at!",
+        "name": "created_at",
         "ordinal": 3,
         "type_info": "Integer",
         "origin": {
@@ -48,7 +48,7 @@
         }
       },
       {
-        "name": "deleted_lines!",
+        "name": "deleted_lines",
         "ordinal": 4,
         "type_info": "Integer",
         "origin": {
@@ -59,8 +59,19 @@
         }
       },
       {
-        "name": "id!",
+        "name": "has_diff: bool",
         "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "has_diff"
+          }
+        }
+      },
+      {
+        "name": "id",
+        "ordinal": 6,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -71,7 +82,7 @@
       },
       {
         "name": "in_progress_started_at",
-        "ordinal": 6,
+        "ordinal": 7,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -81,8 +92,8 @@
         }
       },
       {
-        "name": "in_progress_total_seconds!",
-        "ordinal": 7,
+        "name": "in_progress_total_seconds",
+        "ordinal": 8,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -92,8 +103,8 @@
         }
       },
       {
-        "name": "input_tokens!",
-        "ordinal": 8,
+        "name": "input_tokens",
+        "ordinal": 9,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -103,8 +114,8 @@
         }
       },
       {
-        "name": "is_draft!: bool",
-        "ordinal": 9,
+        "name": "is_draft: bool",
+        "ordinal": 10,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -114,8 +125,8 @@
         }
       },
       {
-        "name": "model!",
-        "ordinal": 10,
+        "name": "model",
+        "ordinal": 11,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -125,8 +136,8 @@
         }
       },
       {
-        "name": "output_tokens!",
-        "ordinal": 11,
+        "name": "output_tokens",
+        "ordinal": 12,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -137,7 +148,7 @@
       },
       {
         "name": "parent_session_id",
-        "ordinal": 12,
+        "ordinal": 13,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -147,8 +158,19 @@
         }
       },
       {
+        "name": "personality_id",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "personality_id"
+          }
+        }
+      },
+      {
         "name": "project_id",
-        "ordinal": 13,
+        "ordinal": 15,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -158,8 +180,19 @@
         }
       },
       {
-        "name": "reasoning_level_override?",
-        "ordinal": 14,
+        "name": "prompt",
+        "ordinal": 16,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "prompt"
+          }
+        }
+      },
+      {
+        "name": "reasoning_level_override",
+        "ordinal": 17,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -170,7 +203,7 @@
       },
       {
         "name": "published_upstream_ref",
-        "ordinal": 15,
+        "ordinal": 18,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -180,8 +213,19 @@
         }
       },
       {
-        "name": "review_request_display_id?",
-        "ordinal": 16,
+        "name": "questions",
+        "ordinal": 19,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "questions"
+          }
+        }
+      },
+      {
+        "name": "review_request_display_id",
+        "ordinal": 20,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -191,8 +235,8 @@
         }
       },
       {
-        "name": "review_request_forge_kind?",
-        "ordinal": 17,
+        "name": "review_request_forge_kind",
+        "ordinal": 21,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -202,8 +246,8 @@
         }
       },
       {
-        "name": "review_request_last_refreshed_at?",
-        "ordinal": 18,
+        "name": "review_request_last_refreshed_at",
+        "ordinal": 22,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -213,8 +257,8 @@
         }
       },
       {
-        "name": "review_request_source_branch?",
-        "ordinal": 19,
+        "name": "review_request_source_branch",
+        "ordinal": 23,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -224,8 +268,8 @@
         }
       },
       {
-        "name": "review_request_state?",
-        "ordinal": 20,
+        "name": "review_request_state",
+        "ordinal": 24,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -235,8 +279,8 @@
         }
       },
       {
-        "name": "review_request_status_summary?",
-        "ordinal": 21,
+        "name": "review_request_status_summary",
+        "ordinal": 25,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -246,8 +290,8 @@
         }
       },
       {
-        "name": "review_request_target_branch?",
-        "ordinal": 22,
+        "name": "review_request_target_branch",
+        "ordinal": 26,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -257,8 +301,8 @@
         }
       },
       {
-        "name": "review_request_title?",
-        "ordinal": 23,
+        "name": "review_request_title",
+        "ordinal": 27,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -268,8 +312,8 @@
         }
       },
       {
-        "name": "review_request_web_url?",
-        "ordinal": 24,
+        "name": "review_request_web_url",
+        "ordinal": 28,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -279,8 +323,8 @@
         }
       },
       {
-        "name": "size!",
-        "ordinal": 25,
+        "name": "size",
+        "ordinal": 29,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -290,8 +334,8 @@
         }
       },
       {
-        "name": "status!",
-        "ordinal": 26,
+        "name": "status",
+        "ordinal": 30,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -301,8 +345,19 @@
         }
       },
       {
+        "name": "summary",
+        "ordinal": 31,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "summary"
+          }
+        }
+      },
+      {
         "name": "title",
-        "ordinal": 27,
+        "ordinal": 32,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -312,8 +367,8 @@
         }
       },
       {
-        "name": "updated_at!",
-        "ordinal": 28,
+        "name": "updated_at",
+        "ordinal": 33,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -324,7 +379,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
       false,
@@ -332,31 +387,36 @@
       false,
       false,
       false,
-      false,
       true,
       false,
+      true,
       false,
       false,
       false,
       false,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
+      false,
       true,
       true,
       true,
       false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
       false,
+      false,
+      true,
       true,
       false
     ]
   },
-  "hash": "908b557ffd15454d54211926c8caec37a55be6095a860bc60e60b09969d54edf"
+  "hash": "83cb8c1bf95e17fc3404cb5a81a61ed3f00f39700a2f0623444a8ee60c9ec29e"
 }

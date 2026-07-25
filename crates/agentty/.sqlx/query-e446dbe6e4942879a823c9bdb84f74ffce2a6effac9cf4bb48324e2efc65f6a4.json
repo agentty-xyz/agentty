@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET in_progress_total_seconds = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e446dbe6e4942879a823c9bdb84f74ffce2a6effac9cf4bb48324e2efc65f6a4"
+}

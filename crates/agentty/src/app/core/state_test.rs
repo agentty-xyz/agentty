@@ -93,7 +93,7 @@ async fn start_created_issue_session_opens_session_when_command_persistence_fail
         .create_session()
         .await
         .expect("issue session should be created");
-    sqlx::query("DROP TABLE session_operation")
+    sqlx::query!("DROP TABLE session_operation")
         .execute(&pool)
         .await
         .expect("session operation table should be removed");
@@ -1123,7 +1123,7 @@ async fn test_new_returns_error_when_startup_project_upsert_fails() {
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
     let (database, pool) = AppRepositories::in_memory_with_pool().await;
-    sqlx::query("DROP TABLE project")
+    sqlx::query!("DROP TABLE project")
         .execute(&pool)
         .await
         .expect("failed to drop project table");
@@ -1154,7 +1154,7 @@ async fn test_new_returns_error_when_startup_active_project_persistence_fails() 
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
     let (database, pool) = AppRepositories::in_memory_with_pool().await;
-    sqlx::query("DROP TABLE setting")
+    sqlx::query!("DROP TABLE setting")
         .execute(&pool)
         .await
         .expect("failed to drop setting table");
@@ -5737,9 +5737,9 @@ async fn record_externally_merged_session_reports_persistence_failures() {
     let session_id = "session-persist-failure";
     insert_review_session_with_data_dir(&app, session_id).await;
     app.refresh_sessions_now().await;
-    sqlx::query(
+    sqlx::query!(
         "CREATE TRIGGER fail_merged_hash BEFORE UPDATE OF merged_commit_hash ON session BEGIN \
-         SELECT RAISE(FAIL, 'merged hash failed'); END",
+         SELECT RAISE(FAIL, 'merged hash failed'); END"
     )
     .execute(&pool)
     .await
@@ -5824,9 +5824,9 @@ async fn manual_sync_surfaces_restack_failure_and_keeps_parent_merged() {
     let update = merged_review_request_status_update(session_id, "#13", "abc1234");
     app.apply_review_request_status_update(update).await;
     app.process_pending_app_events().await;
-    sqlx::query(
+    sqlx::query!(
         "CREATE TRIGGER fail_restack BEFORE UPDATE OF parent_session_id ON session BEGIN SELECT \
-         RAISE(FAIL, 'restack failed'); END",
+         RAISE(FAIL, 'restack failed'); END"
     )
     .execute(&pool)
     .await

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MAX(created_at) FROM session_activity",
+  "describe": {
+    "columns": [
+      {
+        "name": "MAX(created_at)",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "29034deb7f45e8cf04029a74d29c70a2d4b447977eff053f41fc8c37fbced70f"
+}

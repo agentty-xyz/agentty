@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nCREATE TABLE IF NOT EXISTS session (\n    id TEXT PRIMARY KEY NOT NULL,\n    added_lines INTEGER NOT NULL DEFAULT 0,\n    deleted_lines INTEGER NOT NULL DEFAULT 0\n)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "085ed1b66681a2b6517502995f86307ab59b3b1dd189f2bca531a078fb3fa4b2"
+}

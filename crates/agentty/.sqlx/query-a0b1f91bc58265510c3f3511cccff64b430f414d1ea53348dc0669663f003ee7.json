@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT display_id,\n       forge_kind,\n       last_refreshed_at,\n       source_branch,\n       state,\n       status_summary,\n       target_branch,\n       title,\n       web_url\nFROM session_review_request\nWHERE session_id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "display_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_request",
+            "name": "display_id"
+          }
+        }
+      },
+      {
+        "name": "forge_kind",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_request",
+            "name": "forge_kind"
+          }
+        }
+      },
+      {
+        "name": "last_refreshed_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_review_request",
+            "name": "last_refreshed_at"
+          }
+        }
+      },
+      {
+        "name": "source_branch",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_request",
+            "name": "source_branch"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_request",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "status_summary",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_request",
+            "name": "status_summary"
+          }
+        }
+      },
+      {
+        "name": "target_branch",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_request",
+            "name": "target_branch"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_request",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "web_url",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_request",
+            "name": "web_url"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a0b1f91bc58265510c3f3511cccff64b430f414d1ea53348dc0669663f003ee7"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_review_request (\n    session_id,\n    display_id,\n    forge_kind,\n    last_refreshed_at,\n    source_branch,\n    state,\n    status_summary,\n    target_branch,\n    title,\n    web_url\n)\nVALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\nON CONFLICT(session_id) DO UPDATE\nSET display_id = excluded.display_id,\n    forge_kind = excluded.forge_kind,\n    last_refreshed_at = excluded.last_refreshed_at,\n    source_branch = excluded.source_branch,\n    state = excluded.state,\n    status_summary = excluded.status_summary,\n    target_branch = excluded.target_branch,\n    title = excluded.title,\n    web_url = excluded.web_url\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "b41d48873b19202978afe79f93f96c3f8a6ac246e530431e50abafa1d00f1827"
+}

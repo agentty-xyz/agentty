@@ -48,7 +48,6 @@ struct LoadSessionContext<'a> {
     active_session_id: Option<&'a str>,
     base: &'a Path,
     db: &'a AppRepositories,
-    follow_up_tasks_by_session: &'a mut HashMap<SessionId, Vec<SessionFollowUpTask>>,
     fs_client: &'a dyn FsClient,
     handles: &'a mut HashMap<SessionId, SessionHandles>,
     project_name: &'a str,
@@ -125,11 +124,6 @@ impl SessionManager {
             .load_sessions_for_project(active_project_id)
             .await
             .unwrap_or_default();
-        let persisted_follow_up_tasks = db
-            .sessions()
-            .load_session_follow_up_tasks()
-            .await
-            .unwrap_or_default();
         let activity_timestamps = db
             .activity()
             .load_session_activity_timestamps()
@@ -137,15 +131,8 @@ impl SessionManager {
             .unwrap_or_default();
         let stats_activity = Self::daily_activity_from_timestamps(activity_timestamps, clock);
         let mut sessions: Vec<Session> = Vec::new();
-        let mut follow_up_tasks_by_session = HashMap::<SessionId, Vec<_>>::new();
         let mut session_worktree_availability = HashMap::new();
 
-        for persisted_follow_up_task in persisted_follow_up_tasks {
-            follow_up_tasks_by_session
-                .entry(SessionId::from(persisted_follow_up_task.session_id.clone()))
-                .or_default()
-                .push(persisted_follow_up_task.into_session_follow_up_task());
-        }
         let mut load_context = LoadSessionContext {
             base,
             db,
@@ -154,7 +141,6 @@ impl SessionManager {
             fs_client,
             active_session_id,
             sessions: &mut sessions,
-            follow_up_tasks_by_session: &mut follow_up_tasks_by_session,
             session_worktree_availability: &mut session_worktree_availability,
         };
         for row in db_rows {
@@ -201,7 +187,6 @@ impl SessionManager {
             fs_client,
             active_session_id,
             sessions,
-            follow_up_tasks_by_session,
             session_worktree_availability,
         } = load_context;
         let session_id = SessionId::from(row.id.clone());
@@ -256,16 +241,13 @@ impl SessionManager {
             .reasoning_level_override
             .as_deref()
             .and_then(|value| value.parse::<ReasoningLevel>().ok());
-        let follow_up_tasks = follow_up_tasks_by_session
-            .remove(&session_id)
-            .unwrap_or_default();
         let session_queued_messages = handles
             .get(&session_id)
             .map(SessionHandles::queued_message_transcripts)
             .unwrap_or_default();
         sessions.push(Self::build_loaded_session(LoadedSessionInput {
             draft_attachments,
-            follow_up_tasks,
+            follow_up_tasks: Vec::new(),
             folder,
             parent_session_id: row.parent_session_id.clone().map(SessionId::from),
             project_name: (*project_name).to_string(),
@@ -1198,7 +1180,7 @@ mod tests {
     async fn test_load_session_transcript_returns_query_errors() {
         // Arrange
         let (db, pool) = AppRepositories::in_memory_with_pool().await;
-        sqlx::query("DROP TABLE session_message")
+        sqlx::query!("DROP TABLE session_message")
             .execute(&pool)
             .await
             .expect("failed to drop session_message table");

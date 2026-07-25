@@ -1581,7 +1581,7 @@ async fn test_create_session_propagates_project_reasoning_read_failure() {
     let dir = tempdir().expect("failed to create temp dir");
     let (database, pool) = AppRepositories::in_memory_with_pool().await;
     let mut app = new_test_app_with_git_and_db(dir.path(), database).await;
-    sqlx::query("DROP TABLE project_setting")
+    sqlx::query!("DROP TABLE project_setting")
         .execute(&pool)
         .await
         .expect("failed to drop project settings table");
@@ -2244,7 +2244,7 @@ async fn test_start_staged_session_succeeds_when_clearing_draft_flag_fails() {
     app.stage_draft_message(&session_id, "First draft")
         .await
         .expect("failed to stage first draft");
-    sqlx::query(
+    sqlx::query!(
         r"
 CREATE TRIGGER fail_clear_draft_flag
 BEFORE UPDATE OF is_draft ON session
@@ -2252,7 +2252,7 @@ WHEN OLD.is_draft = 1 AND NEW.is_draft = 0
 BEGIN
     SELECT RAISE(ABORT, 'draft cleanup failed');
 END
-",
+"
     )
     .execute(&pool)
     .await

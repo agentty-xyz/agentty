@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_message (session_id, position, kind, content, created_at)\nSELECT ?, COALESCE(MAX(position), -1) + 1, ?, ?, CAST(strftime('%s', 'now') AS INTEGER)\nFROM session_message\nWHERE session_id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "bb261113e5744905897333903ac8b9da5652fc8c3fbe050512a18f068cd666bd"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session_operation SET cancel_requested = 0 WHERE id = 'operation-new'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "767769990c32c0456226227707320e1b7d2cb79349c196763cb4a9cd4f263764"
+}

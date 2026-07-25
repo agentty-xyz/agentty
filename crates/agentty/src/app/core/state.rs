@@ -1404,8 +1404,7 @@ impl App {
     /// the already launched sibling when one is linked.
     ///
     /// # Errors
-    /// Returns an error if creating or starting the sibling session fails, or
-    /// if persisting the launched-task link cannot be completed.
+    /// Returns an error if creating or starting the sibling session fails.
     pub(crate) async fn launch_or_open_selected_follow_up_task(
         &mut self,
         session_id: &str,
@@ -1421,8 +1420,7 @@ impl App {
                 return Ok(());
             }
 
-            self.set_follow_up_task_launched_session_id(session_id, position, None)
-                .await?;
+            self.set_follow_up_task_launched_session_id(session_id, position, None);
         }
 
         if self
@@ -1443,8 +1441,7 @@ impl App {
             session_id,
             position,
             Some(sibling_session_id.clone().into()),
-        )
-        .await?;
+        );
         self.open_session(&sibling_session_id);
 
         Ok(())
@@ -1925,33 +1922,19 @@ impl App {
         ))
     }
 
-    /// Persists one launched sibling-session link and mirrors it into the
-    /// in-memory session snapshot.
-    ///
-    /// # Errors
-    /// Returns an error if the launched-session link cannot be persisted.
-    async fn set_follow_up_task_launched_session_id(
+    /// Mirrors one launched sibling-session link into the in-memory session
+    /// snapshot.
+    fn set_follow_up_task_launched_session_id(
         &mut self,
         session_id: &str,
         position: usize,
         launched_session_id: Option<SessionId>,
-    ) -> Result<(), AppError> {
-        self.services
-            .db()
-            .sessions()
-            .update_session_follow_up_task_launched_session_id(
-                session_id,
-                position,
-                launched_session_id.as_ref().map(ToString::to_string),
-            )
-            .await?;
+    ) {
         self.sessions.set_follow_up_task_launched_session_id(
             session_id,
             position,
             launched_session_id,
         );
-
-        Ok(())
     }
 
     /// Starts one already-created issue session and opens it even when prompt

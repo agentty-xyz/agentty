@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET added_lines = ?,\n    deleted_lines = ?,\n    has_diff = ?,\n    size = ?\nWHERE id = ?\n  AND (\n      added_lines <> ?\n      OR deleted_lines <> ?\n      OR has_diff IS NOT ?\n      OR size <> ?\n  )\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "790ee62b63c6ffad060bfa461aea08fc61d259d6e00b8ffe9130bbbab46c6a20"
+}

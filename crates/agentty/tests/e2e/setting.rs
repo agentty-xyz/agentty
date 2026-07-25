@@ -49,17 +49,17 @@ fn seed_settings_navigation_models(env: &BuilderEnv) -> Result<(), Box<dyn std::
             "DefaultFastModel",
             "DefaultReviewModel",
         ] {
-            sqlx::query(
+            sqlx::query!(
                 r"
 INSERT INTO project_setting (project_id, name, value)
 VALUES (?, ?, ?)
 ON CONFLICT(project_id, name) DO UPDATE
 SET value = excluded.value
 ",
+                project_id,
+                setting_name,
+                "claude-opus-4-6"
             )
-            .bind(project_id)
-            .bind(setting_name)
-            .bind("claude-opus-4-6")
             .execute(database.pool())
             .await?;
         }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nCREATE TRIGGER fail_default_fast_agent_insert\nBEFORE INSERT ON project_setting\nWHEN NEW.name = 'DefaultFastAgent'\nBEGIN\n    SELECT RAISE(FAIL, 'forced setting failure');\nEND;\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "b50282b08db392269dcb63637a9b9b9011c98f73cfde36ae060f8e831efc0e44"
+}

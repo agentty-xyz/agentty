@@ -50,12 +50,12 @@ struct TimestampValueRow {
 impl ActivityRepository for SqliteActivityRepository {
     #[cfg(test)]
     async fn backfill_session_activity_from_sessions(&self) -> Result<(), DbError> {
-        sqlx::query(
+        sqlx::query!(
             r"
 INSERT INTO session_activity (session_id, created_at)
 SELECT id, created_at
 FROM session
-",
+"
         )
         .execute(&self.0)
         .await?;
@@ -65,10 +65,10 @@ FROM session
 
     #[cfg(test)]
     async fn clear_session_activity(&self) -> Result<(), DbError> {
-        sqlx::query(
+        sqlx::query!(
             r"
 DELETE FROM session_activity
-",
+"
         )
         .execute(&self.0)
         .await?;
@@ -81,15 +81,15 @@ DELETE FROM session_activity
         session_id: &str,
         timestamp_seconds: i64,
     ) -> Result<(), DbError> {
-        sqlx::query(
+        sqlx::query!(
             r"
 INSERT INTO session_activity (session_id, created_at)
 VALUES (?, ?)
 ON CONFLICT(session_id) DO NOTHING
 ",
+            session_id,
+            timestamp_seconds
         )
-        .bind(session_id)
-        .bind(timestamp_seconds)
         .execute(&self.0)
         .await?;
 

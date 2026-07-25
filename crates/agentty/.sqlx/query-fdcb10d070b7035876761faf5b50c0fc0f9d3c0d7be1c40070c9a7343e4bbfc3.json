@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "CREATE TRIGGER fail_restack BEFORE UPDATE OF parent_session_id ON session BEGIN SELECT RAISE(FAIL, 'restack failed'); END",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "fdcb10d070b7035876761faf5b50c0fc0f9d3c0d7be1c40070c9a7343e4bbfc3"
+}

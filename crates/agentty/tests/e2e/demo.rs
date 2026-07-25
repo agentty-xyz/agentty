@@ -374,16 +374,16 @@ fn seed_database(
             "DefaultFastModel",
             "DefaultReviewModel",
         ] {
-            let query = sqlx::query(
+            let query = sqlx::query!(
                 r"
 INSERT INTO project_setting (project_id, name, value)
 VALUES (?, ?, ?)
 ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
 ",
-            )
-            .bind(selected_project_id)
-            .bind(name)
-            .bind("claude-fable-5");
+                selected_project_id,
+                name,
+                "claude-fable-5"
+            );
             connection.execute(query).await?;
         }
 
@@ -467,7 +467,7 @@ async fn seed_pre_existing_sessions(
             let stub_worktree = wt_base.join(&id[..8]);
             std::fs::create_dir_all(&stub_worktree)?;
         }
-        let query = sqlx::query(
+        let query = sqlx::query!(
             r"
 INSERT INTO session (
     id, base_branch, status, project_id, model, title, prompt,
@@ -475,20 +475,20 @@ INSERT INTO session (
 )
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
-        )
-        .bind(id)
-        .bind(base_branch)
-        .bind(status)
-        .bind(cwd_project_id)
-        .bind(model)
-        .bind(title)
-        .bind(prompt)
-        .bind(added)
-        .bind(deleted)
-        .bind(8_400 + age)
-        .bind(2_100 + age / 2)
-        .bind(created)
-        .bind(created);
+            id,
+            base_branch,
+            status,
+            cwd_project_id,
+            model,
+            title,
+            prompt,
+            added,
+            deleted,
+            8_400 + age,
+            2_100 + age / 2,
+            created,
+            created
+        );
         connection.execute(query).await?;
     }
 
@@ -511,7 +511,7 @@ async fn seed_dashboard_activity(
                 .saturating_sub(day_offset.saturating_mul(day_seconds))
                 .saturating_sub(i64::try_from(event_index).unwrap_or_default() * 1_800);
             let session_id = format!("demo-activity-{day_offset:02}-{event_index:02}");
-            let query = sqlx::query(
+            let query = sqlx::query!(
                 r"
 INSERT INTO session (
     id, agent, model, base_branch, status, title, prompt, created_at, updated_at
@@ -519,21 +519,21 @@ INSERT INTO session (
 VALUES (?, 'codex', 'gpt-5.6-sol', 'main', 'Done', 'Dashboard activity seed', '', ?, ?)
 ON CONFLICT(id) DO NOTHING
 ",
-            )
-            .bind(&session_id)
-            .bind(timestamp)
-            .bind(timestamp);
+                &session_id,
+                timestamp,
+                timestamp
+            );
             connection.execute(query).await?;
 
-            let query = sqlx::query(
+            let query = sqlx::query!(
                 r"
 INSERT INTO session_activity (session_id, created_at)
 VALUES (?, ?)
 ON CONFLICT(session_id) DO NOTHING
 ",
-            )
-            .bind(session_id)
-            .bind(timestamp);
+                session_id,
+                timestamp
+            );
             connection.execute(query).await?;
         }
     }
@@ -569,22 +569,23 @@ async fn dashboard_and_session_seeds_use_pinned_clock_and_stable_ids() -> DemoRe
     seed_dashboard_activity(&mut connection, PINNED_CLOCK_UNIX_SECONDS).await?;
 
     // Assert
-    let activity_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_activity")
+    let activity_count: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM session_activity")
         .fetch_one(&mut connection)
         .await?;
     let null_session_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM session_activity WHERE session_id IS NULL")
+        sqlx::query_scalar!("SELECT COUNT(*) FROM session_activity WHERE session_id IS NULL")
             .fetch_one(&mut connection)
             .await?;
     let latest_activity_timestamp: Option<i64> =
-        sqlx::query_scalar("SELECT MAX(created_at) FROM session_activity")
+        sqlx::query_scalar!("SELECT MAX(created_at) FROM session_activity")
             .fetch_one(&mut connection)
             .await?;
-    let latest_seeded_session_timestamp: i64 =
-        sqlx::query_scalar("SELECT created_at FROM session WHERE id = ?")
-            .bind("aaaa1111-aaaa-1111-aaaa-111111111111")
-            .fetch_one(&mut connection)
-            .await?;
+    let latest_seeded_session_timestamp: i64 = sqlx::query_scalar!(
+        "SELECT created_at FROM session WHERE id = ?",
+        "aaaa1111-aaaa-1111-aaaa-111111111111"
+    )
+    .fetch_one(&mut connection)
+    .await?;
     assert_eq!(activity_count, 36);
     assert_eq!(null_session_count, 0);
     assert_eq!(latest_activity_timestamp, Some(PINNED_CLOCK_UNIX_SECONDS));

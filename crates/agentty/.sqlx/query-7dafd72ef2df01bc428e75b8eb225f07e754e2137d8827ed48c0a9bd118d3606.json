@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT journal_mode || '' AS \"journal_mode!: String\"\nFROM pragma_journal_mode\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "journal_mode!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7dafd72ef2df01bc428e75b8eb225f07e754e2137d8827ed48c0a9bd118d3606"
+}

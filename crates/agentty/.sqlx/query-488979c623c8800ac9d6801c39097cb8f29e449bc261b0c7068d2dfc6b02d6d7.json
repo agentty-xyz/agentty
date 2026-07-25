@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET is_draft = 0\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "488979c623c8800ac9d6801c39097cb8f29e449bc261b0c7068d2dfc6b02d6d7"
+}

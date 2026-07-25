@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nCREATE TRIGGER fail_clear_draft_flag\nBEFORE UPDATE OF is_draft ON session\nWHEN OLD.is_draft = 1 AND NEW.is_draft = 0\nBEGIN\n    SELECT RAISE(ABORT, 'draft cleanup failed');\nEND\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "98ee10937f7639211b61234f331df8ad89f923c8badd6af1477dac50f2df27c2"
+}

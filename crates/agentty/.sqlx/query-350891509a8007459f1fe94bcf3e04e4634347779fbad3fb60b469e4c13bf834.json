@@ -1,0 +1,182 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT app_server_instruction_provider_conversation_id,\n       applied_personality_id,\n       applied_personality_prompt_hash,\n       focused_review_diff_hash,\n       focused_review_text,\n       in_progress_started_at,\n       in_progress_total_seconds,\n       is_draft AS \"is_draft: bool\",\n       merged_commit_hash,\n       parent_session_id,\n       provider_conversation_id,\n       published_upstream_ref,\n       questions,\n       stack_base_commit_hash\nFROM session\nWHERE id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "app_server_instruction_provider_conversation_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "app_server_instruction_provider_conversation_id"
+          }
+        }
+      },
+      {
+        "name": "applied_personality_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "applied_personality_id"
+          }
+        }
+      },
+      {
+        "name": "applied_personality_prompt_hash",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "applied_personality_prompt_hash"
+          }
+        }
+      },
+      {
+        "name": "focused_review_diff_hash",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "focused_review_diff_hash"
+          }
+        }
+      },
+      {
+        "name": "focused_review_text",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "focused_review_text"
+          }
+        }
+      },
+      {
+        "name": "in_progress_started_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "in_progress_started_at"
+          }
+        }
+      },
+      {
+        "name": "in_progress_total_seconds",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "in_progress_total_seconds"
+          }
+        }
+      },
+      {
+        "name": "is_draft: bool",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "is_draft"
+          }
+        }
+      },
+      {
+        "name": "merged_commit_hash",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "merged_commit_hash"
+          }
+        }
+      },
+      {
+        "name": "parent_session_id",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "parent_session_id"
+          }
+        }
+      },
+      {
+        "name": "provider_conversation_id",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "provider_conversation_id"
+          }
+        }
+      },
+      {
+        "name": "published_upstream_ref",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "published_upstream_ref"
+          }
+        }
+      },
+      {
+        "name": "questions",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "questions"
+          }
+        }
+      },
+      {
+        "name": "stack_base_commit_hash",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "stack_base_commit_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "350891509a8007459f1fe94bcf3e04e4634347779fbad3fb60b469e4c13bf834"
+}

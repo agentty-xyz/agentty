@@ -109,16 +109,16 @@ pub async fn persist_active_project_id_for_test(
     database: &Database,
     project_id: i64,
 ) -> Result<(), DbError> {
-    sqlx::query(
+    sqlx::query!(
         r"
 INSERT INTO setting (name, value)
 VALUES (?, ?)
 ON CONFLICT(name) DO UPDATE
 SET value = excluded.value
 ",
+        SettingName::ActiveProjectId.as_str(),
+        project_id.to_string()
     )
-    .bind(SettingName::ActiveProjectId.as_str())
-    .bind(project_id.to_string())
     .execute(database.pool())
     .await?;
 
@@ -130,16 +130,16 @@ pub async fn persist_active_tab_for_test(
     database: &Database,
     tab: app::Tab,
 ) -> Result<(), DbError> {
-    sqlx::query(
+    sqlx::query!(
         r"
 INSERT INTO setting (name, value)
 VALUES (?, ?)
 ON CONFLICT(name) DO UPDATE
 SET value = excluded.value
 ",
+        SettingName::ActiveTab.as_str(),
+        tab.as_str()
     )
-    .bind(SettingName::ActiveTab.as_str())
-    .bind(tab.as_str())
     .execute(database.pool())
     .await?;
 
@@ -727,6 +727,47 @@ mod tests {
 
         // Assert
         assert!(span_registered);
+    }
+
+    #[tokio::test]
+    async fn persist_active_settings_for_test_upserts_values() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory database");
+
+        // Act
+        persist_active_project_id_for_test(&database, 41)
+            .await
+            .expect("failed to persist initial active project");
+        persist_active_project_id_for_test(&database, 42)
+            .await
+            .expect("failed to update active project");
+        persist_active_tab_for_test(&database, app::Tab::Projects)
+            .await
+            .expect("failed to persist initial active tab");
+        persist_active_tab_for_test(&database, app::Tab::Sessions)
+            .await
+            .expect("failed to update active tab");
+
+        // Assert
+        assert_eq!(
+            database
+                .settings()
+                .load_active_project_id()
+                .await
+                .expect("failed to load active project"),
+            Some(42)
+        );
+        assert_eq!(
+            database
+                .settings()
+                .get_setting(SettingName::ActiveTab)
+                .await
+                .expect("failed to load active tab")
+                .as_deref(),
+            Some("Sessions")
+        );
     }
 
     #[test]

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT timeout + 0 AS \"timeout!: i64\"\nFROM pragma_busy_timeout\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "timeout!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ec756504487fa69c6924c08131867663fa73c60f015dd780bc45287c4b1a3b95"
+}

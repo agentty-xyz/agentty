@@ -189,17 +189,17 @@ WHERE name = ?
         name: SettingName,
         value: &str,
     ) -> Result<(), DbError> {
-        sqlx::query(
+        sqlx::query!(
             r"
 INSERT INTO project_setting (project_id, name, value)
 VALUES (?, ?, ?)
 ON CONFLICT(project_id, name) DO UPDATE
 SET value = excluded.value
 ",
+            project_id,
+            name.as_str(),
+            value
         )
-        .bind(project_id)
-        .bind(name.as_str())
-        .bind(value)
         .execute(&self.0)
         .await?;
 
@@ -214,17 +214,17 @@ SET value = excluded.value
         let mut transaction = self.0.begin().await?;
 
         for (name, value) in settings {
-            sqlx::query(
+            sqlx::query!(
                 r"
 INSERT INTO project_setting (project_id, name, value)
 VALUES (?, ?, ?)
 ON CONFLICT(project_id, name) DO UPDATE
 SET value = excluded.value
 ",
+                project_id,
+                name.as_str(),
+                value
             )
-            .bind(project_id)
-            .bind(name.as_str())
-            .bind(value)
             .execute(&mut *transaction)
             .await?;
         }
@@ -235,16 +235,16 @@ SET value = excluded.value
     }
 
     async fn upsert_setting(&self, name: SettingName, value: &str) -> Result<(), DbError> {
-        sqlx::query(
+        sqlx::query!(
             r"
 INSERT INTO setting (name, value)
 VALUES (?, ?)
 ON CONFLICT(name) DO UPDATE
 SET value = excluded.value
 ",
+            name.as_str(),
+            value
         )
-        .bind(name.as_str())
-        .bind(value)
         .execute(&self.0)
         .await?;
 
@@ -268,7 +268,7 @@ mod tests {
             .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to insert project");
-        sqlx::query(
+        sqlx::query!(
             r"
 CREATE TRIGGER fail_default_fast_agent_insert
 BEFORE INSERT ON project_setting
@@ -276,7 +276,7 @@ WHEN NEW.name = 'DefaultFastAgent'
 BEGIN
     SELECT RAISE(FAIL, 'forced setting failure');
 END;
-",
+"
         )
         .execute(&pool)
         .await

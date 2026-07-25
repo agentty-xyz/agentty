@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT synchronous + 0 AS \"synchronous!: i64\"\nFROM pragma_synchronous\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "synchronous!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7885d8b423d8905b1880dc202003e43fb00de8fd7f900dc60d3ae5de1d08368a"
+}

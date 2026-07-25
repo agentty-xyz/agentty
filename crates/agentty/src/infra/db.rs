@@ -26,8 +26,7 @@ pub use review::{ReviewRepository, SessionReviewRequestRow};
 pub(crate) use session::SqliteSessionRepository;
 pub use session::{
     ForkSessionSnapshot, PersistedSessionCreation, SessionDetailRow, SessionFocusedReviewRow,
-    SessionFollowUpTaskRow, SessionListRow, SessionMessageRow, SessionRepository, SessionRow,
-    SessionTurnMetadata,
+    SessionListRow, SessionMessageRow, SessionRepository, SessionRow, SessionTurnMetadata,
 };
 pub(crate) use setting::{SettingRepository, SqliteSettingRepository};
 pub(crate) use usage::SqliteUsageRepository;
