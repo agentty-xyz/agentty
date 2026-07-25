@@ -229,7 +229,7 @@ fn seed_session_with_user_markdown(env: &BuilderEnv) -> Result<(), Box<dyn std::
                 "user-markdown-0001",
                 SessionMessageKind::UserPrompt,
                 "\
-Use **bold** and `code`.
+Use **bold** and `code`. Review @crates/agentty/src/ui/markdown.rs.
 
 | Input | Meaning |
 | --- | --- |
@@ -2257,6 +2257,11 @@ fn session_view_user_prompt_markdown_output() -> E2eResult {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "@crates/agentty/src/ui/markdown.rs",
+                    &full,
+                );
                 assertion::assert_text_in_region(frame, "Use bold and code.", &full);
                 assertion::assert_text_in_region(frame, "User prompt", &full);
                 assertion::assert_text_in_region(frame, "Markdown", &full);

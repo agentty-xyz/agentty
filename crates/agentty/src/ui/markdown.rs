@@ -258,7 +258,9 @@ fn render_user_prompt_markdown_block(prompt_lines: &[String], width: usize) -> V
     lines
 }
 
-fn user_prompt_content_line_spans(
+/// Preserves markdown styling while highlighting plain `@` lookup tokens in
+/// rendered user prompt content.
+pub(crate) fn user_prompt_content_line_spans(
     rendered_spans: impl IntoIterator<Item = Span<'static>>,
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
