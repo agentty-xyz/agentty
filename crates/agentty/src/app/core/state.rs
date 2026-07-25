@@ -62,6 +62,7 @@ use crate::domain::turn_prompt::TurnPrompt;
 #[cfg(test)]
 use crate::infra::db;
 use crate::infra::fs::{FsClient, RealFsClient};
+use crate::infra::personality::{PersonalityCatalogClient, RealPersonalityCatalogClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode, PromptModeSnapshot};
@@ -147,6 +148,7 @@ pub(crate) struct AppClients {
     pub(super) app_server_client_override: Option<Arc<dyn AppServerClient>>,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
+    pub(super) personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
     pub(super) review_request_client: Arc<dyn ReviewRequestClient>,
     pub(super) sync_main_runner: Option<Arc<dyn SyncMainRunner>>,
@@ -163,6 +165,7 @@ impl AppClients {
             app_server_client_override: None,
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             project_discovery_client: Arc::new(RealProjectDiscoveryClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
             sync_main_runner: None,
@@ -201,6 +204,18 @@ impl AppClients {
     #[must_use]
     pub(crate) fn with_git_client(mut self, git_client: Arc<dyn GitClient>) -> Self {
         self.git_client = git_client;
+
+        self
+    }
+
+    /// Replaces the personality catalog boundary for deterministic app tests.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_personality_catalog_client(
+        mut self,
+        personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
+    ) -> Self {
+        self.personality_catalog_client = personality_catalog_client;
 
         self
     }
@@ -1285,6 +1300,23 @@ impl App {
     ) -> Result<(), AppError> {
         self.sessions
             .set_session_model(&self.services, session_id, session_agent)
+            .await?;
+        self.process_pending_app_events().await;
+
+        Ok(())
+    }
+
+    /// Persists and applies a personality selection for a session.
+    ///
+    /// # Errors
+    /// Returns an error if persistence fails.
+    pub async fn set_session_personality(
+        &mut self,
+        session_id: &str,
+        personality_id: Option<String>,
+    ) -> Result<(), AppError> {
+        self.sessions
+            .set_session_personality(&self.services, session_id, personality_id)
             .await?;
         self.process_pending_app_events().await;
 

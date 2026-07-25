@@ -855,7 +855,7 @@ mod tests {
         let labels: Vec<&str> = menu.items.iter().map(|item| item.label.as_str()).collect();
 
         // Assert
-        assert_eq!(labels, vec!["/model", "/reasoning"]);
+        assert_eq!(labels, vec!["/model", "/personality", "/reasoning"]);
         assert_eq!(menu.selected_index, 0);
     }
 

@@ -5,12 +5,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_agent::{
-    AgentError, AgentRequestKind, LiveTranscript, OneShotClient, TurnContinuation, TurnEvent,
-    TurnRequest, TurnResult,
+    AgentError, AgentRequestKind, LiveTranscript, OneShotClient, PersonalityPrompt,
+    TurnContinuation, TurnEvent, TurnRequest, TurnResult,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::lifecycle::SessionTitleGenerationTaskInput;
 use super::worker::{SessionWorkerContext, TurnMetadata};
@@ -153,9 +153,7 @@ pub(super) async fn run_channel_turn(
     replay_transcript: Option<String>,
     prompt: TurnPrompt,
 ) -> Result<(), SessionError> {
-    // Swap in a fresh token so stale cancellations from previous
-    // turns are discarded. The cloned token is passed to
-    // `run_turn_with_cancellation` for the duration of this turn.
+    // Discard stale cancellations, then keep the new token for this turn.
     let turn_cancel_token = fresh_turn_cancel_token(context)?;
 
     prepare_resume_turn(context, &request_kind).await;
@@ -174,6 +172,7 @@ pub(super) async fn run_channel_turn(
             let result = post_turn::apply_turn_result(
                 &post_turn_context,
                 turn_metadata,
+                post_turn::TurnPersonalityPersistence::default(),
                 Err(AgentError::Backend(error.to_string())),
             )
             .await;
@@ -185,28 +184,14 @@ pub(super) async fn run_channel_turn(
 
     let session_project_id = load_session_project_id(&context.db, &context.session_id).await;
     let reasoning_level = load_session_reasoning_level(&context.db, &context.session_id).await;
-    let provider_conversation_id = context
-        .db
-        .sessions()
-        .get_session_provider_conversation_id(&context.session_id)
-        .await
-        .ok()
-        .flatten();
-    let persisted_instruction_conversation_id = context
-        .db
-        .sessions()
-        .get_session_instruction_conversation_id(&context.session_id)
-        .await
-        .ok()
-        .flatten();
+    let continuation = load_turn_continuation(context, replay_transcript).await;
+    let ResolvedTurnPersonality {
+        persistence: personality_persistence,
+        prompt: personality,
+    } = resolve_turn_personality(context).await;
 
     let req = TurnRequest {
-        continuation: TurnContinuation::provider(
-            Some(live_transcript_source(&context.transcript)),
-            persisted_instruction_conversation_id,
-            provider_conversation_id,
-            replay_transcript,
-        ),
+        continuation,
         folder: context.folder.clone(),
         main_checkout_root: main_checkout_snapshot
             .as_ref()
@@ -216,6 +201,7 @@ pub(super) async fn run_channel_turn(
             .model()
             .provider_model_str()
             .to_string(),
+        personality,
         prompt: prompt.clone(),
         reasoning_level,
         request_kind: request_kind.clone(),
@@ -251,10 +237,132 @@ pub(super) async fn run_channel_turn(
     let turn_result =
         add_main_checkout_warning(context, main_checkout_snapshot.as_ref(), turn_result).await;
     let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
-    let result = post_turn::apply_turn_result(&post_turn_context, turn_metadata, turn_result).await;
+    let result = post_turn::apply_turn_result(
+        &post_turn_context,
+        turn_metadata,
+        personality_persistence,
+        turn_result,
+    )
+    .await;
     post_turn::finalize_channel_turn(&finalizer_context, &result).await;
 
     result.map(|_| ())
+}
+
+/// Loads the durable provider context needed to continue one session turn.
+async fn load_turn_continuation(
+    context: &SessionWorkerContext,
+    replay_transcript: Option<String>,
+) -> TurnContinuation {
+    let provider_conversation_id = context
+        .db
+        .sessions()
+        .get_session_provider_conversation_id(&context.session_id)
+        .await
+        .ok()
+        .flatten();
+    let instruction_conversation_id = context
+        .db
+        .sessions()
+        .get_session_instruction_conversation_id(&context.session_id)
+        .await
+        .ok()
+        .flatten();
+
+    TurnContinuation::provider(
+        Some(live_transcript_source(&context.transcript)),
+        instruction_conversation_id,
+        provider_conversation_id,
+        replay_transcript,
+    )
+}
+
+/// Personality prompt plus the state persisted after a successful turn.
+pub(super) struct ResolvedTurnPersonality {
+    pub(super) persistence: post_turn::TurnPersonalityPersistence,
+    pub(super) prompt: PersonalityPrompt,
+}
+
+/// Resolves the selected personality from the session worktree immediately
+/// before one provider request is built.
+pub(super) async fn resolve_turn_personality(
+    context: &SessionWorkerContext,
+) -> ResolvedTurnPersonality {
+    let state = match context
+        .db
+        .sessions()
+        .load_session_personality_state(&context.session_id)
+        .await
+    {
+        Ok(Some(state)) => state,
+        Ok(None) => {
+            return ResolvedTurnPersonality {
+                persistence: post_turn::TurnPersonalityPersistence::default(),
+                prompt: PersonalityPrompt::default(),
+            };
+        }
+        Err(error) => {
+            warn!(
+                session_id = %context.session_id,
+                %error,
+                "failed to load session personality state"
+            );
+
+            return ResolvedTurnPersonality {
+                persistence: post_turn::TurnPersonalityPersistence::default(),
+                prompt: PersonalityPrompt::default(),
+            };
+        }
+    };
+    let Some(selected_id) = state.personality_id else {
+        return ResolvedTurnPersonality {
+            persistence: post_turn::TurnPersonalityPersistence::default(),
+            prompt: PersonalityPrompt::cleared(state.applied_personality_prompt_hash.is_some()),
+        };
+    };
+    let personality = context
+        .personality_catalog_client
+        .resolve(context.folder.clone(), selected_id.clone())
+        .await;
+    let Some(personality) = personality else {
+        let should_report_fallback = state.applied_personality_id.as_deref()
+            != Some(selected_id.as_str())
+            || state.applied_personality_prompt_hash.is_some();
+        if should_report_fallback {
+            let notice = TranscriptNotice::Personality.format(format!(
+                "Selected personality `{selected_id}` is unavailable in this session worktree; \
+                 continuing without it."
+            ));
+            SessionTaskService::append_workflow_notice(
+                &context.transcript,
+                &context.db,
+                &context.app_event_tx,
+                &context.session_update_versions,
+                &context.session_id,
+                &notice,
+            )
+            .await;
+        }
+
+        return ResolvedTurnPersonality {
+            persistence: post_turn::TurnPersonalityPersistence {
+                applied_personality_id: Some(selected_id),
+                applied_personality_prompt_hash: None,
+            },
+            prompt: PersonalityPrompt::cleared(state.applied_personality_prompt_hash.is_some()),
+        };
+    };
+    let fingerprint = personality.fingerprint();
+    let changed = state.applied_personality_id.as_deref() != Some(personality.id.as_str())
+        || state.applied_personality_prompt_hash.as_deref() != Some(fingerprint.as_str());
+
+    ResolvedTurnPersonality {
+        persistence: post_turn::TurnPersonalityPersistence {
+            applied_personality_id: Some(personality.id),
+            applied_personality_prompt_hash: Some(fingerprint),
+        },
+        prompt: PersonalityPrompt::active(personality.prompt, changed),
+    }
 }
 
 /// Applies best-effort state cleanup before a resume turn starts.

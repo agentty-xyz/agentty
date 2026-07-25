@@ -8,6 +8,7 @@ use tracing::warn;
 use crate::app::{App, ReviewCacheEntry, diff_content_hash};
 use crate::domain::agent::{AgentSelection, ReasoningLevel};
 use crate::domain::composer::PromptAttachment;
+use crate::domain::personality::PersonalitySummary;
 use crate::domain::review;
 use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -255,6 +256,60 @@ impl App {
                 "failed to switch session model from prompt slash command"
             );
         }
+    }
+
+    /// Loads picker metadata from the targeted session worktree.
+    pub(crate) async fn list_prompt_personalities(
+        &self,
+        session_id: &SessionId,
+    ) -> Vec<PersonalitySummary> {
+        let Some(folder) = self
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == *session_id)
+            .map(|session| session.folder.clone())
+        else {
+            return Vec::new();
+        };
+
+        self.services
+            .personality_catalog_client()
+            .list(folder)
+            .await
+            .iter()
+            .map(crate::domain::personality::Personality::summary)
+            .collect()
+    }
+
+    /// Persists one slash-selected personality and appends visible feedback.
+    pub(crate) async fn update_prompt_session_personality(
+        &mut self,
+        session_id: &SessionId,
+        personality: Option<PersonalitySummary>,
+    ) {
+        let personality_id = personality
+            .as_ref()
+            .map(|personality| personality.id.clone());
+        if let Err(error) = self
+            .set_session_personality(session_id, personality_id)
+            .await
+        {
+            warn!(
+                session_id = %session_id,
+                error = %error,
+                "failed to update session personality from prompt slash command"
+            );
+
+            return;
+        }
+
+        let message = personality.map_or_else(
+            || "Personality cleared.".to_string(),
+            |personality| format!("Personality set to *{}*.", personality.name),
+        );
+        self.append_prompt_status_line(session_id, TranscriptNotice::Personality, &message)
+            .await;
     }
 
     /// Persists one slash-selected reasoning level and logs any failure with
@@ -535,9 +590,14 @@ fn append_review_thread_prompt(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use ag_forge::{ReviewComment, ReviewCommentAnchorSide};
+    use tracing::instrument::WithSubscriber;
 
     use super::*;
+    use crate::domain::personality::Personality;
+    use crate::infra::personality::MockPersonalityCatalogClient;
 
     /// Verifies `/apply` submits the checked-in markdown prompt with the
     /// review suggestions fenced as data.
@@ -759,6 +819,86 @@ mod tests {
             }
         );
         assert!(app.sessions.sessions()[0].queued_messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_prompt_personality_catalog_and_selection_use_target_session() {
+        // Arrange
+        let personality = Personality {
+            description: "Reviews code changes".to_string(),
+            id: "reviewer".to_string(),
+            name: "Code Reviewer".to_string(),
+            prompt: "Review changes carefully.".to_string(),
+        };
+        let expected_summary = personality.summary();
+        let mut personality_catalog_client = MockPersonalityCatalogClient::new();
+        personality_catalog_client
+            .expect_list()
+            .once()
+            .return_once(move |_| Box::pin(async move { vec![personality] }));
+        let clients = crate::test_support::test_app_clients()
+            .with_personality_catalog_client(Arc::new(personality_catalog_client));
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_clients(clients).await;
+        let session_id: SessionId = app
+            .create_session()
+            .await
+            .expect("session should be created")
+            .into();
+
+        // Act
+        let personalities = app.list_prompt_personalities(&session_id).await;
+        app.update_prompt_session_personality(&session_id, Some(expected_summary.clone()))
+            .await;
+        let persisted_state = app
+            .services
+            .db()
+            .sessions()
+            .load_session_personality_state(&session_id)
+            .await
+            .expect("personality state should load")
+            .expect("session personality state should exist");
+
+        // Assert
+        assert_eq!(personalities, vec![expected_summary]);
+        assert_eq!(
+            app.sessions.sessions()[0].personality_id.as_deref(),
+            Some("reviewer")
+        );
+        assert_eq!(persisted_state.personality_id.as_deref(), Some("reviewer"));
+
+        // Act
+        app.update_prompt_session_personality(&session_id, None)
+            .await;
+        let cleared_state = app
+            .services
+            .db()
+            .sessions()
+            .load_session_personality_state(&session_id)
+            .await
+            .expect("cleared personality state should load")
+            .expect("session personality state should exist");
+
+        // Assert
+        assert_eq!(app.sessions.sessions()[0].personality_id, None);
+        assert_eq!(cleared_state.personality_id, None);
+    }
+
+    #[tokio::test]
+    async fn test_prompt_personality_ignores_missing_session() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let missing_session_id = SessionId::from("missing-session");
+
+        // Act
+        let personalities = app.list_prompt_personalities(&missing_session_id).await;
+        app.update_prompt_session_personality(&missing_session_id, None)
+            .with_subscriber(crate::test_support::TestSubscriber)
+            .await;
+
+        // Assert
+        assert!(personalities.is_empty());
+        assert!(app.sessions.sessions().is_empty());
     }
 
     #[tokio::test]

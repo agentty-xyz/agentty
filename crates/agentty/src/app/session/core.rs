@@ -410,6 +410,23 @@ impl SessionManager {
         }
     }
 
+    /// Applies one persisted personality update to the matching in-memory
+    /// session snapshot.
+    pub(crate) fn apply_session_personality_updated(
+        &mut self,
+        session_id: &str,
+        personality_id: Option<String>,
+    ) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.personality_id = personality_id;
+        }
+    }
+
     /// Applies one persisted published-upstream reference to the matching
     /// in-memory session snapshot.
     pub(crate) fn apply_published_upstream_ref(

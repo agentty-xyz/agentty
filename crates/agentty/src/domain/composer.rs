@@ -9,6 +9,7 @@ use crate::domain::agent::{
     self, AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
 };
 use crate::domain::input::InputState;
+use crate::domain::personality::PersonalitySummary;
 
 /// One selectable row in the prompt slash-command menu.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,7 +36,7 @@ pub struct PromptSuggestionList {
 }
 
 /// Semantic action represented by the currently highlighted prompt slash item.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PromptSuggestionSelection {
     /// Slash command selected from the first stage.
     Command(&'static str),
@@ -43,6 +44,8 @@ pub enum PromptSuggestionSelection {
     Agent(AgentKind),
     /// Agent and model selected during `/model` model selection.
     Model(AgentSelection),
+    /// Workspace personality selected or cleared during `/personality`.
+    Personality(Option<PersonalitySummary>),
     /// Session-scoped reasoning selection chosen during `/reasoning`.
     Reasoning(ReasoningLevel),
 }
@@ -361,6 +364,8 @@ pub enum PromptSlashStage {
     Command,
     /// Selecting a model after choosing an agent.
     Model,
+    /// Selecting or clearing a workspace personality.
+    Personality,
     /// Selecting a session-specific reasoning level override.
     Reasoning,
 }
@@ -370,6 +375,8 @@ pub enum PromptSlashStage {
 pub struct PromptSlashState {
     /// Agent kinds currently runnable on this machine for `/model`.
     pub available_agent_kinds: Vec<AgentKind>,
+    /// Workspace personalities loaded when `/personality` was accepted.
+    pub personalities: Vec<PersonalitySummary>,
     /// Agent selected for the current slash workflow, when applicable.
     pub selected_agent: Option<AgentKind>,
     /// Highlighted option inside the active slash menu.
@@ -385,6 +392,7 @@ impl PromptSlashState {
     pub fn with_available_agent_kinds(available_agent_kinds: Vec<AgentKind>) -> Self {
         Self {
             available_agent_kinds,
+            personalities: Vec::new(),
             selected_agent: None,
             selected_index: 0,
             stage: PromptSlashStage::Command,
@@ -412,6 +420,7 @@ impl PromptSlashState {
     /// Resets slash state back to command selection.
     pub fn reset(&mut self) {
         self.selected_agent = None;
+        self.personalities.clear();
         self.selected_index = 0;
         self.stage = PromptSlashStage::Command;
     }
@@ -586,6 +595,7 @@ pub fn prompt_slash_option_count(
     stage: PromptSlashStage,
     selected_agent: Option<AgentKind>,
     available_agent_kinds: &[AgentKind],
+    personalities: &[PersonalitySummary],
     session_agent_kind: AgentKind,
     allow_apply_command: bool,
 ) -> usize {
@@ -593,6 +603,7 @@ pub fn prompt_slash_option_count(
         input,
         &PromptSlashState {
             available_agent_kinds: available_agent_kinds.to_vec(),
+            personalities: personalities.to_vec(),
             selected_agent,
             selected_index: 0,
             stage,
@@ -792,15 +803,7 @@ pub fn build_prompt_slash_suggestion_list(
     session_agent_kind: AgentKind,
     allow_apply_command: bool,
 ) -> Option<PromptSuggestionList> {
-    build_slash_suggestion_list(
-        input,
-        &slash_state.available_agent_kinds,
-        slash_state.stage,
-        slash_state.selected_agent,
-        session_agent_kind,
-        slash_state.selected_index,
-        allow_apply_command,
-    )
+    build_slash_suggestion_list(input, slash_state, session_agent_kind, allow_apply_command)
 }
 
 /// Resolves the semantic prompt slash action behind the current selection.
@@ -817,32 +820,21 @@ pub fn resolve_prompt_slash_selection(
     session_agent_kind: AgentKind,
     allow_apply_command: bool,
 ) -> Option<PromptSuggestionSelection> {
-    selected_slash_action(
-        input,
-        &slash_state.available_agent_kinds,
-        slash_state.stage,
-        slash_state.selected_agent,
-        slash_state.selected_index,
-        session_agent_kind,
-        allow_apply_command,
-    )
+    selected_slash_action(input, slash_state, session_agent_kind, allow_apply_command)
 }
 
 /// Builds one prompt slash suggestion list for the provided input state.
 fn build_slash_suggestion_list(
     input: &str,
-    available_agent_kinds: &[AgentKind],
-    stage: PromptSlashStage,
-    selected_agent: Option<AgentKind>,
+    slash_state: &PromptSlashState,
     session_agent_kind: AgentKind,
-    selected_index: usize,
     allow_apply_command: bool,
 ) -> Option<PromptSuggestionList> {
     if !input.starts_with('/') {
         return None;
     }
 
-    let (title, items): (&str, Vec<PromptSuggestionItem>) = match stage {
+    let (title, items): (&str, Vec<PromptSuggestionItem>) = match slash_state.stage {
         PromptSlashStage::Command => {
             let commands = prompt_slash_commands(input, allow_apply_command)
                 .into_iter()
@@ -858,7 +850,8 @@ fn build_slash_suggestion_list(
         }
         PromptSlashStage::Agent => (
             "/model Agent (j/k move, Enter select)",
-            available_agent_kinds
+            slash_state
+                .available_agent_kinds
                 .iter()
                 .map(|agent_kind| PromptSuggestionItem {
                     badge: None,
@@ -871,8 +864,8 @@ fn build_slash_suggestion_list(
         PromptSlashStage::Model => {
             let selected_agent_kind = resolve_model_stage_agent(
                 session_agent_kind,
-                available_agent_kinds,
-                selected_agent,
+                &slash_state.available_agent_kinds,
+                slash_state.selected_agent,
             )?;
             let models = selected_agent_kind
                 .models()
@@ -887,6 +880,10 @@ fn build_slash_suggestion_list(
 
             ("/model Model (j/k move, Enter select)", models)
         }
+        PromptSlashStage::Personality => (
+            "/personality (j/k move, Enter select)",
+            personality_suggestion_items(&slash_state.personalities),
+        ),
         PromptSlashStage::Reasoning => (
             "/reasoning Level (j/k move, Enter select)",
             reasoning_suggestion_items(),
@@ -901,7 +898,7 @@ fn build_slash_suggestion_list(
 
     Some(PromptSuggestionList {
         items,
-        selected_index: selected_index.min(max_index),
+        selected_index: slash_state.selected_index.min(max_index),
         title: title.to_string(),
     })
 }
@@ -909,38 +906,42 @@ fn build_slash_suggestion_list(
 /// Returns the semantic slash action mapped to the current selection state.
 fn selected_slash_action(
     input: &str,
-    available_agent_kinds: &[AgentKind],
-    stage: PromptSlashStage,
-    selected_agent: Option<AgentKind>,
-    selected_index: usize,
+    slash_state: &PromptSlashState,
     session_agent_kind: AgentKind,
     allow_apply_command: bool,
 ) -> Option<PromptSuggestionSelection> {
-    match stage {
+    match slash_state.stage {
         PromptSlashStage::Command => {
             let commands = prompt_slash_commands(input, allow_apply_command);
             let selected_command = commands
-                .get(clamp_selected_index(selected_index, commands.len()))
+                .get(clamp_selected_index(
+                    slash_state.selected_index,
+                    commands.len(),
+                ))
                 .copied()?;
 
             Some(PromptSuggestionSelection::Command(selected_command))
         }
-        PromptSlashStage::Agent => available_agent_kinds
+        PromptSlashStage::Agent => slash_state
+            .available_agent_kinds
             .get(clamp_selected_index(
-                selected_index,
-                available_agent_kinds.len(),
+                slash_state.selected_index,
+                slash_state.available_agent_kinds.len(),
             ))
             .copied()
             .map(PromptSuggestionSelection::Agent),
         PromptSlashStage::Model => {
             let selected_agent_kind = resolve_model_stage_agent(
                 session_agent_kind,
-                available_agent_kinds,
-                selected_agent,
+                &slash_state.available_agent_kinds,
+                slash_state.selected_agent,
             )?;
             let models = selected_agent_kind.models();
             let selected_model = models
-                .get(clamp_selected_index(selected_index, models.len()))
+                .get(clamp_selected_index(
+                    slash_state.selected_index,
+                    models.len(),
+                ))
                 .copied()?;
 
             Some(PromptSuggestionSelection::Model(AgentSelection::new(
@@ -948,10 +949,31 @@ fn selected_slash_action(
                 selected_model,
             )))
         }
+        PromptSlashStage::Personality => {
+            if slash_state.personalities.is_empty() {
+                return None;
+            }
+
+            if slash_state.selected_index == 0 {
+                return Some(PromptSuggestionSelection::Personality(None));
+            }
+
+            slash_state
+                .personalities
+                .get(clamp_selected_index(
+                    slash_state.selected_index.saturating_sub(1),
+                    slash_state.personalities.len(),
+                ))
+                .cloned()
+                .map(|personality| PromptSuggestionSelection::Personality(Some(personality)))
+        }
         PromptSlashStage::Reasoning => {
             let options = reasoning_options();
             let selected_reasoning = options
-                .get(clamp_selected_index(selected_index, options.len()))
+                .get(clamp_selected_index(
+                    slash_state.selected_index,
+                    options.len(),
+                ))
                 .copied()?;
 
             Some(PromptSuggestionSelection::Reasoning(selected_reasoning))
@@ -985,6 +1007,7 @@ fn command_description(command: &str) -> &'static str {
     match command {
         "/apply" => "Verify focused-review suggestions, then apply the correct ones.",
         "/model" => "Choose an agent and model for this session.",
+        "/personality" => "Choose a personality for this session.",
         "/reasoning" => "Override the reasoning level for this session.",
         _ => "Prompt slash command.",
     }
@@ -993,7 +1016,7 @@ fn command_description(command: &str) -> &'static str {
 /// Returns all slash commands whose fuzzy characters match the current input.
 fn prompt_slash_commands(input: &str, allow_apply_command: bool) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
-    let mut commands = vec!["/apply", "/model", "/reasoning"];
+    let mut commands = vec!["/apply", "/model", "/personality", "/reasoning"];
     if !allow_apply_command {
         commands.retain(|command| *command != "/apply");
     }
@@ -1047,7 +1070,7 @@ fn slash_command_fuzzy_score(command: &str, lowered_query: &str) -> Option<usize
         return None;
     }
 
-    Some(200 + first_match_index.unwrap_or(0) + gap_count)
+    Some(200 + first_match_index.unwrap_or(0) * 2 + gap_count)
 }
 
 /// Returns the stable `/reasoning` selection options.
@@ -1066,6 +1089,36 @@ fn reasoning_suggestion_items() -> Vec<PromptSuggestionItem> {
             metadata: None,
         })
         .collect()
+}
+
+/// Returns render-ready rows for `/personality`.
+fn personality_suggestion_items(personalities: &[PersonalitySummary]) -> Vec<PromptSuggestionItem> {
+    if personalities.is_empty() {
+        return vec![PromptSuggestionItem {
+            badge: None,
+            detail: None,
+            label: "No personalities found in `.agents/agents`.".to_string(),
+            metadata: None,
+        }];
+    }
+
+    std::iter::once(PromptSuggestionItem {
+        badge: None,
+        detail: Some("Use the agent's default behavior.".to_string()),
+        label: "None (default)".to_string(),
+        metadata: None,
+    })
+    .chain(
+        personalities
+            .iter()
+            .map(|personality| PromptSuggestionItem {
+                badge: None,
+                detail: Some(personality.description.clone()),
+                label: personality.name.clone(),
+                metadata: None,
+            }),
+    )
+    .collect()
 }
 
 /// Returns the exclusive end index for an `[Image #n]` placeholder token that
@@ -1372,7 +1425,83 @@ mod tests {
             .into_iter()
             .map(|item| item.label)
             .collect::<Vec<_>>();
-        assert_eq!(labels, vec!["/model", "/reasoning"]);
+        assert_eq!(labels, vec!["/model", "/personality", "/reasoning"]);
+    }
+
+    #[test]
+    fn test_personality_slash_stage_lists_default_and_workspace_profiles() {
+        // Arrange
+        let reviewer = PersonalitySummary {
+            description: "Reviews code".to_string(),
+            id: "reviewer".to_string(),
+            name: "Code Reviewer".to_string(),
+        };
+        let mut slash_state = PromptSlashState {
+            personalities: vec![reviewer.clone()],
+            stage: PromptSlashStage::Personality,
+            ..PromptSlashState::default()
+        };
+
+        // Act
+        let default_selection =
+            resolve_prompt_slash_selection("/personality", &slash_state, AgentKind::Codex, false);
+        slash_state.selected_index = 1;
+        let suggestion_list = build_prompt_slash_suggestion_list(
+            "/personality",
+            &slash_state,
+            AgentKind::Codex,
+            false,
+        )
+        .expect("personality suggestions should render");
+        let selection =
+            resolve_prompt_slash_selection("/personality", &slash_state, AgentKind::Codex, false);
+
+        // Assert
+        assert_eq!(
+            suggestion_list.title,
+            "/personality (j/k move, Enter select)"
+        );
+        assert_eq!(suggestion_list.items[0].label, "None (default)");
+        assert_eq!(suggestion_list.items[1].label, "Code Reviewer");
+        assert_eq!(
+            suggestion_list.items[1].detail.as_deref(),
+            Some("Reviews code")
+        );
+        assert_eq!(
+            selection,
+            Some(PromptSuggestionSelection::Personality(Some(reviewer)))
+        );
+        assert_eq!(
+            default_selection,
+            Some(PromptSuggestionSelection::Personality(None))
+        );
+    }
+
+    #[test]
+    fn test_personality_slash_stage_shows_non_actionable_empty_hint() {
+        // Arrange
+        let slash_state = PromptSlashState {
+            stage: PromptSlashStage::Personality,
+            ..PromptSlashState::default()
+        };
+
+        // Act
+        let suggestion_list = build_prompt_slash_suggestion_list(
+            "/personality",
+            &slash_state,
+            AgentKind::Codex,
+            false,
+        )
+        .expect("empty personality hint should render");
+        let selection =
+            resolve_prompt_slash_selection("/personality", &slash_state, AgentKind::Codex, false);
+
+        // Assert
+        assert_eq!(
+            suggestion_list.items[0].label,
+            "No personalities found in `.agents/agents`."
+        );
+        assert_eq!(selection, None);
     }
 
     #[test]
@@ -1719,7 +1848,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(labels, vec!["/model", "/reasoning"]);
+        assert_eq!(labels, vec!["/model", "/personality", "/reasoning"]);
         assert_eq!(suggestion_list.selected_index, 0);
     }
 

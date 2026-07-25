@@ -10,6 +10,8 @@ pub mod file_index;
 pub mod fs;
 /// Agentty data-directory path resolution.
 pub mod home;
+/// Workspace-only personality discovery boundary.
+pub mod personality;
 /// Process-management utilities for agent subprocess lifecycle.
 pub(crate) mod process;
 /// Startup project-discovery boundary for home-directory repository scans.

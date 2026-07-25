@@ -9,7 +9,7 @@ use ag_protocol::TurnPrompt;
 use tokio::sync::mpsc;
 
 use crate::app_server::AppServerError;
-use crate::channel::{AgentRequestKind, LiveTranscript};
+use crate::channel::{AgentRequestKind, LiveTranscript, PersonalityPrompt};
 use crate::model::agent::ReasoningLevel;
 
 /// Boxed async result used by [`AppServerClient`] trait methods.
@@ -60,6 +60,8 @@ pub struct AppServerTurnRequest {
     pub main_checkout_root: Option<PathBuf>,
     /// Provider-specific model identifier.
     pub model: String,
+    /// Personality prompt state resolved for this turn.
+    pub personality: PersonalityPrompt,
     /// Structured prompt payload for this turn.
     pub prompt: TurnPrompt,
     /// Canonical request kind that drives transport behavior and protocol

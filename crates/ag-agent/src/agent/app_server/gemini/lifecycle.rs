@@ -64,6 +64,7 @@ pub(super) async fn start_runtime(
             main_checkout_root: request.main_checkout_root.as_deref(),
             replay_transcript: None,
             model: &request.model,
+            personality_prompt: None,
             prompt: "",
             reasoning_level: request.reasoning_level,
             request_kind: &request_kind,

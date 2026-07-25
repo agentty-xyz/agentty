@@ -49,6 +49,7 @@ impl AgentBackend for AntigravityBackend {
             request_kind: _request_kind,
             replay_transcript: _replay_transcript,
             reasoning_level,
+            ..
         } = request;
         let mut command = Command::new("agy");
 
@@ -328,6 +329,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: requested_model,
+                personality_prompt: None,
                 prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
@@ -382,6 +384,7 @@ mod tests {
                     main_checkout_root: None,
                     replay_transcript: None,
                     model: AgentModel::Gemini31ProPreview.provider_model_str(),
+                    personality_prompt: None,
                     prompt: "Write tests",
                     reasoning_level,
                     request_kind: &session_start_request_kind(),
@@ -427,6 +430,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: requested_model,
+                personality_prompt: None,
                 prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
@@ -564,6 +568,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: requested_model,
+                personality_prompt: None,
                 prompt: "Review [Image #1]",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
@@ -634,6 +639,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: Some("previous answer"),
                 model: AgentModel::Gemini31ProPreview.provider_model_str(),
+                personality_prompt: None,
                 prompt: "continue work",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &request_kind,

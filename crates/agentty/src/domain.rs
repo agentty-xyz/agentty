@@ -4,6 +4,8 @@ pub mod composer;
 pub mod file_entry;
 /// Editable text-input state and cursor operations.
 pub mod input;
+/// Workspace personality definitions and frontmatter parsing.
+pub mod personality;
 /// Persisted project entities and project-list ordering.
 pub mod project;
 pub mod question;

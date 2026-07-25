@@ -17,6 +17,12 @@ use ag_agent::{AppServerClient, MockAppServerClient, StaticAgentAvailabilityProb
 #[cfg(test)]
 use ag_git as git;
 use ratatui::buffer::{Buffer, Cell};
+#[cfg(test)]
+use tracing::field::{Field, Visit};
+#[cfg(test)]
+use tracing::subscriber::{Interest, Subscriber};
+#[cfg(test)]
+use tracing::{Event, Level, Metadata, span};
 
 use crate::app;
 #[cfg(test)]
@@ -41,6 +47,57 @@ use crate::domain::transient_message::TransientMessageStore;
 use crate::infra::project_discovery::MockProjectDiscoveryClient;
 #[cfg(test)]
 use crate::presentation::app_mode::AppMode;
+
+/// Subscriber that enables tracing fields while unit tests exercise warning
+/// paths under source coverage.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct TestSubscriber;
+
+#[cfg(test)]
+struct TestVisitor;
+
+#[cfg(test)]
+impl Visit for TestVisitor {
+    fn record_debug(&mut self, _field: &Field, value: &dyn std::fmt::Debug) {
+        let _rendered = format!("{value:?}");
+    }
+}
+
+#[cfg(test)]
+impl Subscriber for TestSubscriber {
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, span: &span::Attributes<'_>) -> span::Id {
+        span.record(&mut TestVisitor);
+
+        span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &span::Id, values: &span::Record<'_>) {
+        values.record(&mut TestVisitor);
+    }
+
+    fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+    fn event(&self, event: &Event<'_>) {
+        event.record(&mut TestVisitor);
+    }
+
+    fn enter(&self, _span: &span::Id) {}
+
+    fn exit(&self, _span: &span::Id) {}
+
+    fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
+        Interest::sometimes()
+    }
+
+    fn max_level_hint(&self) -> Option<tracing::metadata::LevelFilter> {
+        Some(Level::TRACE.into())
+    }
+}
 
 /// Returns the canonical session folder path for integration-test fixtures.
 pub fn session_folder(base: &Path, session_id: &str) -> PathBuf {
@@ -160,6 +217,7 @@ impl SessionFixtureBuilder {
                 in_progress_total_seconds: 0,
                 is_draft: false,
                 parent_session_id: None,
+                personality_id: None,
                 project_name: "project".to_string(),
                 prompt: String::new(),
                 queued_messages: Vec::new(),
@@ -643,6 +701,33 @@ mod tests {
     use ratatui::style::{Color, Style};
 
     use super::*;
+
+    #[test]
+    fn test_subscriber_records_span_and_event_fields() {
+        // Arrange
+        let subscriber = TestSubscriber;
+
+        // Act
+        let span_registered = tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(
+                "test_subscriber_span",
+                recorded_value = tracing::field::Empty
+            );
+            span.record("recorded_value", "recorded");
+            if let Some(span_id) = span.id() {
+                span.follows_from(span_id);
+            }
+            {
+                let _guard = span.enter();
+                tracing::warn!(path = %Path::new("/workspace").display(), "test warning");
+            }
+
+            span.id().is_some()
+        });
+
+        // Assert
+        assert!(span_registered);
+    }
 
     #[test]
     fn rendered_text_start_cell_returns_first_match() {

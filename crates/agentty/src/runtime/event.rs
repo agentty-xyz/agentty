@@ -471,6 +471,7 @@ mod tests {
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
             ),
             parent_session_id: None,
+            personality_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
             queued_messages: Vec::new(),

@@ -2279,6 +2279,8 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
         .persist_session_turn_metadata(
             "session-a",
             &SessionTurnMetadata {
+                applied_personality_id: None,
+                applied_personality_prompt_hash: None,
                 instruction_conversation_id: None,
                 model: AgentModel::Gpt55.as_str().to_string(),
                 provider_conversation_id: None,
@@ -2305,6 +2307,8 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
         .persist_session_turn_metadata(
             "session-b",
             &SessionTurnMetadata {
+                applied_personality_id: None,
+                applied_personality_prompt_hash: None,
                 instruction_conversation_id: None,
                 model: AgentModel::Gpt55.as_str().to_string(),
                 provider_conversation_id: None,
@@ -2546,6 +2550,8 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
         .persist_session_turn_metadata(
             "session-a",
             &SessionTurnMetadata {
+                applied_personality_id: None,
+                applied_personality_prompt_hash: None,
                 instruction_conversation_id: Some("instruction-thread".to_string()),
                 model: AgentModel::Gpt55.as_str().to_string(),
                 provider_conversation_id: Some("thread-123".to_string()),

@@ -63,6 +63,7 @@ pub(super) async fn start_runtime(
             main_checkout_root: request.main_checkout_root.as_deref(),
             replay_transcript: None,
             model: &request.model,
+            personality_prompt: None,
             prompt: "",
             reasoning_level: request.reasoning_level,
             request_kind: &request_kind,
@@ -898,6 +899,7 @@ mod tests {
 
     use ag_protocol::{TurnPromptAttachment, TurnPromptTextSource};
     use mockall::Sequence;
+    use tempfile::tempdir;
 
     use super::*;
     use crate::agent::app_server::codex::MockCodexRuntimeTransport;
@@ -913,6 +915,40 @@ mod tests {
         if let Ok(mut guard) = id_store.lock() {
             *guard = id;
         }
+    }
+
+    #[tokio::test]
+    async fn start_runtime_omits_personality_from_the_process_command() {
+        // Arrange
+        let runtime_parent = tempdir().expect("create runtime parent");
+        let request = AppServerTurnRequest {
+            folder: runtime_parent.path().join("missing-runtime"),
+            live_transcript: None,
+            main_checkout_root: None,
+            model: AgentModel::Gpt55.as_str().to_string(),
+            personality: crate::channel::PersonalityPrompt::active(
+                "Review carefully.".to_string(),
+                true,
+            ),
+            prompt: TurnPrompt::from("Run the turn"),
+            request_kind: crate::channel::AgentRequestKind::SessionStart,
+            replay_transcript: None,
+            provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
+            reasoning_level: ReasoningLevel::High,
+            session_id: "session-1".to_string(),
+        };
+
+        // Act
+        let result = start_runtime(&request).await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(error)
+                if error.to_string().contains("Failed to spawn `codex app-server`")
+                    && !error.to_string().contains("Review carefully.")
+        ));
     }
 
     #[test]

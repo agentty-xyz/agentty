@@ -54,6 +54,8 @@ pub struct BuildCommandRequest<'a> {
     pub main_checkout_root: Option<&'a Path>,
     /// Provider-specific model identifier.
     pub model: &'a str,
+    /// Current personality body included during a full prompt bootstrap.
+    pub personality_prompt: Option<&'a str>,
     /// User prompt to send.
     pub prompt: &'a str,
     /// Reasoning effort preference for this turn.

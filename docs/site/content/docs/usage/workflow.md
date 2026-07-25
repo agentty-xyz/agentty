@@ -533,14 +533,23 @@ returning to the sessions list:
 The command picker filters as you type and accepts contains or fuzzy abbreviations such
 as `/o` for `/model`.
 
-| Command      | Description                                                   |
-| ------------ | ------------------------------------------------------------- |
-| `/apply`     | Verify focused-review suggestions, then apply the valid ones. |
-| `/model`     | Switch the model for the current session.                     |
-| `/reasoning` | Override the reasoning level for the current session.         |
+| Command        | Description                                                   |
+| -------------- | ------------------------------------------------------------- |
+| `/apply`       | Verify focused-review suggestions, then apply the valid ones. |
+| `/model`       | Switch the model for the current session.                     |
+| `/personality` | Choose an agent personality for the current session.          |
+| `/reasoning`   | Override the reasoning level for the current session.         |
 
 `/apply` requires a completed focused review (`f` key). `/model` and `/reasoning` only
 offer locally available backends; see [Agents & Models](@/docs/agents/backends.md).
+
+`/personality` scans `.agents/agents/*/agent.md` in the session worktree when the picker
+opens. Agentty does not scan the global `~/.agents` directory. Each enabled definition
+provides a name, description, and prompt body; workspace directory names supply missing
+IDs. Choose `None (default)` to clear the selection. Agentty stores the selected ID and
+resolves the file again immediately before each turn, so edits apply on the next turn.
+If the selected definition is removed, disabled, or invalid, the turn continues without
+it and the transcript reports the fallback.
 
 <a id="usage-title-refinement"></a> When the first prompt is submitted, Agentty stores
 it as the initial title and generates a refined title in the background using the
