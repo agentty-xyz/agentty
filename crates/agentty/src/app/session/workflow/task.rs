@@ -1239,6 +1239,23 @@ impl SessionTaskService {
         );
     }
 
+    /// Emits an account-level Codex rate-limit update for one session header.
+    pub(crate) fn set_session_rate_limits(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        id: &str,
+        rate_limits: ag_agent::CodexRateLimits,
+    ) {
+        Self::send_app_event(
+            app_event_tx,
+            AppEvent::SessionRateLimitsUpdated {
+                rate_limits,
+                session_id: SessionId::from(id),
+            },
+            Some(id),
+            "SessionRateLimitsUpdated",
+        );
+    }
+
     fn status_requires_full_refresh(status: Status) -> bool {
         matches!(
             status,
@@ -1502,6 +1519,7 @@ mod tests {
                 diff_state: agent::SessionDiffState::Unknown,
                 input_tokens,
                 output_tokens,
+                rate_limits: None,
             },
         }
     }

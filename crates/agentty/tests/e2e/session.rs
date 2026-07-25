@@ -537,6 +537,58 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Seeds a Codex session and installs an app-server stub that reports account
+/// rate limits after the first completed turn.
+fn seed_codex_rate_limit_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular("codex-limits-0001", "gpt-5.5", "main", "Review")
+            .with_title("Codex usage limits"),
+    )?;
+
+    let codex_path = env.stub_bin.join("codex");
+    let script = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+    printf '%s\n' 'codex-cli 0.141.0'
+    exit 0
+fi
+while IFS= read -r line; do
+    request_id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+    case "$line" in
+        *'"method":"initialize"'*)
+            printf '{"id":"%s","result":{}}\n' "$request_id"
+            ;;
+        *'"method":"thread/start"'*)
+            printf '{"id":"%s","result":{"thread":{"id":"thread-1"}}}\n' "$request_id"
+            ;;
+        *'"method":"thread/resume"'*)
+            printf '{"id":"%s","result":{"thread":{"id":"thread-1"}}}\n' "$request_id"
+            ;;
+        *'"method":"turn/start"'*)
+            printf '{"id":"%s","result":{"turn":{"id":"turn-1"}}}\n' "$request_id"
+            printf '%s\n' '{"method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":23,"windowDurationMins":300,"resetsAt":1785788040},"secondary":{"usedPercent":3,"windowDurationMins":10080,"resetsAt":1785788040}}}}'
+            printf '%s\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"{\"answer\":\"Codex completed the task.\",\"questions\":[],\"summary\":null}"}}}'
+            printf '%s\n' '{"method":"turn/completed","params":{"turn":{"id":"turn-1","status":"completed","usage":{"inputTokens":8,"outputTokens":13}}}}'
+            ;;
+        *'"method":"account/rateLimits/read"'*)
+            printf '%s\n' "{\"id\":\"$request_id\",\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":23,\"windowDurationMins\":300,\"resetsAt\":1785788040},\"secondary\":{\"usedPercent\":3,\"windowDurationMins\":10080,\"resetsAt\":1785788040}}}}"
+            ;;
+    esac
+done
+"#;
+    std::fs::write(&codex_path, script)?;
+    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
+
+    let worktree_path = env.agentty_root.join("wt").join("codex-li");
+    let worktree_path_text = worktree_path.to_string_lossy().into_owned();
+    run_git(
+        &env.workdir,
+        &["worktree", "add", &worktree_path_text, "-b", "wt/codex-li"],
+    )?;
+
+    seed_sessions_startup_tab(env)
+}
+
 /// Seeds one review-ready session with a worktree-local personality.
 fn seed_session_personality(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
@@ -2487,6 +2539,50 @@ fn session_chat_header_agent_model() -> E2eResult {
     Ok(())
 }
 
+/// Verify that Codex account usage limits appear in the session header after
+/// the first completed model turn.
+#[test]
+fn session_chat_header_codex_rate_limits() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_chat_header_codex_rate_limits")
+        .with_git()
+        .setup(seed_codex_rate_limit_session)
+        .zola(
+            "Codex usage limits",
+            "See remaining Codex account quota in the session header after the first turn.",
+            45,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .press_key("Enter")
+                    .wait_for_text("Agent: codex  Model: gpt-5.5", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("show usage limits")
+                    .wait_for_text("show usage limits", 3000)
+                    .press_key("Enter")
+                    .viewing_pause_ms(1500)
+                    .wait_for_text("Weekly limit: 97% left (resets 20:14 on 3 Aug)", 10000)
+                    .capture_labeled(
+                        "codex_rate_limits",
+                        "Session header showing Codex account usage limits",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "Weekly limit: 97% left (resets 20:14 on 3 Aug)",
+                    &full,
+                );
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that a selected session row remains readable under Dark Horizon.
 ///
 /// The source renderer test covers the exact selected-cell background color;
@@ -3243,12 +3339,12 @@ fn session_question_resume_after_leaving_to_list() -> E2eResult {
     Ok(())
 }
 
-/// Persists the `Sessions` tab as the startup tab.
+/// Persists the `Sessions` tab so PTY proof and VHS replay start from the same
+/// navigation state.
 ///
-/// `Tab` is the composer focus toggle under test, so the scenario cannot spend
-/// a `Tab` press on tab navigation: the seeded startup tab keeps every `Tab` in
-/// the scenario meaningful, and keeps the PTY proof and the VHS replay (which
-/// share this database) starting from the same tab.
+/// Feature tests share one database between proof and replay, so scenarios
+/// that stay within session views use this seed instead of persisting a
+/// different tab during the proof run.
 fn seed_sessions_startup_tab(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = common::seed_runtime()?;
 

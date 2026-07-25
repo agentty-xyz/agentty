@@ -2599,6 +2599,7 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
             diff_state: SessionDiffState::Unknown,
             input_tokens: 7,
             output_tokens: 11,
+            rate_limits: None,
         },
     );
 
@@ -2618,6 +2619,7 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
                 diff_state: SessionDiffState::Unknown,
                 input_tokens: 3,
                 output_tokens: 5,
+                rate_limits: None,
             },
         ),
     });
@@ -3927,6 +3929,7 @@ async fn apply_app_events_agent_response_updates_questions_and_token_usage() {
                 diff_state: SessionDiffState::Unknown,
                 input_tokens: 13,
                 output_tokens: 21,
+                rate_limits: None,
             },
         ),
     })
@@ -4095,6 +4098,7 @@ async fn apply_app_events_agent_response_batches_same_session_turns() {
             diff_state: SessionDiffState::Unknown,
             input_tokens: 2,
             output_tokens: 3,
+            rate_limits: None,
         },
     );
     let second_turn = test_turn_applied_state(
@@ -4107,6 +4111,7 @@ async fn apply_app_events_agent_response_batches_same_session_turns() {
             diff_state: SessionDiffState::Unknown,
             input_tokens: 5,
             output_tokens: 8,
+            rate_limits: None,
         },
     );
 

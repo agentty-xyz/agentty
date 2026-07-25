@@ -3100,6 +3100,7 @@ mod tests {
                     diff_state: agent::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
+                    rate_limits: None,
                 },
             })
         });
@@ -3177,6 +3178,7 @@ mod tests {
                         diff_state: agent::SessionDiffState::Unknown,
                         input_tokens: 0,
                         output_tokens: 0,
+                        rate_limits: None,
                     },
                 })
             });

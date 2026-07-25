@@ -222,6 +222,7 @@ async fn submit_one_shot_with_app_server_client(
             diff_state: SessionDiffState::Unknown,
             input_tokens: turn_result.input_tokens + repair_input_tokens,
             output_tokens: turn_result.output_tokens + repair_output_tokens,
+            rate_limits: None,
         },
     })
 }

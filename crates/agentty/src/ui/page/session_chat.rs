@@ -193,6 +193,7 @@ impl<'a> SessionChatPage<'a> {
             area.width.saturating_sub(2),
             self.default_reasoning_level,
             self.frame_time.unix_seconds(),
+            self.frame_time.rate_limit_reset_local_utc_offset_seconds(),
         );
         let header_height = header_height(&header_lines);
         let bottom_height = prepared_prompt_panel.as_ref().map_or_else(
@@ -340,6 +341,8 @@ pub(crate) struct SessionChatLayoutInput<'a> {
     pub(crate) area: Rect,
     /// Active project-scoped default reasoning level shown in the header.
     pub(crate) default_reasoning_level: ReasoningLevel,
+    /// Local UTC offset active at the quota reset timestamp.
+    pub(crate) rate_limit_reset_local_utc_offset_seconds: i64,
     /// Current UI mode, which determines the reserved bottom-panel height.
     pub(crate) mode: &'a AppMode,
     /// Focused-review output for the rendered session.
@@ -361,6 +364,7 @@ pub(crate) fn transcript_view_height(input: SessionChatLayoutInput<'_>) -> u16 {
         input.area.width.saturating_sub(2),
         input.default_reasoning_level,
         input.wall_clock_unix_seconds,
+        input.rate_limit_reset_local_utc_offset_seconds,
     );
     let bottom_height =
         prepare_prompt_panel(input.area, input.mode, input.review_text, input.session).map_or_else(
@@ -706,6 +710,7 @@ mod tests {
             area,
             default_reasoning_level: ReasoningLevel::default(),
             mode,
+            rate_limit_reset_local_utc_offset_seconds: 0,
             review_text: None,
             session,
             wall_clock_unix_seconds: 0,

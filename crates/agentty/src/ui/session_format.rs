@@ -5,10 +5,11 @@ use ag_tui_text::text_util;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
+use time::{OffsetDateTime, UtcOffset};
 
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::review;
-use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, Status};
+use crate::domain::session::{COMMITTING_PROGRESS_LABEL, RateLimitWindow, Session, Status};
 use crate::presentation::help_action::{self, ViewHelpState};
 use crate::ui::icon::Icon;
 use crate::ui::{markdown, style};
@@ -18,18 +19,19 @@ const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
 const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str =
     "### Suggestions (type \"/apply\" to verify and apply)";
 const SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT: &str = "No changes";
-
 /// Formats the session title and metadata lines rendered above the output
 /// panel.
 ///
 /// When a linked review-request URL is available, the URL shares the metadata
 /// row when the full row fits and otherwise wraps to the row directly above
-/// the transcript border.
+/// the transcript border. An available weekly Codex quota window renders on a
+/// separate row with its local reset time.
 pub fn session_header_lines(
     session: &Session,
     header_width: u16,
     default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
+    reset_local_utc_offset_seconds: i64,
 ) -> Vec<Line<'static>> {
     let title_width = usize::from(header_width);
     let title_text = text_util::inline_text(session.display_title());
@@ -43,6 +45,7 @@ pub fn session_header_lines(
         header_width,
         default_reasoning_level,
         wall_clock_unix_seconds,
+        reset_local_utc_offset_seconds,
     );
 
     let mut lines = Vec::with_capacity(1 + metadata_lines.len());
@@ -83,10 +86,22 @@ fn session_header_metadata_lines(
     header_width: u16,
     default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
+    reset_local_utc_offset_seconds: i64,
 ) -> Vec<String> {
     let metadata =
         session_metadata_base_text(session, default_reasoning_level, wall_clock_unix_seconds);
     let available_width = usize::from(header_width);
+    let mut metadata_lines = vec![text_util::truncate_with_ellipsis(
+        &metadata,
+        available_width,
+    )];
+    if let Some(rate_limits_text) = codex_rate_limits_text(session, reset_local_utc_offset_seconds)
+    {
+        metadata_lines.push(text_util::truncate_with_ellipsis(
+            &rate_limits_text,
+            available_width,
+        ));
+    }
 
     let review_request_url = session
         .review_request
@@ -97,10 +112,7 @@ fn session_header_metadata_lines(
         .filter(|url| !url.is_empty());
 
     let Some(review_request_url) = review_request_url else {
-        return vec![text_util::truncate_with_ellipsis(
-            &metadata,
-            available_width,
-        )];
+        return metadata_lines;
     };
 
     let metadata_width = metadata.chars().count();
@@ -109,7 +121,6 @@ fn session_header_metadata_lines(
     let total_required_width = metadata_width
         .saturating_add(separator_width)
         .saturating_add(url_width);
-    let mut metadata_lines = Vec::with_capacity(2);
 
     if total_required_width <= available_width {
         let separator = " ".repeat(
@@ -117,21 +128,66 @@ fn session_header_metadata_lines(
                 .saturating_sub(metadata_width)
                 .saturating_sub(url_width),
         );
-        metadata_lines.push(format!("{metadata}{separator}{review_request_url}"));
+        metadata_lines[0] = format!("{metadata}{separator}{review_request_url}");
 
         return metadata_lines;
     }
 
-    metadata_lines.push(text_util::truncate_with_ellipsis(
-        &metadata,
-        available_width,
-    ));
     metadata_lines.push(text_util::truncate_with_ellipsis(
         review_request_url,
         available_width,
     ));
 
     metadata_lines
+}
+
+/// Formats the weekly account quota for the session chat header.
+fn codex_rate_limits_text(
+    session: &Session,
+    reset_local_utc_offset_seconds: i64,
+) -> Option<String> {
+    let weekly_window = session.codex_weekly_rate_limit_window()?;
+
+    Some(rate_limit_window_text(
+        weekly_window,
+        reset_local_utc_offset_seconds,
+    ))
+}
+
+/// Formats the weekly quota window with its local reset time when available.
+fn rate_limit_window_text(window: RateLimitWindow, reset_local_utc_offset_seconds: i64) -> String {
+    let remaining_percent = 100_u8.saturating_sub(window.used_percent);
+    let reset_text = window
+        .resets_at
+        .and_then(|timestamp| rate_limit_reset_text(timestamp, reset_local_utc_offset_seconds))
+        .map_or_else(String::new, |reset| format!(" (resets {reset})"));
+
+    format!("Weekly limit: {remaining_percent}% left{reset_text}")
+}
+
+/// Converts a Unix reset timestamp to the compact local date-time used in the
+/// session header.
+fn rate_limit_reset_text(
+    reset_timestamp: i64,
+    reset_local_utc_offset_seconds: i64,
+) -> Option<String> {
+    let offset_seconds = i32::try_from(reset_local_utc_offset_seconds).ok()?;
+    let utc_offset = UtcOffset::from_whole_seconds(offset_seconds).ok()?;
+    let reset_time = OffsetDateTime::from_unix_timestamp(reset_timestamp)
+        .ok()?
+        .to_offset(utc_offset);
+    let month_names = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let month_index = usize::from(u8::from(reset_time.month())) - 1;
+
+    Some(format!(
+        "{:02}:{:02} on {} {}",
+        reset_time.hour(),
+        reset_time.minute(),
+        reset_time.day(),
+        month_names[month_index],
+    ))
 }
 
 /// Builds the untruncated left-side metadata text shared by session header and
@@ -378,7 +434,8 @@ mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::{
-        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+        CodexRateLimits, ForgeKind, RateLimitWindow, ReviewRequest, ReviewRequestState,
+        ReviewRequestSummary,
     };
     use crate::test_support::SessionFixtureBuilder;
 
@@ -409,7 +466,7 @@ mod tests {
 
         // Act
         let header_lines =
-            session_header_lines(&session, header_width, ReasoningLevel::default(), 0);
+            session_header_lines(&session, header_width, ReasoningLevel::default(), 0, 0);
         let metadata_line = header_lines[1].to_string();
 
         // Assert
@@ -425,7 +482,7 @@ mod tests {
         let session = session_with_review_request("https://example.test/pull/42");
 
         // Act
-        let header_lines = session_header_lines(&session, 60, ReasoningLevel::default(), 0);
+        let header_lines = session_header_lines(&session, 60, ReasoningLevel::default(), 0, 0);
         let metadata_line = header_lines[1].to_string();
         let review_url_line = header_lines[2].to_string();
 
@@ -463,6 +520,120 @@ mod tests {
 
         // Assert
         assert!(metadata_text.contains("Agent: codex  Model: gpt-5.5"));
+    }
+
+    #[test]
+    fn session_header_lines_show_weekly_limit_with_local_reset_time() {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt55,
+        );
+        session.stats.rate_limits = Some(CodexRateLimits {
+            primary: Some(RateLimitWindow {
+                resets_at: Some(1_700_000_000),
+                used_percent: 23,
+                window_duration_mins: Some(300),
+            }),
+            secondary: Some(RateLimitWindow {
+                resets_at: Some(1_785_788_040),
+                used_percent: 3,
+                window_duration_mins: Some(10_080),
+            }),
+        });
+
+        // Act
+        let header_lines = session_header_lines(&session, 80, ReasoningLevel::default(), 0, 0);
+
+        // Assert
+        assert_eq!(header_lines.len(), 3);
+        assert_eq!(
+            header_lines[2].to_string(),
+            "Weekly limit: 97% left (resets 20:14 on 3 Aug)"
+        );
+    }
+
+    #[test]
+    fn codex_rate_limits_text_omits_empty_and_non_codex_snapshots() {
+        // Arrange
+        let mut non_codex_session = SessionFixtureBuilder::new().build();
+        non_codex_session.stats.rate_limits = Some(CodexRateLimits {
+            primary: Some(RateLimitWindow {
+                resets_at: None,
+                used_percent: 10,
+                window_duration_mins: Some(60),
+            }),
+            secondary: None,
+        });
+        let mut codex_session = SessionFixtureBuilder::new().build();
+        codex_session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt55,
+        );
+        codex_session.stats.rate_limits = Some(CodexRateLimits::default());
+
+        // Act
+        let non_codex_text = codex_rate_limits_text(&non_codex_session, 0);
+        let empty_codex_text = codex_rate_limits_text(&codex_session, 0);
+
+        // Assert
+        assert_eq!(non_codex_text, None);
+        assert_eq!(empty_codex_text, None);
+    }
+
+    #[test]
+    fn codex_rate_limits_text_requires_a_weekly_window() {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt55,
+        );
+        session.stats.rate_limits = Some(CodexRateLimits {
+            primary: Some(RateLimitWindow {
+                resets_at: None,
+                used_percent: 7,
+                window_duration_mins: Some(300),
+            }),
+            secondary: None,
+        });
+
+        // Act
+        let text = codex_rate_limits_text(&session, 0);
+
+        // Assert
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn rate_limit_window_text_omits_unavailable_reset_time() {
+        // Arrange
+        let window = RateLimitWindow {
+            resets_at: Some(i64::MAX),
+            used_percent: 110,
+            window_duration_mins: Some(10_080),
+        };
+
+        // Act
+        let text = rate_limit_window_text(window, i64::MAX);
+        let invalid_timestamp_text = rate_limit_reset_text(i64::MAX, 0);
+
+        // Assert
+        assert_eq!(text, "Weekly limit: 0% left");
+        assert_eq!(invalid_timestamp_text, None);
+    }
+
+    #[test]
+    fn rate_limit_reset_text_applies_post_dst_local_utc_offset() {
+        // Arrange
+        let reset_timestamp = 1_772_967_600;
+
+        // Act
+        let reset_text = rate_limit_reset_text(reset_timestamp, -7 * 3_600);
+
+        // Assert
+        assert_eq!(reset_text.as_deref(), Some("04:00 on 8 Mar"));
     }
 
     #[test]

@@ -106,20 +106,32 @@ impl SessionState {
     }
 
     /// Replaces persisted session snapshots while retaining in-process
-    /// transient output for sessions that remain loaded.
+    /// provider metadata and transient output for sessions that remain
+    /// loaded.
     ///
     /// Database refreshes can observe intermediate workflow persistence, such
     /// as a published upstream branch before its review-request URL is ready.
-    /// Carrying transient output across that refresh keeps active loaders
-    /// visible until their owning reducer resolves them.
+    /// Carrying transient state across that refresh keeps account rate limits
+    /// and active loaders visible until their owning reducer replaces them.
     pub(crate) fn replace_sessions(&mut self, mut sessions: Vec<Session>) {
-        let transient_messages_by_session_id: HashMap<SessionId, _> = self
+        let transient_state_by_session_id: HashMap<SessionId, _> = self
             .sessions
             .iter()
-            .map(|session| (session.id.clone(), session.transient_messages.clone()))
+            .map(|session| {
+                (
+                    session.id.clone(),
+                    (
+                        session.stats.rate_limits,
+                        session.transient_messages.clone(),
+                    ),
+                )
+            })
             .collect();
         for session in &mut sessions {
-            if let Some(transient_messages) = transient_messages_by_session_id.get(&session.id) {
+            if let Some((rate_limits, transient_messages)) =
+                transient_state_by_session_id.get(&session.id)
+            {
+                session.stats.rate_limits = *rate_limits;
                 session.transient_messages.clone_from(transient_messages);
                 session.reconcile_transient_messages();
             }
@@ -432,7 +444,8 @@ mod tests {
     use super::*;
     use crate::domain::selection::SelectionState;
     use crate::domain::session::{
-        Session, SessionDiffState, SessionHandles, SessionSize, SessionStats, Status,
+        CodexRateLimits, RateLimitWindow, Session, SessionDiffState, SessionHandles, SessionSize,
+        SessionStats, Status,
     };
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::domain::transient_message::{
@@ -817,6 +830,15 @@ mod tests {
             .id("session-1")
             .status(Status::Review)
             .build();
+        let expected_rate_limits = Some(CodexRateLimits {
+            primary: Some(RateLimitWindow {
+                resets_at: Some(1_700_000_000),
+                used_percent: 25,
+                window_duration_mins: Some(300),
+            }),
+            secondary: None,
+        });
+        initial_session.stats.rate_limits = expected_rate_limits;
         initial_session.transient_messages.upsert(TransientMessage {
             anchor: TransientMessageAnchor::Tail,
             body: TransientMessageBody::Loading("Publishing review request...".to_string()),
@@ -847,6 +869,7 @@ mod tests {
             refreshed_session.published_upstream_ref.as_deref(),
             Some("origin/wt/session-1")
         );
+        assert_eq!(refreshed_session.stats.rate_limits, expected_rate_limits);
         assert_eq!(
             refreshed_session
                 .transient_messages

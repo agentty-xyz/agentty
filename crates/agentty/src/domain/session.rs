@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-pub use ag_agent::{SessionDiffState, SessionStats};
+pub use ag_agent::{CodexRateLimits, RateLimitWindow, SessionDiffState, SessionStats};
 pub use ag_session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId,
     SessionStatus as Status, activity_day_key_with_offset,
@@ -27,6 +27,9 @@ pub const SESSION_DATA_DIR: &str = ".agentty";
 /// Full in-progress loader label shown while post-turn commit-message
 /// generation and git commit orchestration are running.
 pub(crate) const COMMITTING_PROGRESS_LABEL: &str = "Committing...";
+
+/// Duration identifying the weekly Codex quota window.
+const WEEKLY_LIMIT_DURATION_MINS: u64 = 7 * 24 * 60;
 
 /// Lead sentence used when seeding a follow-on prompt from a terminal session.
 const TERMINAL_CONTINUATION_PROMPT_INTRO: &str =
@@ -363,6 +366,20 @@ impl Session {
         }
 
         self.hydrate_summary_transient();
+    }
+
+    /// Returns the weekly Codex quota window available to this session.
+    pub(crate) fn codex_weekly_rate_limit_window(&self) -> Option<RateLimitWindow> {
+        if self.agent.kind() != super::agent::AgentKind::Codex {
+            return None;
+        }
+
+        let rate_limits = self.stats.rate_limits?;
+
+        [rate_limits.primary, rate_limits.secondary]
+            .into_iter()
+            .flatten()
+            .find(|window| window.window_duration_mins == Some(WEEKLY_LIMIT_DURATION_MINS))
     }
 
     /// Returns the display title for this session.

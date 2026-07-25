@@ -340,6 +340,23 @@ impl SessionManager {
             .apply_session_diff_stats_updated(session_id, diff_stats);
     }
 
+    /// Applies the latest account-level Codex rate-limit snapshot to one
+    /// loaded session.
+    pub(crate) fn apply_session_rate_limits_updated(
+        &mut self,
+        session_id: &str,
+        rate_limits: crate::domain::session::CodexRateLimits,
+    ) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.stats.rate_limits = Some(rate_limits);
+        }
+    }
+
     /// Returns runtime handles keyed by stable session id.
     pub(crate) fn session_handles(
         &self,

@@ -63,21 +63,30 @@ impl App {
         let clock_client = self.services.clock();
         let system_time = clock_client.now_system_time();
         let wall_clock_unix_seconds = session::unix_timestamp_from_system_time(system_time);
+        let local_utc_offset_seconds =
+            clock_client.local_utc_offset_seconds(wall_clock_unix_seconds);
+        let sessions = self.sessions.render_parts();
+        let visible_session_id = visible_session_id(&self.mode);
+        let rate_limit_reset_local_utc_offset_seconds = rate_limit_reset_local_utc_offset_seconds(
+            |timestamp_seconds| clock_client.local_utc_offset_seconds(timestamp_seconds),
+            visible_session_id,
+            sessions.sessions,
+            local_utc_offset_seconds,
+        );
         let frame_time = FrameTime::new(
             wall_clock_unix_seconds,
             clock::unix_timestamp_millis(system_time),
-            clock_client.local_utc_offset_seconds(wall_clock_unix_seconds),
-        );
+            local_utc_offset_seconds,
+        )
+        .with_rate_limit_reset_local_utc_offset_seconds(rate_limit_reset_local_utc_offset_seconds);
         let status_bar_fyi_rotation_index =
             u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
-        let visible_session_id = visible_review_session_id(&self.mode);
         let session_review = visible_session_id.map(|session_id| {
             let (_, text) = self.review_view_state(session_id);
 
             SessionReviewView { session_id, text }
         });
         let project = self.projects.render_parts();
-        let sessions = self.sessions.render_parts();
         let current_tab = self.tabs.current();
         let settings_screen = (current_tab == Tab::Settings)
             .then(|| self.settings_presentation.snapshot(&self.settings.view()));
@@ -120,8 +129,27 @@ impl App {
     }
 }
 
+/// Resolves the local UTC offset active at the visible session's weekly quota
+/// reset, falling back to the current frame offset when no reset is available.
+fn rate_limit_reset_local_utc_offset_seconds(
+    local_utc_offset_seconds: impl FnOnce(i64) -> i64,
+    visible_session_id: Option<&str>,
+    sessions: &[Session],
+    fallback_offset_seconds: i64,
+) -> i64 {
+    visible_session_id
+        .and_then(|session_id| {
+            sessions
+                .iter()
+                .find(|session| session.id.as_str() == session_id)
+        })
+        .and_then(Session::codex_weekly_rate_limit_window)
+        .and_then(|window| window.resets_at)
+        .map_or_else(|| fallback_offset_seconds, local_utc_offset_seconds)
+}
+
 /// Returns the session visible behind the active presentation mode.
-fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
+fn visible_session_id(mode: &AppMode) -> Option<&str> {
     match mode {
         AppMode::View { session_id, .. }
         | AppMode::Prompt { session_id, .. }
@@ -154,9 +182,16 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+    use crate::domain::session::{CodexRateLimits, RateLimitWindow};
+    use crate::test_support::SessionFixtureBuilder;
+
+    const DST_BOUNDARY_TIMESTAMP: i64 = 1_772_964_000;
+    const DST_CURRENT_TIMESTAMP: i64 = 1_772_960_400;
+    const DST_RESET_TIMESTAMP: i64 = 1_772_967_600;
 
     #[test]
-    fn visible_review_session_id_includes_review_comments() {
+    fn visible_session_id_includes_review_comments() {
         // Arrange
         let mode = AppMode::ReviewComments {
             comment_actions: Vec::new(),
@@ -170,10 +205,79 @@ mod tests {
         };
 
         // Act
-        let session_id = visible_review_session_id(&mode);
+        let session_id = visible_session_id(&mode);
 
         // Assert
         assert_eq!(session_id, Some("session-id"));
+    }
+
+    #[test]
+    fn rate_limit_reset_offset_uses_the_offset_at_the_reset_timestamp() {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55);
+        session.stats.rate_limits = Some(CodexRateLimits {
+            primary: None,
+            secondary: Some(RateLimitWindow {
+                resets_at: Some(DST_RESET_TIMESTAMP),
+                used_percent: 3,
+                window_duration_mins: Some(10_080),
+            }),
+        });
+        let session_id = session.id.clone();
+        let sessions = [session];
+        let offset_at = |timestamp_seconds| {
+            if timestamp_seconds >= DST_BOUNDARY_TIMESTAMP {
+                -7 * 3_600
+            } else {
+                -8 * 3_600
+            }
+        };
+        let current_offset_seconds = offset_at(DST_CURRENT_TIMESTAMP);
+
+        // Act
+        let offset_seconds = rate_limit_reset_local_utc_offset_seconds(
+            offset_at,
+            Some(session_id.as_str()),
+            &sessions,
+            current_offset_seconds,
+        );
+
+        // Assert
+        assert_eq!(current_offset_seconds, -8 * 3_600);
+        assert_eq!(offset_seconds, -7 * 3_600);
+    }
+
+    #[tokio::test]
+    async fn view_snapshot_projects_the_visible_quota_reset_offset() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let mut session = SessionFixtureBuilder::new().id("session-id").build();
+        session.agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55);
+        session.stats.rate_limits = Some(CodexRateLimits {
+            primary: None,
+            secondary: Some(RateLimitWindow {
+                resets_at: Some(DST_RESET_TIMESTAMP),
+                used_percent: 3,
+                window_duration_mins: Some(10_080),
+            }),
+        });
+        let session_id = session.id.clone();
+        app.sessions.push_session(session);
+        app.mode = AppMode::View {
+            scroll_offset: Some(0),
+            session_id,
+        };
+        let expected_offset_seconds = app.local_utc_offset_seconds(DST_RESET_TIMESTAMP);
+
+        // Act
+        let frame_time = app.view_snapshot().frame_time;
+
+        // Assert
+        assert_eq!(
+            frame_time.rate_limit_reset_local_utc_offset_seconds(),
+            expected_offset_seconds
+        );
     }
 
     #[tokio::test]

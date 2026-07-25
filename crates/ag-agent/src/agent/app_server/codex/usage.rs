@@ -2,6 +2,58 @@
 
 use serde_json::Value;
 
+use crate::{CodexRateLimits, RateLimitWindow};
+
+/// Extracts the latest account rate-limit snapshot from a Codex response.
+pub(super) fn extract_rate_limits(response_value: &Value) -> Option<CodexRateLimits> {
+    let method = response_value.get("method").and_then(Value::as_str);
+    let rate_limits = if method == Some("account/rateLimits/updated") {
+        response_value.get("params")?.get("rateLimits")?
+    } else {
+        response_value.get("result")?.get("rateLimits")?
+    };
+
+    let snapshot = CodexRateLimits {
+        primary: rate_limits.get("primary").and_then(parse_rate_limit_window),
+        secondary: rate_limits
+            .get("secondary")
+            .and_then(parse_rate_limit_window),
+    };
+    if snapshot == CodexRateLimits::default() {
+        return None;
+    }
+
+    Some(snapshot)
+}
+
+/// Parses one Codex quota-window object while accepting integer or fractional
+/// usage percentages from different app-server versions.
+fn parse_rate_limit_window(value: &Value) -> Option<RateLimitWindow> {
+    if value.is_null() {
+        return None;
+    }
+
+    let used_percent = value
+        .get("usedPercent")
+        .or_else(|| value.get("used_percent"))
+        .and_then(Value::as_f64)
+        .and_then(|percent| percent.round().clamp(0.0, 100.0).to_string().parse().ok())?;
+    let window_duration_mins = value
+        .get("windowDurationMins")
+        .or_else(|| value.get("window_duration_mins"))
+        .and_then(Value::as_u64);
+    let resets_at = value
+        .get("resetsAt")
+        .or_else(|| value.get("resets_at"))
+        .and_then(Value::as_i64);
+
+    Some(RateLimitWindow {
+        resets_at,
+        used_percent,
+        window_duration_mins,
+    })
+}
+
 /// Resolves final turn usage by preferring `turn/completed` payload usage and
 /// falling back to the last seen usage update when completion omits it.
 pub(super) fn resolve_turn_usage(
@@ -149,6 +201,91 @@ mod tests {
 
         // Assert
         assert_eq!(usage, Some((21, 8)));
+    }
+
+    #[test]
+    fn extract_rate_limits_reads_account_update_windows() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "account/rateLimits/updated",
+            "params": {
+                "rateLimits": {
+                    "primary": {
+                        "usedPercent": 23.4,
+                        "windowDurationMins": 300,
+                        "resetsAt": 1_700_000_000
+                    },
+                }
+            }
+        });
+
+        // Act
+        let rate_limits = extract_rate_limits(&response_value);
+
+        // Assert
+        assert_eq!(
+            rate_limits,
+            Some(CodexRateLimits {
+                primary: Some(RateLimitWindow {
+                    resets_at: Some(1_700_000_000),
+                    used_percent: 23,
+                    window_duration_mins: Some(300),
+                }),
+                secondary: None,
+            })
+        );
+    }
+
+    #[test]
+    fn extract_rate_limits_reads_response_and_snake_case_fields() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "result": {
+                "rateLimits": {
+                    "primary": null,
+                    "secondary": {
+                        "used_percent": 50,
+                        "window_duration_mins": 10080,
+                        "resets_at": 1_800_000_000
+                    }
+                }
+            }
+        });
+
+        // Act
+        let rate_limits = extract_rate_limits(&response_value);
+
+        // Assert
+        assert_eq!(
+            rate_limits,
+            Some(CodexRateLimits {
+                primary: None,
+                secondary: Some(RateLimitWindow {
+                    resets_at: Some(1_800_000_000),
+                    used_percent: 50,
+                    window_duration_mins: Some(10080),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn extract_rate_limits_ignores_snapshots_without_windows() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "result": {
+                "rateLimits": {
+                    "primary": null,
+                    "secondary": null
+                }
+            }
+        });
+
+        // Act
+        let rate_limits = extract_rate_limits(&response_value);
+
+        // Assert
+        assert_eq!(rate_limits, None);
     }
 
     #[test]

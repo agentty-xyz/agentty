@@ -1204,6 +1204,13 @@ impl App {
         session::unix_timestamp_from_system_time(self.sessions.state().now_system_time())
     }
 
+    /// Returns the host's UTC offset for one render-time Unix timestamp.
+    pub(crate) fn local_utc_offset_seconds(&self, timestamp_seconds: i64) -> i64 {
+        self.services
+            .clock()
+            .local_utc_offset_seconds(timestamp_seconds)
+    }
+
     /// Returns the focused-review output state that should be shown when one
     /// session view is reopened.
     pub(crate) fn review_view_state(&self, session_id: &str) -> (Option<String>, Option<&str>) {

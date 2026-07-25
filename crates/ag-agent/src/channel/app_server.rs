@@ -124,6 +124,9 @@ impl AgentChannel for AppServerAgentChannel {
                                 // Fire-and-forget: receiver may be dropped during shutdown.
                                 let _ = events.send(TurnEvent::ThoughtDelta(trimmed.to_string()));
                             }
+                            AppServerStreamEvent::RateLimitsUpdated(rate_limits) => {
+                                let _ = events.send(TurnEvent::RateLimitsUpdated(rate_limits));
+                            }
                         }
                     }
                 })
@@ -543,6 +546,43 @@ mod tests {
             .try_recv()
             .expect("should have received a progress event");
         assert_eq!(event, TurnEvent::ThoughtDelta("Running tool".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_run_turn_routes_rate_limit_updates() {
+        // Arrange
+        let rate_limits = crate::CodexRateLimits {
+            primary: Some(crate::RateLimitWindow {
+                resets_at: Some(1_700_000_000),
+                used_percent: 25,
+                window_duration_mins: Some(300),
+            }),
+            secondary: None,
+        };
+        let mut mock_client = MockAppServerClient::new();
+        mock_client
+            .expect_run_turn()
+            .returning(move |_request, stream_tx| {
+                let _ = stream_tx.send(AppServerStreamEvent::RateLimitsUpdated(rate_limits));
+
+                Box::pin(async {
+                    Ok(make_ok_response(
+                        r#"{"answer":"Done.","questions":[],"summary":null}"#,
+                    ))
+                })
+            });
+        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
+        let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = channel
+            .run_turn("sess-1".to_string(), make_turn_request(), events_tx)
+            .await;
+        let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
+
+        // Assert
+        assert!(result.is_ok());
+        assert!(events.contains(&TurnEvent::RateLimitsUpdated(rate_limits)));
     }
 
     #[tokio::test]

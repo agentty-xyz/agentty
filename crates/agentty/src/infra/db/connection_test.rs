@@ -585,6 +585,7 @@ async fn persist_joined_session_metadata(database: &Database, review_request: &R
                 diff_state: SessionDiffState::Unknown,
                 input_tokens: 11,
                 output_tokens: 29,
+                rate_limits: None,
             },
         )
         .await
@@ -1123,6 +1124,7 @@ async fn test_delete_session_removes_row_and_nulls_usage_foreign_key() {
                 diff_state: SessionDiffState::Unknown,
                 input_tokens: 11,
                 output_tokens: 29,
+                rate_limits: None,
             },
         )
         .await
@@ -1472,6 +1474,7 @@ async fn test_upsert_session_usage_accumulates_counts_per_model() {
                 diff_state: SessionDiffState::Unknown,
                 input_tokens: 11,
                 output_tokens: 29,
+                rate_limits: None,
             },
         )
         .await
@@ -1487,6 +1490,7 @@ async fn test_upsert_session_usage_accumulates_counts_per_model() {
                 diff_state: SessionDiffState::Unknown,
                 input_tokens: 3,
                 output_tokens: 5,
+                rate_limits: None,
             },
         )
         .await
@@ -2310,6 +2314,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                     diff_state: SessionDiffState::Unknown,
                     input_tokens: 1_200,
                     output_tokens: 650,
+                    rate_limits: None,
                 },
             },
         )
@@ -2338,6 +2343,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                     diff_state: SessionDiffState::Unknown,
                     input_tokens: 3,
                     output_tokens: 5,
+                    rate_limits: None,
                 },
             },
         )
@@ -2582,6 +2588,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
                     diff_state: SessionDiffState::Unknown,
                     input_tokens: 3,
                     output_tokens: 5,
+                    rate_limits: None,
                 },
             },
         )

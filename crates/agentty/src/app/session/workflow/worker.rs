@@ -416,6 +416,7 @@ impl SessionWorkerRebaseAssistClient {
             diff_state: agent::SessionDiffState::Unknown,
             input_tokens: turn_result.input_tokens,
             output_tokens: turn_result.output_tokens,
+            rate_limits: None,
         };
         if let Err(error) = self
             .db
@@ -1290,6 +1291,7 @@ mod tests {
                     diff_state: agent::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
+                    rate_limits: None,
                 },
             })
         });
@@ -2674,6 +2676,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_consume_turn_events_routes_rate_limits_to_session_state() {
+        // Arrange
+        let rate_limits = agent::CodexRateLimits {
+            primary: Some(agent::RateLimitWindow {
+                resets_at: Some(1_700_000_000),
+                used_percent: 25,
+                window_duration_mins: Some(300),
+            }),
+            secondary: None,
+        };
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let child_pid = Arc::new(Mutex::new(None));
+        event_tx
+            .send(TurnEvent::RateLimitsUpdated(rate_limits))
+            .expect("failed to send rate limits");
+        drop(event_tx);
+
+        // Act
+        consume_turn_events(event_rx, app_event_tx, "session-1".into(), child_pid).await;
+
+        // Assert
+        assert_eq!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::SessionRateLimitsUpdated {
+                rate_limits,
+                session_id: "session-1".into(),
+            })
+        );
+        assert!(app_event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
     /// Verifies ready thought-delta bursts enqueue only the latest progress
     /// update before the final clear event.
     async fn test_consume_turn_events_coalesces_ready_thought_delta_bursts() {
@@ -2682,7 +2717,21 @@ mod tests {
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let child_pid = Arc::new(Mutex::new(None));
 
-        for thought in ["first", "second", "third"] {
+        let rate_limits = agent::CodexRateLimits {
+            primary: None,
+            secondary: Some(agent::RateLimitWindow {
+                resets_at: Some(1_800_000_000),
+                used_percent: 40,
+                window_duration_mins: Some(10_080),
+            }),
+        };
+        event_tx
+            .send(TurnEvent::ThoughtDelta("first".to_string()))
+            .expect("failed to send first thought delta");
+        event_tx
+            .send(TurnEvent::RateLimitsUpdated(rate_limits))
+            .expect("failed to send rate limits");
+        for thought in ["second", "third"] {
             event_tx
                 .send(TurnEvent::ThoughtDelta(thought.to_string()))
                 .expect("failed to send thought delta");
@@ -2698,6 +2747,10 @@ mod tests {
         assert_eq!(
             events,
             vec![
+                AppEvent::SessionRateLimitsUpdated {
+                    rate_limits,
+                    session_id: "session-1".into(),
+                },
                 AppEvent::SessionProgressUpdated {
                     progress_message: Some("third".to_string()),
                     session_id: "session-1".into(),

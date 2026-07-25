@@ -13,6 +13,26 @@ pub enum SessionDiffState {
     Present,
 }
 
+/// Usage percentage and reset metadata for one Codex quota window.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RateLimitWindow {
+    /// Unix timestamp when the quota window resets, when reported.
+    pub resets_at: Option<i64>,
+    /// Percentage of the quota window currently consumed.
+    pub used_percent: u8,
+    /// Length of the quota window in minutes, when reported.
+    pub window_duration_mins: Option<u64>,
+}
+
+/// Latest account-level Codex rate-limit snapshot observed by a session.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CodexRateLimits {
+    /// The shorter or primary quota window, when reported by Codex.
+    pub primary: Option<RateLimitWindow>,
+    /// The longer or secondary quota window, when reported by Codex.
+    pub secondary: Option<RateLimitWindow>,
+}
+
 /// Token and diff usage statistics associated with one agent session or
 /// isolated prompt.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -27,6 +47,8 @@ pub struct SessionStats {
     pub input_tokens: u64,
     /// Output/response tokens produced by this session.
     pub output_tokens: u64,
+    /// Latest account-level Codex rate-limit snapshot, when available.
+    pub rate_limits: Option<CodexRateLimits>,
 }
 
 impl SessionStats {

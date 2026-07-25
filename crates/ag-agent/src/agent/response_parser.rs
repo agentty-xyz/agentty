@@ -309,6 +309,7 @@ fn extract_antigravity_usage_stats(payload: &serde_json::Value) -> Option<Sessio
         diff_state: SessionDiffState::Unknown,
         input_tokens: antigravity_token_count(usage, "input_tokens"),
         output_tokens: antigravity_token_count(usage, "output_tokens"),
+        rate_limits: None,
     })
 }
 
@@ -574,6 +575,7 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
         diff_state: SessionDiffState::Unknown,
         input_tokens: total_input_tokens,
         output_tokens: total_output_tokens,
+        rate_limits: None,
     };
 
     last_agent_message
@@ -702,6 +704,7 @@ fn parse_claude_response_payload(stdout: &str) -> Option<ParsedResponse> {
             .and_then(|usage| usage.output_tokens)
             .unwrap_or(0)
             .cast_unsigned(),
+        rate_limits: None,
     };
 
     Some(ParsedResponse { content, stats })
@@ -732,6 +735,7 @@ fn extract_gemini_stats(stats: Option<&GeminiStats>) -> SessionStats {
         diff_state: SessionDiffState::Unknown,
         input_tokens: tokens.input.unwrap_or(0).cast_unsigned(),
         output_tokens: tokens.candidates.unwrap_or(0).cast_unsigned(),
+        rate_limits: None,
     }
 }
 
@@ -784,6 +788,7 @@ fn extract_gemini_stream_stats(stdout_line: &str) -> Option<SessionStats> {
         diff_state: SessionDiffState::Unknown,
         input_tokens: stats.input_tokens.unwrap_or(0).cast_unsigned(),
         output_tokens: stats.output_tokens.unwrap_or(0).cast_unsigned(),
+        rate_limits: None,
     })
 }
 
@@ -850,6 +855,7 @@ fn extract_claude_usage_stats(stream_event: &serde_json::Value) -> Option<Sessio
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(0)
             .cast_unsigned(),
+        rate_limits: None,
     })
 }
 
@@ -1193,6 +1199,7 @@ mod tests {
         assert_eq!(parsed.stats.input_tokens, 21);
         assert_eq!(parsed.stats.output_tokens, 8);
         assert_eq!(parsed.stats.diff_state, SessionDiffState::Unknown);
+        assert_eq!(parsed.stats.rate_limits, None);
     }
 
     #[test]

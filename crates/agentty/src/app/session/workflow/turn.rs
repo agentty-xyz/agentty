@@ -498,6 +498,8 @@ pub(super) async fn load_session_reasoning_level(
 /// - [`TurnEvent::ThoughtDelta`]: coalesces immediately ready thought bursts
 ///   and updates the transient thinking loader text with the latest message.
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
+/// - [`TurnEvent::RateLimitsUpdated`]: forwards the latest Codex account
+///   snapshot to session state.
 /// - [`TurnEvent::Completed`] / [`TurnEvent::Failed`]: reserved; ignored here
 ///   because completion is signalled by `run_turn`'s return value.
 pub(super) async fn consume_turn_events(
@@ -515,6 +517,7 @@ pub(super) async fn consume_turn_events(
                     continue;
                 };
                 let thought = coalesce_ready_turn_progress_events(
+                    &app_event_tx,
                     &mut event_rx,
                     child_pid.as_ref(),
                     thought,
@@ -529,6 +532,13 @@ pub(super) async fn consume_turn_events(
             }
             TurnEvent::PidUpdate(pid) => {
                 set_child_pid(child_pid.as_ref(), pid);
+            }
+            TurnEvent::RateLimitsUpdated(rate_limits) => {
+                SessionTaskService::set_session_rate_limits(
+                    &app_event_tx,
+                    session_id.as_str(),
+                    rate_limits,
+                );
             }
             TurnEvent::Completed { .. } | TurnEvent::Failed(_) => {
                 // Completion is signalled by run_turn's return value; these
@@ -549,6 +559,7 @@ pub(super) async fn consume_turn_events(
 /// remain ignored here because turn completion is handled by the channel
 /// result.
 fn coalesce_ready_turn_progress_events(
+    app_event_tx: &mpsc::UnboundedSender<AppEvent>,
     event_rx: &mut mpsc::UnboundedReceiver<TurnEvent>,
     child_pid: &Mutex<Option<u32>>,
     initial_thought: String,
@@ -570,6 +581,13 @@ fn coalesce_ready_turn_progress_events(
                 }
             }
             TurnEvent::PidUpdate(pid) => set_child_pid(child_pid, pid),
+            TurnEvent::RateLimitsUpdated(rate_limits) => {
+                SessionTaskService::set_session_rate_limits(
+                    app_event_tx,
+                    session_id.as_str(),
+                    rate_limits,
+                );
+            }
             TurnEvent::Completed { .. } | TurnEvent::Failed(_) => {}
         }
     }

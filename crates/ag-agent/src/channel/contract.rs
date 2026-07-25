@@ -10,6 +10,7 @@ use ag_protocol::{AgentResponse, ProtocolRequestProfile, TurnPrompt};
 use tokio::sync::mpsc;
 
 use crate::model::agent::ReasoningLevel;
+use crate::model::session::CodexRateLimits;
 
 /// Boxed async result used by [`AgentChannel`] trait methods.
 pub type AgentFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -295,6 +296,8 @@ pub enum TurnEvent {
     /// (`Some(pid)`) and again after the child exits (`None`). Consumers
     /// update the shared PID slot used by cancellation signals.
     PidUpdate(Option<u32>),
+    /// Latest account-level Codex rate-limit snapshot.
+    RateLimitsUpdated(CodexRateLimits),
 }
 
 /// Normalized result returned when one agent turn completes successfully.

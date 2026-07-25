@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use crate::app_server::AppServerError;
 use crate::channel::{AgentRequestKind, LiveTranscript, PersonalityPrompt};
 use crate::model::agent::ReasoningLevel;
+use crate::model::session::CodexRateLimits;
 
 /// Boxed async result used by [`AppServerClient`] trait methods.
 pub type AppServerFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -42,6 +43,8 @@ pub enum AppServerStreamEvent {
     },
     /// An `item/started` event produced a progress description.
     ProgressUpdate(String),
+    /// Latest account-level Codex rate-limit snapshot.
+    RateLimitsUpdated(CodexRateLimits),
 }
 
 /// Input payload for one app-server turn execution.

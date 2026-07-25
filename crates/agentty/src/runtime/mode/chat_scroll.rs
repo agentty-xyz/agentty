@@ -58,16 +58,27 @@ impl ChatScrollMetrics {
         let page_area = layout::app_frame_areas(terminal_size).content_area;
         let output_width = page_area.width.saturating_sub(2);
         let (_, review_text) = app.review_view_state(session_id);
+        let wall_clock_unix_seconds = app.wall_clock_unix_seconds();
         let view_height = app.sessions.session_at(session_index).map_or_else(
             || Self::footer_only_view_height(page_area),
             |session| {
+                let current_local_utc_offset_seconds =
+                    app.local_utc_offset_seconds(wall_clock_unix_seconds);
+                let rate_limit_reset_local_utc_offset_seconds = session
+                    .codex_weekly_rate_limit_window()
+                    .and_then(|window| window.resets_at)
+                    .map_or(current_local_utc_offset_seconds, |reset_timestamp| {
+                        app.local_utc_offset_seconds(reset_timestamp)
+                    });
+
                 session_chat::transcript_view_height(SessionChatLayoutInput {
                     area: page_area,
                     default_reasoning_level: app.settings.reasoning_level,
                     mode: &app.mode,
+                    rate_limit_reset_local_utc_offset_seconds,
                     review_text,
                     session,
-                    wall_clock_unix_seconds: app.wall_clock_unix_seconds(),
+                    wall_clock_unix_seconds,
                 })
             },
         );
@@ -276,6 +287,45 @@ mod tests {
     /// Builds a plain key press without modifiers.
     fn plain_key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[tokio::test]
+    async fn chat_scroll_metrics_resolve_the_weekly_reset_offset() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let mut session = crate::test_support::SessionFixtureBuilder::new()
+            .id("session-id")
+            .build();
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            crate::domain::agent::AgentModel::Gpt55,
+        );
+        session.stats.rate_limits = Some(crate::domain::session::CodexRateLimits {
+            primary: None,
+            secondary: Some(crate::domain::session::RateLimitWindow {
+                resets_at: Some(1_772_967_600),
+                used_percent: 3,
+                window_duration_mins: Some(10_080),
+            }),
+        });
+        let session_id = session.id.clone();
+        app.sessions.push_session(session);
+        app.mode = crate::presentation::app_mode::AppMode::View {
+            scroll_offset: Some(0),
+            session_id: session_id.clone(),
+        };
+
+        // Act
+        let metrics = ChatScrollMetrics::new(
+            &app,
+            &RenderCacheStore::default(),
+            &session_id,
+            0,
+            Rect::new(0, 0, 120, 40),
+        );
+
+        // Assert
+        assert!(metrics.view_height > 0);
     }
 
     #[test]

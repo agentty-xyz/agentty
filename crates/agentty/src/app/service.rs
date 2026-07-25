@@ -328,6 +328,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         }
         AppEvent::SessionReviewCommentSnapshotLoaded { .. } => "SessionReviewCommentSnapshotLoaded",
         AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
+        AppEvent::SessionRateLimitsUpdated { .. } => "SessionRateLimitsUpdated",
         AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",
         AppEvent::SyncMainConflictResolutionStarted { .. } => "SyncMainConflictResolutionStarted",
         AppEvent::SessionDiffStatsUpdated { .. } => "SessionDiffStatsUpdated",
@@ -397,6 +398,21 @@ mod tests {
 
         // Assert
         assert_eq!(label, "SessionDiffStatsUpdated");
+    }
+
+    #[test]
+    fn app_event_label_names_session_rate_limit_updates() {
+        // Arrange
+        let event = AppEvent::SessionRateLimitsUpdated {
+            rate_limits: ag_agent::CodexRateLimits::default(),
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "SessionRateLimitsUpdated");
     }
 
     #[tokio::test]

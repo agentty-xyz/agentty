@@ -2611,6 +2611,7 @@ WHERE id = ?
                     diff_state: agent::SessionDiffState::Unknown,
                     input_tokens: 11,
                     output_tokens: 29,
+                    rate_limits: None,
                 },
             )
             .await

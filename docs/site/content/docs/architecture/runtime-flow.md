@@ -160,6 +160,15 @@ keys the transient-store version rather than maintaining a separate fingerprint 
 every temporary channel. Structured clarification questions render in the bottom
 question panel (`AppMode::Question`), not inside the output component.
 
+Each Codex app-server turn sends a best-effort rate-limit read until a snapshot is
+observed, without waiting for that response before completing the turn. Accepted
+requests that never answer are therefore retried on the retained runtime. Snapshots
+returned through the active turn event stream are forwarded into the session's transient
+in-memory state. The session header identifies the weekly window from its duration and
+renders its remaining percentage plus local reset time on a separate row, using the host
+UTC offset active at the reset timestamp so daylight-saving transitions remain accurate.
+Metadata refreshes preserve the snapshot until the next update arrives.
+
 Runtime owns one shared `RenderCacheStore` for markdown, diff, and session-output layout
 caches. The session-output cache keeps a bounded stable-body layer keyed by the typed
 transcript's cached content hash, width, theme, queued input, and transient-message

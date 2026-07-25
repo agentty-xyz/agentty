@@ -22,6 +22,9 @@ pub(super) struct CodexRuntimeState {
     pub(super) folder: PathBuf,
     /// Most recent input token count reported by the app-server.
     pub(super) latest_input_tokens: u64,
+    /// Whether this persistent runtime has observed an account rate-limit
+    /// snapshot.
+    pub(super) rate_limits_received: bool,
     /// Selected Codex model identifier.
     pub(super) model: String,
     /// Whether startup restored provider-native context.
@@ -36,6 +39,7 @@ impl CodexRuntimeState {
         Self {
             folder,
             latest_input_tokens: 0,
+            rate_limits_received: false,
             model,
             restored_context: false,
             thread_id: String::new(),
@@ -315,6 +319,10 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
         send_compact_request(transport, &state.thread_id, &mut state.latest_input_tokens).await?;
     }
 
+    if !state.rate_limits_received {
+        request_rate_limits(transport).await;
+    }
+
     let result = execute_turn_event_loop(
         transport,
         &state.folder,
@@ -322,16 +330,12 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
         &state.thread_id,
         &prompt,
         reasoning_level,
-        stream_tx.clone(),
+        CodexTurnEventContext::new(&mut state.rate_limits_received, stream_tx.clone()),
     )
     .await;
 
-    match result {
-        Ok((message, input_tokens, output_tokens)) => {
-            state.latest_input_tokens = input_tokens;
-
-            Ok((message, input_tokens, output_tokens))
-        }
+    let turn_result = match result {
+        Ok(turn_result) => turn_result,
         Err(ref error) if stream_parser::is_context_window_exceeded_error(&error.to_string()) => {
             let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(
                 "Compacting context".to_string(),
@@ -339,22 +343,23 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
             send_compact_request(transport, &state.thread_id, &mut state.latest_input_tokens)
                 .await?;
 
-            let (message, input_tokens, output_tokens) = execute_turn_event_loop(
+            execute_turn_event_loop(
                 transport,
                 &state.folder,
                 &state.model,
                 &state.thread_id,
                 &prompt,
                 reasoning_level,
-                stream_tx,
+                CodexTurnEventContext::new(&mut state.rate_limits_received, stream_tx.clone()),
             )
-            .await?;
-            state.latest_input_tokens = input_tokens;
-
-            Ok((message, input_tokens, output_tokens))
+            .await?
         }
-        Err(error) => Err(error),
-    }
+        Err(error) => return Err(error),
+    };
+
+    state.latest_input_tokens = turn_result.1;
+
+    Ok(turn_result)
 }
 
 /// Sends `thread/compact/start` and waits for compaction to complete.
@@ -431,6 +436,26 @@ pub(super) async fn send_compact_request_with_timeout<Transport: AppServerRuntim
     .map_err(|_| compaction_timeout_error(turn_timeout))?
 }
 
+/// Mutable event outputs shared with one active Codex turn loop.
+pub(super) struct CodexTurnEventContext<'a> {
+    rate_limits_received: &'a mut bool,
+    stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+}
+
+impl<'a> CodexTurnEventContext<'a> {
+    /// Binds one event sender to the persistent quota-observation flag it can
+    /// satisfy.
+    pub(super) fn new(
+        rate_limits_received: &'a mut bool,
+        stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    ) -> Self {
+        Self {
+            rate_limits_received,
+            stream_tx,
+        }
+    }
+}
+
 /// Sends one `turn/start` request and processes the event stream until
 /// `turn/completed` is received.
 pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport>(
@@ -440,15 +465,15 @@ pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport
     thread_id: &str,
     prompt: impl Into<TurnPrompt>,
     reasoning_level: ReasoningLevel,
-    stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    event_context: CodexTurnEventContext<'_>,
 ) -> Result<(String, u64, u64), AppServerError> {
     let prompt = prompt.into();
     let input = CodexTurnEventLoopInput {
+        event_context,
         folder,
         model,
         prompt,
         reasoning_level,
-        stream_tx,
         thread_id,
         turn_timeout: app_server_transport::TURN_TIMEOUT,
     };
@@ -458,6 +483,8 @@ pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport
 
 /// Borrowed inputs used to start and monitor one Codex app-server turn.
 pub(super) struct CodexTurnEventLoopInput<'a> {
+    /// Mutable outputs updated by the active event stream.
+    event_context: CodexTurnEventContext<'a>,
     /// Worktree folder where the turn should execute.
     folder: &'a Path,
     /// Model id requested for the turn.
@@ -466,8 +493,6 @@ pub(super) struct CodexTurnEventLoopInput<'a> {
     prompt: TurnPrompt,
     /// Reasoning level sent to the runtime.
     reasoning_level: ReasoningLevel,
-    /// Stream sender that receives progress and assistant chunks.
-    stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     /// Runtime thread id for the active provider conversation.
     thread_id: &'a str,
     /// Maximum time to wait for the turn completion event.
@@ -483,9 +508,12 @@ pub(super) async fn execute_turn_event_loop_with_timeout<Transport: AppServerRun
     let turn_start_id = write_turn_start_request(transport, &input).await?;
     let folder = input.folder;
     let turn_timeout = input.turn_timeout;
-    let mut state = CodexTurnEventLoopState::new(input.stream_tx);
+    let mut state = CodexTurnEventLoopState::new(
+        input.event_context.stream_tx,
+        input.event_context.rate_limits_received,
+    );
 
-    tokio::time::timeout(turn_timeout, async {
+    let turn_result = tokio::time::timeout(turn_timeout, async {
         loop {
             let Some(response_value) = read_turn_response_value(transport).await? else {
                 continue;
@@ -495,34 +523,60 @@ pub(super) async fn execute_turn_event_loop_with_timeout<Transport: AppServerRun
                 .process_response(transport, folder, &turn_start_id, response_value)
                 .await?
             {
-                return Ok(turn_completion);
+                return Ok::<_, AppServerError>(turn_completion);
             }
         }
     })
     .await
-    .map_err(|_| turn_completed_timeout_error(turn_timeout))?
+    .map_err(|_| turn_completed_timeout_error(turn_timeout))??;
+
+    Ok(turn_result)
+}
+
+/// Requests the optional account rate-limit snapshot without waiting for its
+/// response.
+///
+/// The active turn event loop consumes the response opportunistically, so a
+/// missing response cannot delay turn completion. The runtime records
+/// completion only when that response is observed, allowing later turns to
+/// retry accepted requests that never produced a snapshot.
+async fn request_rate_limits<Transport: AppServerRuntimeTransport>(
+    transport: &mut Transport,
+) -> bool {
+    let request_id = format!("rate-limits-{}", uuid::Uuid::new_v4());
+    let request = serde_json::json!({
+        "method": "account/rateLimits/read",
+        "id": request_id
+    });
+
+    transport.write_json_line(request).await.is_ok()
 }
 
 /// Mutable state carried across Codex app-server turn events.
-struct CodexTurnEventLoopState {
+struct CodexTurnEventLoopState<'a> {
     active_phase: Option<String>,
     active_turn_id: Option<String>,
     assistant_messages: Vec<String>,
     completed_turn_usage: Option<(u64, u64)>,
     latest_stream_usage: Option<(u64, u64)>,
+    rate_limits_received: &'a mut bool,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     waiting_for_handoff_turn_completion: bool,
 }
 
-impl CodexTurnEventLoopState {
+impl<'a> CodexTurnEventLoopState<'a> {
     /// Creates empty turn-event state for one active app-server turn.
-    fn new(stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>) -> Self {
+    fn new(
+        stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+        rate_limits_received: &'a mut bool,
+    ) -> Self {
         Self {
             active_phase: None,
             active_turn_id: None,
             assistant_messages: Vec::new(),
             completed_turn_usage: None,
             latest_stream_usage: None,
+            rate_limits_received,
             stream_tx,
             waiting_for_handoff_turn_completion: false,
         }
@@ -584,6 +638,13 @@ impl CodexTurnEventLoopState {
         &mut self,
         response_value: &Value,
     ) -> Result<Option<(String, u64, u64)>, AppServerError> {
+        if let Some(rate_limits) = usage::extract_rate_limits(response_value) {
+            *self.rate_limits_received = true;
+            let _ = self
+                .stream_tx
+                .send(AppServerStreamEvent::RateLimitsUpdated(rate_limits));
+        }
+
         update_active_turn_tracking_for_response(
             response_value,
             &mut self.active_turn_id,
@@ -904,6 +965,7 @@ mod tests {
     use super::*;
     use crate::agent::app_server::codex::MockCodexRuntimeTransport;
     use crate::model::agent::{AgentModel, ReasoningLevel};
+    use crate::{CodexRateLimits, RateLimitWindow};
 
     /// Captures the dynamic JSON-RPC `id` from a written payload through the
     /// supplied mutex so the response side of a mock can echo it back.
@@ -1172,6 +1234,83 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("456"));
         assert!(message.contains("compaction"));
+    }
+
+    #[tokio::test]
+    async fn request_rate_limits_writes_best_effort_request() {
+        // Arrange
+        let mut transport = MockCodexRuntimeTransport::new();
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .withf(|payload| {
+                payload.get("method").and_then(Value::as_str) == Some("account/rateLimits/read")
+                    && payload.get("id").and_then(Value::as_str).is_some()
+            })
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        // Act
+        let requested = request_rate_limits(&mut transport).await;
+
+        // Assert
+        assert!(requested);
+    }
+
+    #[tokio::test]
+    async fn request_rate_limits_reports_retryable_write_failure() {
+        // Arrange
+        let mut transport = MockCodexRuntimeTransport::new();
+        transport.expect_write_json_line().times(1).returning(|_| {
+            Box::pin(async {
+                Err(crate::app_server_transport::AppServerTransportError::ProcessTerminated)
+            })
+        });
+
+        // Act
+        let requested = request_rate_limits(&mut transport).await;
+
+        // Assert
+        assert!(!requested);
+    }
+
+    #[test]
+    fn turn_event_loop_state_forwards_rate_limit_notifications() {
+        // Arrange
+        let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+        let mut rate_limits_received = false;
+        let mut state = CodexTurnEventLoopState::new(stream_tx, &mut rate_limits_received);
+        let response_value = serde_json::json!({
+            "method": "account/rateLimits/updated",
+            "params": {
+                "rateLimits": {
+                    "primary": {
+                        "usedPercent": 20,
+                        "windowDurationMins": 300,
+                        "resetsAt": 1_700_000_000
+                    },
+                    "secondary": null
+                }
+            }
+        });
+
+        // Act
+        let completion = state.process_stream_response(&response_value);
+        let event = stream_rx.try_recv();
+        drop(state);
+
+        // Assert
+        assert!(rate_limits_received);
+        assert!(matches!(completion, Ok(None)));
+        assert!(matches!(
+            event,
+            Ok(AppServerStreamEvent::RateLimitsUpdated(CodexRateLimits {
+                primary: Some(RateLimitWindow {
+                    used_percent: 20,
+                    ..
+                }),
+                secondary: None,
+            }))
+        ));
     }
 
     #[tokio::test]

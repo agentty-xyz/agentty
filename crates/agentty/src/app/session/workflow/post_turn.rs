@@ -203,6 +203,7 @@ impl TurnPersistence<'_> {
             diff_state: agent::SessionDiffState::Unknown,
             input_tokens,
             output_tokens,
+            rate_limits: None,
         };
         let instruction_conversation_id =
             if agent::transport_mode(self.session_agent.kind()).uses_app_server() {

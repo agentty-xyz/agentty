@@ -174,6 +174,7 @@ mod tests {
                         diff_state: ag_agent::SessionDiffState::Unknown,
                         input_tokens: 0,
                         output_tokens: 0,
+                        rate_limits: None,
                     },
                 })
             });

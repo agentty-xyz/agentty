@@ -351,6 +351,7 @@ impl SessionManager {
                 },
                 input_tokens: input.row.input_tokens.cast_unsigned(),
                 output_tokens: input.row.output_tokens.cast_unsigned(),
+                rate_limits: None,
             },
             status: input.session_status,
             summary: input.session_summary,

@@ -32,8 +32,8 @@ use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
 use crate::domain::question::default_option_index;
 use crate::domain::session::{
-    PublishBranchAction, PublishedBranchSyncStatus, SessionDiffStats, SessionHandles, SessionId,
-    Status,
+    CodexRateLimits, PublishBranchAction, PublishedBranchSyncStatus, SessionDiffStats,
+    SessionHandles, SessionId, Status,
 };
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageBody;
@@ -162,6 +162,11 @@ pub(crate) enum AppEvent {
         progress_message: Option<String>,
         session_id: SessionId,
     },
+    /// Indicates that Codex reported a newer account rate-limit snapshot.
+    SessionRateLimitsUpdated {
+        rate_limits: CodexRateLimits,
+        session_id: SessionId,
+    },
     /// Indicates completion of a list-mode sync workflow.
     SyncMainCompleted {
         result: Result<SyncMainOutcome, SyncSessionStartError>,
@@ -262,6 +267,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_reasoning_level_updates:
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
+    pub(super) session_rate_limits_updates: HashMap<SessionId, CodexRateLimits>,
     pub(super) session_review_comment_snapshots:
         HashMap<SessionId, Result<ag_forge::ReviewCommentSnapshot, String>>,
     pub(super) session_diff_stats_updates: HashMap<SessionId, SessionDiffStats>,
@@ -444,6 +450,13 @@ impl AppEventBatch {
                 progress_message,
                 session_id,
             } => self.collect_session_progress_updated(session_id, progress_message),
+            AppEvent::SessionRateLimitsUpdated {
+                rate_limits,
+                session_id,
+            } => {
+                self.session_rate_limits_updates
+                    .insert(session_id, rate_limits);
+            }
             AppEvent::SessionReviewCommentSnapshotLoaded { result, session_id } => {
                 self.session_review_comment_snapshots
                     .insert(session_id, result);
@@ -1453,6 +1466,7 @@ impl App {
             || !event_batch.session_model_updates.is_empty()
             || !event_batch.session_personality_updates.is_empty()
             || !event_batch.session_progress_updates.is_empty()
+            || !event_batch.session_rate_limits_updates.is_empty()
             || !event_batch.session_review_comment_snapshots.is_empty()
             || !event_batch.session_reasoning_level_updates.is_empty()
             || !event_batch.session_diff_stats_updates.is_empty()
@@ -1530,6 +1544,13 @@ impl App {
         {
             self.sessions
                 .apply_session_diff_stats_updated(&session_id, diff_stats);
+        }
+
+        for (session_id, rate_limits) in
+            std::mem::take(&mut event_batch.session_rate_limits_updates)
+        {
+            self.sessions
+                .apply_session_rate_limits_updated(&session_id, rate_limits);
         }
 
         for (session_id, generation) in
@@ -2470,6 +2491,42 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn test_session_rate_limit_event_updates_matching_snapshot() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id("session-id")
+                .build(),
+        );
+        let rate_limits = CodexRateLimits {
+            primary: Some(crate::domain::session::RateLimitWindow {
+                resets_at: Some(1_700_000_000),
+                used_percent: 25,
+                window_duration_mins: Some(300),
+            }),
+            secondary: None,
+        };
+
+        // Act
+        app.apply_app_events(AppEvent::SessionRateLimitsUpdated {
+            rate_limits,
+            session_id: "session-id".into(),
+        })
+        .await;
+
+        // Assert
+        assert_eq!(
+            app.sessions
+                .sessions()
+                .iter()
+                .find(|session| session.id == "session-id")
+                .and_then(|session| session.stats.rate_limits),
+            Some(rate_limits)
+        );
     }
 
     #[tokio::test]

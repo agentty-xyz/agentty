@@ -611,6 +611,7 @@ fn auto_commit_one_shot_client() -> Arc<dyn ag_agent::OneShotClient> {
                     diff_state: ag_agent::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
+                    rate_limits: None,
                 },
             })
         });
@@ -4375,6 +4376,7 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
                     diff_state: ag_agent::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
+                    rate_limits: None,
                 },
             })
         });

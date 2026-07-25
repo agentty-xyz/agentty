@@ -444,6 +444,7 @@ mod tests {
         let mut transport = MockCodexRuntimeTransport::new();
         let mut sequence = Sequence::new();
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+        let mut rate_limits_received = false;
 
         expect_user_input_request_turn(&mut transport, &mut sequence, turn_start_id);
 
@@ -455,7 +456,7 @@ mod tests {
             "thread-1",
             "Implement the task",
             ReasoningLevel::default(),
-            stream_tx,
+            lifecycle::CodexTurnEventContext::new(&mut rate_limits_received, stream_tx),
         )
         .await;
 
@@ -561,43 +562,178 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_turn_with_runtime_compacts_proactively_before_turn_start() {
+    async fn run_turn_with_runtime_retries_unanswered_rate_limit_request() {
         // Arrange
         let mut state = build_runtime_state(
             "thread-1",
             policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT,
         );
         let compact_id = Arc::new(Mutex::new(None));
-        let turn_id = Arc::new(Mutex::new(None));
+        let first_turn_id = Arc::new(Mutex::new(None));
+        let second_turn_id = Arc::new(Mutex::new(None));
         let mut transport = MockCodexRuntimeTransport::new();
         let mut sequence = Sequence::new();
         let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
 
-        expect_proactive_compaction_turn(&mut transport, &mut sequence, compact_id, turn_id);
+        expect_proactive_compaction_turn(&mut transport, &mut sequence, compact_id, first_turn_id);
+        expect_successful_turn_without_rate_limit_response(
+            &mut transport,
+            &mut sequence,
+            second_turn_id,
+            4,
+            2,
+        );
 
         // Act
-        let result = lifecycle::run_turn_with_runtime(
+        let first_result = lifecycle::run_turn_with_runtime(
             &mut transport,
             &mut state,
             "Implement the task",
+            ReasoningLevel::default(),
+            stream_tx.clone(),
+        )
+        .await;
+        let second_result = lifecycle::run_turn_with_runtime(
+            &mut transport,
+            &mut state,
+            "Retry quota loading",
             ReasoningLevel::default(),
             stream_tx,
         )
         .await;
 
         // Assert
-        let (message, input_tokens, output_tokens) =
-            result.expect("turn should complete after proactive compaction");
-        assert_eq!(message, String::new());
-        assert_eq!(input_tokens, 12);
-        assert_eq!(output_tokens, 3);
-        assert_eq!(state.latest_input_tokens, 12);
+        assert_eq!(
+            first_result.expect("first turn should complete after proactive compaction"),
+            (String::new(), 12, 3)
+        );
+        assert_eq!(
+            second_result.expect("second turn should complete after retrying quota loading"),
+            (String::new(), 4, 2)
+        );
+        assert_eq!(state.latest_input_tokens, 4);
+        assert!(!state.rate_limits_received);
         assert_eq!(
             stream_rx.try_recv().ok(),
             Some(AppServerStreamEvent::ProgressUpdate(
                 "Compacting context".to_string()
             ))
         );
+        assert!(stream_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn run_turn_with_runtime_skips_rate_limit_request_after_snapshot() {
+        // Arrange
+        let mut state = build_runtime_state("thread-1", 0);
+        state.rate_limits_received = true;
+        let turn_id = Arc::new(Mutex::new(None));
+        let mut transport = MockCodexRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+        expect_successful_turn(&mut transport, &mut sequence, turn_id, 4, 2);
+
+        // Act
+        let result = lifecycle::run_turn_with_runtime(
+            &mut transport,
+            &mut state,
+            "Continue the task",
+            ReasoningLevel::default(),
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            result.expect("turn should complete without another quota request"),
+            (String::new(), 4, 2)
+        );
+        assert!(state.rate_limits_received);
+    }
+
+    #[tokio::test]
+    async fn run_turn_with_runtime_compacts_and_retries_context_overflow() {
+        // Arrange
+        let mut state = build_runtime_state("thread-1", 0);
+        state.rate_limits_received = true;
+        let failed_turn_id = Arc::new(Mutex::new(None));
+        let compact_id = Arc::new(Mutex::new(None));
+        let retry_turn_id = Arc::new(Mutex::new(None));
+        let mut transport = MockCodexRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+        expect_failed_turn(
+            &mut transport,
+            &mut sequence,
+            failed_turn_id,
+            "[contextWindowExceeded] Context window exceeded",
+        );
+        expect_compaction(&mut transport, &mut sequence, compact_id);
+        expect_successful_turn(&mut transport, &mut sequence, retry_turn_id, 6, 3);
+
+        // Act
+        let result = lifecycle::run_turn_with_runtime(
+            &mut transport,
+            &mut state,
+            "Retry after compaction",
+            ReasoningLevel::default(),
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            result.expect("context overflow should compact and retry"),
+            (String::new(), 6, 3)
+        );
+        assert_eq!(state.latest_input_tokens, 6);
+        assert_eq!(
+            stream_rx.try_recv().ok(),
+            Some(AppServerStreamEvent::AssistantMessage {
+                message: "[Codex app-server] [contextWindowExceeded] Context window exceeded"
+                    .to_string(),
+                phase: None,
+                is_delta: false,
+            })
+        );
+        assert_eq!(
+            stream_rx.try_recv().ok(),
+            Some(AppServerStreamEvent::ProgressUpdate(
+                "Compacting context".to_string()
+            ))
+        );
+        assert!(stream_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn run_turn_with_runtime_propagates_non_context_error() {
+        // Arrange
+        let mut state = build_runtime_state("thread-1", 0);
+        state.rate_limits_received = true;
+        let turn_id = Arc::new(Mutex::new(None));
+        let mut transport = MockCodexRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+        expect_failed_turn(
+            &mut transport,
+            &mut sequence,
+            turn_id,
+            "Provider unavailable",
+        );
+
+        // Act
+        let result = lifecycle::run_turn_with_runtime(
+            &mut transport,
+            &mut state,
+            "Attempt the task",
+            ReasoningLevel::default(),
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("non-context errors should propagate");
+        assert!(error.to_string().contains("Provider unavailable"));
     }
 
     /// Expects a proactive compaction request followed by a successful turn.
@@ -606,6 +742,16 @@ mod tests {
         sequence: &mut Sequence,
         compact_id: Arc<Mutex<Option<String>>>,
         turn_id: Arc<Mutex<Option<String>>>,
+    ) {
+        expect_compaction(transport, sequence, compact_id);
+        expect_successful_turn_without_rate_limit_response(transport, sequence, turn_id, 12, 3);
+    }
+
+    /// Expects one successful runtime compaction.
+    fn expect_compaction(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        compact_id: Arc<Mutex<Option<String>>>,
     ) {
         transport
             .expect_write_json_line()
@@ -653,6 +799,29 @@ mod tests {
                     ))
                 })
             });
+    }
+
+    /// Expects a best-effort rate-limit request with no response followed by
+    /// one successful turn.
+    fn expect_successful_turn_without_rate_limit_response(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        turn_id: Arc<Mutex<Option<String>>>,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
+        expect_rate_limits_request_without_response(transport, sequence);
+        expect_successful_turn(transport, sequence, turn_id, input_tokens, output_tokens);
+    }
+
+    /// Expects one successful turn without a preceding rate-limit request.
+    fn expect_successful_turn(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        turn_id: Arc<Mutex<Option<String>>>,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
         transport
             .expect_write_json_line()
             .times(1)
@@ -692,8 +861,8 @@ mod tests {
             .expect_next_stdout()
             .times(1)
             .in_sequence(sequence)
-            .return_once(|| {
-                Box::pin(async {
+            .return_once(move || {
+                Box::pin(async move {
                     Ok(Some(
                         serde_json::json!({
                             "method": "turn/completed",
@@ -701,7 +870,10 @@ mod tests {
                                 "turn": {
                                     "id": "turn-123",
                                     "status": "completed",
-                                    "usage": {"inputTokens": 12, "outputTokens": 3}
+                                    "usage": {
+                                        "inputTokens": input_tokens,
+                                        "outputTokens": output_tokens
+                                    }
                                 }
                             }
                         })
@@ -709,6 +881,87 @@ mod tests {
                     ))
                 })
             });
+    }
+
+    /// Expects one turn to complete with a provider error.
+    fn expect_failed_turn(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        turn_id: Arc<Mutex<Option<String>>>,
+        error_message: &'static str,
+    ) {
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| payload.get("method").and_then(Value::as_str) == Some("turn/start"))
+            .returning({
+                let turn_id = Arc::clone(&turn_id);
+
+                move |payload| {
+                    remember_request_id(&turn_id, &payload);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(move || {
+                let response_id = turn_id
+                    .lock()
+                    .expect("turn mutex should lock")
+                    .clone()
+                    .expect("turn id should be recorded");
+
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "id": response_id,
+                            "result": {"turn": {"id": "turn-failed"}}
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(move || {
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "method": "turn/completed",
+                            "params": {
+                                "turn": {
+                                    "error": {"message": error_message},
+                                    "id": "turn-failed",
+                                    "status": "failed"
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+    }
+
+    /// Expects the best-effort account rate-limit request without providing a
+    /// response, proving the active turn can still complete.
+    fn expect_rate_limits_request_without_response(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+    ) {
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| {
+                payload.get("method").and_then(Value::as_str) == Some("account/rateLimits/read")
+            })
+            .returning(|_| Box::pin(async { Ok(()) }));
     }
 
     #[test]

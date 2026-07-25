@@ -61,8 +61,9 @@ an authentication method permitted for your account, plan, and usage pattern.
 <a id="backends-codex-authentication"></a> Codex is the recommended backend when you
 want subscription-backed usage. The CLI supports signing in with ChatGPT through
 `codex login`, and Agentty uses the supported `codex app-server` integration surface.
-Usage remains subject to the
-[OpenAI Terms of Use](https://openai.com/policies/terms-of-use/).
+Starting with the first turn, the session header shows the remaining weekly account
+quota and its local reset time when the app server reports them. Usage remains subject
+to the [OpenAI Terms of Use](https://openai.com/policies/terms-of-use/).
 
 ### Claude
 
