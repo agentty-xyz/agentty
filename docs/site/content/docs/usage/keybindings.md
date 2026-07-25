@@ -185,8 +185,8 @@ State-specific differences:
   `Alt+V` open the composer with an image paste; stacked drafts also hide `m` and show
   `s` only when the parent is review-ready and the stack is idle.
 - **Question** sessions hide `r` until they return to review-ready state.
-- Review-ready stacked parents with a materialized child keep `Enter`, `m`, and `r`
-  while the stack is idle, but hide `/` until the child is terminal or no longer linked.
+- Review-ready stacked parents with a materialized child keep `Enter`, `/`, `m`, and `r`
+  while the stack is idle.
 - Sessions with a linked pull request or merge request use `c` to open its comments page
   and hide `m`; merge the linked request through its forge instead of Agentty's local
   merge queue. Linked terminal sessions keep continuation available on `C`.
