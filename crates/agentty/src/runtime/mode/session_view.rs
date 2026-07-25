@@ -171,7 +171,9 @@ impl ViewSessionSnapshot {
             return false;
         }
 
-        self.can_edit_without_branch_work() || self.can_mutate_session_branch()
+        self.can_edit_without_branch_work()
+            || self.can_mutate_session_branch()
+            || self.can_reply_to_session()
     }
 
     /// Returns whether image paste can open a draft prompt composer directly
@@ -2925,6 +2927,94 @@ mod tests {
                 && session_id == &view_context.session_id
         ));
         assert!(app.prompt_progress.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handle_view_key_slash_opens_for_reply_enabled_stacked_parent() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            session_id: session_id.clone().into(),
+            scroll_offset: Some(2),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+        let mut view_session_snapshot = reply_enabled_review_snapshot();
+        view_session_snapshot.mutate_session_branch = ViewActionState::Disabled;
+        let view_key_context = ViewKeyContext {
+            context: &view_context,
+            metrics: ChatScrollMetrics {
+                total_lines: 10,
+                view_height: 5,
+            },
+            session_snapshot: &view_session_snapshot,
+        };
+
+        // Act
+        let should_apply = handle_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            view_key_context,
+            &mut pending_update,
+        )
+        .await;
+
+        // Assert
+        assert!(should_apply);
+        assert!(matches!(
+            app.mode,
+            AppMode::Prompt {
+                ref input,
+                ref session_id,
+                scroll_offset: Some(2),
+                ..
+            } if input.text() == "/"
+                && input.cursor == 1
+                && session_id == &view_context.session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_view_key_slash_stays_closed_when_mutation_and_reply_are_blocked() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            session_id: session_id.clone().into(),
+            scroll_offset: Some(2),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+        let mut view_session_snapshot = reply_enabled_review_snapshot();
+        view_session_snapshot.mutate_session_branch = ViewActionState::Disabled;
+        view_session_snapshot.reply_to_session = ViewActionState::Disabled;
+        let view_key_context = ViewKeyContext {
+            context: &view_context,
+            metrics: ChatScrollMetrics {
+                total_lines: 10,
+                view_height: 5,
+            },
+            session_snapshot: &view_session_snapshot,
+        };
+
+        // Act
+        let should_apply = handle_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            view_key_context,
+            &mut pending_update,
+        )
+        .await;
+
+        // Assert
+        assert!(should_apply);
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                scroll_offset: Some(2),
+            } if session_id == &view_context.session_id
+        ));
+        assert_eq!(pending_update.scroll_offset, Some(2));
     }
 
     #[tokio::test]

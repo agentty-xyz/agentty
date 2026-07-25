@@ -179,8 +179,11 @@ impl ViewActionSet {
                     | ViewSessionState::AgentReview
             );
         let can_open_prompt = can_open_view_prompt(state.session_state, state.reply_to_session);
-        let can_launch_configuration =
-            can_open_view_command(state.session_state, state.can_mutate_session_branch);
+        let can_launch_configuration = can_open_view_command(
+            state.session_state,
+            state.can_mutate_session_branch,
+            state.reply_to_session,
+        );
         let can_merge_session =
             can_merge_view_session(state.session_state, state.can_merge_session_branch);
         let can_rebase_session =
@@ -566,10 +569,11 @@ fn can_open_view_prompt(
 }
 
 /// Returns whether a session state can open slash commands in view mode under
-/// stack branch-mutation constraints.
+/// stack branch-mutation and reply constraints.
 fn can_open_view_command(
     session_state: ViewSessionState,
     can_mutate_session_branch: ViewActionAvailability,
+    reply_to_session: ViewActionAvailability,
 ) -> bool {
     if matches!(
         session_state,
@@ -578,7 +582,7 @@ fn can_open_view_command(
         return true;
     }
 
-    can_mutate_session_branch.is_enabled()
+    (can_mutate_session_branch.is_enabled() || reply_to_session.is_enabled())
         && matches!(
             session_state,
             ViewSessionState::Interactive
@@ -1088,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_review_keeps_reply_merge_and_sync_when_stack_blocks_commands() {
+    fn test_view_actions_review_keeps_commands_when_stack_allows_reply() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
@@ -1111,9 +1115,33 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
-        assert!(!actions.iter().any(|action| action.key == "/"));
+        assert!(actions.iter().any(|action| action.key == "/"));
         assert!(actions.iter().any(|action| action.key == "m"));
         assert!(actions.iter().any(|action| action.key == "r"));
+    }
+
+    #[test]
+    fn test_review_actions_hide_commands_when_mutation_and_reply_are_blocked() {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
+            can_mutate_session_branch: ViewActionAvailability::Disabled,
+            can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            reply_to_session: ViewActionAvailability::Disabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+            session_state: ViewSessionState::Review,
+        };
+
+        // Act
+        let actions = view_actions(state);
+        let footer_actions = view_footer_actions(state);
+
+        // Assert
+        assert!(!actions.iter().any(|action| action.key == "/"));
+        assert!(!footer_actions.iter().any(|action| action.key == "/"));
     }
 
     #[test]
@@ -1137,7 +1165,7 @@ mod tests {
         // Assert
         assert!(actions.iter().any(|action| action.key == "m"));
         assert!(!actions.iter().any(|action| action.key == "r"));
-        assert!(!actions.iter().any(|action| action.key == "/"));
+        assert!(actions.iter().any(|action| action.key == "/"));
     }
 
     #[test]
@@ -1372,7 +1400,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_footer_actions_review_keeps_reply_merge_and_sync_when_stack_blocks_commands() {
+    fn test_view_footer_actions_review_keeps_commands_when_stack_allows_reply() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
@@ -1394,7 +1422,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
-        assert!(!actions.iter().any(|action| action.key == "/"));
+        assert!(actions.iter().any(|action| action.key == "/"));
         assert!(actions.iter().any(|action| action.key == "m"));
         assert!(actions.iter().any(|action| action.key == "r"));
     }
@@ -1420,7 +1448,7 @@ mod tests {
         // Assert
         assert!(actions.iter().any(|action| action.key == "m"));
         assert!(!actions.iter().any(|action| action.key == "r"));
-        assert!(!actions.iter().any(|action| action.key == "/"));
+        assert!(actions.iter().any(|action| action.key == "/"));
     }
 
     #[test]

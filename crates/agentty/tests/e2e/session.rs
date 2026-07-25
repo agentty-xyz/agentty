@@ -3378,7 +3378,8 @@ fn stacked_session_creation() -> E2eResult {
 
 /// Verify that a review-ready parent can still open the reply composer, sync
 /// the stack, and queue merge after its stacked child has also reached review,
-/// while slash commands remain hidden until the child is terminal or unlinked.
+/// while direct slash entry opens the same command menu available after
+/// entering the reply composer.
 #[test]
 fn stacked_parent_merge_remains_available_with_review_child() -> E2eResult {
     // Arrange, Act, Assert
@@ -3396,16 +3397,36 @@ fn stacked_parent_merge_remains_available_with_review_child() -> E2eResult {
                     .wait_for_text("Enter: reply", 5000)
                     .capture_labeled(
                         "parent_review",
-                        "Parent review session with reply and sync available",
+                        "Parent review session with reply, commands, and sync available",
+                    )
+                    .press_key("/")
+                    .wait_for_text("Slash Command", 3000)
+                    .capture_labeled(
+                        "parent_slash_commands",
+                        "Direct slash entry opens commands for a stacked parent",
                     )
             },
-            |frame, _report| {
+            |frame, report| {
+                let parent_frame = common::frame_from_capture(&report.captures[0]);
+                let parent_full = Region::full(parent_frame.cols(), parent_frame.rows());
+                assertion::assert_text_in_region(
+                    &parent_frame,
+                    "Parent stack review",
+                    &parent_full,
+                );
+                assertion::assert_text_in_region(&parent_frame, "Enter: reply", &parent_full);
+                assertion::assert_text_in_region(&parent_frame, "/: commands menu", &parent_full);
+                assertion::assert_text_in_region(
+                    &parent_frame,
+                    "m: add to merge queue",
+                    &parent_full,
+                );
+                assertion::assert_text_in_region(&parent_frame, "r: sync", &parent_full);
+
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Parent stack review", &full);
-                assertion::assert_text_in_region(frame, "Enter: reply", &full);
-                assertion::assert_not_visible(frame, "/: commands menu");
-                assertion::assert_text_in_region(frame, "m: add to merge queue", &full);
-                assertion::assert_text_in_region(frame, "r: sync", &full);
+                assertion::assert_text_in_region(frame, "Slash Command", &full);
+                assertion::assert_text_in_region(frame, "/model", &full);
             },
         )?;
 
