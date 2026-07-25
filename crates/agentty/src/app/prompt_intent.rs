@@ -275,11 +275,8 @@ impl App {
 
         self.services
             .personality_catalog_client()
-            .list(folder)
+            .list_summaries(folder)
             .await
-            .iter()
-            .map(crate::domain::personality::Personality::summary)
-            .collect()
     }
 
     /// Persists one slash-selected personality and appends visible feedback.
@@ -833,9 +830,13 @@ mod tests {
         let expected_summary = personality.summary();
         let mut personality_catalog_client = MockPersonalityCatalogClient::new();
         personality_catalog_client
-            .expect_list()
+            .expect_list_summaries()
             .once()
-            .return_once(move |_| Box::pin(async move { vec![personality] }));
+            .return_once({
+                let expected_summary = expected_summary.clone();
+
+                move |_| Box::pin(async move { vec![expected_summary] })
+            });
         let clients = crate::test_support::test_app_clients()
             .with_personality_catalog_client(Arc::new(personality_catalog_client));
         let (mut app, _base_dir) =

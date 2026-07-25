@@ -116,6 +116,46 @@ pub fn parse_agent_definition(
     contents: &str,
 ) -> Result<Option<Personality>, PersonalityParseError> {
     let (frontmatter, body) = split_agent_definition(contents)?;
+    let Some(summary) = parse_agent_summary_parts(directory_id, frontmatter)? else {
+        return Ok(None);
+    };
+    let prompt = required_value(body, "prompt")?;
+
+    Ok(Some(Personality {
+        description: summary.description,
+        id: summary.id,
+        name: summary.name,
+        prompt: truncate_personality_prompt(prompt),
+    }))
+}
+
+/// Parses lightweight picker metadata from one `.agents` agent definition.
+///
+/// Callers may supply a body reduced to any non-empty placeholder because the
+/// returned value does not retain prompt text. Disabled definitions return
+/// `Ok(None)`.
+///
+/// # Errors
+/// Returns [`PersonalityParseError`] under the same validation rules as
+/// [`parse_agent_definition`].
+pub fn parse_agent_summary(
+    directory_id: &str,
+    contents: &str,
+) -> Result<Option<PersonalitySummary>, PersonalityParseError> {
+    let (frontmatter, body) = split_agent_definition(contents)?;
+    let Some(summary) = parse_agent_summary_parts(directory_id, frontmatter)? else {
+        return Ok(None);
+    };
+    required_value(body, "prompt")?;
+
+    Ok(Some(summary))
+}
+
+/// Validates frontmatter and builds lightweight picker metadata.
+fn parse_agent_summary_parts(
+    directory_id: &str,
+    frontmatter: &str,
+) -> Result<Option<PersonalitySummary>, PersonalityParseError> {
     let frontmatter = parse_agent_frontmatter(frontmatter)?;
     if frontmatter.enabled == Some(false) {
         return Ok(None);
@@ -127,13 +167,10 @@ pub fn parse_agent_definition(
         frontmatter.description.as_deref().unwrap_or_default(),
         "description",
     )?;
-    let prompt = required_value(body, "prompt")?;
-
-    Ok(Some(Personality {
+    Ok(Some(PersonalitySummary {
         description: description.to_string(),
         id: id.to_string(),
         name: name.to_string(),
-        prompt: truncate_personality_prompt(prompt),
     }))
 }
 
@@ -333,6 +370,28 @@ Focus on correctness and security.
     }
 
     #[test]
+    fn test_parse_agent_summary_returns_metadata_without_prompt_body() {
+        // Arrange
+        let definition = "---\nid: reviewer\nname: Reviewer\ndescription: Reviews code\n---\nA \
+                          very large prompt body.";
+
+        // Act
+        let summary = parse_agent_summary("fallback", definition)
+            .expect("definition should parse")
+            .expect("definition should be enabled");
+
+        // Assert
+        assert_eq!(
+            summary,
+            PersonalitySummary {
+                description: "Reviews code".to_string(),
+                id: "reviewer".to_string(),
+                name: "Reviewer".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn test_parse_agent_definition_uses_directory_id_when_id_is_missing() {
         // Arrange
         let definition =
@@ -483,6 +542,8 @@ Focus on correctness and security.
             .expect_err("missing description should fail");
         let prompt_error = parse_agent_definition("reviewer", missing_prompt)
             .expect_err("missing prompt should fail");
+        let summary_prompt_error = parse_agent_summary("reviewer", missing_prompt)
+            .expect_err("summary should require a prompt");
 
         // Assert
         assert_eq!(
@@ -490,6 +551,10 @@ Focus on correctness and security.
             PersonalityParseError::MissingField("description")
         );
         assert_eq!(prompt_error, PersonalityParseError::MissingField("prompt"));
+        assert_eq!(
+            summary_prompt_error,
+            PersonalityParseError::MissingField("prompt")
+        );
     }
 
     #[test]
