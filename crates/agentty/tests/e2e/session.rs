@@ -351,6 +351,49 @@ sequenceDiagram
     Ok(())
 }
 
+/// Seeds one review-ready session with the cyclic orchestration flow that
+/// previously fell back to a plain code block.
+fn seed_session_with_cyclic_mermaid_output(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular("cyclic-mermaid-0001", "claude-opus-4-8", "main", "Review")
+            .with_title("Cyclic Mermaid output"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                "cyclic-mermaid-0001",
+                SessionMessageKind::AssistantAnswer,
+                "\
+```mermaid
+flowchart LR
+    U[User and TUI] --> C[Orchestrator controller]
+    M[Agent model] --> P[Typed command response]
+    P --> C
+    C --> S[ag-session service]
+    S --> A[Agentty host adapter]
+    A --> W[Session workers]
+    W --> E[Session events]
+    E --> C
+    C --> M
+```
+",
+            )
+            .await
+    })?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("cyclic-m"))?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session whose assistant answer begins a line with a
 /// workflow-notice prefix that must remain assistant text.
 fn seed_session_with_typed_marker_collision(
@@ -4737,6 +4780,49 @@ fn session_view_mermaid_output() -> E2eResult {
                 assertion::assert_not_visible(frame, "erDiagram");
                 assertion::assert_not_visible(frame, "sequenceDiagram");
                 assertion::assert_not_visible(frame, "Agent available");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify cyclic flowcharts in session output render as Unicode diagrams
+/// instead of falling back to the raw Mermaid fenced block.
+#[test]
+fn session_view_cyclic_mermaid_output() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_cyclic_mermaid_output")
+        .with_terminal_size(100, 60)
+        .setup(seed_session_with_cyclic_mermaid_output)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Orchestrator controller", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "session_cyclic_mermaid_output",
+                        "Cyclic Mermaid flowchart rendered in session chat",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Orchestrator controller", &full);
+                assertion::assert_text_in_region(frame, "Typed command response", &full);
+                assertion::assert_text_in_region(frame, "Session events", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Session events ───▶ Orchestrator controller",
+                    &full,
+                );
+                assertion::assert_text_in_region(
+                    frame,
+                    "Orchestrator controller ───▶ Agent model",
+                    &full,
+                );
+                assertion::assert_not_visible(frame, "flowchart LR");
             },
         )?;
 

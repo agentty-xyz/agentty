@@ -16,7 +16,8 @@ accepted; subgraphs are flattened; styling statements, sequence notes, activatio
 `alt`/`opt`/`loop` blocks are skipped rather than drawn. Keep every node, participant,
 and message label within 32 plain-ASCII characters; longer labels are truncated with an
 ellipsis, and double-width glyphs drop the diagram preview. Keep diagrams small — at
-most 16 nodes and 24 edges, acyclic except a compact two-node `LR` feedback loop — and
-narrow enough for a chat pane: prefer 4 or fewer sequence participants with short
-message labels. Unsupported, cyclic, oversized, or too-wide diagrams fall back to the
-plain fenced-code presentation.
+most 16 nodes and 24 edges — and narrow enough for a chat pane: prefer 4 or fewer
+sequence participants with short message labels. Cyclic flowcharts render each feedback
+edge as an independent return row beneath the layered graph; larger `LR` cycles use a
+compact top-down layout. Unsupported, self-linked, oversized, or too-wide diagrams fall
+back to the plain fenced-code presentation.

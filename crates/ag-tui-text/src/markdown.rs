@@ -2376,6 +2376,40 @@ mod tests {
     }
 
     #[test]
+    fn test_render_markdown_renders_multi_node_feedback_mermaid_block_as_diagram() {
+        // Arrange
+        let input = concat!(
+            "```mermaid\n",
+            "flowchart LR\n",
+            "    U[User and TUI] --> C[Orchestrator controller]\n",
+            "    M[Agent model] --> P[Typed command response]\n",
+            "    P --> C\n",
+            "    C --> S[ag-session service]\n",
+            "    S --> A[Agentty host adapter]\n",
+            "    A --> W[Session workers]\n",
+            "    W --> E[Session events]\n",
+            "    E --> C\n",
+            "    C --> M\n",
+            "```",
+        );
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Orchestrator controller"));
+        assert!(text.contains("Session events"));
+        assert!(text.contains("Session events ───▶ Orchestrator controller"));
+        assert!(text.contains("Orchestrator controller ───▶ Agent model"));
+        assert!(!text.contains("flowchart LR"));
+    }
+
+    #[test]
     fn test_render_markdown_keeps_code_fallback_for_unsupported_mermaid() {
         // Arrange
         let input = "```mermaid\nclassDiagram\n    A <|-- B\n```";
