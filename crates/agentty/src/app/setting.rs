@@ -1084,7 +1084,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gemini31ProPreview.as_str(),
+                AgentModel::Gemini31Pro.as_str(),
             )
             .await
             .expect("failed to persist smart model");
@@ -1100,7 +1100,7 @@ mod tests {
         // Assert
         assert_eq!(
             loaded_selection,
-            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31ProPreview)
+            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro)
         );
     }
 
@@ -1654,13 +1654,13 @@ mod tests {
         // Arrange
         let mut manager = new_settings_manager();
         manager.fixture_view_mut().default_smart_selection =
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31ProPreview);
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro);
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro-preview");
+        assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro");
     }
 
     #[test]
@@ -1673,13 +1673,13 @@ mod tests {
             .map(ModelSelectorOption::selection)
             .collect();
         view.default_smart_selection =
-            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31ProPreview);
+            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro);
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, "gemini/gemini-3.1-pro-preview");
+        assert_eq!(rows[2].1, "gemini/gemini-3.1-pro");
     }
 
     #[test]
@@ -2240,7 +2240,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gemini31ProPreview.as_str(),
+                AgentModel::Gemini31Pro.as_str(),
             )
             .await
             .expect("failed to persist unavailable smart model");

@@ -131,23 +131,24 @@ pub(crate) fn build_resume_prompt(
     render_template("resume_with_transcript_prompt.md", &template)
 }
 
-/// Builds a full prompt payload to stream over stdin for CLI providers.
+/// Builds the full prompt text for a CLI provider.
 ///
 /// This shared helper keeps attachment placeholder rendering and provider
-/// protocol preparation in one place while preserving backend-specific error
-/// labels.
+/// protocol preparation in one place for both argv and stdin transports while
+/// preserving backend-specific error labels.
 ///
 /// # Errors
 /// Returns an error when attachment path rendering, resume wrapping, or
 /// protocol prompt rendering fails.
-pub(crate) fn build_prompt_stdin_payload(
+pub(crate) fn build_cli_prompt_text(
     request: BuildCommandRequest<'_>,
     schema_instruction_mode: ProtocolSchemaInstructionMode,
     backend_display_name: &str,
-) -> Result<Vec<u8>, AgentBackendError> {
+) -> Result<String, AgentBackendError> {
     let prompt =
         render_prompt_with_local_images(request.prompt, request.attachments, backend_display_name)?;
-    let prompt = prepare_prompt_text(PromptPreparationRequest {
+
+    prepare_prompt_text(PromptPreparationRequest {
         instruction_delivery_mode: if request.request_kind.is_resume() {
             InstructionDeliveryMode::BootstrapWithReplay
         } else {
@@ -160,9 +161,20 @@ pub(crate) fn build_prompt_stdin_payload(
         replay_transcript: request.replay_transcript,
         schema_instruction_mode,
         workspace_root: request.folder,
-    })?;
+    })
+}
 
-    Ok(prompt.into_bytes())
+/// Builds a full prompt payload to stream over stdin for CLI providers.
+///
+/// # Errors
+/// Returns an error when the shared CLI prompt text cannot be rendered.
+pub(crate) fn build_prompt_stdin_payload(
+    request: BuildCommandRequest<'_>,
+    schema_instruction_mode: ProtocolSchemaInstructionMode,
+    backend_display_name: &str,
+) -> Result<Vec<u8>, AgentBackendError> {
+    build_cli_prompt_text(request, schema_instruction_mode, backend_display_name)
+        .map(String::into_bytes)
 }
 
 /// Prepends current personality instructions to one full bootstrap prompt.

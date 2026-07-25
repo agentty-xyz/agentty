@@ -105,7 +105,7 @@ fn settings_tab_shows_content() {
                 assertion::assert_text_in_region(frame, "Global settings", &full);
                 assertion::assert_text_in_region(frame, "Default Reasoning Level", &full);
                 assertion::assert_text_in_region(frame, "Default Smart Model", &full);
-                assertion::assert_text_in_region(frame, "gemini/gemini-3.1-pro-preview", &full);
+                assertion::assert_text_in_region(frame, "gemini/gemini-3.1-pro", &full);
                 assertion::assert_text_in_region(frame, "Disabled", &full);
                 assertion::assert_text_in_region(frame, "Launch Configurations", &full);
                 assertion::assert_text_in_region(frame, "Theme", &full);

@@ -1855,7 +1855,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini3FlashPreview,
+                AgentModel::Gemini36Flash,
             ),
             parent_session_id: None,
             personality_id: None,
@@ -1898,7 +1898,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini3FlashPreview,
+                AgentModel::Gemini36Flash,
             ),
             parent_session_id: None,
             personality_id: None,
@@ -1960,7 +1960,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini3FlashPreview,
+                AgentModel::Gemini36Flash,
             ),
             parent_session_id: None,
             personality_id: None,
@@ -2003,7 +2003,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini3FlashPreview,
+                AgentModel::Gemini36Flash,
             ),
             parent_session_id: None,
             personality_id: None,
@@ -2046,7 +2046,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini3FlashPreview,
+                AgentModel::Gemini36Flash,
             ),
             parent_session_id: None,
             personality_id: None,
@@ -2089,7 +2089,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             is_draft: false,
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini3FlashPreview,
+                AgentModel::Gemini36Flash,
             ),
             parent_session_id: None,
             personality_id: None,

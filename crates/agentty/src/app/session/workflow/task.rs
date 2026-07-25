@@ -2855,7 +2855,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultFastModel,
-                AgentModel::Gemini31ProPreview.as_str(),
+                AgentModel::Gemini31Pro.as_str(),
             )
             .await
             .expect("failed to persist default fast model");
@@ -2873,7 +2873,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gemini31ProPreview.as_str(),
+                AgentModel::Gemini31Pro.as_str(),
             )
             .await
             .expect("failed to persist default smart model");
@@ -2889,7 +2889,7 @@ mod tests {
         // Assert
         assert_eq!(
             auto_commit_agent,
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31ProPreview)
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro)
         );
     }
 
@@ -2911,7 +2911,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gemini31ProPreview.as_str(),
+                AgentModel::Gemini31Pro.as_str(),
             )
             .await
             .expect("failed to persist default smart model");
@@ -2936,7 +2936,7 @@ mod tests {
         // Assert
         assert_eq!(
             smart_fallback_agent,
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31ProPreview)
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro)
         );
 
         // Arrange

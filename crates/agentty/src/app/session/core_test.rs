@@ -713,7 +713,7 @@ fn add_manual_session_with_status(
         is_draft: false,
         agent: crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
-            crate::domain::agent::AgentModel::Gemini3FlashPreview,
+            crate::domain::agent::AgentModel::Gemini36Flash,
         ),
         parent_session_id: None,
         personality_id: None,
@@ -2424,7 +2424,7 @@ async fn test_reply_first_message_uses_full_prompt_text_as_title() {
             &session_id,
             prompt,
             Arc::new(backend),
-            AgentModel::Gemini3FlashPreview,
+            AgentModel::Gemini36Flash,
         )
         .await;
 
@@ -5303,7 +5303,7 @@ async fn test_sync_main_uses_active_project_branch_from_context() {
         app.projects.working_dir().to_path_buf(),
         None,
         Arc::new(mock_git_client),
-        AgentModel::Gemini3FlashPreview,
+        AgentModel::Gemini36Flash,
     )
     .await;
 
@@ -5341,7 +5341,7 @@ async fn test_sync_main_requires_clean_selected_project_branch() {
         app.projects.working_dir().to_path_buf(),
         None,
         Arc::new(mock_git_client),
-        AgentModel::Gemini3FlashPreview,
+        AgentModel::Gemini36Flash,
     )
     .await;
 
@@ -5366,7 +5366,7 @@ async fn test_sync_main_returns_error_without_upstream_remote() {
         app.projects.working_dir().to_path_buf(),
         None,
         app.services.git_client(),
-        AgentModel::Gemini3FlashPreview,
+        AgentModel::Gemini36Flash,
     )
     .await;
 
@@ -5429,7 +5429,7 @@ async fn test_sync_main_pushes_local_commits_to_remote() {
         dir.path().to_path_buf(),
         None,
         Arc::new(mock_git_client),
-        AgentModel::Gemini3FlashPreview,
+        AgentModel::Gemini36Flash,
     )
     .await;
 

@@ -62,8 +62,9 @@ impl AppStartup {
     ) -> Result<(), AppError> {
         if available_agent_kinds.is_empty() {
             return Err(AppError::Workflow(
-                "No supported backend CLI found on `PATH`. Install `agy`, `codex`, `claude`, or \
-                 `gemini` and restart `agentty`."
+                "No supported backend CLI found on `PATH`. Install `codex`, `claude`, `gemini`, \
+                 or Antigravity CLI 1.1.7 or newer. For an older `agy`, run `agy update`, then \
+                 restart `agentty`."
                     .to_string(),
             ));
         }

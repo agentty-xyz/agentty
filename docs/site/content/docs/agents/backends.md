@@ -20,9 +20,11 @@ requires its respective CLI to be installed and available on your `PATH`.
   [Codex CLI](https://github.com/openai/codex), then run `codex login`.
 - Claude (`claude`): install [Claude Code](https://github.com/anthropics/claude-code),
   then run `claude auth login`.
-- Antigravity (`agy` 1.1.0 or newer): install the
+- Antigravity (`agy` 1.1.7 or newer): install the
   [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), then run
-  `agy` and follow its sign-in flow.
+  `agy` and follow its sign-in flow. Agentty excludes older versions from provider
+  selection and reports `agy update` as the recovery step if a session encounters an
+  outdated executable.
 - Gemini (`gemini`): install the
   [Gemini CLI](https://github.com/google-gemini/gemini-cli) and authenticate with an API
   key or Vertex AI.
@@ -93,6 +95,13 @@ than Google Account subscription sign-in. The
 [Antigravity terms](https://antigravity.google/terms) do not currently explain how
 subscription access applies when third-party tools invoke `agy --print`.
 
+Antigravity's non-interactive surface accepts the rendered prompt as the value of
+`--print`; it does not expose a prompt-file or standard-input alternative. Agentty
+therefore rejects a rendered prompt larger than 32 KiB before process launch, avoiding
+platform command-size failures. This most commonly affects resumed sessions whose
+replayed transcript is large. Start a new Antigravity session or shorten the prompt when
+that guard is reported.
+
 ### Gemini
 
 <a id="backends-gemini-authentication"></a> Google Account OAuth no longer works for
@@ -133,7 +142,10 @@ Antigravity, Claude, and Codex use their native `update` commands. Because curre
 Gemini CLI releases do not expose that command, npm-global Gemini installations are
 refreshed with `npm install -g @google/gemini-cli@latest`. Rows show `updating...` until
 the refresh completes. Gemini installations that Agentty cannot identify as npm-global
-are version-probed without an automatic update.
+are version-probed without an automatic update. Antigravity setup and turns reuse the
+validated discovery result instead of running `agy --version` on the async session path.
+Replacing or modifying the `agy` executable invalidates that result and asks you to wait
+for discovery or restart Agentty before retrying.
 
 <a id="backends-persistent-defaults"></a> For persistent defaults, choose a default
 model in the **Settings** tab (`Tab` to navigate, `Enter` to open the selector). The
@@ -159,10 +171,9 @@ entries with different trade-offs between speed, quality, and cost.
 
 Both providers share the same Gemini model ids:
 
-- `gemini-3.1-pro-preview` (default): Higher-quality Gemini model for deeper reasoning.
+- `gemini-3.1-pro` (default): Higher-quality Gemini model for deeper reasoning.
 - `gemini-3.6-flash`: Fast Gemini model for agentic and multimodal tasks.
-- `gemini-3.5-flash-lite`: Lightweight Gemini model for fast, cost-conscious workloads.
-- `gemini-3-flash-preview`: Fast Gemini model for quick iterations.
+- `gemini-3.5-flash`: Fast Gemini model for balanced agentic workloads.
 
 ### Claude Models
 
@@ -181,9 +192,10 @@ Both providers share the same Gemini model ids:
 - `gpt-5.3-codex-spark`: Codex spark model for quick coding iterations.
 
 Stored project defaults or session rows that reference a retired model id (such as
-`gemini-3.5-flash`, `gemini-3.1-flash-lite-preview`, `claude-opus-4-6`,
-`claude-opus-4-7`, `claude-sonnet-4-6`, `gpt-5.4`, or `gpt-5.4-mini`) are upgraded to
-the current supported replacement when Agentty loads them.
+`gemini-3-flash-preview`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`,
+`gemini-3.1-flash-lite-preview`, `claude-opus-4-6`, `claude-opus-4-7`,
+`claude-sonnet-4-6`, `gpt-5.4`, or `gpt-5.4-mini`) are upgraded to the current supported
+replacement when Agentty loads them.
 
 ## Switching Models
 

@@ -1,8 +1,12 @@
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
 use std::process::{Command, Stdio};
-use std::{fs, io};
 
+use ag_protocol::{
+    ProtocolSchemaInstructionMode, SchemaRequiredPolicy, agent_response_output_schema_json,
+};
+
+use super::availability;
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 use super::prompt::{self as shared_prompt, CliPromptAccessRootMode};
 
@@ -11,35 +15,63 @@ use super::prompt::{self as shared_prompt, CliPromptAccessRootMode};
 /// Antigravity CLI defaults print mode to five minutes, which is too short
 /// for repository edits.
 const ANTIGRAVITY_PRINT_TIMEOUT: &str = "1h";
-/// Git exclude pattern for Antigravity workspace project state.
-const ANTIGRAVITY_PROJECT_STATE_PATTERN: &str = ".antigravitycli/";
-/// Git exclude pattern for Antigravity's workspace project cache file.
-const ANTIGRAVITY_PROJECT_CACHE_PATTERN: &str = "cache/projects.json";
-/// Git exclude patterns for Antigravity workspace-local state files.
-const ANTIGRAVITY_PROJECT_STATE_PATTERNS: &[&str] = &[
-    ANTIGRAVITY_PROJECT_STATE_PATTERN,
-    ANTIGRAVITY_PROJECT_CACHE_PATTERN,
-];
+/// Conservative upper bound for the prompt passed through `agy --print`.
+///
+/// Antigravity exposes the print prompt only as one command argument. Keeping
+/// the argument below 32 KiB avoids platform-specific spawn failures while
+/// leaving room for the remaining command arguments and environment.
+const ANTIGRAVITY_MAX_PROMPT_BYTES: usize = 32 * 1024;
 
 /// Backend implementation for the Antigravity CLI.
 ///
 /// Antigravity does not currently expose an ACP/app-server flag in `agy
 /// --help`, so Agentty runs it as a stateless CLI provider through
-/// `agy --print`. Prompts are streamed through stdin to avoid argv length
-/// limits for transcript replay, large diffs, and one-shot utility prompts.
-pub(super) struct AntigravityBackend;
+/// `agy --print`. Supported Antigravity releases define `--print` as a
+/// string-valued flag, so Agentty passes the rendered prompt as its immediately
+/// following argument. All other options precede `--print` so none can be
+/// consumed as prompt text. Agentty validates the installed CLI version during
+/// background discovery, then checks the cached executable fingerprint during
+/// setup and before every turn so persisted sessions cannot invoke an
+/// incompatible or replaced executable.
+pub(super) struct AntigravityBackend {
+    path_value: Option<OsString>,
+    validate_cached_cli: fn(Option<&OsStr>) -> Result<(), String>,
+}
+
+impl AntigravityBackend {
+    /// Creates the production backend with real CLI compatibility checks.
+    pub(super) fn new() -> Self {
+        Self {
+            path_value: std::env::var_os("PATH"),
+            validate_cached_cli: availability::ensure_cached_antigravity_cli_supported_on_path,
+        }
+    }
+}
 
 impl AgentBackend for AntigravityBackend {
-    fn setup(&self, folder: &Path) -> Result<(), AgentBackendError> {
-        ensure_antigravity_project_state_ignored(folder)?;
-
-        Ok(())
+    fn setup(&self, _folder: &Path) -> Result<(), AgentBackendError> {
+        (self.validate_cached_cli)(self.path_value.as_deref()).map_err(AgentBackendError::Setup)
     }
 
     fn build_command<'request>(
         &'request self,
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
+        (self.validate_cached_cli)(self.path_value.as_deref())
+            .map_err(AgentBackendError::CommandBuild)?;
+        let prompt = shared_prompt::build_cli_prompt_text(
+            request,
+            ProtocolSchemaInstructionMode::TransportSchema,
+            "Antigravity",
+        )?;
+        if prompt.len() > ANTIGRAVITY_MAX_PROMPT_BYTES {
+            return Err(AgentBackendError::CommandBuild(format!(
+                "Antigravity prompt is {} bytes, exceeding Agentty's safe \
+                 {ANTIGRAVITY_MAX_PROMPT_BYTES}-byte command argument limit. Start a new \
+                 Antigravity session to avoid replaying its transcript, or shorten the prompt.",
+                prompt.len()
+            )));
+        }
         let BuildCommandRequest {
             attachments,
             folder,
@@ -53,7 +85,6 @@ impl AgentBackend for AntigravityBackend {
         } = request;
         let mut command = Command::new("agy");
 
-        ensure_antigravity_project_state_ignored(folder)?;
         shared_prompt::append_cli_prompt_access_directories(
             &mut command,
             folder,
@@ -64,13 +95,20 @@ impl AgentBackend for AntigravityBackend {
         command
             .arg("--sandbox")
             .arg("--dangerously-skip-permissions")
-            .arg("--print")
             .arg("--print-timeout")
             .arg(ANTIGRAVITY_PRINT_TIMEOUT)
             .arg("--model")
             .arg(model)
             .arg("--effort")
             .arg(reasoning_level.antigravity())
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--json-schema")
+            .arg(agent_response_output_schema_json(
+                SchemaRequiredPolicy::MinimumProtocolKeys,
+            ))
+            .arg("--print")
+            .arg(prompt)
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -79,191 +117,19 @@ impl AgentBackend for AntigravityBackend {
     }
 }
 
-/// Ensures Antigravity's workspace-local project state stays out of session
-/// diffs.
-///
-/// `agy --print` creates `.antigravitycli/` and `cache/projects.json` as
-/// project configuration state in the current workspace. Agentty stores
-/// session output as git diffs and commits, so the backend adds
-/// repository-local git exclude entries before the process can create those
-/// paths. The exclude lives under git metadata, not in tracked project files.
-///
-/// # Errors
-/// Returns an error when the session worktree's git exclude file cannot be
-/// resolved or updated.
-fn ensure_antigravity_project_state_ignored(folder: &Path) -> Result<(), AgentBackendError> {
-    let Some(exclude_path) = git_info_exclude_path(folder)? else {
-        return Ok(());
-    };
-
-    for pattern in ANTIGRAVITY_PROJECT_STATE_PATTERNS {
-        append_git_exclude_pattern(&exclude_path, pattern)?;
-    }
-
-    Ok(())
-}
-
-/// Returns the git metadata exclude file used by one worktree.
-///
-/// Supports both regular repositories with a `.git/` directory and linked
-/// worktrees whose `.git` file points at a worktree-specific gitdir. Linked
-/// worktrees share ignore rules through their common gitdir, so this follows
-/// `commondir` when git records one.
-///
-/// # Errors
-/// Returns an error when git metadata exists but cannot be read.
-fn git_info_exclude_path(folder: &Path) -> Result<Option<PathBuf>, AgentBackendError> {
-    let git_path = folder.join(".git");
-    let metadata = match fs::metadata(&git_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(AgentBackendError::Setup(format!(
-                "Failed to inspect Antigravity git metadata path `{}`: {error}",
-                git_path.display()
-            )));
-        }
-    };
-
-    let git_dir = if metadata.is_dir() {
-        git_path
-    } else {
-        let git_file = fs::read_to_string(&git_path).map_err(|error| {
-            AgentBackendError::Setup(format!(
-                "Failed to read Antigravity gitdir file `{}`: {error}",
-                git_path.display()
-            ))
-        })?;
-        let Some(git_dir) = parse_gitdir_file(folder, &git_file) else {
-            return Ok(None);
-        };
-        git_dir
-    };
-
-    Ok(Some(git_common_info_exclude_path(&git_dir)?))
-}
-
-/// Returns the `info/exclude` path below a gitdir's common metadata directory.
-///
-/// # Errors
-/// Returns an error when git's optional `commondir` file cannot be read.
-fn git_common_info_exclude_path(git_dir: &Path) -> Result<PathBuf, AgentBackendError> {
-    let common_dir_file = git_dir.join("commondir");
-    let common_dir = match fs::read_to_string(&common_dir_file) {
-        Ok(common_dir) => parse_common_dir_file(git_dir, &common_dir),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => git_dir.to_path_buf(),
-        Err(error) => {
-            return Err(AgentBackendError::Setup(format!(
-                "Failed to read Antigravity git common-dir file `{}`: {error}",
-                common_dir_file.display()
-            )));
-        }
-    };
-
-    Ok(common_dir.join("info").join("exclude"))
-}
-
-/// Parses a gitdir `commondir` file and resolves its target.
-fn parse_common_dir_file(git_dir: &Path, common_dir_file: &str) -> PathBuf {
-    let Some(common_dir) = common_dir_file.lines().next().map(str::trim) else {
-        return git_dir.to_path_buf();
-    };
-    if common_dir.is_empty() {
-        return git_dir.to_path_buf();
-    }
-
-    let common_dir = PathBuf::from(common_dir);
-    if common_dir.is_absolute() {
-        return common_dir;
-    }
-
-    git_dir.join(common_dir)
-}
-
-/// Parses a `.git` file and resolves its `gitdir:` target.
-fn parse_gitdir_file(folder: &Path, git_file: &str) -> Option<PathBuf> {
-    let git_dir = git_file.strip_prefix("gitdir:")?.trim();
-    if git_dir.is_empty() {
-        return None;
-    }
-
-    let git_dir = PathBuf::from(git_dir);
-    if git_dir.is_absolute() {
-        return Some(git_dir);
-    }
-
-    Some(folder.join(git_dir))
-}
-
-/// Appends one pattern to a git exclude file when it is not already present.
-///
-/// # Errors
-/// Returns an error when the exclude directory cannot be created or the file
-/// cannot be read or appended.
-fn append_git_exclude_pattern(exclude_path: &Path, pattern: &str) -> Result<(), AgentBackendError> {
-    let existing = match fs::read_to_string(exclude_path) {
-        Ok(existing) => existing,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(error) => {
-            return Err(AgentBackendError::Setup(format!(
-                "Failed to read Antigravity git exclude `{}`: {error}",
-                exclude_path.display()
-            )));
-        }
-    };
-
-    if existing.lines().any(|line| line.trim() == pattern) {
-        return Ok(());
-    }
-
-    if let Some(parent) = exclude_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            AgentBackendError::Setup(format!(
-                "Failed to create Antigravity git exclude directory `{}`: {error}",
-                parent.display()
-            ))
-        })?;
-    }
-
-    let mut exclude_file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(exclude_path)
-        .map_err(|error| {
-            AgentBackendError::Setup(format!(
-                "Failed to open Antigravity git exclude `{}`: {error}",
-                exclude_path.display()
-            ))
-        })?;
-
-    if !existing.is_empty() && !existing.ends_with('\n') {
-        writeln!(exclude_file).map_err(|error| {
-            AgentBackendError::Setup(format!(
-                "Failed to update Antigravity git exclude `{}`: {error}",
-                exclude_path.display()
-            ))
-        })?;
-    }
-
-    writeln!(
-        exclude_file,
-        "# Agentty: ignore Antigravity CLI workspace project state\n{pattern}"
-    )
-    .map_err(|error| {
-        AgentBackendError::Setup(format!(
-            "Failed to update Antigravity git exclude `{}`: {error}",
-            exclude_path.display()
-        ))
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use ag_protocol::{ProtocolSchemaInstructionMode, TurnPromptAttachment};
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+
+    use ag_protocol::TurnPromptAttachment;
+    use serde_json::Value;
     use tempfile::{TempDir, tempdir};
 
     use super::shared_prompt::{
-        CliPromptAccessRootMode, build_prompt_stdin_payload, cli_prompt_access_directories,
+        CliPromptAccessRootMode, build_cli_prompt_text, cli_prompt_access_directories,
     };
     use super::*;
     use crate::channel::AgentRequestKind;
@@ -277,6 +143,14 @@ mod tests {
         AgentRequestKind::SessionStart
     }
 
+    /// Creates a backend whose compatibility boundary accepts the test CLI.
+    fn supported_backend() -> AntigravityBackend {
+        AntigravityBackend {
+            path_value: None,
+            validate_cached_cli: |_| Ok(()),
+        }
+    }
+
     /// Creates a temp directory whose own basename is visible so command
     /// assertions are stable on platforms where `tempdir()` uses dot prefixes.
     fn visible_tempdir() -> TempDir {
@@ -286,39 +160,14 @@ mod tests {
             .expect("failed to create visible temp dir")
     }
 
-    /// Creates a minimal standard git metadata directory for backend setup
-    /// tests.
-    fn create_standard_git_directory(folder: &Path) {
-        fs::create_dir_all(folder.join(".git")).expect("failed to create git metadata directory");
-    }
-
-    /// Reads the repository-local git exclude file created by Antigravity
-    /// setup.
-    fn read_standard_git_exclude(folder: &Path) -> String {
-        fs::read_to_string(folder.join(".git").join("info").join("exclude"))
-            .expect("failed to read git exclude")
-    }
-
-    /// Verifies all Antigravity workspace-local state patterns are present in
-    /// one git exclude file.
-    fn assert_antigravity_project_state_patterns_ignored(exclude: &str) {
-        for pattern in ANTIGRAVITY_PROJECT_STATE_PATTERNS {
-            assert!(
-                exclude.lines().any(|line| line.trim() == *pattern),
-                "exclude should contain pattern `{pattern}`"
-            );
-        }
-    }
-
     #[test]
-    /// Verifies Antigravity starts in unattended print mode with sandbox
-    /// restrictions enabled.
+    /// Verifies Antigravity starts in native structured print mode with every
+    /// option before the string-valued `--print` flag and its prompt.
     fn test_antigravity_build_command_uses_print_mode_with_sandbox() {
         // Arrange
         let temp_directory = visible_tempdir();
-        create_standard_git_directory(temp_directory.path());
-        let backend = AntigravityBackend;
-        let requested_model = AgentModel::Gemini31ProPreview.provider_model_str();
+        let backend = supported_backend();
+        let requested_model = AgentModel::Gemini31Pro.provider_model_str();
 
         // Act
         let command = AgentBackend::build_command(
@@ -350,19 +199,27 @@ mod tests {
                 session_folder,
                 "--sandbox".to_string(),
                 "--dangerously-skip-permissions".to_string(),
-                "--print".to_string(),
                 "--print-timeout".to_string(),
                 ANTIGRAVITY_PRINT_TIMEOUT.to_string(),
                 "--model".to_string(),
                 requested_model.to_string(),
                 "--effort".to_string(),
                 ReasoningLevel::default().antigravity().to_string(),
+                "--output-format".to_string(),
+                "stream-json".to_string(),
+                "--json-schema".to_string(),
+                args[args.len() - 3].clone(),
+                "--print".to_string(),
+                args[args.len() - 1].clone(),
             ]
         );
         assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
-        assert_antigravity_project_state_patterns_ignored(&read_standard_git_exclude(
-            temp_directory.path(),
-        ));
+        let schema: Value =
+            serde_json::from_str(&args[args.len() - 3]).expect("schema should be JSON");
+        assert_eq!(schema["required"], serde_json::json!(["answer"]));
+        assert!(args.last().is_some_and(|prompt| {
+            prompt.contains("Structured response protocol:") && prompt.contains("Write tests")
+        }));
     }
 
     #[test]
@@ -371,7 +228,7 @@ mod tests {
     fn test_antigravity_build_command_passes_supported_effort() {
         // Arrange
         let temp_directory = visible_tempdir();
-        let backend = AntigravityBackend;
+        let backend = supported_backend();
         let cases = ReasoningLevel::ALL;
 
         for reasoning_level in cases {
@@ -383,7 +240,7 @@ mod tests {
                     folder: temp_directory.path(),
                     main_checkout_root: None,
                     replay_transcript: None,
-                    model: AgentModel::Gemini31ProPreview.provider_model_str(),
+                    model: AgentModel::Gemini31Pro.provider_model_str(),
                     personality_prompt: None,
                     prompt: "Write tests",
                     reasoning_level,
@@ -416,10 +273,9 @@ mod tests {
             .join(".agentty")
             .join("wt")
             .join("00cbfefe");
-        fs::create_dir_all(&session_folder).expect("failed to create hidden session folder");
-        create_standard_git_directory(&session_folder);
-        let backend = AntigravityBackend;
-        let requested_model = AgentModel::Gemini31ProPreview.provider_model_str();
+        std::fs::create_dir_all(&session_folder).expect("failed to create hidden session folder");
+        let backend = supported_backend();
+        let requested_model = AgentModel::Gemini31Pro.provider_model_str();
 
         // Act
         let command = AgentBackend::build_command(
@@ -447,102 +303,149 @@ mod tests {
         assert_eq!(command.get_current_dir(), Some(session_folder.as_path()));
         assert_eq!(args[0], "--add-dir");
         assert_eq!(args[1], session_folder_display);
-        assert_antigravity_project_state_patterns_ignored(&read_standard_git_exclude(
-            &session_folder,
-        ));
     }
 
     #[test]
-    /// Verifies Antigravity setup excludes workspace-local CLI state for
-    /// standard repositories.
-    fn test_antigravity_setup_ignores_project_state_for_standard_git_directory() {
+    /// Verifies modern Antigravity setup does not mutate repository metadata.
+    fn test_antigravity_setup_does_not_create_git_excludes() {
         // Arrange
         let temp_directory = visible_tempdir();
-        create_standard_git_directory(temp_directory.path());
-        let backend = AntigravityBackend;
+        let backend = supported_backend();
 
         // Act
         AgentBackend::setup(&backend, temp_directory.path()).expect("setup should succeed");
-        let exclude = read_standard_git_exclude(temp_directory.path());
 
         // Assert
-        assert!(exclude.contains("# Agentty: ignore Antigravity CLI workspace project state"));
-        assert_antigravity_project_state_patterns_ignored(&exclude);
+        assert!(!temp_directory.path().join(".git").exists());
     }
 
     #[test]
-    /// Verifies Antigravity setup accepts a hidden session worktree path.
-    fn test_antigravity_setup_accepts_hidden_session_folder() {
+    /// Verifies setup surfaces the compatibility probe's actionable error.
+    fn test_antigravity_setup_rejects_unsupported_cli() {
         // Arrange
         let temp_directory = visible_tempdir();
-        let session_folder = temp_directory
-            .path()
-            .join(".agentty")
-            .join("wt")
-            .join("00cbfefe");
-        fs::create_dir_all(&session_folder).expect("failed to create hidden session folder");
-        create_standard_git_directory(&session_folder);
-        let backend = AntigravityBackend;
+        let backend = AntigravityBackend {
+            path_value: None,
+            validate_cached_cli: |_| Err("Run `agy update`, then retry.".to_string()),
+        };
 
         // Act
-        AgentBackend::setup(&backend, &session_folder).expect("setup should succeed");
-        let exclude = read_standard_git_exclude(&session_folder);
+        let error = AgentBackend::setup(&backend, temp_directory.path())
+            .expect_err("unsupported Antigravity should fail setup");
 
         // Assert
-        assert_antigravity_project_state_patterns_ignored(&exclude);
+        assert_eq!(
+            error,
+            AgentBackendError::Setup("Run `agy update`, then retry.".to_string())
+        );
     }
 
     #[test]
-    /// Verifies Antigravity setup follows linked-worktree `.git` files and
-    /// `commondir` metadata to the repository-local exclude file used by git.
-    fn test_antigravity_setup_ignores_project_state_for_linked_worktree_gitdir() {
+    /// Verifies every turn surfaces the cached compatibility error without
+    /// launching another version subprocess.
+    fn test_antigravity_build_command_rejects_cached_cli_error() {
         // Arrange
         let temp_directory = visible_tempdir();
-        let common_git_dir = temp_directory.path().join("main").join(".git");
-        let worktree = temp_directory.path().join("worktree");
-        let worktree_git_dir = common_git_dir.join("worktrees").join("feature");
-        fs::create_dir_all(&worktree).expect("failed to create worktree directory");
-        fs::create_dir_all(&worktree_git_dir).expect("failed to create gitdir directory");
-        fs::write(
-            worktree.join(".git"),
-            format!("gitdir: {}\n", worktree_git_dir.display()),
+        let backend = AntigravityBackend {
+            path_value: None,
+            validate_cached_cli: |_| Err("Run `agy update`, then retry.".to_string()),
+        };
+
+        // Act
+        let error = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[],
+                folder: temp_directory.path(),
+                main_checkout_root: None,
+                replay_transcript: None,
+                model: AgentModel::Gemini31Pro.provider_model_str(),
+                personality_prompt: None,
+                prompt: "Write tests",
+                reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
+            },
         )
-        .expect("failed to write linked worktree gitdir file");
-        fs::write(worktree_git_dir.join("commondir"), "../..\n")
-            .expect("failed to write linked worktree commondir file");
-        let backend = AntigravityBackend;
-
-        // Act
-        AgentBackend::setup(&backend, &worktree).expect("setup should succeed");
-        let exclude = fs::read_to_string(common_git_dir.join("info").join("exclude"))
-            .expect("failed to read linked worktree git exclude");
+        .expect_err("unsupported Antigravity should fail the turn");
 
         // Assert
-        assert_antigravity_project_state_patterns_ignored(&exclude);
+        assert_eq!(
+            error,
+            AgentBackendError::CommandBuild("Run `agy update`, then retry.".to_string())
+        );
     }
 
     #[test]
-    /// Verifies repeated Antigravity setup keeps one copy of each exclude
-    /// pattern.
-    fn test_antigravity_setup_ignores_project_state_idempotently() {
+    /// Verifies a resumed transcript cannot exceed the safe size for the
+    /// string-valued `--print` command argument.
+    fn test_antigravity_build_command_rejects_oversized_replay_prompt() {
         // Arrange
         let temp_directory = visible_tempdir();
-        create_standard_git_directory(temp_directory.path());
-        let backend = AntigravityBackend;
+        let backend = supported_backend();
+        let replay_transcript = "x".repeat(ANTIGRAVITY_MAX_PROMPT_BYTES);
+        let request_kind = session_resume_request_kind(Some(&replay_transcript));
 
         // Act
-        AgentBackend::setup(&backend, temp_directory.path()).expect("first setup should succeed");
-        AgentBackend::setup(&backend, temp_directory.path()).expect("second setup should succeed");
-        let exclude = read_standard_git_exclude(temp_directory.path());
+        let error = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[],
+                folder: temp_directory.path(),
+                main_checkout_root: None,
+                replay_transcript: Some(&replay_transcript),
+                model: AgentModel::Gemini31Pro.provider_model_str(),
+                personality_prompt: None,
+                prompt: "Continue work",
+                reasoning_level: ReasoningLevel::default(),
+                request_kind: &request_kind,
+            },
+        )
+        .expect_err("oversized Antigravity prompt should fail before spawning");
 
         // Assert
-        for pattern in ANTIGRAVITY_PROJECT_STATE_PATTERNS {
-            let pattern_count = exclude
-                .lines()
-                .filter(|line| line.trim() == *pattern)
-                .count();
-            assert_eq!(pattern_count, 1, "pattern `{pattern}` should appear once");
-        }
+        assert!(matches!(&error, AgentBackendError::CommandBuild(_)));
+        let message = error.to_string();
+        assert!(message.contains("safe 32768-byte command argument limit"));
+        assert!(message.contains("Start a new Antigravity session"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    /// Verifies Antigravity command construction preserves prompt-rendering
+    /// errors for attachment paths that cannot be represented as UTF-8.
+    fn test_antigravity_build_command_rejects_non_utf8_attachment_path() {
+        // Arrange
+        let temp_directory = visible_tempdir();
+        let backend = supported_backend();
+        let attachment = TurnPromptAttachment {
+            placeholder: "[Image #1]".to_string(),
+            local_image_path: OsString::from_vec(vec![0x66, 0x80, 0x6f]).into(),
+        };
+
+        // Act
+        let error = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[attachment],
+                folder: temp_directory.path(),
+                main_checkout_root: None,
+                replay_transcript: None,
+                model: AgentModel::Gemini31Pro.provider_model_str(),
+                personality_prompt: None,
+                prompt: "Review [Image #1]",
+                reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
+            },
+        )
+        .expect_err("non-UTF-8 attachment path should fail command construction");
+
+        // Assert
+        assert_eq!(
+            error,
+            AgentBackendError::CommandBuild(
+                "Antigravity prompt image path is not valid UTF-8".to_string()
+            )
+        );
     }
 
     #[test]
@@ -556,7 +459,7 @@ mod tests {
             placeholder: "[Image #1]".to_string(),
             local_image_path: attachment_directory.join("one.png"),
         };
-        let backend = AntigravityBackend;
+        let backend = supported_backend();
         let requested_model = "gemini-3.6-flash";
 
         // Act
@@ -624,34 +527,34 @@ mod tests {
     }
 
     #[test]
-    /// Verifies Antigravity stdin prompts include protocol instructions and
+    /// Verifies Antigravity argv prompts include protocol instructions and
     /// replayed transcript output for resume turns.
-    fn test_antigravity_stdin_payload_replays_transcript_on_resume() {
+    fn test_antigravity_argv_prompt_replays_transcript_on_resume() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let request_kind = session_resume_request_kind(Some("previous answer"));
 
         // Act
-        let payload = build_prompt_stdin_payload(
+        let prompt = build_cli_prompt_text(
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
                 replay_transcript: Some("previous answer"),
-                model: AgentModel::Gemini31ProPreview.provider_model_str(),
+                model: AgentModel::Gemini31Pro.provider_model_str(),
                 personality_prompt: None,
                 prompt: "continue work",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &request_kind,
             },
-            ProtocolSchemaInstructionMode::PromptSchema,
+            ProtocolSchemaInstructionMode::TransportSchema,
             "Antigravity",
         )
-        .expect("stdin payload should build");
-        let prompt = String::from_utf8(payload).expect("prompt should be utf8");
+        .expect("argv prompt should build");
 
         // Assert
         assert!(prompt.contains("Structured response protocol:"));
+        assert!(!prompt.contains("\"$schema\""));
         assert!(prompt.contains("previous answer"));
         assert!(prompt.contains("continue work"));
     }

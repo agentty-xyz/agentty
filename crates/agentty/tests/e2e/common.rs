@@ -91,11 +91,21 @@ impl BuilderEnv {
         {
             let stub_agent_path = stub_bin.join(executable_name);
             let stub_version_path = stub_bin.join(format!("{executable_name}.version"));
+            let initial_version = if executable_name == "agy" {
+                "1.2.0"
+            } else {
+                "0.0.0-test"
+            };
+            let updated_version = if executable_name == "agy" {
+                "1.2.1"
+            } else {
+                "0.0.1-updated"
+            };
             let stub_script = format!(
-                "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then printf '0.0.1-updated\\n' > \"{}\"; \
-                 exit 0; fi\nif [ \"$1\" = \"--version\" ]; then if [ -f \"{}\" ]; then read \
-                 version < \"{}\"; else version='0.0.0-test'; fi; printf '{} %s\\n' \"$version\"; \
-                 exit 0; fi\nexit 1\n",
+                "#!/bin/sh\nif [ \"$1\" = \"update\" ]; then printf '{updated_version}\\n' > \
+                 \"{}\"; exit 0; fi\nif [ \"$1\" = \"--version\" ]; then if [ -f \"{}\" ]; then \
+                 read version < \"{}\"; else version='{initial_version}'; fi; printf '{} %s\\n' \
+                 \"$version\"; exit 0; fi\nexit 1\n",
                 stub_version_path.display(),
                 stub_version_path.display(),
                 stub_version_path.display(),
@@ -1322,6 +1332,41 @@ mod tests {
                 "missing {executable_name} test stub",
             );
         }
+    }
+
+    #[test]
+    fn builder_env_keeps_antigravity_stub_supported_after_update() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temporary directory");
+        let env = BuilderEnv::new(temp.path()).expect("failed to create builder environment");
+        let antigravity_path = env.stub_bin.join("agy");
+
+        // Act
+        let initial_output = std::process::Command::new(&antigravity_path)
+            .arg("--version")
+            .output()
+            .expect("failed to execute Antigravity test stub");
+        let update_status = std::process::Command::new(&antigravity_path)
+            .arg("update")
+            .status()
+            .expect("failed to update Antigravity test stub");
+        let updated_output = std::process::Command::new(&antigravity_path)
+            .arg("--version")
+            .output()
+            .expect("failed to execute updated Antigravity test stub");
+
+        // Assert
+        assert!(initial_output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&initial_output.stdout),
+            "agy 1.2.0\n"
+        );
+        assert!(update_status.success());
+        assert!(updated_output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&updated_output.stdout),
+            "agy 1.2.1\n"
+        );
     }
 
     #[test]
