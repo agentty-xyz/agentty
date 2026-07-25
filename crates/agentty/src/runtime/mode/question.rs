@@ -540,17 +540,7 @@ fn sync_question_at_mention_state(app: &mut App) {
 /// Starts asynchronous loading of file entries for the question-mode
 /// at-mention dropdown.
 fn activate_question_at_mention(app: &mut App, session_id: &str) {
-    let session_folder = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == session_id)
-        .map(|session| session.folder.clone());
-    let lookup_root = at_mention::lookup_root_for_session(
-        app.working_dir().to_path_buf(),
-        session_folder,
-        |session_folder| app.services.fs_client().is_dir(session_folder),
-    );
+    let lookup_root = app.at_mention_lookup_root(session_id);
     let owned_session_id = SessionId::from(session_id);
     let event_tx = app.services.event_sender();
 
@@ -883,6 +873,70 @@ mod tests {
 
     /// Fake terminal size used by tests that don't exercise scrolling.
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 24);
+
+    #[tokio::test]
+    async fn test_question_at_mention_loads_parent_worktree_entries_for_stacked_session() {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_test_app().await;
+        let parent_session_id = SessionId::from("parent-session");
+        let child_session_id = SessionId::from("child-session");
+        let parent_folder = base_dir.path().join("parent-worktree");
+        let expected_path = "parent_question_target.txt";
+        std::fs::create_dir_all(&parent_folder).expect("failed to create parent worktree");
+        std::fs::write(parent_folder.join(expected_path), "parent")
+            .expect("failed to write parent worktree file");
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(parent_session_id.clone())
+                .folder(parent_folder)
+                .build(),
+        );
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(child_session_id.clone())
+                .folder(base_dir.path().join("missing-child-worktree"))
+                .parent_session_id(Some(parent_session_id))
+                .status(Status::Question)
+                .build(),
+        );
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            current_index: 0,
+            focus: ChatFocus::Input,
+            input: InputState::with_text("@parent".to_string()),
+            questions: vec![QuestionItem::new("Which file?")],
+            responses: Vec::new(),
+            scroll_offset: None,
+            selected_option_index: None,
+            session_id: child_session_id.clone(),
+        };
+
+        // Act
+        sync_question_at_mention_state(&mut app);
+        let next_event = loop {
+            let next_event =
+                tokio::time::timeout(std::time::Duration::from_secs(1), app.next_app_event())
+                    .await
+                    .expect("at-mention event should arrive")
+                    .expect("at-mention event channel should stay open");
+            if matches!(next_event, AppEvent::AtMentionEntriesLoaded { .. }) {
+                break next_event;
+            }
+        };
+
+        // Assert
+        assert!(matches!(
+            next_event,
+            AppEvent::AtMentionEntriesLoaded {
+                entries,
+                session_id,
+            } if session_id == child_session_id
+                && entries.contains(&crate::domain::file_entry::FileEntry {
+                    is_dir: false,
+                    path: expected_path.to_string(),
+                })
+        ));
+    }
 
     #[tokio::test]
     async fn test_question_scroll_metrics_uses_default_review_model_for_loading_fallback() {

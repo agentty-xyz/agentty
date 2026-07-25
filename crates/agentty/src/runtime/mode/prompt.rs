@@ -1067,19 +1067,11 @@ async fn apply_prompt_delete_range(app: &mut App, start: usize, end: usize) {
 /// Starts asynchronous loading of at-mention file entries for the prompt
 /// session.
 ///
-/// Draft sessions in `Draft` state defer worktree creation, so their composer
-/// indexes the active project working directory until the session folder is
-/// materialized.
+/// Draft sessions in `Draft` state defer worktree creation. Regular drafts
+/// index the active project working directory, while stacked drafts index the
+/// parent worktree until their own folder is materialized.
 fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
-    let session_folder = app
-        .sessions
-        .session_at(prompt_context.session_index)
-        .map(|session| session.folder.clone());
-    let lookup_root = at_mention::lookup_root_for_session(
-        app.working_dir().to_path_buf(),
-        session_folder,
-        |session_folder| app.services.fs_client().is_dir(session_folder),
-    );
+    let lookup_root = app.at_mention_lookup_root(&prompt_context.session_id);
     let session_id = prompt_context.session_id.clone();
     let event_tx = app.services.event_sender();
 
@@ -3480,6 +3472,40 @@ mod tests {
                 session_id,
             } => {
                 assert_eq!(session_id, app.sessions.sessions()[0].id.as_str());
+                assert!(entries.contains(&FileEntry {
+                    is_dir: false,
+                    path: expected_path.to_string(),
+                }));
+            }
+            _ => unreachable!("expected at-mention entries event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_char_loads_parent_worktree_entries_for_stacked_draft() {
+        // Arrange
+        let (mut app, base_dir) = new_test_draft_prompt_app("", None).await;
+        let parent_session_id = SessionId::from("parent-session");
+        let parent_folder = base_dir.path().join("parent-worktree");
+        let expected_path = "parent_lookup_target.txt";
+        std::fs::create_dir_all(&parent_folder).expect("failed to create parent worktree");
+        std::fs::write(parent_folder.join(expected_path), "parent")
+            .expect("failed to write parent worktree file");
+        app.sessions.sessions_mut()[0].parent_session_id = Some(parent_session_id.clone());
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(parent_session_id)
+                .folder(parent_folder)
+                .build(),
+        );
+
+        // Act
+        apply_prompt_input_command(&mut app, InputCommand::Insert('@')).await;
+        let next_event = wait_for_at_mention_entries_event(&mut app).await;
+
+        // Assert
+        match next_event {
+            crate::app::AppEvent::AtMentionEntriesLoaded { entries, .. } => {
                 assert!(entries.contains(&FileEntry {
                     is_dir: false,
                     path: expected_path.to_string(),

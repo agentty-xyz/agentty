@@ -1711,6 +1711,38 @@ fn seed_draft_at_lookup_project(env: &BuilderEnv) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+/// Seeds an unmaterialized stacked draft whose parent worktree contains a new
+/// file that is absent from the project checkout.
+fn seed_stacked_at_lookup_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let parent_session_id = "atparent-0001";
+    let child_session_id = "atchildx-0001";
+    common::seed_session(
+        env,
+        SessionSeed::regular(parent_session_id, "gpt-5.5", "main", "Review")
+            .with_title("Parent with lookup file"),
+    )?;
+    common::seed_session(
+        env,
+        SessionSeed::stacked_draft(
+            child_session_id,
+            "gpt-5.5",
+            "wt/atparent",
+            "Draft",
+            parent_session_id,
+        )
+        .with_title("Stacked lookup child"),
+    )?;
+
+    let parent_worktree = env.agentty_root.join("wt").join("atparent");
+    std::fs::create_dir_all(&parent_worktree)?;
+    std::fs::write(
+        parent_worktree.join("parent_lookup_target.txt"),
+        "parent lookup target\n",
+    )?;
+
+    Ok(())
+}
+
 /// Seeds one done session whose merged commit hash can drive the continuation
 /// draft flow.
 fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -3728,6 +3760,37 @@ fn draft_session_at_lookup() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "draft_lookup_target.txt", &full);
+                assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that an unmaterialized stacked draft resolves `@` suggestions from
+/// its parent worktree.
+#[test]
+fn stacked_session_at_lookup() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("stacked_session_at_lookup")
+        .with_git()
+        .setup(seed_stacked_at_lookup_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Stacked lookup child", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Enter: add draft", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Enter: stage draft", 3000)
+                    .write_text("@parent_lookup")
+                    .wait_for_text("parent_lookup_target.txt", 5000)
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "parent_lookup_target.txt", &full);
                 assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
             },
         )?;
