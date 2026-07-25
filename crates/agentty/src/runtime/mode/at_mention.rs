@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use crate::app::at_mention_task;
 use crate::app::session::SessionManager;
 use crate::app::{AppEvent, TaskService};
-use crate::domain::file_entry::{FileEntry, at_mention_lookup_root, filter_entries};
+use crate::domain::file_entry::{FileEntry, filter_entries};
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
 use crate::presentation::prompt::PromptAtMentionState;
@@ -65,38 +65,6 @@ pub(crate) fn start_loading_entries(
     let cached_entries = session_manager.at_mention_index_for_root(&lookup_root);
 
     TaskService::spawn_at_mention_entries_task(event_tx, cached_entries, lookup_root, session_id);
-}
-
-/// Returns the directory that should back one active `@`-mention lookup.
-///
-/// Materialized sessions index their worktree folder. Unstarted draft sessions
-/// have no worktree yet, so the active project working directory is used until
-/// the deferred worktree exists.
-pub(crate) fn lookup_root(
-    project_working_dir: PathBuf,
-    session_folder: Option<PathBuf>,
-    has_session_folder: bool,
-) -> PathBuf {
-    at_mention_lookup_root(project_working_dir, session_folder, has_session_folder)
-}
-
-/// Returns the lookup root for an optional session folder after checking
-/// materialization through the injected filesystem boundary.
-pub(crate) fn lookup_root_for_session(
-    project_working_dir: PathBuf,
-    session_folder: Option<PathBuf>,
-    is_session_folder: impl FnOnce(PathBuf) -> bool,
-) -> PathBuf {
-    let Some(session_folder) = session_folder else {
-        return project_working_dir;
-    };
-    let has_session_folder = is_session_folder(session_folder.clone());
-
-    lookup_root(
-        project_working_dir,
-        Some(session_folder),
-        has_session_folder,
-    )
 }
 
 /// Clears one visible `@`-mention dropdown state.
@@ -163,7 +131,6 @@ fn format_mention_text(entry: &FileEntry) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
@@ -237,64 +204,6 @@ mod tests {
                 text: "@src/ ".to_string(),
             }
         );
-    }
-
-    #[test]
-    fn test_lookup_root_prefers_materialized_session_folder() {
-        // Arrange
-        let project_working_dir = PathBuf::from("/project");
-        let session_folder = PathBuf::from("/project/.agentty/session");
-
-        // Act
-        let lookup_root = lookup_root(project_working_dir, Some(session_folder.clone()), true);
-
-        // Assert
-        assert_eq!(lookup_root, session_folder);
-    }
-
-    #[test]
-    fn test_lookup_root_falls_back_to_project_working_dir_without_session_folder() {
-        // Arrange
-        let project_working_dir = PathBuf::from("/project");
-        let session_folder = PathBuf::from("/project/.agentty/session");
-
-        // Act
-        let lookup_root = lookup_root(project_working_dir.clone(), Some(session_folder), false);
-
-        // Assert
-        assert_eq!(lookup_root, project_working_dir);
-    }
-
-    #[test]
-    fn test_lookup_root_for_session_skips_filesystem_check_without_session_folder() {
-        // Arrange
-        let project_working_dir = PathBuf::from("/project");
-        let was_filesystem_checked = Cell::new(false);
-
-        // Act
-        let lookup_root = lookup_root_for_session(project_working_dir.clone(), None, |_| {
-            was_filesystem_checked.set(true);
-
-            true
-        });
-
-        // Assert
-        assert_eq!(lookup_root, project_working_dir);
-        assert!(!was_filesystem_checked.get());
-    }
-
-    #[test]
-    fn test_lookup_root_for_session_uses_materialized_session_folder() {
-        // Arrange
-        let project_working_dir = PathBuf::from("/project");
-        let session_folder = PathBuf::from("/project/.agentty/session");
-
-        // Act
-        let lookup_root =
-            lookup_root_for_session(project_working_dir, Some(session_folder.clone()), |_| true);
-
-        // Assert
-        assert_eq!(lookup_root, session_folder);
     }
 
     #[tokio::test]

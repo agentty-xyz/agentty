@@ -1678,9 +1678,12 @@ impl App {
         }
     }
 
-    /// Returns the lookup root for the session associated with an at-mention
-    /// event.
-    fn at_mention_lookup_root(&self, session_id: &str) -> PathBuf {
+    /// Returns the lookup root for one session's at-mention entries.
+    ///
+    /// Materialized sessions use their own worktree. An unmaterialized
+    /// stacked draft uses its parent worktree so files introduced by the
+    /// parent remain available before the child worktree is created.
+    pub(crate) fn at_mention_lookup_root(&self, session_id: &str) -> PathBuf {
         let project_working_dir = self.working_dir().to_path_buf();
 
         self.sessions.session_for_id(session_id).map_or_else(
@@ -1689,11 +1692,31 @@ impl App {
                 let project_working_dir = project_working_dir.clone();
                 let session_folder = session.folder.clone();
                 let has_session_folder = self.services.fs_client().is_dir(session_folder.clone());
+                if has_session_folder {
+                    return session_folder;
+                }
+                let parent_session_folder =
+                    session
+                        .parent_session_id
+                        .as_ref()
+                        .and_then(|parent_session_id| {
+                            self.sessions
+                                .session_for_id(parent_session_id)
+                                .map(|parent_session| parent_session.folder.clone())
+                        });
+                let has_parent_session_folder =
+                    parent_session_folder
+                        .as_ref()
+                        .is_some_and(|parent_session_folder| {
+                            self.services
+                                .fs_client()
+                                .is_dir(parent_session_folder.clone())
+                        });
 
                 at_mention_lookup_root(
                     project_working_dir,
-                    Some(session_folder),
-                    has_session_folder,
+                    parent_session_folder,
+                    has_parent_session_folder,
                 )
             },
         )
