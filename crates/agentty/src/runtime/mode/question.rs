@@ -22,12 +22,10 @@ const NO_ANSWER: &str = "no answer";
 /// `Tab` toggles focus between the question panel and the chat output for
 /// scrolling. When chat is focused, scroll keys (`j`/`k`/`Up`/`Down`/`g`/`G`/
 /// `Ctrl+d`/`Ctrl+u`) navigate the session transcript. `Enter` submits the
-/// typed answer (or `no answer` when blank), `Ctrl+C` and `Esc` end the
-/// entire turn without sending a reply while the answer input is focused
-/// (`Esc` additionally requires no open at-mention dropdown, so it stays
-/// available to dismiss that overlay; chat focus keeps both keys from ending
-/// the turn), and `q` returns to the sessions list while saving already-
-/// submitted answers for the next visit
+/// typed answer (or `no answer` when blank), `Ctrl+C` ends the entire turn
+/// without sending a reply while the answer input is focused, `Esc` dismisses
+/// an open at-mention dropdown without ending the turn, and `q` returns to the
+/// sessions list while saving already-submitted answers for the next visit
 /// (skipped while the user is actively typing a free-text answer so the
 /// character can still be inserted into the response).
 pub(crate) async fn handle_with_cache(
@@ -55,12 +53,6 @@ pub(crate) async fn handle_with_cache(
     }
 
     if is_active_at_mention(app) && handle_at_mention_key(app, key) {
-        return EventResult::Continue;
-    }
-
-    if is_plain_esc(key) {
-        end_turn_no_answer(app).await;
-
         return EventResult::Continue;
     }
 
@@ -95,11 +87,6 @@ fn is_answer_input_focused(app: &App) -> bool {
             ..
         }
     )
-}
-
-/// Returns whether `key` is an unmodified `Esc` press.
-fn is_plain_esc(key: KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Esc) && key.modifiers.is_empty()
 }
 
 /// Returns whether `key` is a plain `q` press without modifiers.
@@ -1130,17 +1117,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_escape_ends_turn_and_transitions_to_view() {
-        // Arrange — answer focus with no at-mention overlay. Esc must mirror
-        // Ctrl+C and cancel the question turn without sending a reply.
+    async fn test_handle_escape_preserves_question_turn_and_draft() {
+        // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-        app.review_cache.insert(
-            "session-esc".into(),
-            crate::app::ReviewCacheEntry::Ready {
-                text: "Focused review".to_string(),
-                diff_hash: 42,
-            },
-        );
         app.mode = AppMode::Question {
             at_mention_state: None,
             session_id: "session-esc".into(),
@@ -1164,13 +1143,17 @@ mod tests {
         )
         .await;
 
-        // Assert — transitions to View mode with no reply sent.
+        // Assert
         assert!(matches!(
             app.mode,
-            AppMode::View {
+            AppMode::Question {
                 ref session_id,
+                ref input,
+                ref responses,
                 ..
             } if session_id == "session-esc"
+                && input.text() == "partial answer"
+                && responses.is_empty()
         ));
     }
 

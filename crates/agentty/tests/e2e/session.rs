@@ -2917,9 +2917,9 @@ fn session_stop_turn_returns_to_review() -> E2eResult {
     Ok(())
 }
 
-/// Verify that answering one clarification question, leaving question mode
-/// with `q`, and reopening the session resumes at the next unanswered
-/// question instead of restarting from the first.
+/// Verify that `Esc` leaves a clarification question active, then answering
+/// one question, leaving with `q`, and reopening resumes at the next
+/// unanswered question instead of restarting from the first.
 #[test]
 fn session_question_resume_after_leaving_to_list() -> E2eResult {
     // Arrange
@@ -2939,6 +2939,11 @@ fn session_question_resume_after_leaving_to_list() -> E2eResult {
                     .capture_labeled(
                         "answer_focused",
                         "Question mode starts with the answer input focused",
+                    )
+                    .press_key("Escape")
+                    .wait_for_text(
+                        "Tab: focus | Enter: send | q: sessions | Ctrl+C: end turn",
+                        5000,
                     )
                     .press_key("Tab")
                     .wait_for_text("j/k: scroll", 5000)
@@ -2967,7 +2972,7 @@ fn session_question_resume_after_leaving_to_list() -> E2eResult {
                     Region::full(answer_focused_frame.cols(), answer_focused_frame.rows());
                 assertion::assert_text_in_region(
                     &answer_focused_frame,
-                    "Tab: focus | Enter: send | q: sessions | Esc/Ctrl+C: end turn",
+                    "Tab: focus | Enter: send | q: sessions | Ctrl+C: end turn",
                     &answer_focused_full,
                 );
 
