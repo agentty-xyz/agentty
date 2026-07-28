@@ -1175,7 +1175,7 @@ mod tests {
         );
         assert_eq!(
             answer_focus_line.to_string(),
-            "Tab: focus | Enter: send | Esc/Ctrl+C: end turn"
+            "Tab: focus | Enter: send | Ctrl+C: end turn"
         );
     }
 
@@ -1184,9 +1184,8 @@ mod tests {
         // Arrange — answer focus while navigating predefined options. The
         // runtime accepts plain `q` as an exit-to-list shortcut here, so the
         // footer must surface it. The at-mention overlay variant is also
-        // covered here so the footer swaps `Esc` to a dedicated cancel hint
-        // and drops it from the end-turn label whenever the dropdown owns the
-        // key, matching runtime behavior.
+        // covered here so the footer surfaces `Esc` as a dedicated cancel
+        // hint without advertising it as an end-turn shortcut.
 
         // Act
         let answer_focus_with_options =
@@ -1197,7 +1196,7 @@ mod tests {
         // Assert
         assert_eq!(
             answer_focus_with_options,
-            "Tab: focus | Enter: send | q: sessions | Esc/Ctrl+C: end turn"
+            "Tab: focus | Enter: send | q: sessions | Ctrl+C: end turn"
         );
         assert_eq!(
             answer_focus_with_overlay,

@@ -545,7 +545,7 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
     } else {
         ("", 0)
     };
-    let input_placeholder = "Type answer (Enter: send, Esc: end turn)";
+    let input_placeholder = "Type answer";
     let at_mention_max_visible =
         layout::question_at_mention_max_visible(bottom_area, panel_areas.input_area, 10);
     let at_mention_menu = if is_free_text_mode {
@@ -589,8 +589,8 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
 /// `is_navigating_options` mirrors the runtime predicate that treats plain `q`
 /// as a sessions-list shortcut, so the footer can surface it whenever the
 /// shortcut is actually wired up. `is_at_mention_open` mirrors the runtime
-/// predicate that routes `Esc` to the at-mention dropdown so the end-turn
-/// hint can swap out while the overlay is visible.
+/// predicate that routes `Esc` to the at-mention dropdown so the footer can
+/// add a separate `Esc: cancel @` hint while the overlay is visible.
 fn render_question_help_footer(
     f: &mut Frame,
     area: Rect,

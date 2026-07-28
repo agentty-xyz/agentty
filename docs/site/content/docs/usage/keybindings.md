@@ -339,7 +339,6 @@ exist:
 | `Alt+Enter` / `Shift+Enter`      | Insert newline                       |
 | `Ctrl+J` / `Ctrl+M`              | Insert newline (terminal fallback)   |
 | `Ctrl+C`                         | End turn without answering           |
-| `Esc`                            | End turn without answering           |
 | `Left` / `Right` / `Up` / `Down` | Move cursor                          |
 | `Backspace` / `Delete`           | Delete character                     |
 | `Home` / `End`                   | Move to start / end                  |

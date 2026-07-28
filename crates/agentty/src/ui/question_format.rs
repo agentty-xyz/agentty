@@ -88,8 +88,8 @@ pub(crate) fn question_option_lines(
 /// `q: Sessions` hint is surfaced whenever that predicate is satisfied so the
 /// shortcut stays discoverable in answer focus too, not only in chat focus.
 /// `is_at_mention_open` mirrors the runtime predicate that routes `Esc` to the
-/// at-mention dropdown dismissal, so the end-turn hint drops the `Esc` prefix
-/// and a `Esc: cancel @` hint is surfaced while the dropdown is visible.
+/// at-mention dropdown dismissal, so an `Esc: cancel @` hint is surfaced while
+/// the dropdown is visible.
 ///
 /// Footer entries follow the canonical composer-footer ordering shared with
 /// prompt mode: the `Tab` focus toggle first as the stable anchor, then the
@@ -120,16 +120,10 @@ pub fn question_help_footer_line(
     if !is_chat_focused {
         if is_at_mention_open {
             help_actions.push(help_action::HelpAction::new("cancel @", "Esc", "Cancel @"));
-            help_actions.push(help_action::HelpAction::new(
-                "end turn", "Ctrl+C", "End turn",
-            ));
-        } else {
-            help_actions.push(help_action::HelpAction::new(
-                "end turn",
-                "Esc/Ctrl+C",
-                "End turn",
-            ));
         }
+        help_actions.push(help_action::HelpAction::new(
+            "end turn", "Ctrl+C", "End turn",
+        ));
     }
 
     crate::ui::help_format::footer_line(&help_actions)
