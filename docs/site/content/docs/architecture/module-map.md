@@ -66,15 +66,15 @@ For file-level detail, read the module docstrings directly.
   presentation-owned. No direct process, filesystem, or clock calls — everything
   external goes through `infra/` traits.
 - `domain/`: Pure Agentty-specific business entities and logic — render/runtime session
-  snapshots, projects, settings keys, themes, structured questions, explicit
-  transient-message slots and lifecycles, prompt-composer logic, the shared `InputState`
-  command and undo/redo model, stable input-revision and character-offset identities
-  used to bind prompt attachments to exact placeholder occurrences and history states,
-  session action-eligibility policies, fuzzy file-entry ranking shared by runtime
-  selection and UI suggestions, personality definition parsing and prompt
-  fingerprinting, and thin re-export modules for `ag-agent` provider models,
-  `ag-session` identity/status/transcript models, and shared protocol question and turn
-  prompt payloads. No I/O.
+  snapshots, projects, typed durable operation kinds, statuses, transitions, settings
+  keys, themes, structured questions, explicit transient-message slots and lifecycles,
+  prompt-composer logic, the shared `InputState` command and undo/redo model, stable
+  input-revision and character-offset identities used to bind prompt attachments to
+  exact placeholder occurrences and history states, session action-eligibility policies,
+  fuzzy file-entry ranking shared by runtime selection and UI suggestions, personality
+  definition parsing and prompt fingerprinting, and thin re-export modules for
+  `ag-agent` provider models, `ag-session` identity/status/transcript models, and shared
+  protocol question and turn prompt payloads. No I/O.
 - `infra/`: External integrations behind traits — Agentty data-root resolution, SQLite
   persistence (`infra/db/` repositories), git (`GitClient`, backed by `ag-git`),
   filesystem (`FsClient`), the session-worktree-only personality catalog, tmux,
