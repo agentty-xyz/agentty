@@ -21,7 +21,7 @@ const SESSION_CHAT_FYI_MESSAGES: [&str; 9] = [
     "Published sessions auto-push after queued replies drain.",
     "After publishing once, p refreshes the same review request.",
     "Focused review output stays visible until you submit the next prompt.",
-    "Done sessions can continue in a fresh draft with c.",
+    "Done sessions can continue in a fresh draft with C.",
     "Stacked child review requests target the parent's review branch.",
     "Use @ to attach files or project context to the next prompt.",
     "Type /apply after focused review completes to verify and apply suggestions.",
