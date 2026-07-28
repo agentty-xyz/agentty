@@ -3646,6 +3646,49 @@ fn gemini_model_picker_lists_current_models() -> E2eResult {
     Ok(())
 }
 
+/// Verify that the prompt `/model` picker exposes the current Claude models
+/// when the Claude CLI is locally available.
+#[test]
+fn claude_model_picker_lists_current_models() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("claude_model_picker_lists_current_models")
+        .with_git()
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("/")
+                    .write_text("model")
+                    .wait_for_text("Slash Command", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("/model Agent", 3000)
+                    .press_key("Down")
+                    .press_key("Down")
+                    .press_key("Enter")
+                    .wait_for_text("claude-opus-5", 3000)
+                    .capture_labeled(
+                        "claude_model_picker",
+                        "Claude model picker lists current models",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "claude-fable-5", &full);
+                assertion::assert_text_in_region(frame, "claude-opus-5", &full);
+                assertion::assert_text_in_region(frame, "claude-opus-4-8", &full);
+                assertion::assert_text_in_region(frame, "claude-sonnet-5", &full);
+                assertion::assert_text_in_region(frame, "claude-haiku-4-5-20251001", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that the prompt `/model` picker exposes the current Codex models in
 /// the expected order.
 #[test]
