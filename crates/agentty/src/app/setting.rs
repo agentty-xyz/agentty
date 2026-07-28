@@ -89,10 +89,11 @@ pub(crate) async fn load_default_fast_agent_selection_from_repositories(
         SettingName::DefaultFastAgent,
         SettingName::DefaultFastModel,
         fallback_selection,
+        available_agent_kinds,
     )
     .await
     {
-        return resolve_available_selection(selection, available_agent_kinds);
+        return selection;
     }
 
     load_default_smart_agent_selection_from_repositories(
@@ -123,10 +124,11 @@ pub(crate) async fn load_default_smart_agent_selection_from_repositories(
         SettingName::DefaultSmartAgent,
         SettingName::DefaultSmartModel,
         fallback_selection,
+        available_agent_kinds,
     )
     .await
     {
-        return resolve_available_selection(selection, available_agent_kinds);
+        return selection;
     }
 
     fallback_selection
@@ -196,11 +198,10 @@ impl SettingsManager {
             SettingName::DefaultReviewAgent,
             SettingName::DefaultReviewModel,
             default_smart_agent,
+            &available_agent_kinds,
         )
         .await
-        .map_or(default_smart_agent, |selection| {
-            resolve_available_selection(selection, &available_agent_kinds)
-        });
+        .unwrap_or(default_smart_agent);
         let reasoning_level = repositories
             .settings()
             .load_project_reasoning_level(project_id)
@@ -549,43 +550,56 @@ fn resolve_available_selection(
     AgentSelection::new(agent_kind, model)
 }
 
-/// Loads a model setting and parses it into an [`AgentModel`].
-///
-/// Retired persisted model ids are upgraded to their current replacement
-/// models before the value is returned.
-async fn load_model_setting(
-    repositories: &AppRepositories,
-    project_id: Option<i64>,
-    setting_name: SettingName,
-) -> Option<AgentModel> {
-    let project_id = project_id?;
-
-    repositories
-        .settings()
-        .get_project_setting(project_id, setting_name)
-        .await
-        .unwrap_or(None)
-        .and_then(|setting_value| AgentModel::parse_persisted(&setting_value).ok())
-}
-
 /// Loads one project-scoped model setting and its owning agent setting.
 ///
 /// Older projects may only have a model key; in that case the fallback
-/// selection and available-provider resolution decide ownership.
+/// selection and available-provider resolution decide ownership. Retired
+/// model ids are atomically replaced along with their resolved owning agent.
 async fn load_model_selection_setting(
     repositories: &AppRepositories,
     project_id: Option<i64>,
     agent_setting_name: SettingName,
     model_setting_name: SettingName,
     fallback_selection: AgentSelection,
+    available_agent_kinds: &[AgentKind],
 ) -> Option<AgentSelection> {
-    let model = load_model_setting(repositories, project_id, model_setting_name).await?;
-    let agent_kind = load_agent_setting(repositories, project_id, agent_setting_name)
+    let project_id = project_id?;
+    let setting_value = repositories
+        .settings()
+        .get_project_setting(project_id, model_setting_name)
+        .await
+        .unwrap_or(None)?;
+    let is_retired = AgentModel::retired_replacement(&setting_value).is_some();
+    let model = AgentModel::parse_persisted(&setting_value).ok()?;
+    let agent_kind = load_agent_setting(repositories, Some(project_id), agent_setting_name)
         .await
         .filter(|agent_kind| agent_kind.supports_model(model))
         .unwrap_or_else(|| fallback_agent_kind_for_model(model, fallback_selection.kind()));
+    let resolved_selection = resolve_available_selection(
+        AgentSelection::new(agent_kind, model),
+        available_agent_kinds,
+    );
 
-    Some(AgentSelection::new(agent_kind, model))
+    if is_retired {
+        let _ = repositories
+            .settings()
+            .upsert_project_settings(
+                project_id,
+                vec![
+                    (
+                        model_setting_name,
+                        resolved_selection.model().as_str().to_string(),
+                    ),
+                    (
+                        agent_setting_name,
+                        resolved_selection.kind().name().to_string(),
+                    ),
+                ],
+            )
+            .await;
+    }
+
+    Some(resolved_selection)
 }
 
 /// Loads one project-scoped agent setting.
@@ -662,6 +676,14 @@ mod tests {
 
     /// Builds app services backed by an in-memory database for settings tests.
     async fn test_services() -> (AppServices, i64) {
+        test_services_with_available_agent_kinds(AgentKind::ALL.to_vec()).await
+    }
+
+    /// Builds settings test services with a caller-provided provider
+    /// availability snapshot.
+    async fn test_services_with_available_agent_kinds(
+        available_agent_kinds: Vec<AgentKind>,
+    ) -> (AppServices, i64) {
         let database = AppRepositories::in_memory().await;
         let project_id = database
             .projects()
@@ -675,7 +697,7 @@ mod tests {
             event_tx,
             crate::app::service::AppServiceDeps {
                 app_server_client_override: Some(Arc::new(MockAppServerClient::new())),
-                available_agent_kinds: AgentKind::ALL.to_vec(),
+                available_agent_kinds: available_agent_kinds.clone(),
                 clipboard_image_client_override: None,
                 fs_client: Arc::new(fs::MockFsClient::new()),
                 git_client: Arc::new(git::MockGitClient::new()),
@@ -684,7 +706,7 @@ mod tests {
                 repositories: database.clone(),
                 review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             },
-            crate::domain::agent::AgentCliInfo::from_kinds(AgentKind::ALL),
+            crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds),
         );
 
         (services, project_id)
@@ -1051,7 +1073,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gpt55.as_str(),
+                AgentModel::Gpt56Sol.as_str(),
             )
             .await
             .expect("failed to persist smart model");
@@ -1065,7 +1087,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(loaded_model, AgentModel::Gpt55);
+        assert_eq!(loaded_model, AgentModel::Gpt56Sol);
     }
 
     #[tokio::test]
@@ -1157,7 +1179,7 @@ mod tests {
         // Assert
         assert_eq!(
             fallback_fast_selection,
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48)
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5)
         );
 
         // Arrange
@@ -1167,7 +1189,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultFastModel,
-                AgentModel::Gpt55.as_str(),
+                AgentModel::Gpt56Sol.as_str(),
             )
             .await
             .expect("failed to persist fast model");
@@ -1183,7 +1205,7 @@ mod tests {
         // Assert
         assert_eq!(
             explicit_fast_selection,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55)
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
         );
     }
 
@@ -1197,7 +1219,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gpt55.as_str(),
+                AgentModel::Gpt56Sol.as_str(),
             )
             .await
             .expect("failed to persist project smart model");
@@ -1217,7 +1239,7 @@ mod tests {
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultReviewModel,
-                "claude-opus-4-6",
+                AgentModel::ClaudeOpus5.as_str(),
             )
             .await
             .expect("failed to persist review model");
@@ -1259,7 +1281,7 @@ mod tests {
         // Assert
         assert_eq!(
             settings.default_smart_selection,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55)
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
         );
         assert_eq!(
             settings.default_fast_selection,
@@ -1267,13 +1289,89 @@ mod tests {
         );
         assert_eq!(
             settings.default_review_selection,
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48)
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5)
         );
         assert_eq!(settings.launch_configuration, "nvim .");
         assert_eq!(settings.reasoning_level, ReasoningLevel::Low);
         assert_eq!(settings.theme, ColorTheme::Green);
         assert!(!settings.include_coauthored_by_agentty);
         assert!(settings.use_last_used_model_as_default);
+    }
+
+    #[tokio::test]
+    async fn settings_manager_new_persists_replacements_for_retired_model_defaults() {
+        // Arrange
+        let available_agent_kinds =
+            vec![AgentKind::Codex, AgentKind::Antigravity, AgentKind::Claude];
+        let (services, project_id) =
+            test_services_with_available_agent_kinds(available_agent_kinds).await;
+        services
+            .db()
+            .settings()
+            .upsert_project_settings(
+                project_id,
+                vec![
+                    (SettingName::DefaultSmartModel, "gpt-5.5".to_string()),
+                    (
+                        SettingName::DefaultFastModel,
+                        "gemini-3-flash-preview".to_string(),
+                    ),
+                    (
+                        SettingName::DefaultReviewModel,
+                        "claude-opus-4-6".to_string(),
+                    ),
+                ],
+            )
+            .await
+            .expect("failed to persist retired model defaults");
+
+        // Act
+        let manager = settings_manager(&services, project_id).await;
+        let settings = manager.settings();
+
+        // Assert
+        assert_eq!(
+            settings.default_smart_selection,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
+        );
+        assert_eq!(
+            settings.default_fast_selection,
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash)
+        );
+        assert_eq!(
+            settings.default_review_selection,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5)
+        );
+
+        let expected_persisted_settings = [
+            (
+                SettingName::DefaultSmartModel,
+                AgentModel::Gpt56Sol.as_str(),
+            ),
+            (SettingName::DefaultSmartAgent, AgentKind::Codex.name()),
+            (
+                SettingName::DefaultFastModel,
+                AgentModel::Gemini36Flash.as_str(),
+            ),
+            (SettingName::DefaultFastAgent, AgentKind::Antigravity.name()),
+            (
+                SettingName::DefaultReviewModel,
+                AgentModel::ClaudeOpus5.as_str(),
+            ),
+            (SettingName::DefaultReviewAgent, AgentKind::Claude.name()),
+        ];
+
+        for (setting_name, expected_value) in expected_persisted_settings {
+            assert_eq!(
+                services
+                    .db()
+                    .settings()
+                    .get_project_setting(project_id, setting_name)
+                    .await
+                    .expect("failed to load migrated project setting"),
+                Some(expected_value.to_string())
+            );
+        }
     }
 
     #[tokio::test]
@@ -1361,8 +1459,8 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = settings_manager(&services, project_id).await;
-        let fast_selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55);
-        let review_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48);
+        let fast_selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol);
+        let review_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5);
 
         // Act
         manager
@@ -1398,7 +1496,7 @@ mod tests {
                 .get_project_setting(project_id, SettingName::DefaultFastModel)
                 .await
                 .expect("failed to load fast model"),
-            Some(AgentModel::Gpt55.as_str().to_string())
+            Some(AgentModel::Gpt56Sol.as_str().to_string())
         );
         assert_eq!(
             services
@@ -1416,7 +1514,7 @@ mod tests {
                 .get_project_setting(project_id, SettingName::DefaultReviewModel)
                 .await
                 .expect("failed to load review model"),
-            Some(AgentModel::ClaudeOpus48.as_str().to_string())
+            Some(AgentModel::ClaudeOpus5.as_str().to_string())
         );
         assert_eq!(
             services
@@ -1687,13 +1785,13 @@ mod tests {
         // Arrange
         let mut manager = new_settings_manager();
         manager.fixture_view_mut().default_fast_selection =
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55);
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol);
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[3].1, "codex/gpt-5.5");
+        assert_eq!(rows[3].1, "codex/gpt-5.6-sol");
     }
 
     #[test]
@@ -1701,13 +1799,13 @@ mod tests {
         // Arrange
         let mut manager = new_settings_manager();
         manager.fixture_view_mut().default_review_selection =
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48);
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5);
 
         // Act
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[4].1, "claude/claude-opus-4-8");
+        assert_eq!(rows[4].1, "claude/claude-opus-5");
     }
 
     #[test]

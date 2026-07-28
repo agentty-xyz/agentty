@@ -1531,7 +1531,7 @@ mod tests {
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("session-id", "gpt-5.5", "main", "Review", project_id)
+            .insert_session("session-id", "gpt-5.6-sol", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         database
@@ -1573,7 +1573,7 @@ mod tests {
     async fn test_append_workflow_notice_updates_live_and_durable_workflow_transcript() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let session_update_versions = Arc::default();
@@ -1623,7 +1623,7 @@ mod tests {
     async fn test_append_session_transcript_message_updates_live_and_durable_typed_transcript() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let session_update_versions = Arc::default();
@@ -1708,7 +1708,7 @@ mod tests {
             .sessions()
             .insert_session(
                 "session-id",
-                "gpt-5.5",
+                "gpt-5.6-sol",
                 "main",
                 &Status::Draft.to_string(),
                 project_id,
@@ -1789,7 +1789,7 @@ mod tests {
     async fn test_status_transition_from_services_updates_handle_and_persistence() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, "gpt-5.5").await;
+        insert_review_session(&database, "gpt-5.6-sol").await;
         let handles = SessionHandles::new(Status::Review);
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let services = AppServices::new_with_agent_clis(
@@ -1997,7 +1997,7 @@ mod tests {
             "Adds the release dashboard.",
             "Build release dashboard",
             &one_shot_client,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             "The session now builds a release dashboard.",
         )
         .await
@@ -2034,7 +2034,7 @@ mod tests {
             "Generated body",
             "Generated title",
             &one_shot_client,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             "Current session summary",
         )
         .await
@@ -2071,7 +2071,7 @@ mod tests {
             "Generated body",
             "Generated title",
             &one_shot_client,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             "Current session summary",
         )
         .await
@@ -2108,7 +2108,7 @@ mod tests {
             "Generated body",
             "Generated title",
             &one_shot_client,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             "Current session summary",
         )
         .await
@@ -2146,7 +2146,7 @@ mod tests {
             "Updated generated details.",
             "Generated title",
             &one_shot_client,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             "Current session summary",
         )
         .await
@@ -2419,7 +2419,7 @@ mod tests {
                 Box::pin(async { Err(GitError::OutputParse("commit failed".to_string())) })
             });
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let context = AssistContext {
@@ -2430,7 +2430,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             one_shot_client: Arc::new(MockOneShotClient::new()),
-            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
         };
@@ -2453,7 +2453,7 @@ mod tests {
     async fn test_run_commit_assist_for_error_uses_injected_one_shot_client() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let mut one_shot_client = MockOneShotClient::new();
         one_shot_client
@@ -2473,7 +2473,7 @@ mod tests {
             git_client: Arc::new(MockGitClient::new()),
             id: "session-id".to_string(),
             one_shot_client: Arc::new(one_shot_client),
-            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
         };
@@ -2532,7 +2532,7 @@ mod tests {
                 })
             });
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let mut one_shot_client = MockOneShotClient::new();
@@ -2548,7 +2548,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             one_shot_client: Arc::new(one_shot_client),
-            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
         };
@@ -2587,7 +2587,7 @@ mod tests {
                 })
             });
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let context = AssistContext {
@@ -2598,7 +2598,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             one_shot_client: Arc::new(MockOneShotClient::new()),
-            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
         };
@@ -2640,7 +2640,7 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok::<_, GitError>(true) }));
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let context = AssistContext {
@@ -2651,7 +2651,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             one_shot_client: Arc::new(MockOneShotClient::new()),
-            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
         };
@@ -2691,7 +2691,7 @@ mod tests {
     async fn test_load_include_coauthored_by_agentty_setting_defaults_to_false() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
 
         // Act
         let include_coauthored_by_agentty =
@@ -2708,7 +2708,7 @@ mod tests {
     async fn test_load_include_coauthored_by_agentty_setting_defaults_invalid_value_to_false() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let project_id = database
             .sessions()
             .load_session_project_id("session-id")
@@ -2775,7 +2775,7 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok::<_, GitError>("abc1234".to_string()) }));
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let summary_payload = "- Session branch updates README formatting.".to_string();
         database
             .sessions()
@@ -2800,7 +2800,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             one_shot_client: Arc::new(one_shot_client),
-            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
         };
@@ -2843,7 +2843,7 @@ mod tests {
     async fn test_load_auto_commit_agent_setting_prefers_project_fast_selection() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let project_id = database
             .sessions()
             .load_session_project_id("session-id")
@@ -2882,7 +2882,7 @@ mod tests {
         let auto_commit_agent = SessionTaskService::load_auto_commit_agent_setting(
             &database,
             "session-id",
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
         )
         .await;
 
@@ -2899,7 +2899,7 @@ mod tests {
     async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::Gpt55.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let project_id = database
             .sessions()
             .load_session_project_id("session-id")
@@ -2929,7 +2929,7 @@ mod tests {
         let smart_fallback_agent = SessionTaskService::load_auto_commit_agent_setting(
             &database,
             "session-id",
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
         )
         .await;
 
@@ -2950,14 +2950,14 @@ mod tests {
         let session_fallback_agent = SessionTaskService::load_auto_commit_agent_setting(
             &database,
             "session-id",
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
         )
         .await;
 
         // Assert
         assert_eq!(
             session_fallback_agent,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55)
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
         );
     }
 
@@ -2967,7 +2967,7 @@ mod tests {
     async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::ClaudeOpus48.as_str()).await;
+        insert_review_session(&database, AgentModel::ClaudeOpus5.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let child_pid = Arc::new(Mutex::new(None));
@@ -2991,7 +2991,7 @@ mod tests {
             id: "session-id".to_string(),
             one_shot_client: Arc::new(one_shot_client),
             prompt: "Resolve conflict".to_string(),
-            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
+            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
         })
@@ -3026,7 +3026,7 @@ mod tests {
     async fn test_run_agent_assist_task_rejects_plain_text_output() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::ClaudeOpus48.as_str()).await;
+        insert_review_session(&database, AgentModel::ClaudeOpus5.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -3047,7 +3047,7 @@ mod tests {
             id: "session-id".to_string(),
             one_shot_client: Arc::new(one_shot_client),
             prompt: "Resolve conflict".to_string(),
-            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
+            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
         })
@@ -3081,7 +3081,7 @@ mod tests {
     async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
         // Arrange
         let database = AppRepositories::in_memory().await;
-        insert_review_session(&database, AgentModel::ClaudeOpus48.as_str()).await;
+        insert_review_session(&database, AgentModel::ClaudeOpus5.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let mut one_shot_client = MockOneShotClient::new();
@@ -3100,7 +3100,7 @@ mod tests {
             id: "session-id".to_string(),
             one_shot_client: Arc::new(one_shot_client),
             prompt: "Resolve conflict".to_string(),
-            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
+            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
             session_update_versions: Arc::default(),
             transcript: Arc::new(Mutex::new(SessionTranscript::default())),
         })

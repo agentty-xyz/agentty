@@ -283,7 +283,7 @@ mod tests {
                 folder: temp_directory.path(),
                 main_checkout_root: None,
                 replay_transcript: None,
-                model: "claude-opus-4-8",
+                model: "claude-opus-5",
                 personality_prompt: None,
                 prompt: "Use Opus",
                 reasoning_level: ReasoningLevel::default(),
@@ -298,7 +298,7 @@ mod tests {
             .map(|value| value.to_string_lossy().into_owned());
 
         // Assert
-        assert_eq!(anthropic_model, Some("claude-opus-4-8".to_string()));
+        assert_eq!(anthropic_model, Some("claude-opus-5".to_string()));
     }
 
     #[test]

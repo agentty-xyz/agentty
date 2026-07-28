@@ -586,13 +586,13 @@ mod tests {
     #[test]
     fn review_loading_message_uses_requested_model_name() {
         // Arrange
-        let review_model = AgentModel::Gpt55;
+        let review_model = AgentModel::Gpt56Sol;
 
         // Act
         let message = review_loading_message(review_model);
 
         // Assert
-        assert_eq!(message, "Reviewing changes with gpt-5.5");
+        assert_eq!(message, "Reviewing changes with gpt-5.6-sol");
     }
 
     #[test]
@@ -676,7 +676,7 @@ mod tests {
         );
 
         // Act
-        hydrate_review_transients(&review_cache, &mut session_state, AgentModel::Gpt55);
+        hydrate_review_transients(&review_cache, &mut session_state, AgentModel::Gpt56Sol);
 
         // Assert
         assert!(
@@ -698,7 +698,7 @@ mod tests {
             &HashMap::new(),
             &mut session_state,
             &session_id,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
 
         // Assert
@@ -722,7 +722,7 @@ mod tests {
             &review_cache,
             &mut session_state,
             &session_id,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
 
         // Assert
@@ -752,7 +752,7 @@ mod tests {
             &review_cache,
             &mut session_state,
             &session_id,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
 
         // Assert
@@ -777,7 +777,7 @@ mod tests {
             &HashMap::new(),
             &mut session_state,
             "missing-session",
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
 
         // Assert

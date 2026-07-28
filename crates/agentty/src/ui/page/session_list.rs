@@ -684,7 +684,7 @@ mod tests {
             crate::test_support::titled_session_fixture("active-2", Status::Review);
         medium_session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
         medium_session.reasoning_level_override = Some(ReasoningLevel::Medium);
         let sessions = vec![default_session, medium_session];
@@ -724,7 +724,7 @@ mod tests {
         let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
         session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
         session.reasoning_level_override = Some(ReasoningLevel::High);
         let sessions = vec![session];
@@ -741,7 +741,7 @@ mod tests {
         // Assert
         let buffer = terminal.backend().buffer();
         let fallback_cell = &buffer.content()[0];
-        let model_cell = find_text_start_cell(buffer, "gpt-5.5").unwrap_or(fallback_cell);
+        let model_cell = find_text_start_cell(buffer, "gpt-5.6-sol").unwrap_or(fallback_cell);
         let reasoning_cell = find_text_start_cell(buffer, "high").unwrap_or(fallback_cell);
 
         assert_eq!(model_cell.fg, style::palette::text());
@@ -759,7 +759,7 @@ mod tests {
         let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
         session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
         let sessions = vec![session];
 
@@ -774,7 +774,7 @@ mod tests {
         // Assert
         let buffer = terminal.backend().buffer();
         let fallback_cell = &buffer.content()[0];
-        let model_cell = find_text_start_cell(buffer, "gpt-5.5").unwrap_or(fallback_cell);
+        let model_cell = find_text_start_cell(buffer, "gpt-5.6-sol").unwrap_or(fallback_cell);
 
         assert_eq!(model_cell.bg, style::palette::surface_selection());
     }
@@ -789,7 +789,7 @@ mod tests {
         let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
         session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
         session.reasoning_level_override = Some(ReasoningLevel::Medium);
         let sessions = vec![session];
@@ -804,7 +804,7 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("gpt-5.5 [medium]"));
+        assert!(text.contains("gpt-5.6-sol [medium]"));
     }
 
     #[test]
@@ -854,7 +854,7 @@ mod tests {
         let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
         session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
         session.reasoning_level_override = Some(ReasoningLevel::High);
         let sessions = vec![session];
@@ -869,7 +869,7 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("gpt-5.5 [high]"));
+        assert!(text.contains("gpt-5.6-sol [high]"));
     }
 
     #[test]

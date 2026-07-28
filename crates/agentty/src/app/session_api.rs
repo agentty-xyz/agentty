@@ -9,6 +9,7 @@ use ag_session::{
 };
 use async_trait::async_trait;
 
+use crate::app::session::migrate_session_off_retired_model;
 use crate::app::{App, AppError, SessionError};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
@@ -52,6 +53,18 @@ impl SessionBackend for App {
         else {
             return Ok(None);
         };
+        let session_status = row
+            .status
+            .parse::<SessionStatus>()
+            .unwrap_or(SessionStatus::Done);
+        migrate_session_off_retired_model(
+            self.services.db(),
+            &row.id,
+            &row.agent,
+            &row.model,
+            session_status,
+        )
+        .await;
         let message_rows = self
             .services
             .db()
@@ -498,6 +511,56 @@ mod tests {
         );
         assert_eq!(missing_session, None);
         assert_eq!(stacked_session.settings.parent_session_id, Some(session_id));
+    }
+
+    #[tokio::test]
+    async fn app_backend_migrates_retired_model_for_inactive_project_lookup() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let inactive_project_id = app
+            .services
+            .db()
+            .projects()
+            .upsert_project("/inactive-project", Some("main".to_string()))
+            .await
+            .expect("inactive project should persist");
+        let session_id = SessionId::from("inactive-retired-session");
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                &session_id,
+                "gemini-3.5-flash",
+                "main",
+                "Review",
+                inactive_project_id,
+            )
+            .await
+            .expect("retired-model session should persist");
+
+        // Act
+        let loaded_session = SessionService::new(&mut app)
+            .get_session(&session_id)
+            .await
+            .expect("session lookup should succeed")
+            .expect("session should exist");
+        let persisted_row = app
+            .services
+            .db()
+            .sessions()
+            .load_session(&session_id)
+            .await
+            .expect("migrated session should load")
+            .expect("migrated session should exist");
+
+        // Assert
+        assert_eq!(loaded_session.settings.project_id, inactive_project_id);
+        assert_eq!(
+            loaded_session.settings.agent,
+            ag_agent::AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite)
+        );
+        assert_eq!(persisted_row.agent, "antigravity");
+        assert_eq!(persisted_row.model, "gemini-3.5-flash-lite");
     }
 
     #[tokio::test]

@@ -90,20 +90,16 @@ pub enum AgentModel {
     Gpt56Terra,
     /// Codex Luna model backed by `gpt-5.6-luna`.
     Gpt56Luna,
-    /// Codex model backed by `gpt-5.5`.
-    Gpt55,
     /// Fast Gemini model backed by `gemini-3.6-flash`.
     Gemini36Flash,
-    /// Fast Gemini model backed by `gemini-3.5-flash`.
-    Gemini35Flash,
+    /// Lightweight Gemini model backed by `gemini-3.5-flash-lite`.
+    Gemini35FlashLite,
     /// Higher-quality Gemini model backed by `gemini-3.1-pro`.
     Gemini31Pro,
     /// Codex spark model backed by `gpt-5.3-codex-spark`.
     Gpt53CodexSpark,
     /// Claude Opus model backed by `claude-opus-5`.
     ClaudeOpus5,
-    /// Claude Opus model backed by `claude-opus-4-8`.
-    ClaudeOpus48,
     /// Claude Sonnet model backed by `claude-sonnet-5`.
     ClaudeSonnet5,
     /// Claude Fable model backed by `claude-fable-5`.
@@ -181,13 +177,11 @@ impl AgentModel {
             Self::Gpt56Sol => "gpt-5.6-sol",
             Self::Gpt56Terra => "gpt-5.6-terra",
             Self::Gpt56Luna => "gpt-5.6-luna",
-            Self::Gpt55 => "gpt-5.5",
             Self::Gemini36Flash => "gemini-3.6-flash",
-            Self::Gemini35Flash => "gemini-3.5-flash",
+            Self::Gemini35FlashLite => "gemini-3.5-flash-lite",
             Self::Gemini31Pro => "gemini-3.1-pro",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
             Self::ClaudeOpus5 => "claude-opus-5",
-            Self::ClaudeOpus48 => "claude-opus-4-8",
             Self::ClaudeSonnet5 => "claude-sonnet-5",
             Self::ClaudeFable5 => "claude-fable-5",
             Self::ClaudeHaiku4520251001 => "claude-haiku-4-5-20251001",
@@ -202,11 +196,12 @@ impl AgentModel {
         self.as_str()
     }
 
-    /// Parses one persisted model identifier and upgrades retired aliases.
+    /// Parses one persisted model identifier and upgrades retired ids to
+    /// their replacement models.
     ///
-    /// Stored retired Gemini, Claude, and Codex aliases are migrated forward
-    /// so existing projects and sessions continue loading after model
-    /// removals.
+    /// Stored retired Gemini, Claude, and Codex ids are migrated forward
+    /// through [`AgentModel::retired_replacement`] so existing projects and
+    /// sessions continue loading after model retirements.
     /// Raw `gemini-*` ids parse to shared Gemini model variants; persisted
     /// session agents decide whether Gemini or Antigravity owns the session.
     ///
@@ -214,16 +209,48 @@ impl AgentModel {
     /// Returns an error when `value` is not a known current or retired model
     /// identifier.
     pub fn parse_persisted(value: &str) -> Result<Self, String> {
-        match value {
-            "gemini-3-flash-preview" => Ok(Self::Gemini36Flash),
-            "gemini-3.5-flash-lite" | "gemini-3.1-flash-lite-preview" => Ok(Self::Gemini35Flash),
-            "gemini-3.1-pro-preview" => Ok(Self::Gemini31Pro),
-            "claude-opus-4-6" | "claude-opus-4-7" => Ok(Self::ClaudeOpus48),
-            "claude-sonnet-4-6" => Ok(Self::ClaudeSonnet5),
-            "gpt-5.4-mini" => Ok(Self::Gpt56Luna),
-            "gpt-5.4" => Ok(Self::Gpt55),
-            _ => value.parse(),
+        if let Some(replacement) = Self::retired_replacement(value) {
+            return Ok(replacement);
         }
+
+        value.parse()
+    }
+
+    /// Returns the current replacement model for a retired persisted model
+    /// id, or `None` when `value` is not a retired id.
+    ///
+    /// This registry is the single source of truth for model retirement.
+    /// Retiring a model means removing its selectable [`AgentModel`] variant
+    /// and mapping its persisted id to the replacement model here. Retired
+    /// ids never appear in selectable model lists; they stay in the database
+    /// as history for finished sessions, while sessions that are still active
+    /// are switched to the replacement automatically.
+    #[must_use]
+    pub fn retired_replacement(value: &str) -> Option<Self> {
+        const RETIRED_MODEL_REPLACEMENTS: &[(&str, AgentModel)] = &[
+            ("gemini-3-pro-preview", AgentModel::Gemini31Pro),
+            ("gemini-3-flash-preview", AgentModel::Gemini36Flash),
+            ("gemini-3.5-flash", AgentModel::Gemini35FlashLite),
+            ("gemini-3.1-pro-preview", AgentModel::Gemini31Pro),
+            (
+                "gemini-3.1-flash-lite-preview",
+                AgentModel::Gemini35FlashLite,
+            ),
+            ("claude-opus-4-8", AgentModel::ClaudeOpus5),
+            ("claude-opus-4-6", AgentModel::ClaudeOpus5),
+            ("claude-opus-4-7", AgentModel::ClaudeOpus5),
+            ("claude-sonnet-4-6", AgentModel::ClaudeSonnet5),
+            ("gpt-5.5", AgentModel::Gpt56Sol),
+            ("gpt-5.4-mini", AgentModel::Gpt56Luna),
+            ("gpt-5.4", AgentModel::Gpt56Sol),
+            ("gpt-5.3-codex", AgentModel::Gpt56Sol),
+            ("gpt-5.2-codex", AgentModel::Gpt53CodexSpark),
+        ];
+
+        RETIRED_MODEL_REPLACEMENTS
+            .iter()
+            .find(|(retired_id, _)| *retired_id == value)
+            .map(|(_, replacement)| *replacement)
     }
 }
 
@@ -443,7 +470,7 @@ impl ReasoningLevel {
     /// Returns the Claude `--effort` value for this level.
     ///
     /// Maps `XHigh` and `Max` to `"max"`, which is currently only supported on
-    /// `claude-opus-5` and `claude-opus-4-8`. The Claude CLI enforces this
+    /// `claude-opus-5`. The Claude CLI enforces this
     /// restriction and will surface an error for other models.
     pub fn claude(self) -> &'static str {
         match self {
@@ -487,15 +514,13 @@ impl FromStr for AgentModel {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "gemini-3.6-flash" => Ok(Self::Gemini36Flash),
-            "gemini-3.5-flash" => Ok(Self::Gemini35Flash),
+            "gemini-3.5-flash-lite" => Ok(Self::Gemini35FlashLite),
             "gemini-3.1-pro" => Ok(Self::Gemini31Pro),
             "gpt-5.6-sol" => Ok(Self::Gpt56Sol),
             "gpt-5.6-terra" => Ok(Self::Gpt56Terra),
             "gpt-5.6-luna" => Ok(Self::Gpt56Luna),
-            "gpt-5.5" => Ok(Self::Gpt55),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
             "claude-opus-5" => Ok(Self::ClaudeOpus5),
-            "claude-opus-4-8" => Ok(Self::ClaudeOpus48),
             "claude-sonnet-5" => Ok(Self::ClaudeSonnet5),
             "claude-fable-5" => Ok(Self::ClaudeFable5),
             "claude-haiku-4-5-20251001" => Ok(Self::ClaudeHaiku4520251001),
@@ -513,14 +538,14 @@ impl AgentSelectionMetadata for AgentModel {
         match self {
             Self::Gemini31Pro => "Higher-quality Gemini model for deeper reasoning.",
             Self::Gemini36Flash => "Fast Gemini model for agentic and multimodal tasks.",
-            Self::Gemini35Flash => "Fast Gemini model for balanced agentic workloads.",
+            Self::Gemini35FlashLite => {
+                "Lightweight Gemini model for fast, cost-conscious workloads."
+            }
             Self::Gpt56Sol => "Newest Codex model for the strongest coding performance.",
             Self::Gpt56Terra => "Current Codex model for balanced coding performance.",
             Self::Gpt56Luna => "Current Codex model for lighter coding iterations.",
-            Self::Gpt55 => "Newer Codex model with stronger coding performance when available.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
             Self::ClaudeOpus5 => "Latest Claude Opus model for complex tasks.",
-            Self::ClaudeOpus48 => "Claude Opus 4.8 model for complex tasks.",
             Self::ClaudeSonnet5 => "Balanced Claude model for quality and latency.",
             Self::ClaudeFable5 => "Claude Fable model for creative, narrative-heavy tasks.",
             Self::ClaudeHaiku4520251001 => "Fast Claude model for lighter tasks.",
@@ -570,17 +595,16 @@ impl AgentKind {
         const ANTIGRAVITY_MODELS: &[AgentModel] = &[
             AgentModel::Gemini31Pro,
             AgentModel::Gemini36Flash,
-            AgentModel::Gemini35Flash,
+            AgentModel::Gemini35FlashLite,
         ];
         const GEMINI_MODELS: &[AgentModel] = &[
             AgentModel::Gemini31Pro,
             AgentModel::Gemini36Flash,
-            AgentModel::Gemini35Flash,
+            AgentModel::Gemini35FlashLite,
         ];
         const CLAUDE_MODELS: &[AgentModel] = &[
             AgentModel::ClaudeFable5,
             AgentModel::ClaudeOpus5,
-            AgentModel::ClaudeOpus48,
             AgentModel::ClaudeSonnet5,
             AgentModel::ClaudeHaiku4520251001,
         ];
@@ -588,7 +612,6 @@ impl AgentKind {
             AgentModel::Gpt56Sol,
             AgentModel::Gpt56Terra,
             AgentModel::Gpt56Luna,
-            AgentModel::Gpt55,
             AgentModel::Gpt53CodexSpark,
         ];
 
@@ -694,14 +717,12 @@ mod tests {
         let parsed_sol = codex_kind.parse_model("gpt-5.6-sol");
         let parsed_terra = codex_kind.parse_model("gpt-5.6-terra");
         let parsed_luna = codex_kind.parse_model("gpt-5.6-luna");
-        let parsed_55 = codex_kind.parse_model("gpt-5.5");
         let parsed_spark = codex_kind.parse_model("gpt-5.3-codex-spark");
 
         // Assert
         assert_eq!(parsed_sol, Some(AgentModel::Gpt56Sol));
         assert_eq!(parsed_terra, Some(AgentModel::Gpt56Terra));
         assert_eq!(parsed_luna, Some(AgentModel::Gpt56Luna));
-        assert_eq!(parsed_55, Some(AgentModel::Gpt55));
         assert_eq!(parsed_spark, Some(AgentModel::Gpt53CodexSpark));
     }
 
@@ -715,12 +736,12 @@ mod tests {
         // Act
         let parsed_pro = antigravity_kind.parse_model("gemini-3.1-pro");
         let parsed_flash_36 = antigravity_kind.parse_model("gemini-3.6-flash");
-        let parsed_flash_35 = antigravity_kind.parse_model("gemini-3.5-flash");
+        let parsed_flash_35_lite = antigravity_kind.parse_model("gemini-3.5-flash-lite");
 
         // Assert
         assert_eq!(parsed_pro, Some(AgentModel::Gemini31Pro));
         assert_eq!(parsed_flash_36, Some(AgentModel::Gemini36Flash));
-        assert_eq!(parsed_flash_35, Some(AgentModel::Gemini35Flash));
+        assert_eq!(parsed_flash_35_lite, Some(AgentModel::Gemini35FlashLite));
     }
 
     #[test]
@@ -744,7 +765,7 @@ mod tests {
         let models = [
             AgentModel::Gemini31Pro,
             AgentModel::Gemini36Flash,
-            AgentModel::Gemini35Flash,
+            AgentModel::Gemini35FlashLite,
         ];
 
         // Act
@@ -756,7 +777,7 @@ mod tests {
             [
                 "Higher-quality Gemini model for deeper reasoning.",
                 "Fast Gemini model for agentic and multimodal tasks.",
-                "Fast Gemini model for balanced agentic workloads.",
+                "Lightweight Gemini model for fast, cost-conscious workloads.",
             ]
         );
     }
@@ -807,7 +828,6 @@ mod tests {
         let parsed_haiku_45 = claude_kind.parse_model("claude-haiku-4-5-20251001");
         let opus_5_id = AgentModel::ClaudeOpus5.as_str();
         let opus_5_description = AgentModel::ClaudeOpus5.description();
-        let opus_48_description = AgentModel::ClaudeOpus48.description();
 
         // Assert
         assert_eq!(parsed_opus_5, Some(AgentModel::ClaudeOpus5));
@@ -819,10 +839,54 @@ mod tests {
             opus_5_description,
             "Latest Claude Opus model for complex tasks."
         );
+    }
+
+    #[test]
+    /// Ensures the retirement registry maps retired ids to replacements and
+    /// leaves current ids unmapped.
+    fn test_retired_replacement_maps_only_retired_ids() {
+        // Arrange
+        let retired_ids = [
+            ("gemini-3-pro-preview", AgentModel::Gemini31Pro),
+            ("gemini-3-flash-preview", AgentModel::Gemini36Flash),
+            ("gemini-3.5-flash", AgentModel::Gemini35FlashLite),
+            ("gemini-3.1-pro-preview", AgentModel::Gemini31Pro),
+            (
+                "gemini-3.1-flash-lite-preview",
+                AgentModel::Gemini35FlashLite,
+            ),
+            ("claude-opus-4-8", AgentModel::ClaudeOpus5),
+            ("claude-opus-4-6", AgentModel::ClaudeOpus5),
+            ("claude-opus-4-7", AgentModel::ClaudeOpus5),
+            ("claude-sonnet-4-6", AgentModel::ClaudeSonnet5),
+            ("gpt-5.5", AgentModel::Gpt56Sol),
+            ("gpt-5.4-mini", AgentModel::Gpt56Luna),
+            ("gpt-5.4", AgentModel::Gpt56Sol),
+            ("gpt-5.3-codex", AgentModel::Gpt56Sol),
+            ("gpt-5.2-codex", AgentModel::Gpt53CodexSpark),
+        ];
+
+        // Act
+        let replacements =
+            retired_ids.map(|(retired_id, _)| AgentModel::retired_replacement(retired_id));
+        let selectable_parses = retired_ids.map(|(retired_id, _)| retired_id.parse::<AgentModel>());
+        let current_replacements = [
+            "gemini-3.1-pro",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
+            "claude-opus-5",
+        ]
+        .map(AgentModel::retired_replacement);
+        let unknown_replacement = AgentModel::retired_replacement("not-a-model");
+
+        // Assert
         assert_eq!(
-            opus_48_description,
-            "Claude Opus 4.8 model for complex tasks."
+            replacements,
+            retired_ids.map(|(_, replacement)| Some(replacement))
         );
+        assert!(selectable_parses.iter().all(Result::is_err));
+        assert_eq!(current_replacements, [None; 4]);
+        assert_eq!(unknown_replacement, None);
     }
 
     #[test]
@@ -847,20 +911,23 @@ mod tests {
             AgentModel::parse_persisted("gemini-3.1-flash-lite-preview");
 
         // Assert
-        assert_eq!(parsed_opus_46, Ok(AgentModel::ClaudeOpus48));
-        assert_eq!(parsed_opus_47, Ok(AgentModel::ClaudeOpus48));
+        assert_eq!(parsed_opus_46, Ok(AgentModel::ClaudeOpus5));
+        assert_eq!(parsed_opus_47, Ok(AgentModel::ClaudeOpus5));
         assert_eq!(parsed_sonnet_46, Ok(AgentModel::ClaudeSonnet5));
         assert_eq!(parsed_sonnet_5, Ok(AgentModel::ClaudeSonnet5));
         assert_eq!(parsed_gpt_54_mini, Ok(AgentModel::Gpt56Luna));
-        assert_eq!(parsed_gpt_54, Ok(AgentModel::Gpt55));
+        assert_eq!(parsed_gpt_54, Ok(AgentModel::Gpt56Sol));
         assert_eq!(parsed_gemini_36_flash, Ok(AgentModel::Gemini36Flash));
-        assert_eq!(parsed_gemini_35_flash, Ok(AgentModel::Gemini35Flash));
+        assert_eq!(parsed_gemini_35_flash, Ok(AgentModel::Gemini35FlashLite));
         assert_eq!(parsed_gemini_3_flash_preview, Ok(AgentModel::Gemini36Flash));
-        assert_eq!(parsed_gemini_35_flash_lite, Ok(AgentModel::Gemini35Flash));
+        assert_eq!(
+            parsed_gemini_35_flash_lite,
+            Ok(AgentModel::Gemini35FlashLite)
+        );
         assert_eq!(parsed_gemini_31_pro_preview, Ok(AgentModel::Gemini31Pro));
         assert_eq!(
             parsed_gemini_31_flash_lite_preview,
-            Ok(AgentModel::Gemini35Flash)
+            Ok(AgentModel::Gemini35FlashLite)
         );
     }
 
@@ -899,10 +966,10 @@ mod tests {
     fn test_parse_persisted_session_agent_model_resolves_saved_google_models() {
         // Arrange
         let persisted_selections = [
+            ("gemini", "gemini-3.5-flash-lite"),
             ("gemini", "gemini-3.5-flash"),
-            ("gemini", "gemini-3.1-flash-lite-preview"),
+            ("antigravity", "gemini-3.5-flash-lite"),
             ("antigravity", "gemini-3.5-flash"),
-            ("antigravity", "gemini-3.1-flash-lite-preview"),
         ];
 
         // Act
@@ -914,10 +981,10 @@ mod tests {
         assert_eq!(
             migrated_selections,
             [
-                AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini35Flash),
-                AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini35Flash),
-                AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35Flash),
-                AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35Flash),
+                AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini35FlashLite),
+                AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini35FlashLite),
+                AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite),
+                AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite),
             ]
         );
     }
@@ -933,7 +1000,7 @@ mod tests {
 
         // Assert
         assert_eq!(selection.kind(), AgentKind::Claude);
-        assert_eq!(selection.model(), AgentModel::ClaudeOpus48);
+        assert_eq!(selection.model(), AgentModel::ClaudeOpus5);
     }
 
     #[test]
@@ -958,17 +1025,16 @@ mod tests {
 
         // Act
         let migrated_flash = parse_persisted_session_agent_model(None, "gemini-3.5-flash");
-        let migrated_flash_lite =
-            parse_persisted_session_agent_model(None, "gemini-3.1-flash-lite-preview");
+        let loaded_flash_lite = parse_persisted_session_agent_model(None, "gemini-3.5-flash-lite");
 
         // Assert
         assert_eq!(
             migrated_flash,
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35Flash)
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite)
         );
         assert_eq!(
-            migrated_flash_lite,
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35Flash)
+            loaded_flash_lite,
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite)
         );
     }
 
@@ -1012,7 +1078,6 @@ mod tests {
             AgentModel::Gpt56Sol,
             AgentModel::Gpt56Terra,
             AgentModel::Gpt56Luna,
-            AgentModel::Gpt55,
             AgentModel::Gpt53CodexSpark,
         ];
 
@@ -1021,8 +1086,8 @@ mod tests {
         let unsupported = models.map(|model| AgentKind::Claude.supports_model(model));
 
         // Assert
-        assert_eq!(supported, [true; 5]);
-        assert_eq!(unsupported, [false; 5]);
+        assert_eq!(supported, [true; 4]);
+        assert_eq!(unsupported, [false; 4]);
     }
 
     #[test]
@@ -1031,7 +1096,6 @@ mod tests {
         // Arrange
         let models = [
             AgentModel::ClaudeOpus5,
-            AgentModel::ClaudeOpus48,
             AgentModel::ClaudeSonnet5,
             AgentModel::ClaudeFable5,
             AgentModel::ClaudeHaiku4520251001,
@@ -1042,8 +1106,8 @@ mod tests {
         let unsupported = models.map(|model| AgentKind::Codex.supports_model(model));
 
         // Assert
-        assert_eq!(supported, [true; 5]);
-        assert_eq!(unsupported, [false; 5]);
+        assert_eq!(supported, [true; 4]);
+        assert_eq!(unsupported, [false; 4]);
     }
 
     #[test]
@@ -1053,7 +1117,7 @@ mod tests {
         let models = [
             AgentModel::Gemini31Pro,
             AgentModel::Gemini36Flash,
-            AgentModel::Gemini35Flash,
+            AgentModel::Gemini35FlashLite,
         ];
 
         // Act
@@ -1073,15 +1137,15 @@ mod tests {
     /// transports.
     fn test_antigravity_provider_model_str_returns_raw_gemini_model() {
         // Arrange
-        let model = AgentModel::Gemini35Flash;
+        let model = AgentModel::Gemini35FlashLite;
 
         // Act
         let persisted_model = model.as_str();
         let provider_model = model.provider_model_str();
 
         // Assert
-        assert_eq!(persisted_model, "gemini-3.5-flash");
-        assert_eq!(provider_model, "gemini-3.5-flash");
+        assert_eq!(persisted_model, "gemini-3.5-flash-lite");
+        assert_eq!(provider_model, "gemini-3.5-flash-lite");
     }
 
     #[test]
@@ -1147,11 +1211,10 @@ mod tests {
                 AgentModel::Gpt56Sol,
                 AgentModel::Gpt56Terra,
                 AgentModel::Gpt56Luna,
-                AgentModel::Gpt55,
                 AgentModel::Gpt53CodexSpark,
                 AgentModel::Gemini31Pro,
                 AgentModel::Gemini36Flash,
-                AgentModel::Gemini35Flash,
+                AgentModel::Gemini35FlashLite,
             ]
         );
     }
@@ -1172,7 +1235,7 @@ mod tests {
             vec![
                 AgentModel::Gemini31Pro,
                 AgentModel::Gemini36Flash,
-                AgentModel::Gemini35Flash,
+                AgentModel::Gemini35FlashLite,
             ]
         );
     }
@@ -1182,9 +1245,9 @@ mod tests {
     /// when possible.
     fn test_resolve_model_for_available_agent_kinds_prefers_available_fallback() {
         // Arrange
-        let unavailable_model = AgentModel::ClaudeOpus48;
+        let unavailable_model = AgentModel::ClaudeOpus5;
         let available_agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
-        let fallback_model = AgentModel::Gpt55;
+        let fallback_model = AgentModel::Gpt56Terra;
 
         // Act
         let resolved_model = resolve_model_for_available_agent_kinds(
@@ -1194,7 +1257,7 @@ mod tests {
         );
 
         // Assert
-        assert_eq!(resolved_model, AgentModel::Gpt55);
+        assert_eq!(resolved_model, AgentModel::Gpt56Terra);
     }
 
     #[test]
@@ -1202,7 +1265,7 @@ mod tests {
     /// default when the preferred fallback is also unavailable.
     fn test_resolve_model_for_available_agent_kinds_uses_first_available_default() {
         // Arrange
-        let unavailable_model = AgentModel::ClaudeOpus48;
+        let unavailable_model = AgentModel::ClaudeOpus5;
         let available_agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
         let unavailable_fallback_model = AgentModel::ClaudeSonnet5;
 

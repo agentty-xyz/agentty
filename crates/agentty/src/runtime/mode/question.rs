@@ -950,7 +950,7 @@ mod tests {
         app.sessions.push_session(
             crate::test_support::SessionFixtureBuilder::new()
                 .id(session_id)
-                .model(AgentModel::Gpt55)
+                .model(AgentModel::Gpt56Sol)
                 .status(Status::AgentReview)
                 .build(),
         );
@@ -1481,7 +1481,7 @@ mod tests {
             .sessions()
             .insert_session(
                 session_id,
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,

@@ -513,7 +513,7 @@ mod tests {
         session.title = Some("This is a very long timer-aware session header title".to_string());
         session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
         session.in_progress_started_at = Some(0);
 
@@ -550,7 +550,7 @@ mod tests {
         let mut session = session_fixture();
         session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
         session.stats.added_lines = 9;
         session.stats.deleted_lines = 3;
@@ -564,9 +564,9 @@ mod tests {
         // Assert
         assert!(early_metadata.contains("Lines: +9 / -3"));
         assert!(early_metadata.contains("Timer: 30s"));
-        assert!(early_metadata.contains("Model: gpt-5.5"));
+        assert!(early_metadata.contains("Model: gpt-5.6-sol"));
         assert!(
-            early_metadata.find("Model: gpt-5.5") < early_metadata.find("Reasoning: high"),
+            early_metadata.find("Model: gpt-5.6-sol") < early_metadata.find("Reasoning: high"),
             "model should appear before reasoning in metadata text"
         );
         assert!(later_metadata.contains("Timer: 1h1m0s"));
@@ -1273,7 +1273,7 @@ mod tests {
         let status_line = session_output_status_line(
             Status::AgentReview,
             None,
-            Some("Reviewing changes with gpt-5.5"),
+            Some("Reviewing changes with gpt-5.6-sol"),
         )
         .expect("agent-review sessions should render a status line");
 
@@ -1281,7 +1281,7 @@ mod tests {
         assert!(
             status_line
                 .to_string()
-                .contains("Reviewing changes with gpt-5.5")
+                .contains("Reviewing changes with gpt-5.6-sol")
         );
     }
 

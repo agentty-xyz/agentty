@@ -925,7 +925,7 @@ mod tests {
             folder: runtime_parent.path().join("missing-runtime"),
             live_transcript: None,
             main_checkout_root: None,
-            model: AgentModel::Gpt55.as_str().to_string(),
+            model: AgentModel::Gpt56Sol.as_str().to_string(),
             personality: crate::channel::PersonalityPrompt::active(
                 "Review carefully.".to_string(),
                 true,
@@ -955,7 +955,7 @@ mod tests {
     fn codex_runtime_state_new_initializes_zero_tokens_and_empty_thread_id() {
         // Arrange
         let folder = PathBuf::from("/tmp/agentty-codex-state");
-        let model = AgentModel::Gpt55.as_str().to_string();
+        let model = AgentModel::Gpt56Sol.as_str().to_string();
 
         // Act
         let state = CodexRuntimeState::new(folder.clone(), model.clone());
@@ -972,7 +972,7 @@ mod tests {
     fn build_thread_start_payload_carries_method_id_cwd_and_model() {
         // Arrange
         let folder = PathBuf::from("/tmp/agentty-codex-thread-start");
-        let model = AgentModel::Gpt55.as_str();
+        let model = AgentModel::Gpt56Sol.as_str();
 
         // Act
         let payload =
@@ -1011,7 +1011,7 @@ mod tests {
     #[test]
     fn build_thread_resume_payload_uses_thread_id_for_resume() {
         // Arrange
-        let model = AgentModel::Gpt55.as_str();
+        let model = AgentModel::Gpt56Sol.as_str();
 
         // Act
         let payload = build_thread_resume_payload(
@@ -1046,7 +1046,7 @@ mod tests {
         // Act
         let payload = build_turn_start_payload(
             &folder,
-            AgentModel::Gpt55.as_str(),
+            AgentModel::Gpt56Sol.as_str(),
             ReasoningLevel::Medium,
             "thread-1",
             "Update the repository instructions",

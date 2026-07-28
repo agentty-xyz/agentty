@@ -190,6 +190,19 @@ pub struct SessionListRow {
     pub updated_at: i64,
 }
 
+/// Minimal provider/model row used to migrate active sessions across projects.
+#[derive(sqlx::FromRow)]
+pub struct SessionAgentModelRow {
+    /// Persisted agent provider kind for this session.
+    pub agent: String,
+    /// Stable session identifier.
+    pub id: String,
+    /// Persisted agent model identifier.
+    pub model: String,
+    /// Persisted lifecycle status string.
+    pub status: String,
+}
+
 /// Transcript-detail row loaded lazily for the session being viewed.
 pub struct SessionDetailRow {
     /// Initial or staged prompt text.
@@ -321,6 +334,10 @@ pub trait SessionRepository: Send + Sync {
     /// Loads one complete persisted session row by stable identifier.
     async fn load_session(&self, session_id: &str) -> Result<Option<SessionRow>, DbError>;
 
+    /// Loads provider/model metadata for every non-terminal session across
+    /// projects.
+    async fn load_active_session_agent_models(&self) -> Result<Vec<SessionAgentModelRow>, DbError>;
+
     #[cfg(test)]
     /// Loads all sessions ordered by most recent update.
     async fn load_sessions(&self) -> Result<Vec<SessionRow>, DbError>;
@@ -450,6 +467,15 @@ pub trait SessionRepository: Send + Sync {
 
     /// Updates the persisted agent provider and model for a session.
     async fn update_session_agent_model(
+        &self,
+        id: &str,
+        agent: &str,
+        model: &str,
+    ) -> Result<(), DbError>;
+
+    /// Updates the persisted agent provider and model only while the session
+    /// remains non-terminal, without changing its activity timestamp.
+    async fn update_active_session_agent_model(
         &self,
         id: &str,
         agent: &str,
@@ -1311,6 +1337,24 @@ WHERE session.id = ?
         Ok(row.map(SessionJoinRow::into_session_row))
     }
 
+    async fn load_active_session_agent_models(&self) -> Result<Vec<SessionAgentModelRow>, DbError> {
+        let rows = sqlx::query_as::<_, SessionAgentModelRow>(
+            r"
+SELECT agent,
+       id,
+       model,
+       status
+FROM session
+WHERE status NOT IN ('Merged', 'Done', 'Canceled')
+ORDER BY id
+",
+        )
+        .fetch_all(&self.0)
+        .await?;
+
+        Ok(rows)
+    }
+
     #[cfg(test)]
     async fn load_sessions(&self) -> Result<Vec<SessionRow>, DbError> {
         let rows = sqlx::query_as!(
@@ -1910,6 +1954,69 @@ WHERE id = ?
         Ok(())
     }
 
+    async fn update_active_session_agent_model(
+        &self,
+        id: &str,
+        agent: &str,
+        model: &str,
+    ) -> Result<(), DbError> {
+        let mut transaction = self.0.begin().await?;
+        let updated_at = sqlx::query_scalar::<_, i64>(
+            r"
+SELECT updated_at
+FROM session
+WHERE id = ?
+",
+        )
+        .bind(id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(updated_at) = updated_at else {
+            transaction.commit().await?;
+
+            return Ok(());
+        };
+        let temporary_updated_at = if updated_at == i64::MIN {
+            i64::MAX
+        } else {
+            i64::MIN
+        };
+        let update_result = sqlx::query(
+            r"
+UPDATE session
+SET agent = ?,
+    model = ?,
+    updated_at = ?
+WHERE id = ?
+  AND status NOT IN ('Merged', 'Done', 'Canceled')
+",
+        )
+        .bind(agent)
+        .bind(model)
+        .bind(temporary_updated_at)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+        if update_result.rows_affected() > 0 {
+            sqlx::query(
+                r"
+UPDATE session
+SET updated_at = ?
+WHERE id = ?
+  AND updated_at = ?
+",
+            )
+            .bind(updated_at)
+            .bind(id)
+            .bind(temporary_updated_at)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
     async fn clear_session_draft_flag(&self, id: &str) -> Result<(), DbError> {
         sqlx::query!(
             r"
@@ -2392,7 +2499,7 @@ mod tests {
                 in_progress_total_seconds: 0,
                 input_tokens: 11,
                 is_draft: false,
-                model: "gpt-5.5".to_string(),
+                model: "gpt-5.6-sol".to_string(),
                 output_tokens: 29,
                 parent_session_id: Some("parent-session".to_string()),
                 personality_id: Some("reviewer".to_string()),
@@ -2497,14 +2604,20 @@ WHERE id = ?
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("parent-session", "gpt-5.5", "main", "Review", project_id)
+            .insert_session(
+                "parent-session",
+                "gpt-5.6-sol",
+                "main",
+                "Review",
+                project_id,
+            )
             .await
             .expect("failed to insert parent session");
         database
             .sessions()
             .insert_stacked_draft_session(
                 "source-session",
-                "gpt-5.5",
+                "gpt-5.6-sol",
                 "wt/parent",
                 "Review",
                 "parent-session",
@@ -2541,7 +2654,7 @@ WHERE id = ?
                     applied_personality_id: Some("reviewer".to_string()),
                     applied_personality_prompt_hash: Some("personality-hash".to_string()),
                     instruction_conversation_id: None,
-                    model: "gpt-5.5".to_string(),
+                    model: "gpt-5.6-sol".to_string(),
                     provider_conversation_id: None,
                     questions_json: "[]".to_string(),
                     summary: String::new(),
@@ -2765,7 +2878,7 @@ WHERE id = ?
         // Act
         database
             .sessions()
-            .insert_session("session-a", "gpt-5.5", "main", "Draft", project_id)
+            .insert_session("session-a", "gpt-5.6-sol", "main", "Draft", project_id)
             .await
             .expect("failed to insert session");
         let session = database
@@ -2793,7 +2906,7 @@ WHERE id = ?
         for session_id in ["a-older", "z-newer"] {
             database
                 .sessions()
-                .insert_session(session_id, "gpt-5.5", "main", "Review", project_id)
+                .insert_session(session_id, "gpt-5.6-sol", "main", "Review", project_id)
                 .await
                 .expect("failed to insert session");
         }
@@ -2890,7 +3003,7 @@ WHERE id IN ('a-older', 'z-newer')
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_draft_session("draft-session", "gpt-5.5", "main", "Draft", project_id)
+            .insert_draft_session("draft-session", "gpt-5.6-sol", "main", "Draft", project_id)
             .await
             .expect("failed to insert draft session");
 

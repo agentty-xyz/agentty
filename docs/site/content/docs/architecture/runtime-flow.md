@@ -49,6 +49,7 @@ flowchart TD
   main["main.rs"]
   db["Database::open()<br/>sqlite open + WAL + foreign keys + migrations"]
   app_new["App::new()"]
+  model_migration["Migrate active retired models<br/>across saved projects"]
   scan["Startup-only home-directory project scan<br/>then project/session snapshot load"]
   fail_ops["Fail unfinished operations from previous run"]
   background["Spawn app background tasks"]
@@ -65,7 +66,8 @@ flowchart TD
 
   main --> db
   main --> app_new
-  app_new --> scan
+  app_new --> model_migration
+  model_migration --> scan
   app_new --> fail_ops
   app_new --> background
   main --> runtime
@@ -176,12 +178,13 @@ derived data instead of recomputing the render twice per frame.
 future non-TUI callers. `SessionService` accepts a `SessionBackend` trait object and
 offers create, complete by-id lookup, send, merge, and review-request operations.
 `app/session_api.rs` implements that port for `App`: commands reuse the existing worker
-and merge workflows, while lookup joins the persisted session settings and ordered
-messages into one frontend-neutral aggregate. The adapter deliberately contains no
-orchestrator policy, so a future orchestrator can own sequencing while calling the same
-API as the current frontend. `CreateSessionRequest` carries an explicit project id; the
-current `App` adapter validates that it matches the loaded project context, while
-another host can resolve project contexts independently.
+and merge workflows, while lookup migrates an active retired model reference and joins
+the persisted session settings and ordered messages into one frontend-neutral aggregate.
+The adapter deliberately contains no orchestrator policy, so a future orchestrator can
+own sequencing while calling the same API as the current frontend.
+`CreateSessionRequest` carries an explicit project id; the current `App` adapter
+validates that it matches the loaded project context, while another host can resolve
+project contexts independently.
 
 ```mermaid
 flowchart LR
@@ -278,6 +281,8 @@ restart-safe:
 - Before enqueue: insert `session_operation` row (`queued`).
 - Worker transitions: `queued -> running -> done/failed/canceled`.
 - Cancel requests are persisted and checked before command execution.
+- On startup, active sessions across every saved project are migrated from retired model
+  ids to their current provider/model replacements before project-scoped snapshots load.
 - On startup, unfinished operations are failed with reason `Interrupted by app restart`,
   interrupted rebase operations abort stale in-progress git rebase metadata, and
   impacted sessions are reset to `Review`. Pending post-merge stacked-child syncs are

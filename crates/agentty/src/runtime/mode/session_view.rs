@@ -1775,7 +1775,7 @@ mod tests {
         );
         app.sessions.sessions_mut()[0].agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
         app.sessions.sessions_mut()[0].status = Status::AgentReview;
         let output_width = 14;
@@ -1840,7 +1840,7 @@ mod tests {
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.settings.default_review_selection = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Claude,
-            AgentModel::ClaudeOpus48,
+            AgentModel::ClaudeOpus5,
         );
         app.sessions.sessions_mut()[0].status = Status::Review;
         let session_folder = app.sessions.sessions()[0].folder.clone();
@@ -1859,7 +1859,7 @@ mod tests {
         let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
         assert_eq!(
             review_status_message,
-            Some(review_loading_message(AgentModel::ClaudeOpus48))
+            Some(review_loading_message(AgentModel::ClaudeOpus5))
         );
         assert_eq!(review_text, None);
         assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
@@ -2357,7 +2357,7 @@ mod tests {
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.settings.default_review_selection = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Claude,
-            AgentModel::ClaudeOpus48,
+            AgentModel::ClaudeOpus5,
         );
         app.review_cache.insert(
             session_id.clone().into(),
@@ -2376,7 +2376,7 @@ mod tests {
         let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
         assert_eq!(
             review_status_message,
-            Some(review_loading_message(AgentModel::ClaudeOpus48))
+            Some(review_loading_message(AgentModel::ClaudeOpus5))
         );
         assert_eq!(review_text, None);
     }

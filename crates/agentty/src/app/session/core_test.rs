@@ -773,7 +773,7 @@ fn test_session_manager_with_clock(
             is_draft: false,
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Codex,
-                AgentModel::Gpt55,
+                AgentModel::Gpt56Sol,
             ),
             parent_session_id: None,
             personality_id: None,
@@ -801,7 +801,7 @@ fn test_session_manager_with_clock(
 
     SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt55,
+            model: AgentModel::Gpt56Sol,
         },
         Arc::new(git::MockGitClient::new()),
         state,
@@ -1073,7 +1073,7 @@ async fn create_and_start_session(app: &mut App, prompt: &str) {
             &session_id,
             prompt,
             Arc::new(start_backend),
-            AgentModel::ClaudeOpus48,
+            AgentModel::ClaudeOpus5,
         )
         .await;
 }
@@ -1712,7 +1712,7 @@ async fn test_create_session_keeps_default_smart_model_setting_when_session_mode
         .expect("failed to create first session");
     app.set_session_model(
         &first_session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
     )
     .await
     .expect("failed to set session model");
@@ -1795,7 +1795,7 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
     // Act
     app.set_session_model(
         &first_session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
     )
     .await
     .expect("failed to set session model");
@@ -1823,7 +1823,7 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
     // Assert
     assert_eq!(
         default_smart_model_setting,
-        Some(AgentModel::Gpt55.as_str().to_string())
+        Some(AgentModel::Gpt56Sol.as_str().to_string())
     );
     assert_eq!(
         default_smart_agent_setting,
@@ -1836,7 +1836,7 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
         .find(|session| session.id == second_session_id)
         .expect("missing second session");
     assert_eq!(second_session.agent.kind(), AgentKind::Codex);
-    assert_eq!(second_session.agent.model(), AgentModel::Gpt55);
+    assert_eq!(second_session.agent.model(), AgentModel::Gpt56Sol);
 }
 
 #[tokio::test]
@@ -2042,7 +2042,7 @@ async fn test_replace_title_generation_task_aborts_superseded_task() {
     );
     let mut session_manager = SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt55,
+            model: AgentModel::Gpt56Sol,
         },
         Arc::new(git::MockGitClient::new()),
         state,
@@ -2099,7 +2099,7 @@ async fn test_clear_title_generation_task_if_matches_ignores_stale_generation() 
     );
     let mut session_manager = SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt55,
+            model: AgentModel::Gpt56Sol,
         },
         Arc::new(git::MockGitClient::new()),
         state,
@@ -2134,7 +2134,7 @@ async fn test_clear_title_generation_task_if_matches_removes_matching_generation
     );
     let mut session_manager = SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt55,
+            model: AgentModel::Gpt56Sol,
         },
         Arc::new(git::MockGitClient::new()),
         state,
@@ -2969,7 +2969,7 @@ async fn test_load_existing_sessions() {
     assert_eq!(app.sessions.sessions()[0].id, "12345678");
     assert_eq!(
         app.sessions.sessions()[0].agent.model(),
-        AgentModel::ClaudeOpus48
+        AgentModel::ClaudeOpus5
     );
     assert_eq!(app.sessions.sessions()[0].prompt, "Existing");
     let output = session_replay_text(&app.sessions.sessions()[0]);
@@ -2988,13 +2988,7 @@ async fn test_create_session_uses_default_smart_model_setting_and_most_recent_pe
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session(
-            "alpha0001",
-            "gemini-3-flash-preview",
-            "main",
-            "Done",
-            project_id,
-        )
+        .insert_session("alpha0001", "gemini-3.6-flash", "main", "Done", project_id)
         .await
         .expect("failed to insert alpha0001");
     db.sessions()
@@ -3060,17 +3054,11 @@ async fn test_load_existing_sessions_ordered_by_updated_at_desc() {
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("alpha000", "claude-opus-4-8", "main", "Done", project_id)
+        .insert_session("alpha000", "claude-opus-5", "main", "Done", project_id)
         .await
         .expect("failed to insert alpha000");
     db.sessions()
-        .insert_session(
-            "beta0000",
-            "gemini-3-flash-preview",
-            "main",
-            "Done",
-            project_id,
-        )
+        .insert_session("beta0000", "gemini-3.6-flash", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
 
@@ -3119,15 +3107,15 @@ async fn test_load_sessions_aggregates_daily_activity() {
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("alpha000", "claude-opus-4-8", "main", "Done", project_id)
+        .insert_session("alpha000", "claude-opus-5", "main", "Done", project_id)
         .await
         .expect("failed to insert alpha000");
     db.sessions()
-        .insert_session("beta0000", "claude-opus-4-8", "main", "Done", project_id)
+        .insert_session("beta0000", "claude-opus-5", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
     db.sessions()
-        .insert_session("gamma000", "claude-opus-4-8", "main", "Done", project_id)
+        .insert_session("gamma000", "claude-opus-5", "main", "Done", project_id)
         .await
         .expect("failed to insert gamma000");
     let seconds_per_day = 86_400_i64;
@@ -3209,11 +3197,11 @@ async fn test_load_sessions_keeps_daily_activity_after_session_deletion() {
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("alpha000", "claude-opus-4-8", "main", "Done", project_id)
+        .insert_session("alpha000", "claude-opus-5", "main", "Done", project_id)
         .await
         .expect("failed to insert alpha000");
     db.sessions()
-        .insert_session("beta0000", "claude-opus-4-8", "main", "Done", project_id)
+        .insert_session("beta0000", "claude-opus-5", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
     db.activity()
@@ -3269,7 +3257,7 @@ async fn test_refresh_sessions_if_needed_reloads_and_preserves_selection() {
     db.sessions()
         .insert_session(
             "alpha000",
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             "InProgress",
             project_id,
@@ -3277,7 +3265,7 @@ async fn test_refresh_sessions_if_needed_reloads_and_preserves_selection() {
         .await
         .expect("failed to insert alpha000");
     db.sessions()
-        .insert_session("beta0000", "claude-opus-4-8", "main", "Done", project_id)
+        .insert_session("beta0000", "claude-opus-5", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
     db.sessions()
@@ -3339,7 +3327,7 @@ async fn test_periodic_session_refresh_preserves_focused_review_states() {
         db.sessions()
             .insert_session(
                 session_id,
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 &Status::Review.to_string(),
                 project_id,
@@ -3430,7 +3418,7 @@ async fn test_refresh_sessions_if_needed_remaps_view_mode_index() {
     db.sessions()
         .insert_session(
             "alpha000",
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             "InProgress",
             project_id,
@@ -3438,7 +3426,7 @@ async fn test_refresh_sessions_if_needed_remaps_view_mode_index() {
         .await
         .expect("failed to insert alpha000");
     db.sessions()
-        .insert_session("beta0000", "claude-opus-4-8", "main", "Done", project_id)
+        .insert_session("beta0000", "claude-opus-5", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
     db.sessions()
@@ -3507,13 +3495,7 @@ async fn test_load_done_session_without_folder_kept() {
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session(
-            "missing01",
-            "gemini-3-flash-preview",
-            "main",
-            "Done",
-            project_id,
-        )
+        .insert_session("missing01", "gemini-3.6-flash", "main", "Done", project_id)
         .await
         .expect("failed to insert");
 
@@ -3545,7 +3527,7 @@ async fn test_load_in_progress_session_without_folder_skipped() {
     db.sessions()
         .insert_session(
             "missing02",
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             "InProgress",
             project_id,
@@ -3660,7 +3642,7 @@ async fn test_reply_turn_completion_persists_session_size() {
             &session_id,
             "compute size after turn",
             Arc::new(backend),
-            AgentModel::ClaudeOpus48,
+            AgentModel::ClaudeOpus5,
         )
         .await;
     wait_for_status_with_retries(&mut app, &session_id, Status::AgentReview, 200, true).await;
@@ -4481,7 +4463,7 @@ async fn test_spawn_session_task_skips_commit_when_nothing_to_commit() {
             &session_id,
             "NoChanges",
             Arc::new(mock),
-            AgentModel::ClaudeOpus48,
+            AgentModel::ClaudeOpus5,
         )
         .await;
 
@@ -5725,7 +5707,7 @@ async fn test_cancel_session_triggers_app_server_shutdown() {
         .expect("failed to create session");
     app.set_session_model(
         &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
     )
     .await
     .expect("failed to set app-server model");
@@ -5799,7 +5781,7 @@ async fn test_done_status_triggers_app_server_shutdown() {
         .expect("failed to create session");
     app.set_session_model(
         &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
     )
     .await
     .expect("failed to set app-server model");

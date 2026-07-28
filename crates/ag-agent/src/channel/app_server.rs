@@ -293,7 +293,7 @@ mod tests {
             continuation: crate::channel::TurnContinuation::fresh(),
             folder: PathBuf::from("/tmp"),
             main_checkout_root: Some(PathBuf::from("/tmp/main")),
-            model: "gpt-5.5".to_string(),
+            model: "gpt-5.6-sol".to_string(),
             personality: crate::channel::PersonalityPrompt::default(),
             prompt: "Do something".into(),
             reasoning_level: ReasoningLevel::default(),

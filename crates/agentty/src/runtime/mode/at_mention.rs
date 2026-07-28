@@ -351,7 +351,7 @@ mod tests {
                 is_draft: false,
                 agent: crate::domain::agent::AgentSelection::new(
                     crate::domain::agent::AgentKind::Codex,
-                    AgentModel::Gpt55,
+                    AgentModel::Gpt56Sol,
                 ),
                 parent_session_id: None,
                 personality_id: None,
@@ -379,7 +379,7 @@ mod tests {
 
         SessionManager::new(
             SessionDefaults {
-                model: AgentModel::Gpt55,
+                model: AgentModel::Gpt56Sol,
             },
             Arc::new(git::MockGitClient::new()),
             state,

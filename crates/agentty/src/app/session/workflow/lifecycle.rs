@@ -3135,7 +3135,7 @@ mod tests {
 
         SessionManager::new(
             SessionDefaults {
-                model: AgentModel::Gpt55,
+                model: AgentModel::Gpt56Sol,
             },
             Arc::new(git::MockGitClient::new()),
             state,
@@ -4565,7 +4565,7 @@ mod tests {
 
         SessionManager::new(
             SessionDefaults {
-                model: AgentModel::Gpt55,
+                model: AgentModel::Gpt56Sol,
             },
             Arc::new(git::MockGitClient::new()),
             state,
@@ -4792,7 +4792,7 @@ mod tests {
             .set_session_model(
                 &services,
                 "session-id",
-                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             )
             .await
             .expect("set session model should succeed");
@@ -4818,14 +4818,14 @@ mod tests {
         let emitted_event = event_rx.try_recv().expect("model event expected");
 
         // Assert
-        assert_eq!(persisted_model, AgentModel::Gpt55.as_str());
+        assert_eq!(persisted_model, AgentModel::Gpt56Sol.as_str());
         assert!(cleared_provider.is_none());
         assert!(cleared_instruction.is_none());
         assert_eq!(
             emitted_event,
             AppEvent::SessionModelUpdated {
                 session_id: "session-id".into(),
-                session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+                session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             }
         );
         assert!(session_manager.should_replay_history("session-id"));
@@ -4897,7 +4897,7 @@ mod tests {
             .set_session_model(
                 &services,
                 "missing",
-                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             )
             .await;
 

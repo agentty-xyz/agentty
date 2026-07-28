@@ -184,7 +184,7 @@ async fn seed_persisted_review_session(
         .sessions()
         .insert_session(
             session_id,
-            AgentModel::Gpt55.as_str(),
+            AgentModel::Gpt56Sol.as_str(),
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -432,7 +432,7 @@ async fn test_switch_project_reloads_project_scoped_settings() {
         .upsert_project_setting(
             second_project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::Gpt55.as_str(),
+            AgentModel::Gpt56Sol.as_str(),
         )
         .await
         .expect("failed to persist second project smart model");
@@ -473,7 +473,7 @@ async fn test_switch_project_reloads_project_scoped_settings() {
     // Assert
     assert_eq!(
         app.settings.default_smart_selection.model(),
-        AgentModel::Gpt55
+        AgentModel::Gpt56Sol
     );
     assert_eq!(app.settings.launch_configuration, "cargo test");
     assert!(!app.settings_presentation.is_selector_dropdown_open());
@@ -1076,7 +1076,7 @@ async fn test_new_prefers_active_session_for_initial_selection() {
         .sessions()
         .insert_session(
             active_session_id,
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -1087,7 +1087,7 @@ async fn test_new_prefers_active_session_for_initial_selection() {
         .sessions()
         .insert_session(
             archive_session_id,
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             &Status::Done.to_string(),
             project_id,
@@ -1218,7 +1218,7 @@ async fn test_new_with_clients_falls_back_from_stale_active_project_and_loads_cu
         .sessions()
         .insert_session(
             current_session_id,
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             &Status::Review.to_string(),
             current_project_id,
@@ -1229,7 +1229,7 @@ async fn test_new_with_clients_falls_back_from_stale_active_project_and_loads_cu
         .sessions()
         .insert_session(
             missing_session_id,
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             &Status::Review.to_string(),
             missing_project_id,
@@ -1400,7 +1400,7 @@ async fn persist_selected_session(app: &App) {
     app.services
         .db()
         .sessions()
-        .insert_session("session-1", "gpt-5.5", "main", "Review", project_id)
+        .insert_session("session-1", "gpt-5.6-sol", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
 }
@@ -3250,7 +3250,7 @@ async fn apply_app_events_review_request_status_survives_same_batch_sync_refresh
         .sessions()
         .insert_session(
             session_id,
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -4574,7 +4574,7 @@ async fn apply_app_events_refresh_projects_reloads_project_active_session_count(
         .sessions()
         .insert_session(
             "session-active",
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -4882,7 +4882,7 @@ async fn test_continue_terminal_session_opens_draft_prompt_for_done_session_with
     app.services
         .db()
         .sessions()
-        .insert_session("done-source", "gpt-5.5", "release", "Done", project_id)
+        .insert_session("done-source", "gpt-5.6-sol", "release", "Done", project_id)
         .await
         .expect("failed to insert source session row");
     let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
@@ -4978,7 +4978,7 @@ async fn test_continue_terminal_session_falls_back_to_persisted_context_without_
     app.services
         .db()
         .sessions()
-        .insert_session("done-source", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("done-source", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert source session row");
     let source_session = crate::test_support::SessionFixtureBuilder::new()
@@ -5634,7 +5634,7 @@ async fn insert_review_session_with_data_dir(app: &App, session_id: &str) {
         .sessions()
         .insert_session(
             session_id,
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             &Status::Review.to_string(),
             app.active_project_id(),
@@ -5812,7 +5812,7 @@ async fn manual_sync_surfaces_restack_failure_and_keeps_parent_merged() {
         .sessions()
         .insert_stacked_draft_session(
             "child-session",
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "wt/parent",
             &Status::Draft.to_string(),
             session_id,
@@ -5920,7 +5920,7 @@ async fn test_apply_review_request_status_update_persists_summary() {
         .sessions()
         .insert_session(
             session_id,
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -5978,7 +5978,7 @@ async fn test_apply_review_request_status_update_closed_cancels_session() {
         .sessions()
         .insert_session(
             session_id,
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -6037,7 +6037,7 @@ async fn test_apply_review_request_status_update_closed_cancels_stacked_child() 
         .sessions()
         .insert_session(
             session_id,
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -6049,7 +6049,7 @@ async fn test_apply_review_request_status_update_closed_cancels_stacked_child() 
         .sessions()
         .insert_stacked_draft_session(
             child_session_id,
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "wt/session",
             &Status::Draft.to_string(),
             session_id,
@@ -6235,7 +6235,7 @@ async fn test_apply_review_request_status_update_merged_restacks_stacked_child()
         .sessions()
         .insert_stacked_draft_session(
             child_session_id,
-            "gemini-3-flash-preview",
+            "gemini-3.6-flash",
             "wt/session",
             &Status::Draft.to_string(),
             session_id,
