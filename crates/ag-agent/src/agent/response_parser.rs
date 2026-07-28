@@ -119,24 +119,205 @@ pub(super) fn parse_codex_response_with_fallback(stdout: &str, stderr: &str) -> 
     })
 }
 
-/// Parses Antigravity output as plain print-mode stdout.
+/// Parses Antigravity `stream-json` output and falls back to raw output when
+/// the CLI emits an unstructured diagnostic.
 pub(super) fn parse_antigravity_response_with_fallback(
     stdout: &str,
     stderr: &str,
 ) -> ParsedResponse {
-    ParsedResponse {
+    parse_antigravity_response(stdout).unwrap_or_else(|| ParsedResponse {
         content: fallback_response(stdout, stderr),
         stats: SessionStats::default(),
-    }
+    })
 }
 
 /// Parses one Antigravity stream line.
 ///
-/// Antigravity print mode currently writes final response text to stdout
-/// without a documented structured stream format, so Agentty suppresses
-/// partial stdout rendering and parses the complete output after exit.
-pub(super) fn parse_antigravity_stream_output_line(_stdout_line: &str) -> Option<(String, bool)> {
+/// Response content is classified separately so the CLI channel can suppress
+/// duplicate partial answers while still surfacing reasoning and tool
+/// progress.
+pub(super) fn parse_antigravity_stream_output_line(stdout_line: &str) -> Option<(String, bool)> {
+    let stream_event = serde_json::from_str::<serde_json::Value>(stdout_line.trim()).ok()?;
+    let event_label = antigravity_event_label(&stream_event);
+    if event_label.is_some_and(|label| {
+        let label = label.to_ascii_lowercase();
+
+        label.contains("thought") || label.contains("reason")
+    }) {
+        return antigravity_event_text(&stream_event).map(|text| (text, false));
+    }
+
+    if let Some(progress_message) = compact_progress_message_from_json(&stream_event) {
+        return Some((progress_message, false));
+    }
+
+    antigravity_event_text(&stream_event).map(|text| (text, true))
+}
+
+/// Parses a complete Antigravity JSON or NDJSON response.
+fn parse_antigravity_response(stdout: &str) -> Option<ParsedResponse> {
+    let trimmed_stdout = stdout.trim();
+    if trimmed_stdout.is_empty() {
+        return None;
+    }
+
+    let mut final_content: Option<String> = None;
+    let mut streamed_content = String::new();
+    let mut latest_stats: Option<SessionStats> = None;
+
+    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(trimmed_stdout) {
+        record_antigravity_payload(
+            &payload,
+            &mut final_content,
+            &mut streamed_content,
+            &mut latest_stats,
+        );
+    } else {
+        for line in stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            let Ok(payload) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            record_antigravity_payload(
+                &payload,
+                &mut final_content,
+                &mut streamed_content,
+                &mut latest_stats,
+            );
+        }
+    }
+
+    let content = final_content.or_else(|| {
+        if streamed_content.trim().is_empty() {
+            None
+        } else {
+            Some(streamed_content)
+        }
+    })?;
+    let stats = latest_stats.unwrap_or_default();
+
+    Some(ParsedResponse { content, stats })
+}
+
+/// Records final content, streamed deltas, and usage from one Antigravity
+/// payload or payload array.
+fn record_antigravity_payload(
+    payload: &serde_json::Value,
+    final_content: &mut Option<String>,
+    streamed_content: &mut String,
+    latest_stats: &mut Option<SessionStats>,
+) {
+    if let Some(events) = payload.as_array() {
+        for event in events {
+            record_antigravity_payload(event, final_content, streamed_content, latest_stats);
+        }
+
+        return;
+    }
+
+    if let Some(stats) = extract_antigravity_usage_stats(payload) {
+        latest_stats.replace(stats);
+    }
+
+    if antigravity_protocol_payload(payload) {
+        final_content.replace(payload.to_string());
+
+        return;
+    }
+
+    if let Some(result) = payload.get("result") {
+        if let Some(content) = result.get("response").and_then(antigravity_value_text) {
+            final_content.replace(content);
+        }
+
+        return;
+    }
+
+    if let Some(content) = payload.get("response").and_then(antigravity_value_text) {
+        final_content.replace(content);
+
+        return;
+    }
+
+    if antigravity_event_label(payload).is_some_and(|label| {
+        let label = label.to_ascii_lowercase();
+
+        label.contains("result") || label.contains("complete") || label.contains("final")
+    }) {
+        if let Some(content) = payload.get("value").and_then(antigravity_value_text) {
+            final_content.replace(content);
+        }
+
+        return;
+    }
+
+    if let Some(content) = antigravity_event_text(payload) {
+        streamed_content.push_str(&content);
+    }
+}
+
+/// Returns whether a JSON value is the protocol response itself.
+fn antigravity_protocol_payload(payload: &serde_json::Value) -> bool {
+    payload.get("answer").is_some() && payload.get("questions").is_some()
+}
+
+/// Extracts string or structured content from an Antigravity event value.
+fn antigravity_value_text(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value.as_str().filter(|text| !text.trim().is_empty()) {
+        return Some(text.to_string());
+    }
+
+    if value.is_object() || value.is_array() {
+        return Some(value.to_string());
+    }
+
     None
+}
+
+/// Extracts response text from the fields used by Antigravity stream events.
+fn antigravity_event_text(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("text")
+        .or_else(|| payload.get("delta"))
+        .or_else(|| payload.get("content"))
+        .or_else(|| payload.get("value"))
+        .and_then(antigravity_value_text)
+}
+
+/// Returns the discriminator used by an Antigravity stream event.
+fn antigravity_event_label(payload: &serde_json::Value) -> Option<&str> {
+    payload
+        .get("event")
+        .or_else(|| payload.get("type"))
+        .or_else(|| payload.get("state"))
+        .and_then(serde_json::Value::as_str)
+}
+
+/// Extracts the latest Antigravity token counters from top-level or nested
+/// usage data.
+fn extract_antigravity_usage_stats(payload: &serde_json::Value) -> Option<SessionStats> {
+    let usage = payload
+        .get("usage")
+        .or_else(|| payload.get("result").and_then(|result| result.get("usage")))?;
+
+    Some(SessionStats {
+        added_lines: 0,
+        deleted_lines: 0,
+        diff_state: SessionDiffState::Unknown,
+        input_tokens: antigravity_token_count(usage, "input_tokens"),
+        output_tokens: antigravity_token_count(usage, "output_tokens"),
+    })
+}
+
+/// Reads one non-negative token counter from Antigravity usage JSON.
+fn antigravity_token_count(usage: &serde_json::Value, field: &str) -> u64 {
+    usage
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
 }
 
 /// Parses one full Claude turn payload from stream-json stdout.
@@ -970,33 +1151,209 @@ mod tests {
     }
 
     #[test]
-    /// Ensures Antigravity print-mode responses are parsed from stdout as
-    /// complete final content.
-    fn test_antigravity_parse_response_reads_plain_stdout() {
+    /// Ensures the supported Antigravity final stream envelope exposes its
+    /// nested schema-constrained response and usage.
+    fn test_antigravity_parse_response_reads_stream_result() {
         // Arrange
-        let stdout = r#"{"answer":"Antigravity ok","questions":[],"summary":null}"#;
-        let stderr = "diagnostics";
+        let response = serde_json::json!({
+            "answer": "Antigravity ok",
+            "questions": [],
+            "review_comment_outcomes": [],
+            "summary": null,
+        });
+        let stdout = serde_json::json!({
+            "event": "result",
+            "result": {
+                "conversation_id": "conversation-1",
+                "status": "SUCCESS",
+                "response": response.to_string(),
+                "error": "",
+                "duration_seconds": 1.25,
+                "num_turns": 1,
+                "usage": {
+                    "input_tokens": 21,
+                    "output_tokens": 8,
+                    "thinking_tokens": 3,
+                    "cache_read_tokens": 5,
+                    "total_tokens": 37,
+                },
+            },
+        })
+        .to_string();
 
         // Act
-        let parsed = parse_antigravity_response_with_fallback(stdout, stderr);
+        let parsed = parse_antigravity_response_with_fallback(&stdout, "diagnostics");
 
         // Assert
-        assert_eq!(parsed.content, stdout);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&parsed.content)
+                .expect("content should remain JSON"),
+            response
+        );
+        assert_eq!(parsed.stats.input_tokens, 21);
+        assert_eq!(parsed.stats.output_tokens, 8);
+        assert_eq!(parsed.stats.diff_state, SessionDiffState::Unknown);
+    }
+
+    #[test]
+    /// Ensures an empty Antigravity stream falls back to stderr diagnostics.
+    fn test_antigravity_parse_response_falls_back_for_empty_stdout() {
+        // Arrange
+        let stderr = "Antigravity emitted no result";
+
+        // Act
+        let parsed = parse_antigravity_response_with_fallback("", stderr);
+
+        // Assert
+        assert_eq!(parsed.content, stderr);
         assert_eq!(parsed.stats, SessionStats::default());
     }
 
     #[test]
-    /// Ensures Antigravity stream parsing waits for the final print-mode
-    /// output instead of treating stdout lines as incremental transcript.
-    fn test_antigravity_stream_output_line_is_not_incremental() {
+    /// Ensures top-level structured responses are preserved while primitive
+    /// values remain ineligible as response content.
+    fn test_antigravity_parse_response_reads_top_level_structured_response() {
         // Arrange
-        let stdout_line = "partial output";
+        let response = serde_json::json!({
+            "answer": "Top-level response",
+            "questions": [],
+        });
+        let stdout = serde_json::json!({"response": response}).to_string();
+
+        // Act
+        let parsed = parse_antigravity_response_with_fallback(&stdout, "");
+        let primitive_content = antigravity_value_text(&serde_json::json!(42));
+
+        // Assert
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&parsed.content)
+                .expect("content should remain JSON"),
+            response
+        );
+        assert_eq!(primitive_content, None);
+    }
+
+    #[test]
+    /// Ensures Antigravity JSON arrays and final `value` payloads are accepted
+    /// across the CLI's structured output variants.
+    fn test_antigravity_parse_response_reads_array_final_value() {
+        // Arrange
+        let response = serde_json::json!({
+            "answer": "Array result",
+            "questions": [],
+            "review_comment_outcomes": [],
+            "summary": null,
+        });
+        let stdout = serde_json::json!([
+            {"event": "response", "delta": "partial"},
+            {"event": "completed", "value": response},
+        ])
+        .to_string();
+
+        // Act
+        let parsed = parse_antigravity_response_with_fallback(&stdout, "");
+
+        // Assert
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&parsed.content)
+                .expect("content should remain JSON"),
+            response
+        );
+    }
+
+    #[test]
+    /// Ensures a direct schema-constrained Antigravity response remains
+    /// available without an event envelope.
+    fn test_antigravity_parse_response_reads_direct_protocol_payload() {
+        // Arrange
+        let stdout = r#"{"answer":"Direct result","questions":[]}"#;
+
+        // Act
+        let parsed = parse_antigravity_response_with_fallback(stdout, "");
+
+        // Assert
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&parsed.content)
+                .expect("content should remain JSON"),
+            serde_json::json!({"answer": "Direct result", "questions": []})
+        );
+    }
+
+    #[test]
+    /// Ensures Antigravity response deltas are joined when no separate final
+    /// result envelope is emitted.
+    fn test_antigravity_parse_response_joins_streamed_content() {
+        // Arrange
+        let stdout = concat!(
+            r#"{"event":"response","delta":"{\"answer\":\"Joined"}"#,
+            "\n",
+            r#"{"event":"response","delta":" result\",\"questions\":[]}"}"#
+        );
+
+        // Act
+        let parsed = parse_antigravity_response_with_fallback(stdout, "");
+
+        // Assert
+        assert_eq!(
+            parsed.content,
+            r#"{"answer":"Joined result","questions":[]}"#
+        );
+    }
+
+    #[test]
+    /// Ensures Antigravity reasoning events surface as progress instead of
+    /// response content.
+    fn test_antigravity_stream_output_line_classifies_reasoning() {
+        // Arrange
+        let stdout_line = r#"{"event":"reasoning","value":"Inspecting files"}"#;
 
         // Act
         let parsed_line = parse_antigravity_stream_output_line(stdout_line);
 
         // Assert
-        assert_eq!(parsed_line, None);
+        assert_eq!(parsed_line, Some(("Inspecting files".to_string(), false)));
+    }
+
+    #[test]
+    /// Ensures Antigravity response deltas remain classified as response
+    /// content so the final protocol response is rendered only once.
+    fn test_antigravity_stream_output_line_classifies_response_content() {
+        // Arrange
+        let stdout_line = r#"{"event":"response","text":"partial output"}"#;
+
+        // Act
+        let parsed_line = parse_antigravity_stream_output_line(stdout_line);
+
+        // Assert
+        assert_eq!(parsed_line, Some(("partial output".to_string(), true)));
+    }
+
+    #[test]
+    /// Ensures Antigravity tool events surface compact progress text.
+    fn test_antigravity_stream_output_line_classifies_tool_progress() {
+        // Arrange
+        let stdout_line = r#"{"event":"tool","tool_name":"web_search"}"#;
+
+        // Act
+        let parsed_line = parse_antigravity_stream_output_line(stdout_line);
+
+        // Assert
+        assert_eq!(parsed_line, Some(("Searching the web".to_string(), false)));
+    }
+
+    #[test]
+    /// Ensures unstructured Antigravity diagnostics remain available when
+    /// structured parsing is impossible.
+    fn test_antigravity_parse_response_falls_back_to_raw_output() {
+        // Arrange
+        let stdout = "plain diagnostic";
+
+        // Act
+        let parsed = parse_antigravity_response_with_fallback(stdout, "");
+
+        // Assert
+        assert_eq!(parsed.content, stdout);
+        assert_eq!(parsed.stats, SessionStats::default());
     }
 
     #[test]

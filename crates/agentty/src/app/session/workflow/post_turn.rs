@@ -819,7 +819,7 @@ mod tests {
                         review_comment_thread_ids: Vec::new(),
                         session_agent: AgentSelection::new(
                             AgentKind::Antigravity,
-                            AgentModel::Gemini3FlashPreview,
+                            AgentModel::Gemini36Flash,
                         ),
                     },
                     None,

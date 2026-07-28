@@ -417,15 +417,20 @@ optional `summary`):
    turn runs; assistant transcript output is appended once from the final parsed result.
 1. Transports that enforce the schema natively receive it through
    `SchemaRequiredPolicy`. Codex needs every property listed in `required`; validators
-   that enforce `required` literally, such as Claude's `--json-schema`, receive
-   `MinimumProtocolKeys` so only `answer` is mandatory and a reply that omits other
-   optional fields still validates. Ordinary turns leave `review_comment_outcomes`
-   empty; review-comment prompts provide the only accepted thread-ID allowlist.
+   that enforce `required` literally, such as the Antigravity and Claude `--json-schema`
+   transports, receive `MinimumProtocolKeys` so only the protocol's minimum fields are
+   mandatory and a reply that omits other optional fields still validates. Ordinary
+   turns leave `review_comment_outcomes` empty; review-comment prompts provide the only
+   accepted thread-ID allowlist.
 1. Final output must parse as the shared protocol JSON object. Claude, Gemini, and Codex
-   session turns fail closed on invalid output; Antigravity tries one protocol-repair
-   retry and then preserves non-empty plain text as `answer`. Claude result events
-   prefer the schema-validated `structured_output` value over the legacy string-valued
-   `result` field before protocol parsing.
+   session turns fail closed on invalid output. Antigravity uses native `stream-json`
+   output with the same schema enforcement and fail-closed protocol-repair behavior. Its
+   rendered prompt immediately follows the string-valued `--print` flag, and the final
+   protocol object is extracted from the supported `result.response` envelope while
+   token counters come from `result.usage`. Because the CLI exposes no non-argument
+   prompt transport, Agentty rejects rendered Antigravity prompts over 32 KiB before
+   spawning. Claude result events prefer the schema-validated `structured_output` value
+   over the legacy string-valued `result` field before protocol parsing.
 1. Turn errors are rendered into the session transcript, so no failure surface
    reproduces provider output. A rejected payload surfaces the parse reason plus
    *derived* diagnostics only (response sizing, parser location, visible top-level
@@ -469,6 +474,12 @@ their triggers:
   timeout so one unavailable provider cannot retain the queue indefinitely.
 
 - **Version check** (startup): reports npm update availability.
+
+- **Agent CLI discovery and refresh** (startup): runs bounded provider updates and
+  version probes off the async runtime. Antigravity compatibility is cached with the
+  validated executable's filesystem fingerprint. Turn construction reads that snapshot
+  without launching `agy --version` and fails closed if the executable path or metadata
+  changed, so the next discovery cycle or restart must revalidate it.
 
 - **Per-session worker loop** (first command enqueue): serializes all turn commands per
   session and manages channel lifecycle.

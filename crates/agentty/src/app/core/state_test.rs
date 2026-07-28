@@ -242,7 +242,7 @@ async fn test_new_with_clients_fails_when_no_backend_cli_is_available() {
         result,
         Err(AppError::Workflow(message))
             if message
-                == "No supported backend CLI found on `PATH`. Install `agy`, `codex`, `claude`, or `gemini` and restart `agentty`."
+                == "No supported backend CLI found on `PATH`. Install `codex`, `claude`, `gemini`, or Antigravity CLI 1.1.7 or newer. For an older `agy`, run `agy update`, then restart `agentty`."
     ));
 }
 
@@ -2722,11 +2722,11 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
     // Act
     event_batch.collect_event(AppEvent::SessionModelUpdated {
         session_id: "session-a".into(),
-        session_agent: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini3FlashPreview),
+        session_agent: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini36Flash),
     });
     event_batch.collect_event(AppEvent::SessionModelUpdated {
         session_id: "session-a".into(),
-        session_agent: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31ProPreview),
+        session_agent: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
     });
     event_batch.collect_event(AppEvent::SessionProgressUpdated {
         progress_message: Some("first".to_string()),
@@ -2784,7 +2784,7 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
         event_batch.session_model_updates.get("session-a"),
         Some(&AgentSelection::new(
             AgentKind::Gemini,
-            AgentModel::Gemini31ProPreview
+            AgentModel::Gemini31Pro
         ))
     );
     assert_eq!(
@@ -3193,7 +3193,7 @@ async fn apply_app_events_review_request_status_transition_updates_session() {
         .sessions()
         .insert_session(
             session_id,
-            AgentModel::Gemini3FlashPreview.as_str(),
+            AgentModel::Gemini36Flash.as_str(),
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -4314,7 +4314,7 @@ async fn apply_app_events_refresh_keeps_viewed_merging_session_without_worktree(
         .sessions()
         .insert_session(
             "session-1",
-            AgentModel::Gemini3FlashPreview.as_str(),
+            AgentModel::Gemini36Flash.as_str(),
             "main",
             &Status::Merging.to_string(),
             project_id,

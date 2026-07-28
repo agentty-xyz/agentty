@@ -1524,7 +1524,7 @@ async fn test_setting_round_trip_supports_default_smart_fast_and_review_models()
         .settings()
         .upsert_setting(
             SettingName::DefaultSmartModel,
-            AgentModel::Gemini31ProPreview.as_str(),
+            AgentModel::Gemini31Pro.as_str(),
         )
         .await
         .expect("failed to persist default smart model");
@@ -1562,7 +1562,7 @@ async fn test_setting_round_trip_supports_default_smart_fast_and_review_models()
     // Assert
     assert_eq!(
         default_smart_model,
-        Some(AgentModel::Gemini31ProPreview.as_str().to_string())
+        Some(AgentModel::Gemini31Pro.as_str().to_string())
     );
     assert_eq!(
         default_fast_model,

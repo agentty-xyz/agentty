@@ -1330,7 +1330,7 @@ mod tests {
             is_draft: false,
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini3FlashPreview,
+                crate::domain::agent::AgentModel::Gemini36Flash,
             ),
             parent_session_id: None,
             personality_id: None,
@@ -1406,7 +1406,7 @@ mod tests {
             is_draft: false,
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini3FlashPreview,
+                crate::domain::agent::AgentModel::Gemini36Flash,
             ),
             parent_session_id: None,
             personality_id: None,
@@ -3078,7 +3078,7 @@ mod tests {
             is_draft: false,
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini3FlashPreview,
+                crate::domain::agent::AgentModel::Gemini36Flash,
             ),
             parent_session_id: None,
             personality_id: None,

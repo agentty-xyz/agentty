@@ -19,6 +19,7 @@ dependencies = [
  "base64",
  "mockall",
  "rustix",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",

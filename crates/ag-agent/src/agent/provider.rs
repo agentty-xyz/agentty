@@ -126,21 +126,10 @@ pub(crate) fn build_command_stdin_payload(
 
     match prompt_transport(kind) {
         AgentPromptTransport::Argv => Ok(None),
-        AgentPromptTransport::Stdin => match kind {
-            AgentKind::Antigravity => prompt::build_prompt_stdin_payload(
-                request,
-                protocol_schema_instruction_mode,
-                "Antigravity",
-            )
-            .map(Some),
-            AgentKind::Claude => prompt::build_prompt_stdin_payload(
-                request,
-                protocol_schema_instruction_mode,
-                "Claude",
-            )
-            .map(Some),
-            AgentKind::Codex | AgentKind::Gemini => Ok(None),
-        },
+        AgentPromptTransport::Stdin => {
+            prompt::build_prompt_stdin_payload(request, protocol_schema_instruction_mode, "Claude")
+                .map(Some)
+        }
     }
 }
 
@@ -161,11 +150,11 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
         AgentKind::Antigravity => AgentProviderDescriptor {
             app_server_client_factory: |_default_client| None,
             app_server_thought_policy: AppServerThoughtPolicy::None,
-            backend_factory: || Box::new(super::antigravity::AntigravityBackend),
+            backend_factory: || Box::new(super::antigravity::AntigravityBackend::new()),
             parse_response: super::response_parser::parse_antigravity_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_antigravity_stream_output_line,
-            prompt_transport: AgentPromptTransport::Stdin,
-            protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
+            prompt_transport: AgentPromptTransport::Argv,
+            protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::Cli,
         },
         AgentKind::Gemini => AgentProviderDescriptor {
@@ -268,7 +257,7 @@ mod tests {
         let gemini_transport = prompt_transport(gemini_kind);
 
         // Assert
-        assert_eq!(antigravity_transport, AgentPromptTransport::Stdin);
+        assert_eq!(antigravity_transport, AgentPromptTransport::Argv);
         assert_eq!(claude_transport, AgentPromptTransport::Stdin);
         assert_eq!(codex_transport, AgentPromptTransport::Argv);
         assert_eq!(gemini_transport, AgentPromptTransport::Argv);
@@ -281,7 +270,7 @@ mod tests {
         // Arrange / Act / Assert
         assert_eq!(
             protocol_schema_instruction_mode(AgentKind::Antigravity),
-            ProtocolSchemaInstructionMode::PromptSchema
+            ProtocolSchemaInstructionMode::TransportSchema
         );
         assert_eq!(
             protocol_schema_instruction_mode(AgentKind::Gemini),

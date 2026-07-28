@@ -77,7 +77,7 @@ authenticate one backend before launching Agentty:
 - **Claude** (`claude`): install
   [Claude Code](https://github.com/anthropics/claude-code), then run
   `claude auth login`.
-- **Antigravity** (`agy` 1.1.0 or newer): install the
+- **Antigravity** (`agy` 1.1.7 or newer): install the
   [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), then run
   `agy` and follow its sign-in flow.
 - **Gemini** (`gemini`): install the

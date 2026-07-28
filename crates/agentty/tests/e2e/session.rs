@@ -31,6 +31,10 @@ use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 const LOADER_SESSION_ID: &str = "loader-session-0001";
 
+/// Stable id for the Antigravity session whose replay exceeds the safe
+/// command-argument limit.
+const ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID: &str = "antigravity-oversized-replay";
+
 /// Stable id for the seeded running session used by stop-turn tests.
 const RUNNING_STOP_SESSION_ID: &str = "running-stop-0001";
 
@@ -1033,10 +1037,159 @@ fn seed_failing_gemini_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::err
 /// stub keeps accidental provider execution from looking successful.
 fn seed_failing_antigravity_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let stub_agent_path = env.stub_bin.join("agy");
-    std::fs::write(&stub_agent_path, "#!/bin/sh\nexit 1\n")?;
+    std::fs::write(
+        &stub_agent_path,
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'agy 1.2.0\\n'; exit 0; fi\nexit \
+         1\n",
+    )?;
 
     #[cfg(unix)]
     std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
+/// Adds an outdated Antigravity CLI stub and one supported fallback provider.
+fn seed_outdated_antigravity_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let antigravity_path = env.stub_bin.join("agy");
+    std::fs::write(
+        &antigravity_path,
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'agy 1.1.6\\n'; exit 0; fi\nexit \
+         1\n",
+    )?;
+    let codex_path = env.stub_bin.join("codex");
+    std::fs::write(&codex_path, "#!/bin/sh\nexit 1\n")?;
+
+    #[cfg(unix)]
+    {
+        std::fs::set_permissions(&antigravity_path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    Ok(())
+}
+
+/// Adds a supported Antigravity stub that requires structured output flags and
+/// a prompt argument immediately after `--print`.
+fn seed_antigravity_argv_prompt_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let stub_agent_path = env.stub_bin.join("agy");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'agy 1.2.0\n'; exit 0; fi
+output_format=''
+schema=''
+prompt=''
+valid_print=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-format)
+      output_format=$2
+      shift 2
+      ;;
+    --json-schema)
+      schema=$2
+      shift 2
+      ;;
+    --print)
+      if [ "$#" -eq 2 ]; then
+        prompt=$2
+        valid_print=true
+      fi
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [ "$valid_print" != true ]; then
+  answer='Antigravity invocation did not satisfy the CLI contract: print.'
+elif [ "$output_format" != stream-json ]; then
+  answer='Antigravity invocation did not satisfy the CLI contract: output.'
+elif ! printf '%s' "$schema" | grep -q '"required"' ||
+     ! printf '%s' "$schema" | grep -q '"answer"'; then
+  answer='Antigravity invocation did not satisfy the CLI contract: schema.'
+elif ! printf '%s' "$prompt" | grep -q 'Hi from Agentty argv'; then
+  answer='Antigravity invocation did not satisfy the CLI contract: prompt.'
+else
+  answer='Antigravity received the argv prompt.'
+fi
+printf '%s\n' '{"event":"reasoning","value":"Reading the Agentty prompt"}'
+printf '{"event":"result","result":{"conversation_id":"stub-conversation","status":"SUCCESS","response":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[],\\"summary\\":{\\"session\\":\\"Antigravity prompt delivery verified.\\",\\"turn\\":\\"Verified argv prompt delivery.\\"}}","error":"","duration_seconds":0.1,"num_turns":1,"usage":{"input_tokens":7,"output_tokens":6,"thinking_tokens":1,"cache_read_tokens":2,"total_tokens":16}}}\n' "$answer"
+"#;
+    std::fs::write(&stub_agent_path, script)?;
+
+    #[cfg(unix)]
+    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "antigravity"),
+            ("DefaultSmartModel", "gemini-3.1-pro"),
+        ],
+    )?;
+
+    Ok(())
+}
+
+/// Seeds a review-ready Antigravity session with an oversized replay
+/// transcript and a valid worktree.
+fn seed_antigravity_oversized_replay_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_antigravity_argv_prompt_project(env)?;
+    common::seed_session(
+        env,
+        SessionSeed::regular(
+            ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID,
+            "gemini-3.1-pro",
+            "main",
+            "Review",
+        )
+        .with_title("Oversized Antigravity replay"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+    let oversized_answer = "x".repeat(40 * 1024);
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID,
+                SessionMessageKind::UserPrompt,
+                "Complete the initial task.",
+            )
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID,
+                SessionMessageKind::AssistantAnswer,
+                &oversized_answer,
+            )
+            .await?;
+        database
+            .sessions()
+            .update_session_prompt(
+                ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID,
+                "Complete the initial task.",
+            )
+            .await
+    })?;
+
+    let session_worktree = test_support::session_folder(
+        &env.agentty_root.join("wt"),
+        ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID,
+    );
+    let session_worktree = session_worktree.to_string_lossy();
+    run_git(
+        &env.workdir,
+        &["worktree", "add", "-b", "wt/antigrav", &session_worktree],
+    )?;
 
     Ok(())
 }
@@ -2032,6 +2185,89 @@ fn test_claude_structured_output_response() -> E2eResult {
                     "Agent output did not match the required JSON schema",
                 );
                 assertion::assert_not_visible(frame, "Working: tool use");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify Antigravity receives the typed user prompt as the value of its
+/// string-valued `--print` flag.
+#[test]
+fn session_antigravity_receives_argv_prompt() -> E2eResult {
+    // Arrange
+    FeatureTest::new("session_antigravity_argv_prompt")
+        .with_git()
+        .setup(seed_antigravity_argv_prompt_project)
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Hi from Agentty argv")
+                    .wait_for_text("Hi from Agentty argv", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Antigravity received the argv prompt.", 60000)
+                    .capture_labeled(
+                        "antigravity_response",
+                        "Antigravity response to the argv prompt",
+                    )
+            },
+            |frame, _report| {
+                // Assert
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "Antigravity received the argv prompt.",
+                    &full,
+                );
+                assertion::assert_not_visible(
+                    frame,
+                    "Antigravity invocation did not satisfy the CLI contract:",
+                );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify oversized resumed transcripts fail before Agentty attempts to spawn
+/// Antigravity with an unsafe command argument.
+#[test]
+fn session_antigravity_rejects_oversized_replay_prompt() -> E2eResult {
+    // Arrange
+    FeatureTest::new("session_antigravity_oversized_replay")
+        .with_git()
+        .setup(seed_antigravity_oversized_replay_project)
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("Continue work")
+                    .wait_for_text("Continue work", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("32768-byte", 30000)
+                    .capture_labeled(
+                        "oversized_replay_error",
+                        "Oversized Antigravity replay is rejected safely",
+                    )
+            },
+            |frame, _report| {
+                // Assert
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "32768-byte", &full);
+                assertion::assert_text_in_region(frame, "Antigravity prompt is", &full);
+                assertion::assert_not_visible(frame, "Antigravity received the argv prompt.");
             },
         )?;
 
@@ -3644,7 +3880,7 @@ fn gemini_model_picker_lists_current_models() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gemini-3.6-flash", &full);
-                assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.5-flash", &full);
             },
         )?;
 
@@ -3761,7 +3997,6 @@ fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
                     .wait_for_text("Slash Command", 3000)
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
-                    .press_key("Down")
                     .press_key("Enter")
                     .wait_for_text("gemini-3.6-flash", 3000)
                     .capture_labeled(
@@ -3771,9 +4006,46 @@ fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gemini-3.1-pro-preview", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.1-pro", &full);
                 assertion::assert_text_in_region(frame, "gemini-3.6-flash", &full);
-                assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.5-flash", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify outdated Antigravity installations are excluded from the provider
+/// picker while supported fallback providers remain selectable.
+#[test]
+fn antigravity_model_picker_excludes_outdated_cli() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("antigravity_model_picker_excludes_outdated_cli")
+        .with_git()
+        .setup(seed_outdated_antigravity_cli_stub)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("/")
+                    .write_text("model")
+                    .wait_for_text("Slash Command", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("/model Agent", 3000)
+                    .capture_labeled(
+                        "supported_agent_picker",
+                        "Provider picker excludes outdated Antigravity",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Codex CLI", &full);
+                assertion::assert_not_visible(frame, "Antigravity CLI");
             },
         )?;
 
