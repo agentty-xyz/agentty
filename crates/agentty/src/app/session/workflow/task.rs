@@ -1,6 +1,7 @@
 //! Session task execution helpers for process running, output capture, and
 //! status persistence.
 
+use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -28,7 +29,7 @@ use crate::domain::session::{
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::db::AppRepositories;
+use crate::infra::db::{AppRepositories, DbError};
 use crate::infra::fs::FsClient;
 
 const AUTO_COMMIT_ASSIST_POLICY: AssistPolicy = AssistPolicy {
@@ -1135,23 +1136,16 @@ impl SessionTaskService {
         id: &str,
         message: &str,
     ) {
-        Self::append_live_transcript_message(
+        Self::append_live_and_persist_transcript_message(
             transcript,
             id,
             SessionMessageKind::WorkflowNotice,
             message,
-        );
-        if let Err(error) = db
-            .sessions()
-            .append_session_message(id, SessionMessageKind::WorkflowNotice, message)
-            .await
-        {
-            warn!(
-                session_id = id,
-                error = %error,
-                "failed to persist workflow notice"
-            );
-        }
+            db.sessions()
+                .append_session_message(id, SessionMessageKind::WorkflowNotice, message),
+            "failed to persist workflow notice",
+        )
+        .await;
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
     }
 
@@ -1183,27 +1177,28 @@ impl SessionTaskService {
         id: &str,
         message: SessionTranscriptMessageAppend<'_>,
     ) {
-        Self::append_live_transcript_message(transcript, id, message.kind, message.raw_content);
-        if let Err(error) = db
-            .sessions()
-            .append_session_message(id, message.kind, message.raw_content)
-            .await
-        {
-            warn!(
-                session_id = id,
-                error = %error,
-                "failed to persist session transcript message"
-            );
-        }
+        Self::append_live_and_persist_transcript_message(
+            transcript,
+            id,
+            message.kind,
+            message.raw_content,
+            db.sessions()
+                .append_session_message(id, message.kind, message.raw_content),
+            "failed to persist session transcript message",
+        )
+        .await;
         Self::emit_session_updated(app_event_tx, session_update_versions, id);
     }
 
-    /// Appends one typed message to the live transcript snapshot.
-    fn append_live_transcript_message(
+    /// Appends one live message before awaiting persistence so the render
+    /// snapshot remains current while durable storage is in flight.
+    async fn append_live_and_persist_transcript_message(
         transcript: &Arc<Mutex<SessionTranscript>>,
         id: &str,
         kind: SessionMessageKind,
         content: &str,
+        persistence: impl Future<Output = Result<(), DbError>>,
+        persistence_error_message: &'static str,
     ) {
         match transcript.lock() {
             Ok(mut transcript) => transcript.append_message(kind, content),
@@ -1214,6 +1209,14 @@ impl SessionTaskService {
                     "failed to lock session transcript buffer"
                 );
             }
+        }
+
+        if let Err(error) = persistence.await {
+            warn!(
+                session_id = id,
+                error = %error,
+                "{persistence_error_message}"
+            );
         }
     }
 
@@ -1444,6 +1447,7 @@ mod tests {
 
     use ag_agent::MockOneShotClient;
     use ag_git::{GitError, MockGitClient};
+    use tokio::sync::oneshot;
 
     use super::*;
     use crate::app::service::AppServiceDeps;
@@ -1617,6 +1621,113 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].kind, "workflow_notice");
         assert_eq!(messages[0].content, "\n[Commit] No changes to commit.\n");
+    }
+
+    #[tokio::test]
+    async fn test_workflow_notice_append_survives_hydration_during_persistence() {
+        // Arrange
+        let handles = SessionHandles::new_unloaded(Status::Review);
+        let loaded_transcript = SessionTranscript::new(vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "original prompt"),
+            SessionMessage::conversation(1, SessionMessageKind::AssistantAnswer, "original answer"),
+        ]);
+        let (persistence_started_tx, persistence_started_rx) = oneshot::channel();
+        let (release_persistence_tx, release_persistence_rx) = oneshot::channel();
+        let transcript = Arc::clone(&handles.transcript);
+        let append_task = tokio::spawn(async move {
+            SessionTaskService::append_live_and_persist_transcript_message(
+                &transcript,
+                "session-id",
+                SessionMessageKind::WorkflowNotice,
+                "\n[Sync] Successfully synced onto main\n",
+                async move {
+                    let _ = persistence_started_tx.send(());
+                    let _ = release_persistence_rx.await;
+
+                    Ok(())
+                },
+                "failed to persist workflow notice",
+            )
+            .await;
+        });
+        persistence_started_rx
+            .await
+            .expect("persistence should start");
+
+        // Act
+        let hydrated_transcript = handles.transcript_snapshot_with_loaded(Some(&loaded_transcript));
+        release_persistence_tx
+            .send(())
+            .expect("persistence should still be waiting");
+        append_task.await.expect("append task should finish");
+
+        // Assert
+        assert_eq!(
+            hydrated_transcript,
+            Some(SessionTranscript::new(vec![
+                SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "original prompt"),
+                SessionMessage::conversation(
+                    1,
+                    SessionMessageKind::AssistantAnswer,
+                    "original answer"
+                ),
+                SessionMessage::new(
+                    2,
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Sync] Successfully synced onto main\n"
+                ),
+            ]))
+        );
+        assert_eq!(
+            handles
+                .transcript
+                .lock()
+                .expect("transcript lock should not be poisoned")
+                .messages(),
+            &[
+                SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "original prompt"),
+                SessionMessage::conversation(
+                    1,
+                    SessionMessageKind::AssistantAnswer,
+                    "original answer"
+                ),
+                SessionMessage::new(
+                    2,
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Sync] Successfully synced onto main\n"
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_workflow_notice_append_remains_live_after_persistence_error() {
+        // Arrange
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+
+        // Act
+        SessionTaskService::append_live_and_persist_transcript_message(
+            &transcript,
+            "session-id",
+            SessionMessageKind::WorkflowNotice,
+            "\n[Sync Error] persistence failed\n",
+            async { Err(DbError::Query(sqlx::Error::RowNotFound)) },
+            "failed to persist workflow notice",
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            transcript
+                .lock()
+                .expect("transcript lock should not be poisoned")
+                .messages(),
+            &[SessionMessage::new(
+                0,
+                SessionMessageKind::WorkflowNotice,
+                "\n[Sync Error] persistence failed\n"
+            )]
+        );
     }
 
     #[tokio::test]
