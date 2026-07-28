@@ -197,10 +197,6 @@ impl TurnPersistence<'_> {
             serde_json::to_string(&questions).unwrap_or_default()
         };
         let follow_up_tasks = turn_applied_follow_up_tasks(assistant_message);
-        let persisted_follow_up_text = follow_up_tasks
-            .iter()
-            .map(|follow_up_task| follow_up_task.text.clone())
-            .collect::<Vec<_>>();
         let token_usage_delta = SessionStats {
             added_lines: 0,
             deleted_lines: 0,
@@ -234,11 +230,6 @@ impl TurnPersistence<'_> {
                     token_usage_delta: token_usage_delta.clone(),
                 },
             )
-            .await?;
-        self.context
-            .db
-            .sessions()
-            .replace_session_follow_up_tasks(&self.context.session_id, &persisted_follow_up_text)
             .await?;
 
         Ok(TurnAppliedState {

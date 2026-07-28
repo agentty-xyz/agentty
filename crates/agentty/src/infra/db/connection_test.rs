@@ -1,3 +1,4 @@
+use sqlx::migrate::Migrator;
 use tempfile::tempdir;
 
 use super::*;
@@ -12,6 +13,7 @@ use crate::domain::theme::ColorTheme;
 use crate::infra::db::{
     SessionFocusedReviewRow, SessionOperationRow, SessionRow, SessionTurnMetadata,
 };
+
 /// Builds one deterministic persisted review-request fixture for DB tests.
 fn review_request_fixture() -> ReviewRequest {
     ReviewRequest {
@@ -111,19 +113,35 @@ async fn insert_session_message_row(
     kind: &str,
     content: &str,
 ) {
-    sqlx::query(
+    sqlx::query!(
         r"
 INSERT INTO session_message (session_id, position, kind, content)
 VALUES (?, ?, ?, ?)
 ",
+        session_id,
+        position,
+        kind,
+        content
     )
-    .bind(session_id)
-    .bind(position)
-    .bind(kind)
-    .bind(content)
     .execute(database.pool())
     .await
     .expect("failed to insert raw session message row");
+}
+
+/// Reapplies one embedded migration under an isolated test tracking table.
+async fn rerun_embedded_migration(pool: &SqlitePool, version: i64) {
+    let migration = sqlx::migrate!("./migrations")
+        .iter()
+        .find(|migration| migration.version == version)
+        .cloned()
+        .expect("embedded migration should exist");
+    let mut migrator = Migrator::with_migrations(vec![migration]);
+    migrator.dangerous_set_table_name(format!("_sqlx_test_migrations_{version}"));
+
+    migrator
+        .run(pool)
+        .await
+        .expect("embedded migration should run");
 }
 
 /// Loads one session row by identifier through `load_sessions()`.
@@ -233,35 +251,45 @@ async fn test_add_session_diff_presence_backfills_legacy_rows() {
         .connect("sqlite::memory:")
         .await
         .expect("failed to open pre-migration database");
-    sqlx::raw_sql(
+    sqlx::query!(
         r"
-CREATE TABLE session (
+CREATE TABLE IF NOT EXISTS session (
     id TEXT PRIMARY KEY NOT NULL,
     added_lines INTEGER NOT NULL DEFAULT 0,
     deleted_lines INTEGER NOT NULL DEFAULT 0
-);
+)
+"
+    )
+    .execute(&pool)
+    .await
+    .expect("failed to create pre-migration session table");
+    sqlx::query!(
+        r"
 INSERT INTO session (id, added_lines, deleted_lines)
 VALUES ('legacy-clean', 0, 0),
        ('legacy-added', 3, 0),
-       ('legacy-deleted', 0, 2);
-",
+       ('legacy-deleted', 0, 2)
+"
     )
     .execute(&pool)
     .await
     .expect("failed to seed pre-migration sessions");
 
     // Act
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/061_add_session_diff_presence.sql"
-    ))
-    .execute(&pool)
+    rerun_embedded_migration(&pool, 61).await;
+    let rows = sqlx::query!(
+        r#"
+SELECT id, has_diff AS "has_diff: bool"
+FROM session
+ORDER BY id
+"#
+    )
+    .fetch_all(&pool)
     .await
-    .expect("failed to migrate legacy diff presence");
-    let rows =
-        sqlx::query_as::<_, (String, Option<bool>)>("SELECT id, has_diff FROM session ORDER BY id")
-            .fetch_all(&pool)
-            .await
-            .expect("failed to load migrated diff presence");
+    .expect("failed to load migrated diff presence")
+    .into_iter()
+    .map(|row| (row.id, row.has_diff))
+    .collect::<Vec<_>>();
 
     // Assert
     assert_eq!(
@@ -374,12 +402,7 @@ async fn test_convert_legacy_transcript_messages_keeps_latest_checkpoint() {
     insert_session_message_row(&database, "session-b", 0, "transcript_chunk", "chunk text").await;
 
     // Act
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/055_convert_legacy_transcript_messages.sql"
-    ))
-    .execute(database.pool())
-    .await
-    .expect("failed to run legacy transcript conversion migration");
+    rerun_embedded_migration(database.pool(), 55).await;
 
     // Assert
     let checkpoint_messages = database
@@ -1323,7 +1346,7 @@ async fn test_is_cancel_requested_for_operation_scoped_to_single_operation() {
     // Simulate a new operation created after the cancel request by
     // resetting its flag directly (mirrors real flow where new
     // operations are inserted with cancel_requested = 0 by default).
-    sqlx::query("UPDATE session_operation SET cancel_requested = 0 WHERE id = 'operation-new'")
+    sqlx::query!("UPDATE session_operation SET cancel_requested = 0 WHERE id = 'operation-new'")
         .execute(&database.pool)
         .await
         .expect("failed to reset new operation flag");
@@ -1564,12 +1587,7 @@ async fn test_migrate_hacker_theme_to_green_preserves_theme_selection() {
         .expect("failed to persist legacy theme setting");
 
     // Act
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/060_migrate_hacker_theme_to_green.sql"
-    ))
-    .execute(database.pool())
-    .await
-    .expect("failed to run theme setting migration");
+    rerun_embedded_migration(database.pool(), 60).await;
     let theme = database
         .settings()
         .get_setting(SettingName::Theme)
@@ -2539,7 +2557,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
         .update_session_summary("session-a", "persisted summary")
         .await
         .expect("failed to seed summary");
-    sqlx::query("DROP TABLE session_usage")
+    sqlx::query!("DROP TABLE session_usage")
         .execute(database.pool())
         .await
         .expect("failed to drop session-usage table");
@@ -2626,7 +2644,7 @@ async fn query_on_dropped_table_returns_db_error_query() {
     let database = Database::open_in_memory()
         .await
         .expect("failed to open database");
-    sqlx::query("DROP TABLE session")
+    sqlx::query!("DROP TABLE session")
         .execute(database.pool())
         .await
         .expect("failed to drop table");
@@ -2647,7 +2665,7 @@ async fn db_error_display_includes_underlying_message() {
     let database = Database::open_in_memory()
         .await
         .expect("failed to open database");
-    sqlx::query("DROP TABLE session")
+    sqlx::query!("DROP TABLE session")
         .execute(database.pool())
         .await
         .expect("failed to drop table");
@@ -2693,18 +2711,33 @@ async fn open_configures_small_wal_pool_normal_synchronous_mode_and_busy_timeout
     let database = Database::open(&db_path)
         .await
         .expect("failed to open database");
-    let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode;")
-        .fetch_one(database.pool())
-        .await
-        .expect("failed to load journal mode pragma");
-    let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous;")
-        .fetch_one(database.pool())
-        .await
-        .expect("failed to load synchronous pragma");
-    let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout;")
-        .fetch_one(database.pool())
-        .await
-        .expect("failed to load busy-timeout pragma");
+    let journal_mode = sqlx::query_scalar!(
+        r#"
+SELECT journal_mode || '' AS "journal_mode!: String"
+FROM pragma_journal_mode
+"#
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("failed to load journal mode pragma");
+    let synchronous = sqlx::query_scalar!(
+        r#"
+SELECT synchronous + 0 AS "synchronous!: i64"
+FROM pragma_synchronous
+"#
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("failed to load synchronous pragma");
+    let busy_timeout = sqlx::query_scalar!(
+        r#"
+SELECT timeout + 0 AS "timeout!: i64"
+FROM pragma_busy_timeout
+"#
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("failed to load busy-timeout pragma");
 
     // Assert
     // `SqliteConnectOptions` are reused for every pooled connection, so
@@ -2725,14 +2758,24 @@ async fn open_in_memory_uses_single_connection_normal_synchronous_mode_and_busy_
     let database = Database::open_in_memory()
         .await
         .expect("failed to open in-memory database");
-    let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous;")
-        .fetch_one(database.pool())
-        .await
-        .expect("failed to load synchronous pragma");
-    let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout;")
-        .fetch_one(database.pool())
-        .await
-        .expect("failed to load busy-timeout pragma");
+    let synchronous = sqlx::query_scalar!(
+        r#"
+SELECT synchronous + 0 AS "synchronous!: i64"
+FROM pragma_synchronous
+"#
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("failed to load synchronous pragma");
+    let busy_timeout = sqlx::query_scalar!(
+        r#"
+SELECT timeout + 0 AS "timeout!: i64"
+FROM pragma_busy_timeout
+"#
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("failed to load busy-timeout pragma");
 
     // Assert
     assert_eq!(database.pool().options().get_max_connections(), 1);

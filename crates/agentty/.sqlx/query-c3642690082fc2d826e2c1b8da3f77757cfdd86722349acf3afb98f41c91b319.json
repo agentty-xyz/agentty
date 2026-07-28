@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO setting (name, value) VALUES ('ActiveTab', 'Sessions')\nON CONFLICT(name) DO UPDATE SET value = excluded.value\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "c3642690082fc2d826e2c1b8da3f77757cfdd86722349acf3afb98f41c91b319"
+}

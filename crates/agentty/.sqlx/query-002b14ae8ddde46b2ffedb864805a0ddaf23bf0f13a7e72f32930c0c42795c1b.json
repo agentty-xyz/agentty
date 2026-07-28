@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session (\n    id, agent, model, base_branch, status, title, prompt, created_at, updated_at\n)\nVALUES (?, 'codex', 'gpt-5.6-sol', 'main', 'Done', 'Dashboard activity seed', '', ?, ?)\nON CONFLICT(id) DO NOTHING\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "002b14ae8ddde46b2ffedb864805a0ddaf23bf0f13a7e72f32930c0c42795c1b"
+}

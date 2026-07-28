@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO project (path, git_branch, created_at, updated_at)\nVALUES (?, ?, unixepoch(), unixepoch())\nON CONFLICT(path) DO UPDATE\nSET git_branch = excluded.git_branch,\n    updated_at = unixepoch()\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "8fa37176deeec4921b1c13e4274856eb72e1de42e4533dd663d5809e8d763614"
+}

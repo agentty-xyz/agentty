@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session (\n    id, base_branch, status, project_id, model, title, prompt,\n    added_lines, deleted_lines, input_tokens, output_tokens, created_at, updated_at\n)\nVALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 13
+    },
+    "nullable": []
+  },
+  "hash": "b421c9d60f52c829ffc172333593f8e25d9c177e679a8f9c1f037c19b55814d4"
+}

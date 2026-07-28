@@ -79,7 +79,7 @@ ORDER BY model
             return Ok(());
         }
 
-        sqlx::query(
+        sqlx::query!(
             r"
 INSERT INTO session_usage (session_id, model, input_tokens, output_tokens, invocation_count)
 VALUES (?, ?, ?, ?, 1)
@@ -88,11 +88,11 @@ ON CONFLICT(session_id, model) DO UPDATE SET
     output_tokens = output_tokens + excluded.output_tokens,
     invocation_count = invocation_count + 1
 ",
+            session_id,
+            model,
+            stats.input_tokens.cast_signed(),
+            stats.output_tokens.cast_signed()
         )
-        .bind(session_id)
-        .bind(model)
-        .bind(stats.input_tokens.cast_signed())
-        .bind(stats.output_tokens.cast_signed())
         .execute(&self.0)
         .await?;
 

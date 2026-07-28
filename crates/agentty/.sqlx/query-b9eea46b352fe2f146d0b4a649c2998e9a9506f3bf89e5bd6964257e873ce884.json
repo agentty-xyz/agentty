@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DROP TABLE setting",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "b9eea46b352fe2f146d0b4a649c2998e9a9506f3bf89e5bd6964257e873ce884"
+}

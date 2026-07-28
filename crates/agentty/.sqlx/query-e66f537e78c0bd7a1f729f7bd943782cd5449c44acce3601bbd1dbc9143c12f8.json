@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_message (session_id, position, kind, content)\nVALUES (?, ?, ?, ?)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "e66f537e78c0bd7a1f729f7bd943782cd5449c44acce3601bbd1dbc9143c12f8"
+}

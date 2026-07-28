@@ -99,7 +99,7 @@ impl OperationRepository for SqliteOperationRepository {
     async fn fail_unfinished_session_operations(&self, reason: &str) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
-        sqlx::query(
+        sqlx::query!(
             r"
 UPDATE session_operation
 SET status = 'failed',
@@ -109,10 +109,10 @@ SET status = 'failed',
     cancel_requested = 1
 WHERE status IN ('queued', 'running')
 ",
+            now,
+            now,
+            reason
         )
-        .bind(now)
-        .bind(now)
-        .bind(reason)
         .execute(&self.0)
         .await?;
 
@@ -186,7 +186,7 @@ ORDER BY queued_at ASC, id ASC
     ) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
-        sqlx::query(
+        sqlx::query!(
             r"
 UPDATE session_operation
 SET status = 'canceled',
@@ -195,11 +195,11 @@ SET status = 'canceled',
     last_error = ?
 WHERE id = ?
 ",
+            now,
+            now,
+            reason,
+            operation_id
         )
-        .bind(now)
-        .bind(now)
-        .bind(reason)
-        .bind(operation_id)
         .execute(&self.0)
         .await?;
 
@@ -209,7 +209,7 @@ WHERE id = ?
     async fn mark_session_operation_done(&self, operation_id: &str) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
-        sqlx::query(
+        sqlx::query!(
             r"
 UPDATE session_operation
 SET status = 'done',
@@ -218,10 +218,10 @@ SET status = 'done',
     last_error = NULL
 WHERE id = ?
 ",
+            now,
+            now,
+            operation_id
         )
-        .bind(now)
-        .bind(now)
-        .bind(operation_id)
         .execute(&self.0)
         .await?;
 
@@ -235,7 +235,7 @@ WHERE id = ?
     ) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
-        sqlx::query(
+        sqlx::query!(
             r"
 UPDATE session_operation
 SET status = 'failed',
@@ -244,11 +244,11 @@ SET status = 'failed',
     last_error = ?
 WHERE id = ?
 ",
+            now,
+            now,
+            error,
+            operation_id
         )
-        .bind(now)
-        .bind(now)
-        .bind(error)
-        .bind(operation_id)
         .execute(&self.0)
         .await?;
 
@@ -258,7 +258,7 @@ WHERE id = ?
     async fn mark_session_operation_running(&self, operation_id: &str) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
-        sqlx::query(
+        sqlx::query!(
             r"
 UPDATE session_operation
 SET status = 'running',
@@ -267,10 +267,10 @@ SET status = 'running',
     last_error = NULL
 WHERE id = ?
 ",
+            now,
+            now,
+            operation_id
         )
-        .bind(now)
-        .bind(now)
-        .bind(operation_id)
         .execute(&self.0)
         .await?;
 
@@ -285,16 +285,16 @@ WHERE id = ?
     ) -> Result<(), DbError> {
         let queued_at = unix_timestamp_now();
 
-        sqlx::query(
+        sqlx::query!(
             r"
 INSERT INTO session_operation (id, session_id, kind, status, queued_at)
 VALUES (?, ?, ?, 'queued', ?)
 ",
+            operation_id,
+            session_id,
+            kind,
+            queued_at
         )
-        .bind(operation_id)
-        .bind(session_id)
-        .bind(kind)
-        .bind(queued_at)
         .execute(&self.0)
         .await?;
 
@@ -302,15 +302,15 @@ VALUES (?, ?, ?, 'queued', ?)
     }
 
     async fn request_cancel_for_session_operations(&self, session_id: &str) -> Result<(), DbError> {
-        sqlx::query(
+        sqlx::query!(
             r"
 UPDATE session_operation
 SET cancel_requested = 1
 WHERE session_id = ?
   AND status IN ('queued', 'running')
 ",
+            session_id
         )
-        .bind(session_id)
         .execute(&self.0)
         .await?;
 

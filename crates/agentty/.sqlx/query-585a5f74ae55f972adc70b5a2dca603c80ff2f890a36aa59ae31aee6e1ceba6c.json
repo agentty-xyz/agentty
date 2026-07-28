@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "CREATE TRIGGER fail_merged_hash BEFORE UPDATE OF merged_commit_hash ON session BEGIN SELECT RAISE(FAIL, 'merged hash failed'); END",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "585a5f74ae55f972adc70b5a2dca603c80ff2f890a36aa59ae31aee6e1ceba6c"
+}

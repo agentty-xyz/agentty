@@ -919,13 +919,13 @@ fn seed_sessions_with_matching_update_times(
             .filename(&db_path)
             .connect()
             .await?;
-        let query = sqlx::query(
+        let query = sqlx::query!(
             r"
 UPDATE session
 SET created_at = CASE id WHEN 'a-older' THEN 100 ELSE 200 END,
     updated_at = 300
 WHERE id IN ('a-older', 'z-newer')
-",
+"
         );
         connection.execute(query).await?;
         connection.close().await?;
@@ -1281,16 +1281,16 @@ fn seed_project_settings(
             .connect()
             .await?;
         for (setting_name, setting_value) in settings {
-            let query = sqlx::query(
+            let query = sqlx::query!(
                 r"
 INSERT INTO project_setting (project_id, name, value)
 VALUES (?, ?, ?)
 ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
 ",
-            )
-            .bind(project_id)
-            .bind(setting_name)
-            .bind(setting_value);
+                project_id,
+                setting_name,
+                setting_value
+            );
             connection.execute(query).await?;
         }
         connection.close().await?;
@@ -3020,11 +3020,11 @@ fn seed_sessions_startup_tab(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
             .filename(&db_path)
             .connect()
             .await?;
-        let query = sqlx::query(
+        let query = sqlx::query!(
             r"
 INSERT INTO setting (name, value) VALUES ('ActiveTab', 'Sessions')
 ON CONFLICT(name) DO UPDATE SET value = excluded.value
-",
+"
         );
         connection.execute(query).await?;
         connection.close().await?;

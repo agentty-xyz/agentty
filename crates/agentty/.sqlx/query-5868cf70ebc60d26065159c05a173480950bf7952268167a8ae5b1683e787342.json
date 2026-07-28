@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_operation\nSET status = 'running',\n    started_at = COALESCE(started_at, ?),\n    heartbeat_at = ?,\n    last_error = NULL\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "5868cf70ebc60d26065159c05a173480950bf7952268167a8ae5b1683e787342"
+}

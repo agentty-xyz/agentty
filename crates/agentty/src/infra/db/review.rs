@@ -7,7 +7,7 @@ use crate::domain::session::ReviewRequest;
 use crate::infra::db::DbError;
 
 /// Row returned when loading one `session_review_request`.
-#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionReviewRequestRow {
     /// Forge-native display identifier such as `#123` or `!123`.
     pub display_id: String,
@@ -64,7 +64,8 @@ impl ReviewRepository for SqliteReviewRepository {
         &self,
         id: &str,
     ) -> Result<Option<SessionReviewRequestRow>, DbError> {
-        let review_request = sqlx::query_as::<_, SessionReviewRequestRow>(
+        let review_request = sqlx::query_as!(
+            SessionReviewRequestRow,
             r"
 SELECT display_id,
        forge_kind,
@@ -78,8 +79,8 @@ SELECT display_id,
 FROM session_review_request
 WHERE session_id = ?
 ",
+            id
         )
-        .bind(id)
         .fetch_optional(&self.0)
         .await?;
 
@@ -92,7 +93,7 @@ WHERE session_id = ?
         review_request: Option<ReviewRequest>,
     ) -> Result<(), DbError> {
         if let Some(review_request) = review_request.as_ref() {
-            sqlx::query(
+            sqlx::query!(
                 r"
 INSERT INTO session_review_request (
     session_id,
@@ -118,27 +119,27 @@ SET display_id = excluded.display_id,
     title = excluded.title,
     web_url = excluded.web_url
 ",
+                id,
+                review_request.summary.display_id.as_str(),
+                review_request.summary.forge_kind.as_str(),
+                review_request.last_refreshed_at,
+                review_request.summary.source_branch.as_str(),
+                review_request.summary.state.as_str(),
+                review_request.summary.status_summary.as_deref(),
+                review_request.summary.target_branch.as_str(),
+                review_request.summary.title.as_str(),
+                review_request.summary.web_url.as_str()
             )
-            .bind(id)
-            .bind(review_request.summary.display_id.as_str())
-            .bind(review_request.summary.forge_kind.as_str())
-            .bind(review_request.last_refreshed_at)
-            .bind(review_request.summary.source_branch.as_str())
-            .bind(review_request.summary.state.as_str())
-            .bind(review_request.summary.status_summary.as_deref())
-            .bind(review_request.summary.target_branch.as_str())
-            .bind(review_request.summary.title.as_str())
-            .bind(review_request.summary.web_url.as_str())
             .execute(&self.0)
             .await?;
         } else {
-            sqlx::query(
+            sqlx::query!(
                 r"
 DELETE FROM session_review_request
 WHERE session_id = ?
 ",
+                id
             )
-            .bind(id)
             .execute(&self.0)
             .await?;
         }

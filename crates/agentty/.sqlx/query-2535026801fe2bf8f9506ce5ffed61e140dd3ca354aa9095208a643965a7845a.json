@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DROP TABLE session_message",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "2535026801fe2bf8f9506ce5ffed61e140dd3ca354aa9095208a643965a7845a"
+}

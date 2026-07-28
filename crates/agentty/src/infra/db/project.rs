@@ -227,17 +227,17 @@ ORDER BY p.is_favorite DESC,
     ) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
-        sqlx::query(
+        sqlx::query!(
             r"
 UPDATE project
 SET is_favorite = ?,
     updated_at = ?
 WHERE id = ?
 ",
+            i64::from(is_favorite),
+            now,
+            project_id
         )
-        .bind(i64::from(is_favorite))
-        .bind(now)
-        .bind(project_id)
         .execute(&self.0)
         .await?;
 
@@ -247,17 +247,17 @@ WHERE id = ?
     async fn touch_project_last_opened(&self, project_id: i64) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
-        sqlx::query(
+        sqlx::query!(
             r"
 UPDATE project
 SET last_opened_at = ?,
     updated_at = ?
 WHERE id = ?
 ",
+            now,
+            now,
+            project_id
         )
-        .bind(now)
-        .bind(now)
-        .bind(project_id)
         .execute(&self.0)
         .await?;
 
@@ -265,7 +265,7 @@ WHERE id = ?
     }
 
     async fn upsert_project(&self, path: &str, git_branch: Option<String>) -> Result<i64, DbError> {
-        sqlx::query(
+        sqlx::query!(
             r"
 INSERT INTO project (path, git_branch, created_at, updated_at)
 VALUES (?, ?, unixepoch(), unixepoch())
@@ -273,9 +273,9 @@ ON CONFLICT(path) DO UPDATE
 SET git_branch = excluded.git_branch,
     updated_at = unixepoch()
 ",
+            path,
+            git_branch.as_deref()
         )
-        .bind(path)
-        .bind(git_branch.as_deref())
         .execute(&self.0)
         .await?;
 
