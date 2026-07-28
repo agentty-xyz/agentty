@@ -7,9 +7,46 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.13.7] - 2026-07-27
+
 ### Added
 
 - agentty: add `claude-opus-5` to the Claude model picker.
+- agentty: add workspace personalities, personality-aware session prompts, source
+  details in slash-command results, and a code-improver agent.
+- agentty: add a frontend-neutral session lifecycle API through the new `ag-session`
+  crate.
+- agentty: render cyclic Mermaid flowcharts in markdown previews.
+- ag-harness: add the initial harness crate for backend compatibility testing.
+
+### Changed
+
+- agentty: preserve session diffs across refreshes and forks, resolve stacked review
+  parents from their worktrees, and allow slash commands while working on those parents.
+- agentty: improve prompt file mentions, highlighted file lookups, session rendering,
+  and personality summary loading.
+- agentty: preserve manually linked review-request metadata and handle outdated review
+  threads and explicit no-change outcomes.
+- ag-agent: parse Claude structured output, pass reasoning effort to Antigravity, and
+  refresh npm-global Gemini CLI installations.
+- ci: move E2E tooling into a verified Podman container, compile-check database queries,
+  and update grouped GitHub Actions dependencies.
+- docs: rename the `README.md` project title to Agentty ADE.
+- deps: update `agent-client-protocol` to `1.3.0`, `async-trait` to `0.1.91`, `clap` to
+  `4.6.4`, `ignore` to `0.4.31`, `serde_json` to `1.0.151`, `thiserror` to `2.0.19`,
+  `time` to `0.3.54`, `tokio` to `1.53.1`, and `x11rb` to `0.14.0`.
+- release: bump workspace crate metadata and lockfile package versions to `0.13.7`.
+
+### Fixed
+
+- agentty: keep `Esc` from ending question turns and correct the draft continuation
+  shortcut.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.13.6] - 2026-07-22
 
