@@ -7,7 +7,8 @@ system boundaries.
 
 ## Entry Points
 
-- `db.rs` owns SQLite persistence and query execution.
+- `db.rs` owns SQLite persistence and query execution, including complete session-by-id
+  rows consumed by the `ag-session` adapter.
 - `file_index.rs` owns gitignore-aware file traversal used by `@` mentions and explorer
   features.
 - `clipboard_image.rs` owns clipboard image capture, PNG encoding, and prompt-image

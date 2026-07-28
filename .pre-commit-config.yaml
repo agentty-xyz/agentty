@@ -119,6 +119,14 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: test-ag-session-src
+        name: cargo nextest ag-session src
+        description: Source tests for `crates/ag-session/src`.
+        entry: cargo nextest run --locked --profile ci -p ag-session --lib
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: test-ag-tui-text-src
         name: cargo nextest ag-tui-text src
         description: Source tests for `crates/ag-tui-text/src`.

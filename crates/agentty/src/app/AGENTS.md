@@ -13,6 +13,8 @@ Application-layer workflows and orchestration.
 
 - Composition model:
   - `App` is a facade/orchestrator.
+  - `session_api.rs` adapts `App` to the frontend-neutral `ag-session` `SessionBackend`
+    port.
   - `SessionManager` owns session snapshots, runtime handles, and session worker queues.
   - `ProjectManager` owns project list, active project context, and git status tracking
     state.
@@ -56,6 +58,8 @@ When app orchestration or session lifecycle behavior changes, update:
 ## Entry Points
 
 - `core.rs` owns the main `App` facade and reducer wiring.
+- `session_api.rs` owns complete session aggregate loading and the programmatic API
+  adapter.
 - `session.rs` and `session/` own session lifecycle and worker orchestration.
 - `project.rs`, `setting.rs`, and `tab.rs` own project, settings, and top-level
   navigation concerns.

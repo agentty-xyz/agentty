@@ -318,6 +318,9 @@ pub trait SessionRepository: Send + Sync {
     async fn fork_session_snapshot(&self, snapshot: ForkSessionSnapshot<'_>)
     -> Result<(), DbError>;
 
+    /// Loads one complete persisted session row by stable identifier.
+    async fn load_session(&self, session_id: &str) -> Result<Option<SessionRow>, DbError>;
+
     #[cfg(test)]
     /// Loads all sessions ordered by most recent update.
     async fn load_sessions(&self) -> Result<Vec<SessionRow>, DbError>;
@@ -625,6 +628,44 @@ struct SessionRowMetadata {
 }
 
 impl SessionRowMetadata {
+    /// Converts shared metadata fields into a complete session row.
+    fn into_session_row(
+        self,
+        prompt: String,
+        questions: Option<String>,
+        summary: Option<String>,
+        review_request: Option<SessionReviewRequestRow>,
+    ) -> SessionRow {
+        SessionRow {
+            added_lines: self.added_lines,
+            agent: self.agent,
+            base_branch: self.base_branch,
+            created_at: self.created_at,
+            deleted_lines: self.deleted_lines,
+            has_diff: self.has_diff,
+            id: self.id,
+            in_progress_started_at: self.in_progress_started_at,
+            in_progress_total_seconds: self.in_progress_total_seconds,
+            input_tokens: self.input_tokens,
+            is_draft: self.is_draft,
+            model: self.model,
+            output_tokens: self.output_tokens,
+            parent_session_id: self.parent_session_id,
+            personality_id: self.personality_id,
+            project_id: self.project_id,
+            prompt,
+            published_upstream_ref: self.published_upstream_ref,
+            questions,
+            reasoning_level_override: self.reasoning_level_override,
+            review_request,
+            size: self.size,
+            status: self.status,
+            summary,
+            title: self.title,
+            updated_at: self.updated_at,
+        }
+    }
+
     /// Converts shared metadata fields into a session-list row.
     fn into_session_list_row(
         self,
@@ -658,9 +699,10 @@ impl SessionRowMetadata {
     }
 }
 
-/// Row returned when loading one lightweight `session` list entry plus aliased
+/// Row returned when loading one complete `session` plus aliased
 /// `session_review_request` join columns.
-struct SessionListJoinRow {
+#[derive(sqlx::FromRow)]
+struct SessionJoinRow {
     added_lines: i64,
     agent: String,
     base_branch: String,
@@ -677,7 +719,9 @@ struct SessionListJoinRow {
     parent_session_id: Option<String>,
     personality_id: Option<String>,
     project_id: Option<i64>,
+    prompt: String,
     published_upstream_ref: Option<String>,
+    questions: Option<String>,
     reasoning_level_override: Option<String>,
     review_request_display_id: Option<String>,
     review_request_forge_kind: Option<String>,
@@ -690,14 +734,41 @@ struct SessionListJoinRow {
     review_request_web_url: Option<String>,
     size: String,
     status: String,
+    summary: Option<String>,
     title: Option<String>,
     updated_at: i64,
 }
 
-impl SessionListJoinRow {
-    /// Converts the query-mapped list join row into a lightweight
+impl SessionJoinRow {
+    /// Converts the query-mapped join row into a complete [`SessionRow`].
+    fn into_session_row(self) -> SessionRow {
+        let (metadata, detail, review_request) = self.into_parts();
+
+        metadata.into_session_row(
+            detail.prompt,
+            detail.questions,
+            detail.summary,
+            review_request,
+        )
+    }
+
+    /// Converts placeholder-detail query rows into a lightweight
     /// [`SessionListRow`].
     fn into_session_list_row(self) -> SessionListRow {
+        let (metadata, _, review_request) = self.into_parts();
+
+        metadata.into_session_list_row(review_request)
+    }
+
+    /// Splits the flat query row into shared metadata, transcript detail, and
+    /// normalized review-request data.
+    fn into_parts(
+        self,
+    ) -> (
+        SessionRowMetadata,
+        SessionDetailRow,
+        Option<SessionReviewRequestRow>,
+    ) {
         let Self {
             added_lines,
             agent,
@@ -715,7 +786,9 @@ impl SessionListJoinRow {
             parent_session_id,
             personality_id,
             project_id,
+            prompt,
             published_upstream_ref,
+            questions,
             reasoning_level_override,
             review_request_display_id,
             review_request_forge_kind,
@@ -728,24 +801,12 @@ impl SessionListJoinRow {
             review_request_web_url,
             size,
             status,
+            summary,
             title,
             updated_at,
         } = self;
 
-        let review_request = SessionReviewRequestJoinRow {
-            display_id: review_request_display_id,
-            forge_kind: review_request_forge_kind,
-            last_refreshed_at: review_request_last_refreshed_at,
-            source_branch: review_request_source_branch,
-            state: review_request_state,
-            status_summary: review_request_status_summary,
-            target_branch: review_request_target_branch,
-            title: review_request_title,
-            web_url: review_request_web_url,
-        }
-        .into_review_request_row();
-
-        SessionRowMetadata {
+        let metadata = SessionRowMetadata {
             added_lines,
             agent,
             base_branch,
@@ -768,8 +829,26 @@ impl SessionListJoinRow {
             status,
             title,
             updated_at,
+        };
+        let detail = SessionDetailRow {
+            prompt,
+            questions,
+            summary,
+        };
+        let review_request = SessionReviewRequestJoinRow {
+            display_id: review_request_display_id,
+            forge_kind: review_request_forge_kind,
+            last_refreshed_at: review_request_last_refreshed_at,
+            source_branch: review_request_source_branch,
+            state: review_request_state,
+            status_summary: review_request_status_summary,
+            target_branch: review_request_target_branch,
+            title: review_request_title,
+            web_url: review_request_web_url,
         }
-        .into_session_list_row(review_request)
+        .into_review_request_row();
+
+        (metadata, detail, review_request)
     }
 }
 
@@ -1182,10 +1261,60 @@ ORDER BY position, id
         Ok(())
     }
 
+    async fn load_session(&self, session_id: &str) -> Result<Option<SessionRow>, DbError> {
+        let row = sqlx::query_as::<_, SessionJoinRow>(
+            r"
+SELECT session.base_branch AS base_branch,
+       session.added_lines AS added_lines,
+       session.agent AS agent,
+       session.created_at AS created_at,
+       session.deleted_lines AS deleted_lines,
+       session.has_diff AS has_diff,
+       session.id AS id,
+       session.in_progress_started_at,
+       session.in_progress_total_seconds AS in_progress_total_seconds,
+       session.input_tokens AS input_tokens,
+       session.is_draft AS is_draft,
+       session.model AS model,
+       session.output_tokens AS output_tokens,
+       session.parent_session_id,
+       session.personality_id,
+       session.project_id,
+       session.prompt AS prompt,
+       session.reasoning_level AS reasoning_level_override,
+       session.published_upstream_ref,
+       session.questions,
+       session_review_request.display_id AS review_request_display_id,
+       session_review_request.forge_kind AS review_request_forge_kind,
+       session_review_request.last_refreshed_at AS review_request_last_refreshed_at,
+       session_review_request.source_branch AS review_request_source_branch,
+       session_review_request.state AS review_request_state,
+       session_review_request.status_summary AS review_request_status_summary,
+       session_review_request.target_branch AS review_request_target_branch,
+       session_review_request.title AS review_request_title,
+       session_review_request.web_url AS review_request_web_url,
+       session.size AS size,
+       session.status AS status,
+       session.summary,
+       session.title,
+       session.updated_at AS updated_at
+FROM session
+LEFT JOIN session_review_request
+ON session_review_request.session_id = session.id
+WHERE session.id = ?
+",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.0)
+        .await?;
+
+        Ok(row.map(SessionJoinRow::into_session_row))
+    }
+
     #[cfg(test)]
     async fn load_sessions(&self) -> Result<Vec<SessionRow>, DbError> {
         let rows = sqlx::query_as!(
-            tests::SessionJoinRow,
+            SessionJoinRow,
             r#"
 SELECT session.base_branch AS base_branch,
        session.added_lines AS added_lines,
@@ -1232,7 +1361,7 @@ ORDER BY session.updated_at DESC, session.created_at DESC, session.id
 
         Ok(rows
             .into_iter()
-            .map(tests::SessionJoinRow::into_session_row)
+            .map(SessionJoinRow::into_session_row)
             .collect())
     }
 
@@ -1241,7 +1370,7 @@ ORDER BY session.updated_at DESC, session.created_at DESC, session.id
         project_id: i64,
     ) -> Result<Vec<SessionListRow>, DbError> {
         let rows = sqlx::query_as!(
-            SessionListJoinRow,
+            SessionJoinRow,
             r#"
 SELECT session.base_branch AS base_branch,
        session.added_lines AS added_lines,
@@ -1259,8 +1388,10 @@ SELECT session.base_branch AS base_branch,
        session.parent_session_id,
        session.personality_id,
        session.project_id,
+       '' AS "prompt!: String",
        session.reasoning_level AS reasoning_level_override,
        session.published_upstream_ref,
+       NULL AS "questions: String",
        session_review_request.display_id AS review_request_display_id,
        session_review_request.forge_kind AS review_request_forge_kind,
        session_review_request.last_refreshed_at AS review_request_last_refreshed_at,
@@ -1272,6 +1403,7 @@ SELECT session.base_branch AS base_branch,
        session_review_request.web_url AS review_request_web_url,
        session.size AS size,
        session.status AS status,
+       NULL AS "summary: String",
        session.title,
        session.updated_at AS updated_at
 FROM session
@@ -1287,7 +1419,7 @@ ORDER BY session.updated_at DESC, session.created_at DESC, session.id
 
         Ok(rows
             .into_iter()
-            .map(SessionListJoinRow::into_session_list_row)
+            .map(SessionJoinRow::into_session_list_row)
             .collect())
     }
 
@@ -2244,167 +2376,7 @@ mod tests {
         stack_base_commit_hash: Option<String>,
     }
 
-    impl SessionRowMetadata {
-        /// Converts shared metadata fields into a full session row for the
-        /// joined-session test mapping.
-        fn into_session_row(
-            self,
-            prompt: String,
-            questions: Option<String>,
-            summary: Option<String>,
-            review_request: Option<SessionReviewRequestRow>,
-        ) -> SessionRow {
-            SessionRow {
-                added_lines: self.added_lines,
-                agent: self.agent,
-                base_branch: self.base_branch,
-                created_at: self.created_at,
-                deleted_lines: self.deleted_lines,
-                has_diff: self.has_diff,
-                id: self.id,
-                in_progress_started_at: self.in_progress_started_at,
-                in_progress_total_seconds: self.in_progress_total_seconds,
-                input_tokens: self.input_tokens,
-                is_draft: self.is_draft,
-                model: self.model,
-                output_tokens: self.output_tokens,
-                parent_session_id: self.parent_session_id,
-                personality_id: self.personality_id,
-                project_id: self.project_id,
-                prompt,
-                published_upstream_ref: self.published_upstream_ref,
-                questions,
-                reasoning_level_override: self.reasoning_level_override,
-                review_request,
-                size: self.size,
-                status: self.status,
-                summary,
-                title: self.title,
-                updated_at: self.updated_at,
-            }
-        }
-    }
-
-    /// Row returned when loading one `session` plus aliased
-    /// `session_review_request` join columns.
-    pub(super) struct SessionJoinRow {
-        pub(super) added_lines: i64,
-        pub(super) agent: String,
-        pub(super) base_branch: String,
-        pub(super) created_at: i64,
-        pub(super) deleted_lines: i64,
-        pub(super) has_diff: Option<bool>,
-        pub(super) id: String,
-        pub(super) in_progress_started_at: Option<i64>,
-        pub(super) in_progress_total_seconds: i64,
-        pub(super) input_tokens: i64,
-        pub(super) is_draft: bool,
-        pub(super) model: String,
-        pub(super) output_tokens: i64,
-        pub(super) parent_session_id: Option<String>,
-        pub(super) personality_id: Option<String>,
-        pub(super) project_id: Option<i64>,
-        pub(super) prompt: String,
-        pub(super) published_upstream_ref: Option<String>,
-        pub(super) questions: Option<String>,
-        pub(super) reasoning_level_override: Option<String>,
-        pub(super) review_request_display_id: Option<String>,
-        pub(super) review_request_forge_kind: Option<String>,
-        pub(super) review_request_last_refreshed_at: Option<i64>,
-        pub(super) review_request_source_branch: Option<String>,
-        pub(super) review_request_state: Option<String>,
-        pub(super) review_request_status_summary: Option<String>,
-        pub(super) review_request_target_branch: Option<String>,
-        pub(super) review_request_title: Option<String>,
-        pub(super) review_request_web_url: Option<String>,
-        pub(super) size: String,
-        pub(super) status: String,
-        pub(super) summary: Option<String>,
-        pub(super) title: Option<String>,
-        pub(super) updated_at: i64,
-    }
-
     impl SessionJoinRow {
-        /// Converts the query-mapped join row into the public [`SessionRow`]
-        /// model.
-        pub(super) fn into_session_row(self) -> SessionRow {
-            let Self {
-                added_lines,
-                agent,
-                base_branch,
-                created_at,
-                deleted_lines,
-                has_diff,
-                id,
-                in_progress_started_at,
-                in_progress_total_seconds,
-                input_tokens,
-                is_draft,
-                model,
-                output_tokens,
-                parent_session_id,
-                personality_id,
-                project_id,
-                prompt,
-                published_upstream_ref,
-                questions,
-                reasoning_level_override,
-                review_request_display_id,
-                review_request_forge_kind,
-                review_request_last_refreshed_at,
-                review_request_source_branch,
-                review_request_state,
-                review_request_status_summary,
-                review_request_target_branch,
-                review_request_title,
-                review_request_web_url,
-                size,
-                status,
-                summary,
-                title,
-                updated_at,
-            } = self;
-
-            let review_request = SessionReviewRequestJoinRow {
-                display_id: review_request_display_id,
-                forge_kind: review_request_forge_kind,
-                last_refreshed_at: review_request_last_refreshed_at,
-                source_branch: review_request_source_branch,
-                state: review_request_state,
-                status_summary: review_request_status_summary,
-                target_branch: review_request_target_branch,
-                title: review_request_title,
-                web_url: review_request_web_url,
-            }
-            .into_review_request_row();
-
-            SessionRowMetadata {
-                added_lines,
-                agent,
-                base_branch,
-                created_at,
-                deleted_lines,
-                has_diff,
-                id,
-                in_progress_started_at,
-                in_progress_total_seconds,
-                input_tokens,
-                is_draft,
-                model,
-                output_tokens,
-                parent_session_id,
-                personality_id,
-                project_id,
-                published_upstream_ref,
-                reasoning_level_override,
-                size,
-                status,
-                title,
-                updated_at,
-            }
-            .into_session_row(prompt, questions, summary, review_request)
-        }
-
         /// Builds a deterministic joined-session row fixture for conversion
         /// tests.
         fn fixture_for_test() -> Self {
@@ -2981,6 +2953,7 @@ WHERE id IN ('a-older', 'z-newer')
         assert_eq!(session_row.added_lines, 14);
         assert_eq!(session_row.deleted_lines, 6);
         assert_eq!(session_row.project_id, Some(7));
+        assert_eq!(session_row.personality_id.as_deref(), Some("reviewer"));
         assert_eq!(
             session_row.parent_session_id.as_deref(),
             Some("parent-session")

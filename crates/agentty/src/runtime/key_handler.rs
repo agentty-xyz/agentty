@@ -1,5 +1,6 @@
 use std::io;
 
+use ag_session::{CreateSessionMode, CreateSessionRequest, SessionService};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -234,21 +235,24 @@ fn update_session_creation_selection(app: &mut App, selected_option_index: usize
 /// Creates the selected session type and opens its prompt composer.
 async fn create_selected_session(app: &mut App) -> io::Result<()> {
     let selected_option_index = current_session_creation_selection(app);
-    let creation_result = match selected_option_index {
-        0 => app.create_session().await,
-        1 => app.create_draft_session().await,
+    let mode = match selected_option_index {
+        0 => CreateSessionMode::Regular,
+        1 => CreateSessionMode::Draft,
         2 => {
             let Some(parent_session_id) = selected_stacked_parent_session_id(app) else {
                 return Ok(());
             };
 
-            app.create_stacked_draft_session(parent_session_id.as_str())
-                .await
+            CreateSessionMode::Stacked { parent_session_id }
         }
         _ => return Ok(()),
     };
-    let session_id = creation_result.map_err(io::Error::other)?;
-    mode::list::open_session_prompt(app, session_id);
+    let project_id = app.active_project_id();
+    let session_id = SessionService::new(app)
+        .create_session(CreateSessionRequest { mode, project_id })
+        .await
+        .map_err(io::Error::other)?;
+    mode::list::open_session_prompt(app, session_id.into());
 
     Ok(())
 }
@@ -747,7 +751,7 @@ async fn handle_merge_confirmation(
     app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
 
     if let Some(session_id) = confirmation_session_id
-        && let Err(error) = app.merge_session(&session_id).await
+        && let Err(error) = SessionService::new(app).merge_session(&session_id).await
     {
         app.append_output_for_session(&session_id, &TranscriptNotice::MergeError.format(error))
             .await;
@@ -964,6 +968,54 @@ mod tests {
                 scroll_offset: None,
                 ..
             } if !session_id.is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_session_creation_key_creates_stacked_session() {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        let parent_session_id = app
+            .create_session()
+            .await
+            .expect("parent session should be created");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &parent_session_id,
+            crate::domain::session::Status::Review,
+        );
+        app.sessions.select_session_index(Some(0));
+        app.mode = AppMode::SessionCreation {
+            selected_option_index: 2,
+        };
+
+        // Act
+        let result = handle_session_creation_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        let child_session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| {
+                session.parent_session_id.as_deref() == Some(parent_session_id.as_str())
+            })
+            .expect("stacked child should be created");
+        let child_session_id = child_session.id.clone();
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert!(child_session.is_draft_session());
+        assert!(matches!(
+            app.mode,
+            AppMode::Prompt {
+                ref session_id,
+                scroll_offset: None,
+                ..
+            } if session_id == &child_session_id
         ));
     }
 

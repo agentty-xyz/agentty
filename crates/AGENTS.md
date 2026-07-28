@@ -17,6 +17,8 @@ Contains the workspace member crates.
 - `crates/ag-protocol/` holds structured agent response contracts, protocol parsing,
   schema generation, and transport-neutral turn prompt payloads shared across frontends
   and agent adapters.
+- `crates/ag-session/` holds shared session identity, lifecycle and transcript models,
+  complete session aggregates, and the frontend-neutral programmatic lifecycle API.
 - `crates/ag-tui-text/` holds shared Ratatui text rendering helpers for markdown,
   mermaid diagrams, and terminal-width wrapping/truncation.
 - `crates/ag-xtask/` holds workspace maintenance utilities, including migration checks.
