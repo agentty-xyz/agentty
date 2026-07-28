@@ -234,6 +234,40 @@ mod tests {
     }
 
     #[test]
+    /// Verifies Claude commands pass the selected Opus 5 model through the
+    /// Claude Code model environment variable.
+    fn test_claude_command_sets_anthropic_model_to_claude_opus_5() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let backend = ClaudeBackend;
+
+        // Act
+        let command = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[],
+                folder: temp_directory.path(),
+                main_checkout_root: None,
+                replay_transcript: None,
+                model: "claude-opus-5",
+                personality_prompt: None,
+                prompt: "Use Opus",
+                reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
+            },
+        )
+        .expect("command should build");
+        let anthropic_model = command
+            .get_envs()
+            .find(|(key, _value)| *key == OsStr::new("ANTHROPIC_MODEL"))
+            .and_then(|(_key, value)| value)
+            .map(|value| value.to_string_lossy().into_owned());
+
+        // Assert
+        assert_eq!(anthropic_model, Some("claude-opus-5".to_string()));
+    }
+
+    #[test]
     /// Verifies Claude commands pass the selected Opus 4.8 model through the
     /// Claude Code model environment variable.
     fn test_claude_command_sets_anthropic_model_to_claude_opus_48() {

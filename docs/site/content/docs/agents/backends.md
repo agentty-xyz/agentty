@@ -148,7 +148,7 @@ unless a session-specific override is active. Antigravity receives `--effort low
 `--effort medium`, or `--effort high`; `xhigh` and `max` map to its highest supported
 value, `--effort high`. Codex receives `max` as a distinct reasoning effort. For Claude,
 both `xhigh` and `max` map to `--effort max`, which is currently only supported by
-`claude-opus-4-8`.
+`claude-opus-5` and `claude-opus-4-8`.
 
 ## Available Models
 
@@ -167,7 +167,8 @@ Both providers share the same Gemini model ids:
 ### Claude Models
 
 - `claude-fable-5` (default): Claude Fable model for creative, narrative-heavy tasks.
-- `claude-opus-4-8`: Latest Claude Opus model for complex tasks.
+- `claude-opus-5`: Latest Claude Opus model for complex tasks.
+- `claude-opus-4-8`: Claude Opus 4.8 model for complex tasks.
 - `claude-sonnet-5`: Balanced Claude model for quality and latency.
 - `claude-haiku-4-5-20251001`: Fast Claude model for lighter tasks.
 

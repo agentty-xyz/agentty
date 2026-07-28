@@ -7,6 +7,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- agentty: add `claude-opus-5` to the Claude model picker.
+
 ## [v0.13.6] - 2026-07-22
 
 ### Added

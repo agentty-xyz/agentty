@@ -102,6 +102,8 @@ pub enum AgentModel {
     Gemini31ProPreview,
     /// Codex spark model backed by `gpt-5.3-codex-spark`.
     Gpt53CodexSpark,
+    /// Claude Opus model backed by `claude-opus-5`.
+    ClaudeOpus5,
     /// Claude Opus model backed by `claude-opus-4-8`.
     ClaudeOpus48,
     /// Claude Sonnet model backed by `claude-sonnet-5`.
@@ -187,6 +189,7 @@ impl AgentModel {
             Self::Gemini35FlashLite => "gemini-3.5-flash-lite",
             Self::Gemini31ProPreview => "gemini-3.1-pro-preview",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
+            Self::ClaudeOpus5 => "claude-opus-5",
             Self::ClaudeOpus48 => "claude-opus-4-8",
             Self::ClaudeSonnet5 => "claude-sonnet-5",
             Self::ClaudeFable5 => "claude-fable-5",
@@ -442,8 +445,8 @@ impl ReasoningLevel {
     /// Returns the Claude `--effort` value for this level.
     ///
     /// Maps `XHigh` and `Max` to `"max"`, which is currently only supported on
-    /// `claude-opus-4-8`. The Claude CLI enforces this restriction and will
-    /// surface an error for other models.
+    /// `claude-opus-5` and `claude-opus-4-8`. The Claude CLI enforces this
+    /// restriction and will surface an error for other models.
     pub fn claude(self) -> &'static str {
         match self {
             Self::Low => "low",
@@ -494,6 +497,7 @@ impl FromStr for AgentModel {
             "gpt-5.6-luna" => Ok(Self::Gpt56Luna),
             "gpt-5.5" => Ok(Self::Gpt55),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
+            "claude-opus-5" => Ok(Self::ClaudeOpus5),
             "claude-opus-4-8" => Ok(Self::ClaudeOpus48),
             "claude-sonnet-5" => Ok(Self::ClaudeSonnet5),
             "claude-fable-5" => Ok(Self::ClaudeFable5),
@@ -521,7 +525,8 @@ impl AgentSelectionMetadata for AgentModel {
             Self::Gpt56Luna => "Current Codex model for lighter coding iterations.",
             Self::Gpt55 => "Newer Codex model with stronger coding performance when available.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
-            Self::ClaudeOpus48 => "Latest Claude Opus model for complex tasks.",
+            Self::ClaudeOpus5 => "Latest Claude Opus model for complex tasks.",
+            Self::ClaudeOpus48 => "Claude Opus 4.8 model for complex tasks.",
             Self::ClaudeSonnet5 => "Balanced Claude model for quality and latency.",
             Self::ClaudeFable5 => "Claude Fable model for creative, narrative-heavy tasks.",
             Self::ClaudeHaiku4520251001 => "Fast Claude model for lighter tasks.",
@@ -582,6 +587,7 @@ impl AgentKind {
         ];
         const CLAUDE_MODELS: &[AgentModel] = &[
             AgentModel::ClaudeFable5,
+            AgentModel::ClaudeOpus5,
             AgentModel::ClaudeOpus48,
             AgentModel::ClaudeSonnet5,
             AgentModel::ClaudeHaiku4520251001,
@@ -794,14 +800,28 @@ mod tests {
         let claude_kind = AgentKind::Claude;
 
         // Act
+        let parsed_opus_5 = claude_kind.parse_model("claude-opus-5");
         let parsed_sonnet_5 = claude_kind.parse_model("claude-sonnet-5");
         let parsed_fable_5 = claude_kind.parse_model("claude-fable-5");
         let parsed_haiku_45 = claude_kind.parse_model("claude-haiku-4-5-20251001");
+        let opus_5_id = AgentModel::ClaudeOpus5.as_str();
+        let opus_5_description = AgentModel::ClaudeOpus5.description();
+        let opus_48_description = AgentModel::ClaudeOpus48.description();
 
         // Assert
+        assert_eq!(parsed_opus_5, Some(AgentModel::ClaudeOpus5));
         assert_eq!(parsed_sonnet_5, Some(AgentModel::ClaudeSonnet5));
         assert_eq!(parsed_fable_5, Some(AgentModel::ClaudeFable5));
         assert_eq!(parsed_haiku_45, Some(AgentModel::ClaudeHaiku4520251001));
+        assert_eq!(opus_5_id, "claude-opus-5");
+        assert_eq!(
+            opus_5_description,
+            "Latest Claude Opus model for complex tasks."
+        );
+        assert_eq!(
+            opus_48_description,
+            "Claude Opus 4.8 model for complex tasks."
+        );
     }
 
     #[test]
@@ -1003,6 +1023,7 @@ mod tests {
     fn test_claude_models_are_supported_by_claude() {
         // Arrange
         let models = [
+            AgentModel::ClaudeOpus5,
             AgentModel::ClaudeOpus48,
             AgentModel::ClaudeSonnet5,
             AgentModel::ClaudeFable5,
@@ -1014,8 +1035,8 @@ mod tests {
         let unsupported = models.map(|model| AgentKind::Codex.supports_model(model));
 
         // Assert
-        assert_eq!(supported, [true; 4]);
-        assert_eq!(unsupported, [false; 4]);
+        assert_eq!(supported, [true; 5]);
+        assert_eq!(unsupported, [false; 5]);
     }
 
     #[test]
