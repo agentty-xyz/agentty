@@ -554,7 +554,9 @@ fn resolve_available_selection(
 ///
 /// Older projects may only have a model key; in that case the fallback
 /// selection and available-provider resolution decide ownership. Retired
-/// model ids are atomically replaced along with their resolved owning agent.
+/// model ids are atomically replaced before runtime availability fallback is
+/// applied. Explicit providers are preserved, while ambiguous model-only
+/// settings use an available provider that supports the replacement.
 async fn load_model_selection_setting(
     repositories: &AppRepositories,
     project_id: Option<i64>,
@@ -571,28 +573,34 @@ async fn load_model_selection_setting(
         .unwrap_or(None)?;
     let is_retired = AgentModel::retired_replacement(&setting_value).is_some();
     let model = AgentModel::parse_persisted(&setting_value).ok()?;
-    let agent_kind = load_agent_setting(repositories, Some(project_id), agent_setting_name)
-        .await
-        .filter(|agent_kind| agent_kind.supports_model(model))
+    let persisted_agent_kind =
+        load_agent_setting(repositories, Some(project_id), agent_setting_name)
+            .await
+            .filter(|agent_kind| agent_kind.supports_model(model));
+    let agent_kind = persisted_agent_kind
         .unwrap_or_else(|| fallback_agent_kind_for_model(model, fallback_selection.kind()));
-    let resolved_selection = resolve_available_selection(
-        AgentSelection::new(agent_kind, model),
-        available_agent_kinds,
-    );
+    let persisted_selection = AgentSelection::new(agent_kind, model);
+    let resolved_selection =
+        resolve_available_selection(persisted_selection, available_agent_kinds);
 
     if is_retired {
+        let replacement_agent_kind = persisted_agent_kind.unwrap_or_else(|| {
+            if resolved_selection.kind().supports_model(model) {
+                resolved_selection.kind()
+            } else {
+                agent_kind
+            }
+        });
+
         let _ = repositories
             .settings()
             .upsert_project_settings(
                 project_id,
                 vec![
-                    (
-                        model_setting_name,
-                        resolved_selection.model().as_str().to_string(),
-                    ),
+                    (model_setting_name, model.as_str().to_string()),
                     (
                         agent_setting_name,
-                        resolved_selection.kind().name().to_string(),
+                        replacement_agent_kind.name().to_string(),
                     ),
                 ],
             )
@@ -1372,6 +1380,65 @@ mod tests {
                 Some(expected_value.to_string())
             );
         }
+    }
+
+    #[tokio::test]
+    async fn settings_manager_preserves_retired_default_when_provider_is_unavailable() {
+        // Arrange
+        let repositories = AppRepositories::in_memory().await;
+        let project_id = repositories
+            .projects()
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        repositories
+            .settings()
+            .upsert_project_setting(project_id, SettingName::DefaultSmartModel, "gpt-5.5")
+            .await
+            .expect("failed to persist retired smart model");
+
+        // Act
+        let unavailable_manager = SettingsManager::from_repositories(
+            repositories.clone(),
+            vec![AgentKind::Claude],
+            project_id,
+        )
+        .await;
+        let persisted_model = repositories
+            .settings()
+            .get_project_setting(project_id, SettingName::DefaultSmartModel)
+            .await
+            .expect("failed to load migrated smart model");
+        let persisted_agent = repositories
+            .settings()
+            .get_project_setting(project_id, SettingName::DefaultSmartAgent)
+            .await
+            .expect("failed to load migrated smart agent");
+
+        // Assert
+        assert_eq!(
+            unavailable_manager.default_smart_selection,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5)
+        );
+        assert_eq!(
+            persisted_model.as_deref(),
+            Some(AgentModel::Gpt56Sol.as_str())
+        );
+        assert_eq!(persisted_agent.as_deref(), Some(AgentKind::Codex.name()));
+
+        // Act
+        let available_manager = SettingsManager::from_repositories(
+            repositories,
+            vec![AgentKind::Codex, AgentKind::Claude],
+            project_id,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            available_manager.default_smart_selection,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
+        );
     }
 
     #[tokio::test]
