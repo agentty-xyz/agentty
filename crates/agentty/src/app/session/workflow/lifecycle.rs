@@ -18,10 +18,8 @@ use super::{
     SessionTaskService, StatusTransition, draft, isolation, session_branch, session_folder,
     unix_timestamp_from_system_time,
 };
-use crate::app::session::SessionError;
-use crate::app::{
-    AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, review_request, setting,
-};
+use crate::app::session::{SessionCreationSettings, SessionError};
+use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, setting};
 use crate::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel};
 use crate::domain::session::{
     ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
@@ -71,6 +69,67 @@ struct BuildSessionCommandInput {
 
 /// Intermediate values captured while preparing a session reply.
 type ReplyContext = (Option<String>, bool, SessionId, Option<String>);
+
+/// Status policy applied while preparing one reply command.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ReplyEligibility {
+    /// Accept the normal draft, question, and review-ready reply states.
+    Standard,
+    /// Accept a structured question answer during turn finalization or while
+    /// the session is already waiting in `Question`.
+    QuestionAnswer,
+}
+
+impl ReplyEligibility {
+    /// Returns whether this reply kind can run from the current status.
+    fn allows(self, status: Status, is_first_message: bool) -> bool {
+        match self {
+            Self::Standard => {
+                status.allows_review_actions()
+                    || status == Status::Question
+                    || (is_first_message && status == Status::Draft)
+            }
+            Self::QuestionAnswer => matches!(status, Status::InProgress | Status::Question),
+        }
+    }
+}
+
+/// Reply-command behavior selected by the caller.
+struct ReplyOptions {
+    defer_prompt_until_enqueued: bool,
+    eligibility: ReplyEligibility,
+    requires_existing_worker: bool,
+    review_comment_thread_ids: Vec<String>,
+}
+
+impl ReplyOptions {
+    /// Builds the normal reply behavior with optional review-thread targets.
+    fn standard(review_comment_thread_ids: Vec<String>) -> Self {
+        Self {
+            defer_prompt_until_enqueued: false,
+            eligibility: ReplyEligibility::Standard,
+            requires_existing_worker: false,
+            review_comment_thread_ids,
+        }
+    }
+
+    /// Builds structured question-answer behavior for the current worker
+    /// state.
+    fn question_answer(requires_existing_worker: bool) -> Self {
+        Self {
+            defer_prompt_until_enqueued: true,
+            eligibility: ReplyEligibility::QuestionAnswer,
+            requires_existing_worker,
+            review_comment_thread_ids: Vec::new(),
+        }
+    }
+}
+
+/// Worker-queue behavior selected after reply preparation.
+struct ReplyEnqueueOptions {
+    report_failure_in_transcript: bool,
+    requires_existing_worker: bool,
+}
 
 /// Cleanup payload for a deleted session's git and filesystem resources.
 struct DeletedSessionCleanup {
@@ -156,7 +215,18 @@ impl SessionManager {
         projects: &ProjectManager,
         services: &AppServices,
     ) -> Result<String, SessionError> {
-        self.create_live_session(projects, services).await
+        let base_branch = projects.git_branch().ok_or_else(|| {
+            SessionError::Workflow("Git branch is required to create a session".to_string())
+        })?;
+
+        self.create_session_for_project(
+            services,
+            projects.active_project_id(),
+            base_branch,
+            projects.working_dir().to_path_buf(),
+            None,
+        )
+        .await
     }
 
     /// Creates a blank draft session that stages prompts until explicitly
@@ -202,6 +272,85 @@ impl SessionManager {
         services: &AppServices,
         parent_session_id: &str,
     ) -> Result<String, SessionError> {
+        self.create_stacked_draft_session_with_optional_settings(services, parent_session_id, None)
+            .await
+    }
+
+    /// Creates one blank draft session for an explicit persisted project.
+    ///
+    /// Continuation flows use the source session project instead of the
+    /// currently active project so the later lazy worktree is materialized from
+    /// the same repository and base branch as the terminal source session.
+    ///
+    /// Returns the identifier of the newly created session.
+    ///
+    /// # Errors
+    /// Returns an error if the session files or database record cannot be
+    /// created.
+    pub async fn create_draft_session_for_project(
+        &mut self,
+        services: &AppServices,
+        project_id: i64,
+        base_branch: &str,
+    ) -> Result<String, SessionError> {
+        self.create_draft_session_for_project_with_parent(
+            services,
+            project_id,
+            base_branch,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Creates one project-scoped draft with a deterministic launch-settings
+    /// snapshot.
+    ///
+    /// # Errors
+    /// Returns an error if session metadata cannot be persisted.
+    pub(crate) async fn create_draft_session_for_project_with_settings(
+        &mut self,
+        services: &AppServices,
+        project_id: i64,
+        base_branch: &str,
+        creation_settings: Option<SessionCreationSettings>,
+    ) -> Result<String, SessionError> {
+        self.create_draft_session_for_project_with_parent(
+            services,
+            project_id,
+            base_branch,
+            None,
+            creation_settings,
+        )
+        .await
+    }
+
+    /// Creates one stacked draft with a deterministic launch-settings
+    /// snapshot.
+    ///
+    /// # Errors
+    /// Returns an error when the parent is ineligible or persistence fails.
+    pub(crate) async fn create_stacked_draft_session_with_settings(
+        &mut self,
+        services: &AppServices,
+        parent_session_id: &str,
+        creation_settings: SessionCreationSettings,
+    ) -> Result<String, SessionError> {
+        self.create_stacked_draft_session_with_optional_settings(
+            services,
+            parent_session_id,
+            Some(creation_settings),
+        )
+        .await
+    }
+
+    /// Creates one stacked draft with optional deterministic launch settings.
+    async fn create_stacked_draft_session_with_optional_settings(
+        &mut self,
+        services: &AppServices,
+        parent_session_id: &str,
+        creation_settings: Option<SessionCreationSettings>,
+    ) -> Result<String, SessionError> {
         let (base_branch, parent_id) = {
             let parent_session = self.session_or_err(parent_session_id)?;
             if !parent_session.allows_stacked_child_creation() {
@@ -234,29 +383,9 @@ impl SessionManager {
             project_id,
             &base_branch,
             Some(parent_id.as_str()),
+            creation_settings,
         )
         .await
-    }
-
-    /// Creates one blank draft session for an explicit persisted project.
-    ///
-    /// Continuation flows use the source session project instead of the
-    /// currently active project so the later lazy worktree is materialized from
-    /// the same repository and base branch as the terminal source session.
-    ///
-    /// Returns the identifier of the newly created session.
-    ///
-    /// # Errors
-    /// Returns an error if the session files or database record cannot be
-    /// created.
-    pub async fn create_draft_session_for_project(
-        &mut self,
-        services: &AppServices,
-        project_id: i64,
-        base_branch: &str,
-    ) -> Result<String, SessionError> {
-        self.create_draft_session_for_project_with_parent(services, project_id, base_branch, None)
-            .await
     }
 
     /// Creates one blank draft session with an optional persisted parent
@@ -267,17 +396,13 @@ impl SessionManager {
         project_id: i64,
         base_branch: &str,
         parent_session_id: Option<&str>,
+        creation_settings: Option<SessionCreationSettings>,
     ) -> Result<String, SessionError> {
-        let session_agent = self
-            .resolve_default_session_agent(services, project_id)
-            .await;
-        let session_model = session_agent.model();
-        let reasoning_level = services
-            .db()
-            .settings()
-            .load_project_reasoning_level(project_id)
+        let creation_settings = self
+            .resolve_session_creation_settings(services, project_id, creation_settings)
             .await?;
-        self.default_session_model = session_model;
+        let session_agent = creation_settings.agent;
+        let session_model = session_agent.model();
 
         let session_id = Uuid::new_v4().to_string();
         let folder = session_folder(services.base_path(), &session_id);
@@ -299,8 +424,9 @@ impl SessionManager {
                 is_draft: true,
                 model: session_model.as_str(),
                 parent_session_id,
+                personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
-                reasoning_level,
+                reasoning_level: creation_settings.reasoning_level,
                 status: &status,
             })
             .await;
@@ -445,24 +571,19 @@ impl SessionManager {
     /// # Errors
     /// Returns an error if the worktree, session files, database record, or
     /// backend setup cannot be created.
-    async fn create_live_session(
+    pub(crate) async fn create_session_for_project(
         &mut self,
-        projects: &ProjectManager,
         services: &AppServices,
+        project_id: i64,
+        base_branch: &str,
+        working_dir: PathBuf,
+        creation_settings: Option<SessionCreationSettings>,
     ) -> Result<String, SessionError> {
-        let base_branch = projects.git_branch().ok_or_else(|| {
-            SessionError::Workflow("Git branch is required to create a session".to_string())
-        })?;
-        let session_agent = self
-            .resolve_default_session_agent(services, projects.active_project_id())
-            .await;
-        let session_model = session_agent.model();
-        let reasoning_level = services
-            .db()
-            .settings()
-            .load_project_reasoning_level(projects.active_project_id())
+        let creation_settings = self
+            .resolve_session_creation_settings(services, project_id, creation_settings)
             .await?;
-        self.default_session_model = session_model;
+        let session_agent = creation_settings.agent;
+        let session_model = session_agent.model();
 
         let session_id = Uuid::new_v4().to_string();
         let folder = session_folder(services.base_path(), &session_id);
@@ -474,7 +595,6 @@ impl SessionManager {
         }
 
         let worktree_branch = session_branch(&session_id);
-        let working_dir = projects.working_dir().to_path_buf();
         let git_client = services.git_client();
         let repo_root = git_client
             .find_git_repo_root(working_dir)
@@ -504,8 +624,9 @@ impl SessionManager {
                 is_draft: false,
                 model: session_model.as_str(),
                 parent_session_id: None,
-                project_id: projects.active_project_id(),
-                reasoning_level,
+                personality_id: creation_settings.personality_id.as_deref(),
+                project_id,
+                reasoning_level: creation_settings.reasoning_level,
                 status: &status,
             })
             .await
@@ -1220,8 +1341,45 @@ impl SessionManager {
         }
         let session_agent = session.agent;
 
-        self.reply_impl(services, session_id, prompt, Vec::new(), session_agent)
-            .await
+        self.reply_impl(
+            services,
+            session_id,
+            prompt,
+            session_agent,
+            ReplyOptions::standard(Vec::new()),
+        )
+        .await
+    }
+
+    /// Queues a validated structured question answer directly on the
+    /// per-session worker.
+    ///
+    /// Unlike ordinary chat submitted during `InProgress`, this reply must
+    /// not enter the in-memory prompt queue: the active turn can transition
+    /// to `Question`, where chat-queue drainage intentionally pauses. A
+    /// worker command remains ordered behind the active turn and resumes it
+    /// regardless of that transition.
+    pub(crate) async fn reply_to_question_answers(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        prompt: impl Into<TurnPrompt>,
+    ) -> bool {
+        let prompt = prompt.into();
+        let Ok(session) = self.session_or_err(session_id) else {
+            return false;
+        };
+        let requires_existing_worker = session.status == Status::InProgress;
+        let session_agent = session.agent;
+
+        self.reply_impl(
+            services,
+            session_id,
+            prompt,
+            session_agent,
+            ReplyOptions::question_answer(requires_existing_worker),
+        )
+        .await
     }
 
     /// Submits a follow-up prompt with an allowlist of forge review threads
@@ -1248,8 +1406,8 @@ impl SessionManager {
             services,
             session_id,
             prompt,
-            review_comment_thread_ids,
             session_agent,
+            ReplyOptions::standard(review_comment_thread_ids),
         )
         .await
     }
@@ -1503,90 +1661,6 @@ impl SessionManager {
         self.state.session_index_for_id(session_id)
     }
 
-    /// Publishes a review-ready session branch and creates or refreshes the
-    /// linked forge review request.
-    ///
-    /// Existing links are refreshed after the branch push so repeated publish
-    /// requests update the same remote review request instead of returning a
-    /// stale stored summary. When no link is stored yet, the workflow reuses
-    /// an existing remote review request for the session branch before
-    /// creating a new one.
-    ///
-    /// # Errors
-    /// Returns an error if the session is missing, cannot be published, git
-    /// push fails, forge detection fails, the review-request operation fails,
-    /// or persistence fails.
-    pub async fn publish_review_request(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-    ) -> Result<ReviewRequest, SessionError> {
-        let session_index = self.session_index_or_err(session_id)?;
-        let Some(session) = self.state.sessions.get(session_index) else {
-            return Err(SessionError::NotFound);
-        };
-
-        if !session.status.allows_review_actions() {
-            return Err(SessionError::Workflow(
-                "Session must be in review to create a review request".to_string(),
-            ));
-        }
-
-        let folder = session.folder.clone();
-        let source_branch = session_branch(session_id);
-        let linked_review_request = session.review_request.clone();
-        let git_client = services.git_client();
-        let published_upstream_ref = git_client
-            .push_current_branch(folder.clone())
-            .await
-            .map_err(|error| {
-                SessionError::Workflow(format!("Failed to publish session branch: {error}"))
-            })?;
-        self.store_published_upstream_ref(services, session_id, published_upstream_ref)
-            .await?;
-
-        let session = self
-            .state
-            .sessions
-            .get(session_index)
-            .ok_or(SessionError::NotFound)?;
-        let review_request_client = services.review_request_client();
-        let remote = self
-            .review_request_remote(services, session, linked_review_request.as_ref())
-            .await?;
-        let review_request_summary = if let Some(review_request) = linked_review_request {
-            review_request_client
-                .refresh_review_request(remote, review_request.summary.display_id)
-                .await
-                .map_err(|error| SessionError::Workflow(error.detail_message()))?
-        } else {
-            match review_request_client
-                .find_by_source_branch(remote.clone(), source_branch.clone())
-                .await
-                .map_err(|error| SessionError::Workflow(error.detail_message()))?
-            {
-                Some(existing_review_request) => review_request_client
-                    .refresh_review_request(remote, existing_review_request.display_id)
-                    .await
-                    .map_err(|error| SessionError::Workflow(error.detail_message()))?,
-                None => review_request_client
-                    .create_review_request(
-                        remote,
-                        Self::load_review_request_create_input(
-                            git_client.as_ref(),
-                            session,
-                            source_branch.clone(),
-                        )
-                        .await?,
-                    )
-                    .await
-                    .map_err(|error| SessionError::Workflow(error.detail_message()))?,
-            }
-        };
-        self.store_review_request_summary(services, session_id, review_request_summary)
-            .await
-    }
-
     /// Returns the browser-openable URL for one linked review request.
     ///
     /// # Errors
@@ -1744,46 +1818,6 @@ impl SessionManager {
         Self::cleanup_session_temp_directory(fs_client, &cleanup.session_id).await;
     }
 
-    /// Builds one normalized create-request payload from the session branch
-    /// commit message.
-    async fn load_review_request_create_input(
-        git_client: &dyn git::GitClient,
-        session: &Session,
-        source_branch: String,
-    ) -> Result<forge::CreateReviewRequestInput, SessionError> {
-        let commit_message = git_client
-            .head_commit_message(session.folder.clone())
-            .await
-            .map_err(|error| {
-                SessionError::Workflow(format!(
-                    "Failed to load session branch commit message: {error}"
-                ))
-            })?
-            .ok_or_else(|| {
-                SessionError::Workflow(
-                    "Session branch has no commit message for review-request publishing."
-                        .to_string(),
-                )
-            })?;
-        let review_request_commit_message = review_request::parse_review_request_commit_message(
-            &commit_message,
-        )
-        .ok_or_else(|| {
-            SessionError::Workflow(
-                "Session branch commit message must have a non-empty title for review-request \
-                 publishing."
-                    .to_string(),
-            )
-        })?;
-
-        Ok(forge::CreateReviewRequestInput {
-            body: review_request_commit_message.body,
-            source_branch,
-            target_branch: session.base_branch.clone(),
-            title: review_request_commit_message.title,
-        })
-    }
-
     /// Converts one refreshed summary into persisted review-request metadata.
     pub(super) fn build_review_request(
         &self,
@@ -1842,31 +1876,6 @@ impl SessionManager {
         Ok(review_request)
     }
 
-    /// Persists one published upstream reference in memory and the database.
-    ///
-    /// # Errors
-    /// Returns an error if the session disappears or persistence fails.
-    pub(super) async fn store_published_upstream_ref(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-        published_upstream_ref: String,
-    ) -> Result<(), SessionError> {
-        services
-            .db()
-            .sessions()
-            .update_session_published_upstream_ref(session_id, Some(published_upstream_ref.clone()))
-            .await?;
-
-        let session_index = self.session_index_or_err(session_id)?;
-        let Some(session) = self.state.sessions.get_mut(session_index) else {
-            return Err(SessionError::NotFound);
-        };
-        session.published_upstream_ref = Some(published_upstream_ref);
-
-        Ok(())
-    }
-
     /// Validates and queues a follow-up prompt for an existing session.
     ///
     /// Gathers reply context, appends the prompt line to session output, builds
@@ -1879,24 +1888,27 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
         prompt: TurnPrompt,
-        review_comment_thread_ids: Vec<String>,
         session_agent: AgentSelection,
+        options: ReplyOptions,
     ) -> bool {
-        let Ok(session_index) = self.session_index_or_err(session_id) else {
-            return false;
-        };
+        let ReplyOptions {
+            defer_prompt_until_enqueued,
+            eligibility,
+            requires_existing_worker,
+            review_comment_thread_ids,
+        } = options;
         let should_replay_history = self.should_replay_history(session_id);
-        let (replay_transcript, is_first_message, persisted_session_id, title_to_save) =
-            match self.prepare_reply_context(session_index, &prompt, should_replay_history) {
-                Ok(Some(reply_context)) => reply_context,
-                Ok(None) => return false,
-                Err(error) => {
-                    self.append_reply_status_error(services, session_id, &error)
-                        .await;
+        let (replay_transcript, is_first_message, persisted_session_id, title_to_save) = match self
+            .prepare_reply_context(session_id, &prompt, should_replay_history, eligibility)
+        {
+            Ok(reply_context) => reply_context,
+            Err(error) => {
+                self.append_reply_status_error(services, session_id, &error)
+                    .await;
 
-                    return false;
-                }
-            };
+                return false;
+            }
+        };
 
         if should_replay_history {
             self.clear_history_replay_pending(&persisted_session_id);
@@ -1931,14 +1943,16 @@ impl SessionManager {
             }
         }
 
-        self.append_reply_prompt_line(
-            services,
-            &transcript,
-            &app_event_tx,
-            &persisted_session_id,
-            &effective_prompt,
-        )
-        .await;
+        if !defer_prompt_until_enqueued {
+            self.append_reply_prompt_line(
+                services,
+                &transcript,
+                &app_event_tx,
+                &persisted_session_id,
+                &effective_prompt,
+            )
+            .await;
+        }
         let published_upstream_ref = self
             .session_or_err(&persisted_session_id)
             .ok()
@@ -1952,14 +1966,31 @@ impl SessionManager {
             review_comment_thread_ids,
             session_agent,
         });
-        self.enqueue_reply_command(
-            services,
-            &transcript,
-            &persisted_session_id,
-            &effective_prompt,
-            command,
-        )
-        .await
+        let enqueued = self
+            .enqueue_reply_command(
+                services,
+                &transcript,
+                &persisted_session_id,
+                &effective_prompt,
+                command,
+                ReplyEnqueueOptions {
+                    report_failure_in_transcript: !defer_prompt_until_enqueued,
+                    requires_existing_worker,
+                },
+            )
+            .await;
+        if enqueued && defer_prompt_until_enqueued {
+            self.append_reply_prompt_line(
+                services,
+                &transcript,
+                &app_event_tx,
+                &persisted_session_id,
+                &effective_prompt,
+            )
+            .await;
+        }
+
+        enqueued
     }
 
     /// Validates reply eligibility and gathers per-session values needed for
@@ -1970,33 +2001,22 @@ impl SessionManager {
     /// replying.
     fn prepare_reply_context(
         &mut self,
-        session_index: usize,
+        session_id: &str,
         prompt: &TurnPrompt,
         should_replay_history: bool,
-    ) -> Result<Option<ReplyContext>, SessionError> {
-        let Some(session_id) = self
-            .state
-            .sessions
-            .get(session_index)
-            .map(|session| session.id.clone())
-        else {
-            return Ok(None);
-        };
-        if !self.can_reply_to_session_in_stack(session_id.as_str()) {
+        reply_eligibility: ReplyEligibility,
+    ) -> Result<ReplyContext, SessionError> {
+        let session_index = self.session_index_or_err(session_id)?;
+        if !self.can_reply_to_session_in_stack(session_id) {
             return Err(SessionError::Workflow(
                 "Stacked replies can only run when no other stack session is active".to_string(),
             ));
         }
 
-        let Some(session) = self.state.sessions.get_mut(session_index) else {
-            return Ok(None);
-        };
+        let session = &mut self.state.sessions[session_index];
 
         let is_first_message = session.prompt.is_empty();
-        let allowed = session.status.allows_review_actions()
-            || session.status == Status::Question
-            || (is_first_message && session.status == Status::Draft);
-        if !allowed {
+        if !reply_eligibility.allows(session.status, is_first_message) {
             return Err(SessionError::Workflow(
                 "Session must be in review status".to_string(),
             ));
@@ -2022,12 +2042,12 @@ impl SessionManager {
             None
         };
 
-        Ok(Some((
+        Ok((
             replay_transcript,
             is_first_message,
             session.id.clone(),
             title_to_save,
-        )))
+        ))
     }
 
     /// Persists first-message prompt/title metadata before queueing execution.
@@ -2242,24 +2262,33 @@ impl SessionManager {
         persisted_session_id: &str,
         prompt: &TurnPrompt,
         command: SessionCommand,
+        options: ReplyEnqueueOptions,
     ) -> bool {
-        if let Err(error) = self
-            .enqueue_session_command(services, persisted_session_id, command)
-            .await
-        {
+        let enqueue_result = if options.requires_existing_worker {
+            let persisted_session_id = SessionId::from(persisted_session_id);
+            self.worker_service_mut()
+                .enqueue_existing_session_command(services, &persisted_session_id, command)
+                .await
+        } else {
+            self.enqueue_session_command(services, persisted_session_id, command)
+                .await
+        };
+        if let Err(error) = enqueue_result {
             self.cleanup_prompt_attachment_files(services, prompt).await;
 
-            let error_line = TranscriptNotice::ReplyError.format(error);
-            let app_event_tx = services.event_sender();
-            SessionTaskService::append_workflow_notice(
-                transcript,
-                services.db(),
-                &app_event_tx,
-                &services.session_update_versions(),
-                persisted_session_id,
-                &error_line,
-            )
-            .await;
+            if options.report_failure_in_transcript {
+                let error_line = TranscriptNotice::ReplyError.format(error);
+                let app_event_tx = services.event_sender();
+                SessionTaskService::append_workflow_notice(
+                    transcript,
+                    services.db(),
+                    &app_event_tx,
+                    &services.session_update_versions(),
+                    persisted_session_id,
+                    &error_line,
+                )
+                .await;
+            }
 
             return false;
         }
@@ -2543,6 +2572,35 @@ impl SessionManager {
         GENERATED_SESSION_TITLE_PROGRESS_PREFIXES
             .iter()
             .any(|prefix| lower_title.starts_with(prefix))
+    }
+
+    /// Resolves project defaults unless the caller supplied a deterministic
+    /// launch-settings snapshot.
+    async fn resolve_session_creation_settings(
+        &mut self,
+        services: &AppServices,
+        project_id: i64,
+        creation_settings: Option<SessionCreationSettings>,
+    ) -> Result<SessionCreationSettings, SessionError> {
+        if let Some(creation_settings) = creation_settings {
+            return Ok(creation_settings);
+        }
+
+        let agent = self
+            .resolve_default_session_agent(services, project_id)
+            .await;
+        let reasoning_level = services
+            .db()
+            .settings()
+            .load_project_reasoning_level(project_id)
+            .await?;
+        self.default_session_model = agent.model();
+
+        Ok(SessionCreationSettings {
+            agent,
+            personality_id: None,
+            reasoning_level,
+        })
     }
 
     /// Resolves the default agent/model selection for a new session.
@@ -3083,8 +3141,14 @@ mod test_support {
             self.worker_service
                 .test_agent_channels
                 .insert(session_id.to_string().into(), channel);
-            self.reply_impl(services, session_id, prompt, Vec::new(), session_agent)
-                .await;
+            self.reply_impl(
+                services,
+                session_id,
+                prompt,
+                session_agent,
+                ReplyOptions::standard(Vec::new()),
+            )
+            .await;
         }
     }
 }
@@ -3338,39 +3402,6 @@ mod tests {
         }
     }
 
-    /// Returns one GitHub forge-remote fixture for review-request tests.
-    fn github_remote() -> forge::ForgeRemote {
-        forge::ForgeRemote {
-            command_working_directory: Some(PathBuf::from("/tmp/session")),
-            forge_kind: ForgeKind::GitHub,
-            host: "github.com".to_string(),
-            namespace: "agentty-xyz".to_string(),
-            project: "agentty".to_string(),
-            repo_url: "https://github.com/agentty-xyz/agentty.git".to_string(),
-            web_url: "https://github.com/agentty-xyz/agentty".to_string(),
-        }
-    }
-
-    /// Returns the expected create payload for one session review request.
-    fn expected_create_input() -> forge::CreateReviewRequestInput {
-        forge::CreateReviewRequestInput {
-            body: Some("- Keep title in sync".to_string()),
-            source_branch: session_branch("session-id"),
-            target_branch: "main".to_string(),
-            title: "Refine session commit message".to_string(),
-        }
-    }
-    /// Configures git expectations for review-request publication.
-    fn expect_published_session_branch(mock_git_client: &mut git::MockGitClient) {
-        mock_git_client
-            .expect_push_current_branch()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
-        mock_git_client.expect_repo_url().times(1).returning(|_| {
-            Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
-        });
-    }
-
     /// Loads the persisted session row used by workflow assertions.
     async fn load_persisted_session_row(database: &AppRepositories) -> db::SessionRow {
         database
@@ -3530,112 +3561,6 @@ mod tests {
         assert!(!reply_enqueued);
         assert!(!review_reply_enqueued);
         assert!(event_rx.try_recv().is_err());
-    }
-
-    #[tokio::test]
-    async fn test_publish_review_request_creates_and_persists_link_when_lookup_misses() {
-        // Arrange
-        let session = test_session(
-            "Implement forge review support",
-            Status::Review,
-            Some("Add forge review support"),
-            "",
-        );
-        let database = database_with_session(&session).await;
-        let mut session_manager = session_manager_with_one_session(session);
-        let source_branch = session_branch("session-id");
-        let expected_create_input = expected_create_input();
-        let remote = github_remote();
-        let created_summary = review_request_summary("#42");
-        let mut mock_git_client = git::MockGitClient::new();
-        expect_published_session_branch(&mut mock_git_client);
-        mock_git_client
-            .expect_head_commit_message()
-            .times(1)
-            .returning(|_| {
-                Box::pin(async {
-                    Ok(Some(
-                        "Refine session commit message\n\n- Keep title in sync".to_string(),
-                    ))
-                })
-            });
-        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
-        mock_review_request_client
-            .expect_detect_remote()
-            .times(1)
-            .returning({
-                let remote = remote.clone();
-                move |_| Ok(remote.clone())
-            });
-        mock_review_request_client
-            .expect_find_by_source_branch()
-            .times(1)
-            .withf({
-                let remote = remote.clone();
-                let source_branch = source_branch.clone();
-                move |candidate_remote, candidate_source_branch| {
-                    candidate_remote == &remote && candidate_source_branch == &source_branch
-                }
-            })
-            .returning(|_, _| Box::pin(async { Ok(None) }));
-        mock_review_request_client
-            .expect_create_review_request()
-            .times(1)
-            .withf({
-                let remote = remote.clone();
-                let expected_create_input = expected_create_input.clone();
-                move |candidate_remote, candidate_input| {
-                    candidate_remote == &remote && candidate_input == &expected_create_input
-                }
-            })
-            .returning(move |_, _| {
-                let created_summary = created_summary.clone();
-
-                Box::pin(async move { Ok(created_summary) })
-            });
-        let services = test_services(
-            &database,
-            Arc::new(mock_git_client),
-            Arc::new(mock_review_request_client),
-        );
-
-        // Act
-        let review_request = session_manager
-            .publish_review_request(&services, "session-id")
-            .await
-            .expect("review request should be created");
-        let persisted_row = load_persisted_session_row(&database).await;
-
-        // Assert
-        assert_eq!(review_request.summary.display_id, "#42");
-        assert_eq!(
-            session_manager.state.sessions[0].review_request,
-            Some(review_request.clone())
-        );
-        assert_eq!(
-            persisted_row
-                .review_request
-                .as_ref()
-                .map(|row| row.display_id.as_str()),
-            Some("#42")
-        );
-        assert_eq!(
-            persisted_row
-                .review_request
-                .as_ref()
-                .map(|row| row.last_refreshed_at),
-            Some(review_request.last_refreshed_at)
-        );
-        assert_eq!(
-            persisted_row.published_upstream_ref.as_deref(),
-            Some("origin/wt/session-id")
-        );
-        assert_eq!(
-            session_manager.state.sessions[0]
-                .published_upstream_ref
-                .as_deref(),
-            Some("origin/wt/session-id")
-        );
     }
 
     #[tokio::test]
@@ -3900,153 +3825,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_publish_review_request_reuses_existing_remote_link_before_create() {
-        // Arrange
-        let session = test_session(
-            "Implement forge review support",
-            Status::Review,
-            Some("Add forge review support"),
-            "",
-        );
-        let database = database_with_session(&session).await;
-        let mut session_manager = session_manager_with_one_session(session);
-        let source_branch = session_branch("session-id");
-        let remote = github_remote();
-        let existing_summary = review_request_summary("#24");
-        let mut mock_git_client = git::MockGitClient::new();
-        expect_published_session_branch(&mut mock_git_client);
-        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
-        mock_review_request_client
-            .expect_detect_remote()
-            .times(1)
-            .returning({
-                let remote = remote.clone();
-                move |_| Ok(remote.clone())
-            });
-        mock_review_request_client
-            .expect_find_by_source_branch()
-            .times(1)
-            .withf({
-                let remote = remote.clone();
-                let source_branch = source_branch.clone();
-                move |candidate_remote, candidate_source_branch| {
-                    candidate_remote == &remote && candidate_source_branch == &source_branch
-                }
-            })
-            .returning(move |_, _| {
-                let existing_summary = existing_summary.clone();
-
-                Box::pin(async move { Ok(Some(existing_summary)) })
-            });
-        mock_review_request_client
-            .expect_refresh_review_request()
-            .times(1)
-            .withf({
-                let remote = remote.clone();
-                move |candidate_remote, display_id| {
-                    candidate_remote == &remote && display_id == "#24"
-                }
-            })
-            .returning(|_, _| Box::pin(async { Ok(review_request_summary("#24")) }));
-        mock_review_request_client
-            .expect_create_review_request()
-            .times(0);
-        let services = test_services(
-            &database,
-            Arc::new(mock_git_client),
-            Arc::new(mock_review_request_client),
-        );
-
-        // Act
-        let review_request = session_manager
-            .publish_review_request(&services, "session-id")
-            .await
-            .expect("existing remote review request should be reused");
-
-        // Assert
-        assert_eq!(review_request.summary.display_id, "#24");
-        assert_eq!(
-            session_manager.state.sessions[0]
-                .review_request
-                .as_ref()
-                .map(|review_request| review_request.summary.display_id.as_str()),
-            Some("#24")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_publish_review_request_refreshes_stored_link_after_push() {
-        // Arrange
-        let mut session = test_session(
-            "Implement forge review support",
-            Status::Review,
-            Some("Add forge review support"),
-            "",
-        );
-        session.review_request = Some(ReviewRequest {
-            last_refreshed_at: 42,
-            summary: review_request_summary("#11"),
-        });
-        let database = database_with_session(&session).await;
-        let mut session_manager = session_manager_with_one_session(session);
-        let remote = github_remote();
-        let refreshed_summary = review_request_summary("#11");
-        let mut mock_git_client = git::MockGitClient::new();
-        expect_published_session_branch(&mut mock_git_client);
-        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
-        mock_review_request_client
-            .expect_detect_remote()
-            .times(1)
-            .returning({
-                let remote = remote.clone();
-                move |_| Ok(remote.clone())
-            });
-        mock_review_request_client
-            .expect_refresh_review_request()
-            .times(1)
-            .withf({
-                let remote = remote.clone();
-                move |candidate_remote, display_id| {
-                    candidate_remote == &remote && display_id == "#11"
-                }
-            })
-            .returning(move |_, _| {
-                let refreshed_summary = refreshed_summary.clone();
-
-                Box::pin(async move { Ok(refreshed_summary) })
-            });
-        let services = test_services(
-            &database,
-            Arc::new(mock_git_client),
-            Arc::new(mock_review_request_client),
-        );
-
-        // Act
-        let review_request = session_manager
-            .publish_review_request(&services, "session-id")
-            .await
-            .expect("stored review request should be refreshed");
-        let persisted_row = load_persisted_session_row(&database).await;
-
-        // Assert
-        assert_eq!(review_request.summary.display_id, "#11");
-        assert!(review_request.last_refreshed_at >= 42);
-        assert_eq!(
-            session_manager.state.sessions[0]
-                .published_upstream_ref
-                .as_deref(),
-            Some("origin/wt/session-id")
-        );
-        assert_eq!(
-            persisted_row
-                .review_request
-                .as_ref()
-                .map(|row| row.display_id.as_str()),
-            Some("#11")
-        );
-    }
-
-    #[tokio::test]
     async fn test_review_request_web_url_returns_linked_review_request_url() {
         // Arrange
         let mut session = test_session(
@@ -4282,6 +4060,29 @@ mod tests {
         assert!(!enqueued);
     }
 
+    /// Ensures the structured question-answer entry point rejects stale
+    /// session identifiers before attempting to enqueue worker commands.
+    #[tokio::test]
+    async fn test_reply_to_question_answers_returns_false_for_missing_session() {
+        // Arrange
+        let session = test_session("Initial prompt", Status::Question, Some("Title"), "");
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let services = test_services(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let enqueued = session_manager
+            .reply_to_question_answers(&services, "missing-session", "The answer")
+            .await;
+
+        // Assert
+        assert!(!enqueued);
+    }
+
     #[test]
     /// Ensures first replies persist the full prompt as the one-time title.
     fn test_prepare_reply_context_first_message_sets_title_from_prompt() {
@@ -4293,9 +4094,13 @@ mod tests {
 
         // Act
         let context = session_manager
-            .prepare_reply_context(0, &turn_prompt, false)
-            .expect("reply context should be available")
-            .expect("session should produce reply context");
+            .prepare_reply_context(
+                "session-id",
+                &turn_prompt,
+                false,
+                ReplyEligibility::Standard,
+            )
+            .expect("reply context should be available");
 
         // Assert
         assert_eq!(context.0, None);
@@ -4324,9 +4129,8 @@ mod tests {
 
         // Act
         let context = session_manager
-            .prepare_reply_context(0, &prompt, false)
-            .expect("reply context should be available")
-            .expect("session should produce reply context");
+            .prepare_reply_context("session-id", &prompt, false, ReplyEligibility::Standard)
+            .expect("reply context should be available");
 
         // Assert
         assert_eq!(context.0, None);
@@ -4350,7 +4154,12 @@ mod tests {
         let prompt = TurnPrompt::from_text("Another prompt".to_string());
 
         // Act
-        let result = session_manager.prepare_reply_context(0, &prompt, false);
+        let result = session_manager.prepare_reply_context(
+            "session-id",
+            &prompt,
+            false,
+            ReplyEligibility::Standard,
+        );
 
         // Assert
         let error = result.expect_err("in-progress session should block reply");

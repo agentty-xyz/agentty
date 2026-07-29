@@ -105,6 +105,7 @@ async fn run_main_loop<B: Backend>(
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    let _session_runtime_consumer = app.sessions.foreground_consumer();
     let clock = app.services.clock();
     let last_draw_at = clock.now_instant();
     let mut main_loop_state = MainLoopState {

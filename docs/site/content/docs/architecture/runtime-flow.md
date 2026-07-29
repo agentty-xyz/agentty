@@ -62,6 +62,7 @@ flowchart TD
   process["event::process_events()"]
   key_events["Key events<br/>mode handlers -> app/session orchestration"]
   app_events["App events<br/>App::apply_app_events reducer"]
+  session_commands["Session commands<br/>App::apply_session_runtime_command"]
   tick["Tick<br/>refresh_sessions_if_needed safety poll"]
 
   main --> db
@@ -79,8 +80,24 @@ flowchart TD
   main_loop --> process
   process --> key_events
   process --> app_events
+  process --> session_commands
   process --> tick
 ```
+
+Programmatic session creation uses the same foreground-owned runtime, but its response
+is stricter than the asynchronous list refresh path: before returning a new session id,
+the runtime directly reloads the active-project session snapshot. A backlog of unrelated
+`AppEvent` values therefore cannot make an immediately following session command observe
+the new session as missing. Structured question answers similarly claim the current
+persisted question set before their continuation is queued directly on the per-session
+worker, preventing cloned API clients from enqueueing the same answer set twice and
+ensuring a turn entering `Question` cannot strand the accepted answer in the chat queue.
+The clarification answer is appended to durable history only after the worker accepts
+its continuation command; a rejected enqueue restores the claimed questions without
+leaving a duplicate answer or reply-error notice for the next attempt. If the
+post-create snapshot reload encounters a transient persistence failure, creation still
+returns the already-durable session id and queues another `RefreshSessions` event
+instead of returning an ambiguous error that could prompt duplicate creation.
 
 <a id="architecture-runtime-flow-notes"></a> Foreground loop details:
 
@@ -89,19 +106,24 @@ flowchart TD
 - `run_main_loop()` owns `PresentationState`; input measurement and `ui::render_app()`
   share its bounded `RenderCacheStore`. `App` neither constructs Ratatui frames nor owns
   render caches.
-- `process_events()` waits on terminal events, app events, or tick, then drains a
-  bounded batch of queued terminal events to avoid one-key-per-frame lag.
+- `process_events()` waits on terminal events, app events, session-runtime commands, or
+  tick, then drains a bounded batch of queued terminal events to avoid one-key-per-frame
+  lag.
 - Tick interval is `50ms`; metadata-based session reload fallback is `5s`.
 
 ## Data Channels
 
-<a id="architecture-runtime-flow-channels"></a> Agentty uses four primary runtime data
+<a id="architecture-runtime-flow-channels"></a> Agentty uses five primary runtime data
 channels:
 
 - **Terminal `Event` channel** (`runtime/event.rs`): the event-reader thread forwards
   `crossterm` events into `runtime::process_events()`.
 - **App event bus** (`AppEvent`): background tasks and workers send typed events into
   the `App::apply_app_events()` reducer for safe cross-task state mutation.
+- **Session runtime mailbox** (`SessionRuntimeCommand`): cloneable
+  `SessionRuntimeHandle` values submit commands through a bounded Tokio channel. The
+  foreground runtime executes them against the live `SessionManager` and answers each
+  caller through a one-shot response channel.
 - **Turn event stream** (`TurnEvent`): `AgentChannel` implementations stream transient
   loader-thought and PID updates to the session turn consumer while the final transcript
   waits for the completed turn result.
@@ -175,29 +197,44 @@ derived data instead of recomputing the render twice per frame.
 <a id="architecture-runtime-flow-turn"></a> From prompt submit to persisted result:
 
 `ag-session` provides the programmatic entry point used by terminal interactions and
-future non-TUI callers. `SessionService` accepts a `SessionBackend` trait object and
-offers create, complete by-id lookup, send, merge, and review-request operations.
-`app/session_api.rs` implements that port for `App`: commands reuse the existing worker
-and merge workflows, while lookup migrates an active retired model reference and joins
-the persisted session settings and ordered messages into one frontend-neutral aggregate.
-The adapter deliberately contains no orchestrator policy, so a future orchestrator can
-own sequencing while calling the same API as the current frontend.
-`CreateSessionRequest` carries an explicit project id; the current `App` adapter
-validates that it matches the loaded project context, while another host can resolve
-project contexts independently.
+future non-TUI callers. `SessionService` owns an `Arc<dyn SessionBackend>`, is
+cloneable, and offers create, complete by-id lookup, send, structured question-answer,
+cancellation, merge, and review-request operations. Its backend methods use shared
+access, so a background coordinator does not borrow `App`.
+
+`app/session_runtime.rs` implements that backend on `SessionRuntimeHandle`. Every call
+enters a bounded mailbox and waits on its own response channel while a foreground
+consumer is registered. Handles reject calls made without a registered driver and stop
+waiting if its final consumer exits. The foreground event loop executes accepted
+commands through `app/session_api.rs`, reusing the existing worker, cancellation, merge,
+and review-request workflows without placing `App` behind an async mutex. Review-request
+commands snapshot the session's existing branch-publish context, spawn its push and
+forge work on the detached branch-publish task, and resolve the API response from that
+task's terminal result; the foreground mailbox remains available while publishing is in
+flight. Lookup joins persisted settings and ordered messages into one frontend-neutral
+aggregate. Creation is restricted to the active project while `SessionRuntime` owns a
+single active-project `SessionManager`, and can copy the agent, model, reasoning,
+personality, and base-branch snapshot from another session in that project without
+changing defaults for later ordinary sessions. The adapter deliberately contains no
+orchestrator policy, so a future coordinator owns sequencing while calling the same API
+as the TUI.
 
 ```mermaid
 flowchart LR
   tui["TUI runtime"]
   future["Future orchestrator"]
   api["ag-session service"]
-  adapter["App session adapter"]
+  handle["Session runtime handle"]
+  mailbox["Bounded command mailbox"]
+  adapter["Foreground adapter"]
   workers["Session workers"]
   repos["Session repositories"]
 
   tui --> api
   future --> api
-  api --> adapter
+  api --> handle
+  handle --> mailbox
+  mailbox --> adapter
   adapter --> workers
   adapter --> repos
 ```

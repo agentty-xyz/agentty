@@ -1,6 +1,6 @@
 use std::io;
 
-use ag_session::{CreateSessionMode, CreateSessionRequest, SessionService};
+use ag_session::{CreateSessionMode, CreateSessionRequest};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -248,8 +248,14 @@ async fn create_selected_session(app: &mut App) -> io::Result<()> {
         _ => return Ok(()),
     };
     let project_id = app.active_project_id();
-    let session_id = SessionService::new(app)
-        .create_session(CreateSessionRequest { mode, project_id })
+    let service = app.session_service();
+    let request = service.create_session(CreateSessionRequest {
+        inherit_from_session_id: None,
+        mode,
+        project_id,
+    });
+    let session_id = app
+        .drive_session_request(request)
         .await
         .map_err(io::Error::other)?;
     mode::list::open_session_prompt(app, session_id.into());
@@ -685,9 +691,12 @@ async fn handle_cancel_session_confirmation(
 ) -> io::Result<EventResult> {
     app.mode = AppMode::List;
 
-    if let Some(session_id) = confirmation_session_id
-        && let Err(error) = app.cancel_session(&session_id).await
-    {
+    let Some(session_id) = confirmation_session_id else {
+        return Ok(EventResult::Continue);
+    };
+    let service = app.session_service();
+    let request = service.cancel_session(&session_id);
+    if let Err(error) = app.drive_session_request(request).await {
         warn!(
             session_id = %session_id,
             error = %error,
@@ -750,9 +759,12 @@ async fn handle_merge_confirmation(
 ) -> io::Result<EventResult> {
     app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
 
-    if let Some(session_id) = confirmation_session_id
-        && let Err(error) = SessionService::new(app).merge_session(&session_id).await
-    {
+    let Some(session_id) = confirmation_session_id else {
+        return Ok(EventResult::Continue);
+    };
+    let service = app.session_service();
+    let request = service.merge_session(&session_id);
+    if let Err(error) = app.drive_session_request(request).await {
         app.append_output_for_session(&session_id, &TranscriptNotice::MergeError.format(error))
             .await;
     }
@@ -1360,6 +1372,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_cancel_session_confirmation_tolerates_a_missing_session() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+
+        // Act
+        let event_result =
+            handle_cancel_session_confirmation(&mut app, Some("missing-session".into())).await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_session_confirmation_handlers_accept_no_selected_session() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+
+        // Act
+        let cancel_result = handle_cancel_session_confirmation(&mut app, None).await;
+        let merge_result = handle_merge_confirmation(&mut app, None, None).await;
+
+        // Assert
+        assert!(matches!(cancel_result, Ok(EventResult::Continue)));
+        assert!(matches!(merge_result, Ok(EventResult::Continue)));
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
     async fn test_handle_key_event_routes_done_session_continue_shortcut() {
         // Arrange
         let (mut app, _base_dir) =
@@ -1695,6 +1736,45 @@ mod tests {
         app.sessions.sync_from_handles();
         let output = session_replay_text(&app.sessions.sessions()[0]);
         assert!(output.contains("[Merge Error]"));
+    }
+
+    #[tokio::test]
+    async fn test_merge_confirmation_accepts_an_already_active_merge() {
+        // Arrange
+        let base_dir = tempfile::tempdir().expect("failed to create base dir");
+        let project_dir = tempfile::tempdir().expect("failed to create project dir");
+        crate::test_support::setup_test_git_repo(project_dir.path());
+        let repositories = crate::infra::db::AppRepositories::in_memory().await;
+        let clients = crate::test_support::test_app_clients_with_mock_app_server()
+            .with_tmux_client(Arc::new(MockTmuxClient::new()));
+        let mut app = App::new_with_clients(
+            base_dir.path().to_path_buf(),
+            project_dir.path().to_path_buf(),
+            Some("main".to_string()),
+            repositories,
+            clients,
+        )
+        .await
+        .expect("failed to create app");
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &session_id,
+            crate::domain::session::Status::Review,
+        );
+        app.merge_session(&session_id)
+            .await
+            .expect("merge should become active");
+
+        // Act
+        let event_result = handle_merge_confirmation(&mut app, Some(session_id.into()), None).await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]

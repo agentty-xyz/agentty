@@ -445,7 +445,7 @@ mod tests {
             .folder(base_dir.path().to_path_buf())
             .build();
         app.sessions =
-            crate::test_support::session_manager_with_handles(vec![session], HashMap::new());
+            crate::test_support::session_manager_with_handles(vec![session], HashMap::new()).into();
 
         (app, base_dir)
     }

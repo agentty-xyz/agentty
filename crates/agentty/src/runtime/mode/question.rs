@@ -1,4 +1,4 @@
-use ag_session::SessionService;
+use ag_session::{AnswerQuestionsRequest, QuestionAnswer};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use tracing::warn;
@@ -609,16 +609,15 @@ async fn submit_response(app: &mut App, response: String) {
     };
 
     let session_id = completed_response.session_id.clone();
-    let question_reply =
-        build_question_reply_prompt(&completed_response.questions, &completed_response.responses);
+    let answers =
+        structured_question_answers(&completed_response.questions, &completed_response.responses);
     app.mode = AppMode::View {
         session_id: session_id.clone(),
         scroll_offset: None,
     };
-    let reply_enqueued = match SessionService::new(app)
-        .send_message(&session_id, question_reply)
-        .await
-    {
+    let service = app.session_service();
+    let request = service.answer_questions(&session_id, AnswerQuestionsRequest { answers });
+    let reply_enqueued = match app.drive_session_request(request).await {
         Ok(()) => true,
         Err(error) => {
             warn!(
@@ -842,20 +841,19 @@ fn normalize_response_text(response_text: &str) -> String {
     trimmed.to_string()
 }
 
-/// Builds the follow-up prompt sent after all clarification responses are
-/// collected.
-fn build_question_reply_prompt(questions: &[QuestionItem], responses: &[String]) -> String {
-    let mut lines = vec!["Clarifications:".to_string()];
-
-    for (question_index, question) in questions.iter().enumerate() {
-        let response = responses
-            .get(question_index)
-            .map_or(NO_ANSWER, std::string::String::as_str);
-        lines.push(format!("{}. Q: {}", question_index + 1, question.text));
-        lines.push(format!("   A: {response}"));
-    }
-
-    lines.join("\n")
+/// Pairs the current ordered question set with its collected responses.
+fn structured_question_answers(
+    questions: &[QuestionItem],
+    responses: &[String],
+) -> Vec<QuestionAnswer> {
+    questions
+        .iter()
+        .zip(responses)
+        .map(|(question, answer)| QuestionAnswer {
+            answer: answer.clone(),
+            question: question.text.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1632,12 +1630,28 @@ mod tests {
             .await
             .expect("session should be created");
         crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Question);
+        let questions = vec![QuestionItem::new("Which tests should be added?")];
+        app.sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == session_id)
+            .expect("session should be loaded")
+            .questions = questions.clone();
+        app.services
+            .db()
+            .sessions()
+            .update_session_questions(
+                &session_id,
+                &serde_json::to_string(&questions).expect("questions should serialize"),
+            )
+            .await
+            .expect("questions should persist");
         app.mode = AppMode::Question {
             at_mention_state: None,
             current_index: 0,
             focus: ChatFocus::Input,
             input: InputState::default(),
-            questions: vec![QuestionItem::new("Which tests should be added?")],
+            questions,
             responses: Vec::new(),
             scroll_offset: None,
             selected_option_index: None,
@@ -2511,7 +2525,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_question_reply_prompt_formats_all_pairs() {
+    fn test_structured_question_answers_pairs_all_responses() {
         // Arrange
         let questions = vec![
             QuestionItem {
@@ -2526,12 +2540,21 @@ mod tests {
         let responses = vec!["main".to_string(), NO_ANSWER.to_string()];
 
         // Act
-        let message = build_question_reply_prompt(&questions, &responses);
+        let answers = structured_question_answers(&questions, &responses);
 
         // Assert
         assert_eq!(
-            message,
-            "Clarifications:\n1. Q: Need target?\n   A: main\n2. Q: Need tests?\n   A: no answer"
+            answers,
+            [
+                QuestionAnswer {
+                    answer: "main".to_string(),
+                    question: "Need target?".to_string(),
+                },
+                QuestionAnswer {
+                    answer: NO_ANSWER.to_string(),
+                    question: "Need tests?".to_string(),
+                },
+            ]
         );
     }
 

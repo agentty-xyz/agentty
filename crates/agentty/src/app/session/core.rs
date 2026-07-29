@@ -18,7 +18,7 @@ pub(crate) use super::workflow::task::{
 use super::workflow::worker::SessionWorkerService;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppServices, SessionState, setting};
-use crate::domain::agent::{AgentModel, ReasoningLevel};
+use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
@@ -42,6 +42,17 @@ pub(crate) const AT_MENTION_INDEX_TTL: Duration = Duration::from_secs(30);
 pub(crate) struct SessionDefaults {
     /// Default model selected for newly created sessions.
     pub(crate) model: AgentModel,
+}
+
+/// Deterministic provider settings captured for one new session.
+#[derive(Clone)]
+pub(crate) struct SessionCreationSettings {
+    /// Agent provider and model assigned to the session.
+    pub(crate) agent: AgentSelection,
+    /// Workspace personality selected for future turns.
+    pub(crate) personality_id: Option<String>,
+    /// Session-scoped reasoning level.
+    pub(crate) reasoning_level: ReasoningLevel,
 }
 
 /// Borrowed session state required to draw one UI frame.

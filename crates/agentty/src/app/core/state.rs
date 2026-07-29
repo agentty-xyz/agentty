@@ -27,6 +27,7 @@ use app::review::{
 };
 use app::service::AppServices;
 use app::session::SessionManager;
+use app::session_runtime::SessionRuntime;
 use app::setting::SettingsManager;
 use app::sync::SyncMainRunner;
 use app::tab::{Tab, TabManager};
@@ -290,8 +291,9 @@ pub struct App {
     pub(crate) projects: ProjectManager,
     /// Shares application-wide services and external clients across workflows.
     pub(crate) services: AppServices,
-    /// Owns session state, runtime handles, and session workflow coordination.
-    pub(crate) sessions: SessionManager,
+    /// Owns session state, worker coordination, and the bounded control
+    /// mailbox used by frontend-neutral callers.
+    pub(crate) sessions: SessionRuntime,
     /// Runs sync-to-main workflows behind an injectable boundary.
     pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
     /// Owns the active-project sync orchestrator command and context
@@ -2327,7 +2329,10 @@ impl App {
     }
 
     /// Builds one branch-publish task snapshot with its shared operation lock.
-    fn branch_publish_task_context(&self, session_id: &str) -> Option<BranchPublishTaskContext> {
+    pub(crate) fn branch_publish_task_context(
+        &self,
+        session_id: &str,
+    ) -> Option<BranchPublishTaskContext> {
         let (session, handles) = self.sessions.session_and_handles_or_err(session_id).ok()?;
         let mut branch_publish_session = BranchPublishTaskSession::from_session(session);
         branch_publish_session.base_branch = self.review_target_branch_for_session(session);

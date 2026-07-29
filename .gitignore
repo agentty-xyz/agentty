@@ -1,4 +1,5 @@
 /target
+/coverage.lcov
 .agentty/
 docs/site/public/
 
