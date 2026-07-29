@@ -11,4 +11,6 @@ Reusable skills available to agents in this repository.
 - `security-audit` covers threat-model-driven project auditing.
 - `feature-test` covers E2E feature test creation with VHS GIF generation and Zola page
   auto-discovery.
+- `grilling` stress-tests plans, decisions, and ideas through a one-question-at-a-time
+  interview.
 - `tech-debt` covers maintenance and cleanup sweeps.
