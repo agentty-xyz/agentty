@@ -4,8 +4,6 @@ pub mod composer;
 pub mod file_entry;
 /// Editable text-input state and cursor operations.
 pub mod input;
-/// Durable operation kinds, lifecycle states, and transition rules.
-pub mod operation;
 /// Workspace personality definitions and frontmatter parsing.
 pub mod personality;
 /// Persisted project entities and project-list ordering.
