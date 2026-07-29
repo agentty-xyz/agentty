@@ -779,7 +779,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "session-id",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,

@@ -455,14 +455,14 @@ mod tests {
         let mut session = SessionFixtureBuilder::new().build();
         session.agent = crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt55,
+            AgentModel::Gpt56Sol,
         );
 
         // Act
         let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
 
         // Assert
-        assert!(metadata_text.contains("Agent: codex  Model: gpt-5.5"));
+        assert!(metadata_text.contains("Agent: codex  Model: gpt-5.6-sol"));
     }
 
     #[test]

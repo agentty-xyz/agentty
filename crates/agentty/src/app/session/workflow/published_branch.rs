@@ -697,7 +697,7 @@ mod tests {
                 one_shot_client: Arc::new(one_shot_client),
                 session_agent: AgentSelection::new(
                     crate::domain::agent::AgentKind::Codex,
-                    crate::domain::agent::AgentModel::Gpt55,
+                    crate::domain::agent::AgentModel::Gpt56Sol,
                 ),
                 session_summary: "The same goal now includes the completed body.".to_string(),
             },
@@ -1061,7 +1061,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "session-id",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "Review",
                 project_id,

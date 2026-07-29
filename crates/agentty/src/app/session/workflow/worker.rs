@@ -1212,7 +1212,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -1680,7 +1680,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -2441,7 +2441,7 @@ mod tests {
             continuation: TurnContinuation::fresh(),
             folder: context.folder.clone(),
             main_checkout_root: None,
-            model: "gemini-3-flash-preview".to_string(),
+            model: "gemini-3.6-flash".to_string(),
             personality: ag_agent::PersonalityPrompt::default(),
             prompt: "test".into(),
             reasoning_level: ReasoningLevel::default(),
@@ -2515,7 +2515,7 @@ mod tests {
             continuation: TurnContinuation::fresh(),
             folder: context.folder.clone(),
             main_checkout_root: None,
-            model: "gemini-3-flash-preview".to_string(),
+            model: "gemini-3.6-flash".to_string(),
             personality: ag_agent::PersonalityPrompt::default(),
             prompt: "test".into(),
             reasoning_level: ReasoningLevel::default(),
@@ -2725,7 +2725,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -2997,7 +2997,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -3323,7 +3323,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -3531,7 +3531,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -3626,7 +3626,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -3722,7 +3722,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -3833,7 +3833,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -3937,7 +3937,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4030,7 +4030,7 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session("sess1", "gpt-5.5", "main", "InProgress", project_id)
+            .insert_session("sess1", "gpt-5.6-sol", "main", "InProgress", project_id)
             .await
             .expect("failed to insert session");
 
@@ -4082,7 +4082,7 @@ mod tests {
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Codex,
-                AgentModel::Gpt55,
+                AgentModel::Gpt56Sol,
             ),
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
@@ -4140,7 +4140,7 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session("sess1", "gpt-5.5", "main", "Rebasing", project_id)
+            .insert_session("sess1", "gpt-5.6-sol", "main", "Rebasing", project_id)
             .await
             .expect("failed to insert session");
         db.sessions()
@@ -4312,7 +4312,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Codex,
-                AgentModel::Gpt55,
+                AgentModel::Gpt56Sol,
             ),
             status: Arc::clone(&status),
         };
@@ -4387,7 +4387,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4446,13 +4446,7 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session(
-                "sess1",
-                "gemini-3-flash-preview",
-                "main",
-                "Rebasing",
-                project_id,
-            )
+            .insert_session("sess1", "gemini-3.6-flash", "main", "Rebasing", project_id)
             .await
             .expect("failed to insert session");
         db.operations()
@@ -4504,7 +4498,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4574,7 +4568,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4649,7 +4643,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4745,7 +4739,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,

@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use super::events::AppEvent;
 use super::state::{App, AppClients};
 use crate::app::service::{AppServiceDeps, AppServices};
-use crate::app::session::SessionManager;
+use crate::app::session::{SessionManager, migrate_active_sessions_off_retired_models};
 use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
 use crate::app::{AppError, review, sync, task};
@@ -278,8 +278,8 @@ impl App {
         );
     }
 
-    /// Loads the startup project state and builds the repository bundle used
-    /// by the app layer.
+    /// Migrates project-independent session state before loading the startup
+    /// project context.
     ///
     /// # Errors
     /// Returns an error if startup project metadata cannot be persisted or
@@ -290,6 +290,7 @@ impl App {
         repositories: &AppRepositories,
         clients: &AppClients,
     ) -> Result<StartupProjectContext, AppError> {
+        migrate_active_sessions_off_retired_models(repositories).await;
         let current_project_id =
             AppStartup::persist_startup_project(repositories, working_dir, git_branch.as_deref())
                 .await?;

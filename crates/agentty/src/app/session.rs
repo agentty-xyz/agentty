@@ -19,5 +19,7 @@ pub(crate) use core::{
 pub use error::SessionError;
 pub(crate) use state::SessionGitStatus;
 pub use state::SessionState;
-pub(crate) use workflow::load::SessionLoadInput;
+pub(crate) use workflow::load::{
+    SessionLoadInput, migrate_active_sessions_off_retired_models, migrate_session_off_retired_model,
+};
 pub(crate) use workflow::refresh::SyncReviewRequestOutcome;

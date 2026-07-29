@@ -160,7 +160,7 @@ unless a session-specific override is active. Antigravity receives `--effort low
 `--effort medium`, or `--effort high`; `xhigh` and `max` map to its highest supported
 value, `--effort high`. Codex receives `max` as a distinct reasoning effort. For Claude,
 both `xhigh` and `max` map to `--effort max`, which is currently only supported by
-`claude-opus-5` and `claude-opus-4-8`.
+`claude-opus-5`.
 
 ## Available Models
 
@@ -173,13 +173,12 @@ Both providers share the same Gemini model ids:
 
 - `gemini-3.1-pro` (default): Higher-quality Gemini model for deeper reasoning.
 - `gemini-3.6-flash`: Fast Gemini model for agentic and multimodal tasks.
-- `gemini-3.5-flash`: Fast Gemini model for balanced agentic workloads.
+- `gemini-3.5-flash-lite`: Lightweight Gemini model for fast, cost-conscious workloads.
 
 ### Claude Models
 
 - `claude-fable-5` (default): Claude Fable model for creative, narrative-heavy tasks.
 - `claude-opus-5`: Latest Claude Opus model for complex tasks.
-- `claude-opus-4-8`: Claude Opus 4.8 model for complex tasks.
 - `claude-sonnet-5`: Balanced Claude model for quality and latency.
 - `claude-haiku-4-5-20251001`: Fast Claude model for lighter tasks.
 
@@ -188,14 +187,25 @@ Both providers share the same Gemini model ids:
 - `gpt-5.6-sol` (default): Newest Codex model for the strongest coding performance.
 - `gpt-5.6-terra`: Current Codex model for balanced coding performance.
 - `gpt-5.6-luna`: Current Codex model for lighter coding iterations.
-- `gpt-5.5`: Newer Codex model with stronger coding performance when available.
 - `gpt-5.3-codex-spark`: Codex spark model for quick coding iterations.
 
-Stored project defaults or session rows that reference a retired model id (such as
-`gemini-3-flash-preview`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`,
-`gemini-3.1-flash-lite-preview`, `claude-opus-4-6`, `claude-opus-4-7`,
-`claude-sonnet-4-6`, `gpt-5.4`, or `gpt-5.4-mini`) are upgraded to the current supported
-replacement when Agentty loads them.
+### Retired Models
+
+When a model is retired in favor of a replacement (for example, a new Claude Opus
+release superseding the previous one), Agentty upgrades stored references automatically:
+
+- Model pickers for new sessions list only the current models above; retired ids (such
+  as `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.5-flash`,
+  `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite-preview`, `claude-opus-4-8`,
+  `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `gpt-5.5`, `gpt-5.4`,
+  `gpt-5.4-mini`, `gpt-5.3-codex`, or `gpt-5.2-codex`) are never selectable.
+- Stored project defaults that reference a retired model id are upgraded to the current
+  supported replacement when Agentty loads them.
+- Sessions that are still active are switched to the replacement model automatically,
+  and the switch is persisted so every following turn runs on the current model.
+- Finished sessions (`Merged`, `Done`, or `Canceled`) keep the retired model id in the
+  database as a historical record and are displayed with the replacement model when
+  reopened.
 
 ## Switching Models
 

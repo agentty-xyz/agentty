@@ -126,7 +126,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!(
             "agentty-codex-runtime-state-{thread_id}-{latest_input_tokens}"
         ));
-        let mut state = CodexRuntimeState::new(folder, AgentModel::Gpt55.as_str().to_string());
+        let mut state = CodexRuntimeState::new(folder, AgentModel::Gpt56Sol.as_str().to_string());
         state.thread_id = thread_id.to_string();
         state.latest_input_tokens = latest_input_tokens;
 
@@ -179,7 +179,7 @@ mod tests {
         let gpt_56_sol_model = AgentModel::Gpt56Sol.as_str();
         let gpt_56_terra_model = AgentModel::Gpt56Terra.as_str();
         let gpt_56_luna_model = AgentModel::Gpt56Luna.as_str();
-        let gpt_55_model = AgentModel::Gpt55.as_str();
+        let gpt_55_model = AgentModel::Gpt56Sol.as_str();
         let spark_model = AgentModel::Gpt53CodexSpark.as_str();
 
         // Act
@@ -269,7 +269,7 @@ mod tests {
         let thread_id = lifecycle::start_thread(
             &mut transport,
             folder.path(),
-            AgentModel::Gpt55.as_str(),
+            AgentModel::Gpt56Sol.as_str(),
             ReasoningLevel::default(),
         )
         .await;
@@ -358,7 +358,7 @@ mod tests {
         let thread = lifecycle::start_or_resume_thread(
             &mut transport,
             folder.path(),
-            AgentModel::Gpt55.as_str(),
+            AgentModel::Gpt56Sol.as_str(),
             Some("thread-existing"),
             ReasoningLevel::default(),
         )
@@ -451,7 +451,7 @@ mod tests {
         let result = lifecycle::execute_turn_event_loop(
             &mut transport,
             folder.path(),
-            AgentModel::Gpt55.as_str(),
+            AgentModel::Gpt56Sol.as_str(),
             "thread-1",
             "Implement the task",
             ReasoningLevel::default(),
@@ -762,7 +762,7 @@ mod tests {
         // Act
         let payload = lifecycle::build_thread_start_payload(
             folder.path(),
-            AgentModel::Gpt55.as_str(),
+            AgentModel::Gpt56Sol.as_str(),
             ReasoningLevel::default(),
             "thread-start-1",
         );
@@ -922,7 +922,7 @@ mod tests {
         // Act
         let payload = lifecycle::build_turn_start_payload(
             folder.path(),
-            AgentModel::Gpt55.as_str(),
+            AgentModel::Gpt56Sol.as_str(),
             ReasoningLevel::default(),
             "thread-123",
             "Implement the task",

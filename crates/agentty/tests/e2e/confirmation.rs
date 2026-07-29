@@ -16,7 +16,7 @@ type E2eResult = Result<(), Box<dyn std::error::Error>>;
 fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
     common::seed_session(
         env,
-        SessionSeed::draft("draft-cancel-0001", "gpt-5.5", "main", "Draft")
+        SessionSeed::draft("draft-cancel-0001", "gpt-5.6-sol", "main", "Draft")
             .with_title("Cancel staged draft from list"),
     )
 }
@@ -27,8 +27,8 @@ fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
 
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "gpt-5.5", "main", "InProgress")
-            .with_title("Cancel running session from list"),
+        SessionSeed::regular(session_id, "gpt-5.6-sol", "main", "InProgress")
+            .with_title("Cancel running session"),
     )?;
 
     let worktree_name = &session_id[..8];
@@ -46,14 +46,14 @@ fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
 
     common::seed_session(
         env,
-        SessionSeed::regular(parent_session_id, "gpt-5.5", "main", "Review")
+        SessionSeed::regular(parent_session_id, "gpt-5.6-sol", "main", "Review")
             .with_title("Parent for child cancel"),
     )?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
             child_session_id,
-            "gpt-5.5",
+            "gpt-5.6-sol",
             "wt/parentca",
             "Draft",
             parent_session_id,
@@ -243,7 +243,7 @@ fn running_session_cancel_confirmation() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("Cancel running session from list", 5000)
+                    .wait_for_text("Cancel running session", 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "running_row",
@@ -267,11 +267,7 @@ fn running_session_cancel_confirmation() -> E2eResult {
             |frame, report| {
                 let list_frame = common::frame_from_capture(&report.captures[0]);
                 let list_full = Region::full(list_frame.cols(), list_frame.rows());
-                assertion::assert_text_in_region(
-                    &list_frame,
-                    "Cancel running session from list",
-                    &list_full,
-                );
+                assertion::assert_text_in_region(&list_frame, "Cancel running session", &list_full);
                 assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
 
                 let confirmation_frame = common::frame_from_capture(&report.captures[1]);

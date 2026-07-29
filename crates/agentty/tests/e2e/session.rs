@@ -111,7 +111,7 @@ fn seed_session_with_beautified_agent_error(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("agent-error-0001", "claude-opus-4-8", "main", "Review")
+        SessionSeed::regular("agent-error-0001", "claude-opus-5", "main", "Review")
             .with_title("Readable agent error"),
     )?;
 
@@ -187,7 +187,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Crea
 fn seed_session_with_markdown_table(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("markdown-table-0001", "claude-opus-4-8", "main", "Review")
+        SessionSeed::regular("markdown-table-0001", "claude-opus-5", "main", "Review")
             .with_title("Markdown table output"),
     )?;
 
@@ -219,7 +219,7 @@ fn seed_session_with_markdown_table(env: &BuilderEnv) -> Result<(), Box<dyn std:
 fn seed_session_with_user_markdown(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("user-markdown-0001", "claude-opus-4-8", "main", "Review")
+        SessionSeed::regular("user-markdown-0001", "claude-opus-5", "main", "Review")
             .with_title("User markdown prompt"),
     )?;
 
@@ -272,7 +272,7 @@ fn seed_session_with_inline_markdown_punctuation(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("inline-md-0001", "claude-opus-4-8", "main", "Review")
+        SessionSeed::regular("inline-md-0001", "claude-opus-5", "main", "Review")
             .with_title("Inline markdown punctuation"),
     )?;
 
@@ -302,7 +302,7 @@ fn seed_session_with_inline_markdown_punctuation(
 fn seed_session_with_mermaid_output(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("mermaid-chat-0001", "claude-opus-4-8", "main", "Review")
+        SessionSeed::regular("mermaid-chat-0001", "claude-opus-5", "main", "Review")
             .with_title("Mermaid diagram output"),
     )?;
 
@@ -362,7 +362,7 @@ fn seed_session_with_cyclic_mermaid_output(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("cyclic-mermaid-0001", "claude-opus-4-8", "main", "Review")
+        SessionSeed::regular("cyclic-mermaid-0001", "claude-opus-5", "main", "Review")
             .with_title("Cyclic Mermaid output"),
     )?;
 
@@ -406,7 +406,7 @@ fn seed_session_with_typed_marker_collision(
     let session_id = "typed-marker-0001";
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "gpt-5.5", "main", "Review")
+        SessionSeed::regular(session_id, "gpt-5.6-sol", "main", "Review")
             .with_title("Typed marker collision"),
     )?;
 
@@ -517,7 +517,7 @@ printf '{{"type":"result","subtype":"success","result":"{{\\"answer\\":\\"## Rev
 fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("review-shortcut-0001", "gpt-5.5", "main", "Review")
+        SessionSeed::regular("review-shortcut-0001", "gpt-5.6-sol", "main", "Review")
             .with_title("Review-ready session shortcuts"),
     )?;
 
@@ -681,7 +681,7 @@ fn seed_session_with_published_branch_push_notice(
 
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "gpt-5.5", "main", "Review")
+        SessionSeed::regular(session_id, "gpt-5.6-sol", "main", "Review")
             .with_title("Published push notice"),
     )?;
 
@@ -740,7 +740,7 @@ fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
             .sessions()
             .insert_session(
                 "agent-review-sync-0001",
-                "gpt-5.5",
+                "gpt-5.6-sol",
                 "main",
                 "AgentReview",
                 project_id,
@@ -767,14 +767,14 @@ fn seed_review_ready_parent_with_review_child(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("stack-parent-0001", "gpt-5.5", "main", "Review")
+        SessionSeed::regular("stack-parent-0001", "gpt-5.6-sol", "main", "Review")
             .with_title("Parent stack review"),
     )?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
             "stack-child-0001",
-            "gpt-5.5",
+            "gpt-5.6-sol",
             "wt/stack-pa",
             "Review",
             "stack-parent-0001",
@@ -797,7 +797,7 @@ fn seed_pending_post_merge_restack_child(
     let parent_tip = seed_child_worktree_for_onto_rebase(&env.workdir, &child_worktree)?;
     common::seed_session(
         env,
-        SessionSeed::regular("stack-restack-child-0001", "gpt-5.5", "main", "Review")
+        SessionSeed::regular("stack-restack-child-0001", "gpt-5.6-sol", "main", "Review")
             .with_title("Pending post-merge child sync"),
     )?;
 
@@ -823,8 +823,13 @@ fn seed_failing_pending_post_merge_restack_child(
     let _parent_tip = seed_child_worktree_for_onto_rebase(&env.workdir, &child_worktree)?;
     common::seed_session(
         env,
-        SessionSeed::regular("stack-restack-failure-0001", "gpt-5.5", "main", "Review")
-            .with_title("Blocked post-merge child sync"),
+        SessionSeed::regular(
+            "stack-restack-failure-0001",
+            "gpt-5.6-sol",
+            "main",
+            "Review",
+        )
+        .with_title("Blocked post-merge child sync"),
     )?;
 
     let runtime = common::seed_runtime()?;
@@ -907,12 +912,12 @@ fn seed_sessions_with_matching_update_times(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("a-older", "gpt-5.5", "main", "Review")
+        SessionSeed::regular("a-older", "gpt-5.6-sol", "main", "Review")
             .with_title("Older created session"),
     )?;
     common::seed_session(
         env,
-        SessionSeed::regular("z-newer", "gpt-5.5", "main", "Review")
+        SessionSeed::regular("z-newer", "gpt-5.6-sol", "main", "Review")
             .with_title("Newer created session"),
     )?;
 
@@ -1266,7 +1271,7 @@ fn seed_sessions_with_persisted_focused_reviews(
     // Seeding in the other order makes row 0 depend on that boundary.
     common::seed_session(
         env,
-        SessionSeed::regular("second-review-0001", "gpt-5.5", "main", "Review")
+        SessionSeed::regular("second-review-0001", "gpt-5.6-sol", "main", "Review")
             .with_title("Second persisted review"),
     )?;
 
@@ -1299,7 +1304,7 @@ fn seed_sessions_with_persisted_focused_reviews(
 fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(RUNNING_STOP_SESSION_ID, "gpt-5.5", "main", "InProgress")
+        SessionSeed::regular(RUNNING_STOP_SESSION_ID, "gpt-5.6-sol", "main", "InProgress")
             .with_title("Running session stop"),
     )?;
 
@@ -1325,7 +1330,7 @@ fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
 fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(REBASING_QUEUE_SESSION_ID, "gpt-5.5", "main", "Rebasing")
+        SessionSeed::regular(REBASING_QUEUE_SESSION_ID, "gpt-5.6-sol", "main", "Rebasing")
             .with_title("Rebasing message queue"),
     )?;
 
@@ -1361,8 +1366,13 @@ fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::erro
 fn seed_question_resume_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(QUESTION_RESUME_SESSION_ID, "gpt-5.5", "main", "Question")
-            .with_title("Question resume session"),
+        SessionSeed::regular(
+            QUESTION_RESUME_SESSION_ID,
+            "gpt-5.6-sol",
+            "main",
+            "Question",
+        )
+        .with_title("Question resume session"),
     )?;
 
     let session_worktree =
@@ -1716,7 +1726,7 @@ fn seed_dirty_fork_source_session(env: &BuilderEnv) -> Result<(), Box<dyn std::e
 fn seed_binary_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(BINARY_DIFF_SESSION_ID, "gpt-5.5", "main", "Review")
+        SessionSeed::regular(BINARY_DIFF_SESSION_ID, "gpt-5.6-sol", "main", "Review")
             .with_title("Binary diff session"),
     )?;
 
@@ -1963,14 +1973,14 @@ fn seed_stacked_at_lookup_session(env: &BuilderEnv) -> Result<(), Box<dyn std::e
     let child_session_id = "atchildx-0001";
     common::seed_session(
         env,
-        SessionSeed::regular(parent_session_id, "gpt-5.5", "main", "Review")
+        SessionSeed::regular(parent_session_id, "gpt-5.6-sol", "main", "Review")
             .with_title("Parent with lookup file"),
     )?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
             child_session_id,
-            "gpt-5.5",
+            "gpt-5.6-sol",
             "wt/atparent",
             "Draft",
             parent_session_id,
@@ -1994,7 +2004,7 @@ fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn st
     let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
     common::seed_session(
         env,
-        SessionSeed::regular("done-continue-0001", "gpt-5.5", "main", "Done")
+        SessionSeed::regular("done-continue-0001", "gpt-5.6-sol", "main", "Done")
             .with_title("Continue terminal session"),
     )?;
 
@@ -2021,7 +2031,7 @@ fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn st
 fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(LOADER_SESSION_ID, "gpt-5.5", "main", "InProgress")
+        SessionSeed::regular(LOADER_SESSION_ID, "gpt-5.6-sol", "main", "InProgress")
             .with_title("Loader session"),
     )?;
 
@@ -2040,7 +2050,7 @@ fn seed_session_with_scrollable_output(env: &BuilderEnv) -> Result<(), Box<dyn s
 
     common::seed_session(
         env,
-        SessionSeed::regular(SESSION_ID, "gpt-5.5", "main", "Review")
+        SessionSeed::regular(SESSION_ID, "gpt-5.6-sol", "main", "Review")
             .with_title("Scrollable output"),
     )?;
 
@@ -2364,7 +2374,7 @@ fn session_list_model_reasoning_level() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("gpt-5.5 [medium]", 5000)
+                    .wait_for_text("gpt-5.6-sol [medium]", 5000)
                     .capture_labeled(
                         "model_reasoning",
                         "Session row model column with reasoning level",
@@ -2372,7 +2382,7 @@ fn session_list_model_reasoning_level() -> E2eResult {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gpt-5.5 [medium]", &full);
+                assertion::assert_text_in_region(frame, "gpt-5.6-sol [medium]", &full);
             },
         )?;
 
@@ -2431,7 +2441,7 @@ fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("gpt-5.5 [high]", 5000)
+                    .wait_for_text("gpt-5.6-sol [high]", 5000)
                     .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
@@ -2443,7 +2453,7 @@ fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
                     .press_key("BackTab")
                     .press_key("BackTab")
                     .press_key("BackTab")
-                    .wait_for_text("gpt-5.5 [high]", 5000)
+                    .wait_for_text("gpt-5.6-sol [high]", 5000)
                     .capture_labeled(
                         "active_reasoning",
                         "Existing session retains persisted reasoning",
@@ -2451,7 +2461,7 @@ fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gpt-5.5 [high]", &full);
+                assertion::assert_text_in_region(frame, "gpt-5.6-sol [high]", &full);
             },
         )?;
 
@@ -2472,7 +2482,7 @@ fn session_chat_header_agent_model() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("Agent: codex  Model: gpt-5.5", 5000)
+                    .wait_for_text("Agent: codex  Model: gpt-5.6-sol", 5000)
                     .capture_labeled(
                         "agent_model_header",
                         "Session chat header showing agent before model",
@@ -2480,7 +2490,7 @@ fn session_chat_header_agent_model() -> E2eResult {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Agent: codex  Model: gpt-5.5", &full);
+                assertion::assert_text_in_region(frame, "Agent: codex  Model: gpt-5.6-sol", &full);
             },
         )?;
 
@@ -2558,7 +2568,7 @@ fn session_list_selected_row_remains_readable_under_dark_horizon() -> E2eResult 
                 let selected_row_region =
                     Region::new(0, selected_title.rect.row, sessions_frame.cols(), 1);
                 sessions_frame
-                    .find_text_in_region("gpt-5.5", &selected_row_region)
+                    .find_text_in_region("gpt-5.6-sol", &selected_row_region)
                     .into_iter()
                     .next()
                     .expect("expected selected session model to be visible");
@@ -3880,7 +3890,7 @@ fn gemini_model_picker_lists_current_models() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gemini-3.6-flash", &full);
-                assertion::assert_text_in_region(frame, "gemini-3.5-flash", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
             },
         )?;
 
@@ -3921,9 +3931,54 @@ fn claude_model_picker_lists_current_models() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "claude-fable-5", &full);
                 assertion::assert_text_in_region(frame, "claude-opus-5", &full);
-                assertion::assert_text_in_region(frame, "claude-opus-4-8", &full);
                 assertion::assert_text_in_region(frame, "claude-sonnet-5", &full);
                 assertion::assert_text_in_region(frame, "claude-haiku-4-5-20251001", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Seeds one still-active review session whose persisted model id has been
+/// retired in favor of `gemini-3.5-flash-lite`.
+fn seed_active_session_with_retired_model(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular("retired-model-0001", "gemini-3.5-flash", "main", "Review")
+            .with_title("Retired model"),
+    )?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("retired-"))?;
+
+    Ok(())
+}
+
+/// Verify that a still-active session stored on a retired model id is
+/// switched automatically to the replacement model.
+#[test]
+fn retired_model_session_switches_to_replacement() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("retired_model_session_switches_to_replacement")
+        .with_git()
+        .setup(seed_active_session_with_retired_model)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("gemini-3.5-flash-lite", 5000)
+                    .capture_labeled(
+                        "retired_model_replacement",
+                        "Active session switched to the replacement model",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Retired model", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
+                assertion::assert_match_count(frame, "gemini-3.5-flash [medium]", 0);
             },
         )?;
 
@@ -3967,7 +4022,6 @@ fn codex_model_picker_lists_current_models() -> E2eResult {
                 assertion::assert_text_in_region(frame, "gpt-5.6-sol", &full);
                 assertion::assert_text_in_region(frame, "gpt-5.6-terra", &full);
                 assertion::assert_text_in_region(frame, "gpt-5.6-luna", &full);
-                assertion::assert_text_in_region(frame, "gpt-5.5", &full);
                 assertion::assert_text_in_region(frame, "gpt-5.3-codex-spark", &full);
             },
         )?;
@@ -4008,7 +4062,7 @@ fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gemini-3.1-pro", &full);
                 assertion::assert_text_in_region(frame, "gemini-3.6-flash", &full);
-                assertion::assert_text_in_region(frame, "gemini-3.5-flash", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
             },
         )?;
 

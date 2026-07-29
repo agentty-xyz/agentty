@@ -103,12 +103,7 @@ pub(super) const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_128K_CONTEXT: u64 = 120_000;
 pub(super) fn auto_compact_input_token_threshold(model: &str) -> u64 {
     let is_1050k_context_model = matches!(
         AgentKind::Codex.parse_model(model),
-        Some(
-            AgentModel::Gpt56Sol
-                | AgentModel::Gpt56Terra
-                | AgentModel::Gpt56Luna
-                | AgentModel::Gpt55
-        )
+        Some(AgentModel::Gpt56Sol | AgentModel::Gpt56Terra | AgentModel::Gpt56Luna)
     );
     if is_1050k_context_model {
         return AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT;

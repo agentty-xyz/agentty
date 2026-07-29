@@ -100,7 +100,7 @@ async fn insert_session_fixture(
 ) {
     database
         .sessions()
-        .insert_session(session_id, "gpt-5.5", base_branch, status, project_id)
+        .insert_session(session_id, "gpt-5.6-sol", base_branch, status, project_id)
         .await
         .expect("failed to insert session fixture");
 }
@@ -790,7 +790,7 @@ async fn test_insert_stacked_draft_session_persists_parent_session_id() {
         .sessions()
         .insert_stacked_draft_session(
             "child-session",
-            "gpt-5.5",
+            "gpt-5.6-sol",
             "wt/parent-session",
             "Draft",
             "parent-session",
@@ -826,7 +826,7 @@ async fn test_restack_child_sessions_after_parent_merge_clears_active_children()
         .sessions()
         .insert_stacked_draft_session(
             "child-session",
-            "gpt-5.5",
+            "gpt-5.6-sol",
             "wt/parent-session",
             "Draft",
             "parent-session",
@@ -838,7 +838,7 @@ async fn test_restack_child_sessions_after_parent_merge_clears_active_children()
         .sessions()
         .insert_stacked_draft_session(
             "review-child",
-            "gpt-5.5",
+            "gpt-5.6-sol",
             "wt/parent-session",
             "Review",
             "parent-session",
@@ -850,7 +850,7 @@ async fn test_restack_child_sessions_after_parent_merge_clears_active_children()
         .sessions()
         .insert_stacked_draft_session(
             "canceled-child",
-            "gpt-5.5",
+            "gpt-5.6-sol",
             "wt/parent-session",
             "Canceled",
             "parent-session",
@@ -914,7 +914,7 @@ async fn test_delete_session_retargets_children_base_branch() {
         .sessions()
         .insert_stacked_draft_session(
             "child-session",
-            "gpt-5.5",
+            "gpt-5.6-sol",
             "wt/parent-session",
             "Draft",
             "parent-session",
@@ -926,7 +926,7 @@ async fn test_delete_session_retargets_children_base_branch() {
         .sessions()
         .insert_stacked_draft_session(
             "canceled-child",
-            "gpt-5.5",
+            "gpt-5.6-sol",
             "wt/parent-session",
             "Canceled",
             "parent-session",
@@ -970,7 +970,7 @@ async fn test_load_pending_stack_restack_session_ids_returns_only_review_ready_p
         .sessions()
         .insert_stacked_draft_session(
             "still-stacked",
-            "gpt-5.5",
+            "gpt-5.6-sol",
             "wt/parent-session",
             "Review",
             "parent-session",
@@ -1530,14 +1530,14 @@ async fn test_setting_round_trip_supports_default_smart_fast_and_review_models()
         .expect("failed to persist default smart model");
     database
         .settings()
-        .upsert_setting(SettingName::DefaultFastModel, AgentModel::Gpt55.as_str())
+        .upsert_setting(SettingName::DefaultFastModel, AgentModel::Gpt56Sol.as_str())
         .await
         .expect("failed to persist default fast model");
     database
         .settings()
         .upsert_setting(
             SettingName::DefaultReviewModel,
-            AgentModel::ClaudeOpus48.as_str(),
+            AgentModel::ClaudeOpus5.as_str(),
         )
         .await
         .expect("failed to persist default review model");
@@ -1566,11 +1566,11 @@ async fn test_setting_round_trip_supports_default_smart_fast_and_review_models()
     );
     assert_eq!(
         default_fast_model,
-        Some(AgentModel::Gpt55.as_str().to_string())
+        Some(AgentModel::Gpt56Sol.as_str().to_string())
     );
     assert_eq!(
         default_review_model,
-        Some(AgentModel::ClaudeOpus48.as_str().to_string())
+        Some(AgentModel::ClaudeOpus5.as_str().to_string())
     );
 }
 
@@ -1778,7 +1778,7 @@ async fn test_session_provider_conversation_id_round_trip_and_clear() {
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert session");
 
@@ -1822,7 +1822,7 @@ async fn test_session_instruction_conversation_id_round_trip_and_clear() {
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert session");
     let instruction_conversation_id = Some("thread-123");
@@ -1870,7 +1870,7 @@ async fn test_session_published_upstream_ref_round_trip_and_clear() {
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
 
@@ -1923,7 +1923,7 @@ async fn test_load_session_published_upstream_ref_returns_stored_value() {
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-load", "gpt-5.5", "main", "Review", project_id)
+        .insert_session("session-load", "gpt-5.6-sol", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
     database
@@ -1959,7 +1959,7 @@ async fn test_load_session_published_upstream_ref_returns_none_when_unset() {
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-unset", "gpt-5.5", "main", "Review", project_id)
+        .insert_session("session-unset", "gpt-5.6-sol", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
 
@@ -2005,7 +2005,7 @@ async fn test_session_merged_commit_hash_round_trip_and_clear() {
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert session");
 
@@ -2049,7 +2049,7 @@ async fn test_session_review_request_round_trip_and_clear() {
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
     let review_request = review_request_fixture();
@@ -2100,7 +2100,7 @@ async fn test_insert_session_creation_activity_at_persists_timestamp() {
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert session");
 
@@ -2133,7 +2133,7 @@ async fn test_insert_session_creation_activity_at_ignores_duplicates_per_session
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert session");
 
@@ -2171,7 +2171,7 @@ async fn test_load_session_activity_timestamps_keeps_deleted_session_history() {
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert first session");
     database
@@ -2181,7 +2181,7 @@ async fn test_load_session_activity_timestamps_keeps_deleted_session_history() {
         .expect("failed to persist first activity event");
     database
         .sessions()
-        .insert_session("session-b", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-b", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert second session");
     database
@@ -2219,17 +2219,17 @@ async fn test_load_session_activity_timestamps_preserves_event_order() {
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert first session");
     database
         .sessions()
-        .insert_session("session-b", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-b", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert second session");
     database
         .sessions()
-        .insert_session("session-c", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-c", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert third session");
 
@@ -2289,7 +2289,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert session-a");
     database
@@ -2300,7 +2300,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 applied_personality_id: None,
                 applied_personality_prompt_hash: None,
                 instruction_conversation_id: None,
-                model: AgentModel::Gpt55.as_str().to_string(),
+                model: AgentModel::Gpt56Sol.as_str().to_string(),
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
                 summary: String::new(),
@@ -2317,7 +2317,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
         .expect("failed to persist session-a token metadata");
     database
         .sessions()
-        .insert_session("session-b", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-b", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert session-b");
     database
@@ -2328,7 +2328,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 applied_personality_id: None,
                 applied_personality_prompt_hash: None,
                 instruction_conversation_id: None,
-                model: AgentModel::Gpt55.as_str().to_string(),
+                model: AgentModel::Gpt56Sol.as_str().to_string(),
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
                 summary: String::new(),
@@ -2400,7 +2400,7 @@ async fn test_load_session_project_id_returns_associated_project() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert session");
 
@@ -2428,7 +2428,7 @@ async fn test_load_session_summary_returns_persisted_summary() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Done", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
         .await
         .expect("failed to insert session");
     database
@@ -2461,7 +2461,7 @@ async fn test_load_session_focused_reviews_for_project_returns_persisted_review(
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
     database
@@ -2505,7 +2505,7 @@ async fn test_update_session_focused_review_clears_persisted_review() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
     database
@@ -2549,7 +2549,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-a", "gpt-5.5", "main", "Review", project_id)
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
     database
@@ -2571,7 +2571,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
                 applied_personality_id: None,
                 applied_personality_prompt_hash: None,
                 instruction_conversation_id: Some("instruction-thread".to_string()),
-                model: AgentModel::Gpt55.as_str().to_string(),
+                model: AgentModel::Gpt56Sol.as_str().to_string(),
                 provider_conversation_id: Some("thread-123".to_string()),
                 questions_json: r#"[{"text":"Need tests?"}]"#.to_string(),
                 summary: r#"{"turn":"Updated the worker.","session":"Session state changed."}"#

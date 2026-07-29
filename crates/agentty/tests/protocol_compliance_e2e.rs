@@ -28,13 +28,13 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 /// Maximum duration allowed for provider CLI readiness preflight checks.
 const PROVIDER_PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Verifies real Codex (`gpt-5.5`) turn execution through
+/// Verifies real Codex (`gpt-5.6-sol`) turn execution through
 /// `create_agent_channel()` yields a non-empty protocol `answer`.
 #[tokio::test]
 #[ignore = "requires real Codex CLI credentials and network"]
 async fn codex_protocol_compliance_e2e() {
     // Arrange
-    let model = AgentModel::Gpt55;
+    let model = AgentModel::Gpt56Sol;
     if provider_preflight_skip_reason(AgentKind::Codex)
         .await
         .is_some()

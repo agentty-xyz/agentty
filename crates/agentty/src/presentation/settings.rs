@@ -846,13 +846,13 @@ mod tests {
         SettingsView {
             available_model_selections: vec![
                 smart_selection,
-                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
-                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus48),
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
             ],
-            default_fast_selection: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt55),
+            default_fast_selection: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             default_review_selection: AgentSelection::new(
                 AgentKind::Claude,
-                AgentModel::ClaudeOpus48,
+                AgentModel::ClaudeOpus5,
             ),
             default_smart_selection: smart_selection,
             include_coauthored_by_agentty: false,

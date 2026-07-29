@@ -61,7 +61,7 @@ mod tests {
                 folder: temp_directory.path(),
                 main_checkout_root: None,
                 replay_transcript: None,
-                model: "gpt-5.5",
+                model: "gpt-5.6-sol",
                 personality_prompt: None,
                 prompt: "Run checks",
                 reasoning_level: crate::model::agent::ReasoningLevel::High,
@@ -92,7 +92,7 @@ mod tests {
                 folder: temp_directory.path(),
                 main_checkout_root: None,
                 replay_transcript: None,
-                model: "gpt-5.5",
+                model: "gpt-5.6-sol",
                 personality_prompt: None,
                 prompt: "Continue edits",
                 reasoning_level: crate::model::agent::ReasoningLevel::High,
@@ -108,7 +108,13 @@ mod tests {
         // Assert
         assert_eq!(
             arguments,
-            vec!["--model", "gpt-5.5", "app-server", "--listen", "stdio://"]
+            vec![
+                "--model",
+                "gpt-5.6-sol",
+                "app-server",
+                "--listen",
+                "stdio://"
+            ]
         );
     }
 
@@ -168,7 +174,7 @@ mod tests {
                 folder: temp_directory.path(),
                 main_checkout_root: None,
                 replay_transcript: None,
-                model: "gpt-5.5",
+                model: "gpt-5.6-sol",
                 personality_prompt: None,
                 prompt: "Generate title",
                 reasoning_level: crate::model::agent::ReasoningLevel::Low,

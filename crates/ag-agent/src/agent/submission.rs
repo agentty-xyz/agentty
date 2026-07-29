@@ -571,7 +571,7 @@ mod tests {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
-                model: AgentModel::Gpt55,
+                model: AgentModel::Gpt56Sol,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -653,7 +653,7 @@ mod tests {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
-                model: AgentModel::Gpt55,
+                model: AgentModel::Gpt56Sol,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -798,7 +798,7 @@ mod tests {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
-                model: AgentModel::Gpt55,
+                model: AgentModel::Gpt56Sol,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -837,7 +837,7 @@ mod tests {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
-                model: AgentModel::Gpt55,
+                model: AgentModel::Gpt56Sol,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -1026,7 +1026,7 @@ mod tests {
             .expect_run_turn()
             .times(1)
             .returning(|request, _| {
-                assert_eq!(request.model, AgentModel::Gpt55.as_str());
+                assert_eq!(request.model, AgentModel::Gpt56Sol.as_str());
                 assert!(matches!(
                     request.request_kind,
                     AgentRequestKind::UtilityPrompt
@@ -1058,7 +1058,7 @@ mod tests {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
-                model: AgentModel::Gpt55,
+                model: AgentModel::Gpt56Sol,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -1106,7 +1106,7 @@ mod tests {
                 agent_kind: AgentKind::Codex,
                 child_pid: Some(Arc::clone(&child_pid)),
                 folder: temp_directory.path().to_path_buf(),
-                model: AgentModel::Gpt55,
+                model: AgentModel::Gpt56Sol,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -1135,7 +1135,7 @@ mod tests {
             .expect_run_turn()
             .times(2)
             .returning(|request, _| {
-                assert_eq!(request.model, AgentModel::Gpt55.as_str());
+                assert_eq!(request.model, AgentModel::Gpt56Sol.as_str());
 
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
@@ -1160,7 +1160,7 @@ mod tests {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
-                model: AgentModel::Gpt55,
+                model: AgentModel::Gpt56Sol,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -1215,7 +1215,7 @@ mod tests {
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
-                model: AgentModel::Gpt55,
+                model: AgentModel::Gpt56Sol,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::SessionStart,
                 reasoning_level: ReasoningLevel::default(),

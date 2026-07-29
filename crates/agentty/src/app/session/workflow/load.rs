@@ -7,7 +7,9 @@ use ag_git::GitClient;
 
 use super::{draft, session_folder};
 use crate::app::SessionManager;
-use crate::domain::agent::{AgentSelection, ReasoningLevel, parse_persisted_session_agent_model};
+use crate::domain::agent::{
+    AgentModel, AgentSelection, ReasoningLevel, parse_persisted_session_agent_model,
+};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     DailyActivity, ReviewRequest, ReviewRequestSummary, Session, SessionDiffState,
@@ -76,6 +78,59 @@ struct LoadedSessionInput {
     size: SessionSize,
 }
 
+/// Migrates every non-terminal session across all saved projects away from
+/// retired persisted model ids.
+///
+/// Query and persistence failures are best-effort so startup remains usable
+/// with a degraded database. Individual UI and API loads repeat the same
+/// migration for the row they read.
+pub(crate) async fn migrate_active_sessions_off_retired_models(db: &AppRepositories) {
+    let Ok(rows) = db.sessions().load_active_session_agent_models().await else {
+        return;
+    };
+
+    for row in rows {
+        let session_status = row.status.parse::<Status>().unwrap_or(Status::Done);
+        migrate_session_off_retired_model(db, &row.id, &row.agent, &row.model, session_status)
+            .await;
+    }
+}
+
+/// Resolves one persisted provider/model pair and persists the replacement
+/// when its model is retired and the session is still active.
+///
+/// Terminal rows (`Merged`, `Done`, `Canceled`) keep the retired model id in
+/// the database as a historical record. Persistence failures are ignored so
+/// session reads still return the in-memory replacement.
+pub(crate) async fn migrate_session_off_retired_model(
+    db: &AppRepositories,
+    session_id: &str,
+    persisted_agent: &str,
+    persisted_model: &str,
+    session_status: Status,
+) -> AgentSelection {
+    let session_agent = parse_persisted_session_agent_model(Some(persisted_agent), persisted_model);
+    if matches!(
+        session_status,
+        Status::Merged | Status::Done | Status::Canceled
+    ) || AgentModel::retired_replacement(persisted_model).is_none()
+    {
+        return session_agent;
+    }
+
+    let session_agent_kind = session_agent.kind().to_string();
+    db.sessions()
+        .update_active_session_agent_model(
+            session_id,
+            &session_agent_kind,
+            session_agent.model().as_str(),
+        )
+        .await
+        .ok();
+
+    session_agent
+}
+
 impl SessionManager {
     /// Loads session models from the database using the provided filesystem
     /// boundary to decide which session folders exist.
@@ -90,7 +145,10 @@ impl SessionManager {
     /// `Canceled`) override stale in-memory status.
     ///
     /// Retired persisted model ids are upgraded to their current replacement
-    /// models while rows are loaded.
+    /// models while rows are loaded. Sessions that are still active also have
+    /// the replacement persisted so future turns run on the current model;
+    /// terminal sessions keep their retired model id in the database as a
+    /// historical record.
     ///
     /// New handles are inserted for sessions that don't have entries yet.
     ///
@@ -207,7 +265,6 @@ impl SessionManager {
             return;
         }
         session_worktree_availability.insert(session_id.clone(), has_session_folder);
-        let session_agent = parse_persisted_session_agent_model(Some(&row.agent), &row.model);
 
         let (session_detail, loaded_transcript) =
             load_active_session_detail(db, *active_session_id, &row.id).await;
@@ -229,6 +286,9 @@ impl SessionManager {
 
                 (persisted_status, transcript)
             };
+        let session_agent =
+            migrate_session_off_retired_model(db, &row.id, &row.agent, &row.model, session_status)
+                .await;
         let review_request = parse_review_request(&row);
         let draft_attachments =
             draft::load_staged_draft_attachments(*fs_client, base, &session_id).await;
@@ -788,7 +848,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 session_id,
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -873,7 +933,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 session_with_worktree_id,
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "Draft",
                 project_id,
@@ -883,7 +943,7 @@ mod tests {
         db.sessions()
             .insert_draft_session(
                 session_without_worktree_id,
-                "gemini-3-flash-preview",
+                "gemini-3.6-flash",
                 "main",
                 "Draft",
                 project_id,
@@ -935,13 +995,7 @@ mod tests {
 
         let session_id = "test-session";
         db.sessions()
-            .insert_session(
-                session_id,
-                "gemini-3-flash-preview",
-                "main",
-                "Review",
-                project_id,
-            )
+            .insert_session(session_id, "gemini-3.6-flash", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         db.sessions()
@@ -1029,13 +1083,7 @@ mod tests {
 
         let session_id = "inactive-session";
         db.sessions()
-            .insert_session(
-                session_id,
-                "gemini-3-flash-preview",
-                "main",
-                "Review",
-                project_id,
-            )
+            .insert_session(session_id, "gemini-3.6-flash", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         db.sessions()
@@ -1112,13 +1160,7 @@ mod tests {
 
         let session_id = "active-session";
         db.sessions()
-            .insert_session(
-                session_id,
-                "gemini-3-flash-preview",
-                "main",
-                "Review",
-                project_id,
-            )
+            .insert_session(session_id, "gemini-3.6-flash", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         db.sessions()
@@ -1208,13 +1250,7 @@ mod tests {
 
         let session_id = "test-session";
         db.sessions()
-            .insert_session(
-                session_id,
-                "gemini-3-flash-preview",
-                "main",
-                "Done",
-                project_id,
-            )
+            .insert_session(session_id, "gemini-3.6-flash", "main", "Done", project_id)
             .await
             .expect("failed to insert session");
 
@@ -1257,6 +1293,315 @@ mod tests {
         assert_eq!(handle_status, Status::Done);
     }
 
+    /// Ensures still-active sessions on a retired model are switched to the
+    /// replacement model both in memory and in the database.
+    #[tokio::test]
+    async fn test_load_sessions_switches_active_session_off_retired_model() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        let session_id = "retired-active-session";
+        db.sessions()
+            .insert_session(session_id, "claude-opus-4-6", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        let base_path = Path::new("/virtual/session-base");
+        let mock_fs_client = create_folder_lookup_mock(vec![session_folder(base_path, session_id)]);
+        let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
+
+        // Act
+        let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+            SessionLoadInput {
+                active_project_id: project_id,
+                active_session_id: None,
+                base: base_path,
+                clock: &RealClock,
+                db: &db,
+                fs_client: &mock_fs_client,
+                working_dir: Path::new("/tmp/test"),
+            },
+            &mut handles,
+        )
+        .await;
+
+        // Assert
+        let session = sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing reloaded session");
+        assert_eq!(session.agent.model(), AgentModel::ClaudeOpus5);
+        let row = db
+            .sessions()
+            .load_session(session_id)
+            .await
+            .expect("failed to load session row")
+            .expect("missing session row");
+        assert_eq!(row.model, "claude-opus-5");
+        assert_eq!(row.agent, "claude");
+    }
+
+    /// Ensures automatic model migration does not make an old session appear
+    /// recently active.
+    #[tokio::test]
+    async fn test_migrate_session_preserves_updated_at() {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        let session_id = "retired-timestamp-session";
+        db.sessions()
+            .insert_session(session_id, "claude-opus-4-6", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        sqlx::query(
+            r"
+UPDATE session
+SET updated_at = ?
+WHERE id = ?
+",
+        )
+        .bind(123_i64)
+        .bind(session_id)
+        .execute(&pool)
+        .await
+        .expect("failed to set historical timestamp");
+
+        // Act
+        migrate_session_off_retired_model(
+            &db,
+            session_id,
+            "claude",
+            "claude-opus-4-6",
+            Status::Review,
+        )
+        .await;
+
+        // Assert
+        let row = db
+            .sessions()
+            .load_session(session_id)
+            .await
+            .expect("failed to load migrated session")
+            .expect("missing migrated session");
+        assert_eq!(row.agent, "claude");
+        assert_eq!(row.model, "claude-opus-5");
+        assert_eq!(row.updated_at, 123);
+    }
+
+    /// Ensures startup migration covers active sessions outside the currently
+    /// loaded project while retaining terminal-session history.
+    #[tokio::test]
+    async fn test_migrate_active_sessions_off_retired_models_covers_inactive_projects() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let active_project_id = db
+            .projects()
+            .upsert_project("/tmp/active", None)
+            .await
+            .expect("failed to upsert active project");
+        let inactive_project_id = db
+            .projects()
+            .upsert_project("/tmp/inactive", None)
+            .await
+            .expect("failed to upsert inactive project");
+        db.sessions()
+            .insert_session(
+                "active-project-session",
+                "claude-opus-4-6",
+                "main",
+                "Review",
+                active_project_id,
+            )
+            .await
+            .expect("failed to insert active-project session");
+        db.sessions()
+            .insert_session(
+                "inactive-project-session",
+                "gemini-3.5-flash",
+                "main",
+                "Review",
+                inactive_project_id,
+            )
+            .await
+            .expect("failed to insert inactive-project session");
+        db.sessions()
+            .insert_session(
+                "inactive-project-finished",
+                "gemini-3.5-flash",
+                "main",
+                "Done",
+                inactive_project_id,
+            )
+            .await
+            .expect("failed to insert finished inactive-project session");
+
+        // Act
+        migrate_active_sessions_off_retired_models(&db).await;
+
+        // Assert
+        let active_project_row = db
+            .sessions()
+            .load_session("active-project-session")
+            .await
+            .expect("failed to load active-project session")
+            .expect("missing active-project session");
+        let inactive_project_row = db
+            .sessions()
+            .load_session("inactive-project-session")
+            .await
+            .expect("failed to load inactive-project session")
+            .expect("missing inactive-project session");
+        let finished_row = db
+            .sessions()
+            .load_session("inactive-project-finished")
+            .await
+            .expect("failed to load finished inactive-project session")
+            .expect("missing finished inactive-project session");
+        assert_eq!(active_project_row.model, "claude-opus-5");
+        assert_eq!(active_project_row.agent, "claude");
+        assert_eq!(inactive_project_row.model, "gemini-3.5-flash-lite");
+        assert_eq!(inactive_project_row.agent, "antigravity");
+        assert_eq!(finished_row.model, "gemini-3.5-flash");
+    }
+
+    /// Ensures a terminal transition after the migration read wins the race
+    /// and preserves the retired model id as history.
+    #[tokio::test]
+    async fn test_migrate_session_preserves_retired_model_after_terminal_transition() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        let race_cases = [
+            ("race-merged", "Merged"),
+            ("race-done", "Done"),
+            ("race-canceled", "Canceled"),
+        ];
+        for (session_id, _) in race_cases {
+            db.sessions()
+                .insert_session(session_id, "claude-opus-4-6", "main", "Review", project_id)
+                .await
+                .expect("failed to insert active session");
+        }
+        let stale_rows = db
+            .sessions()
+            .load_active_session_agent_models()
+            .await
+            .expect("failed to load active sessions");
+        for (session_id, terminal_status) in race_cases {
+            db.sessions()
+                .update_session_status_with_timing_at(session_id, terminal_status, 1)
+                .await
+                .expect("failed to persist terminal transition");
+        }
+
+        // Act
+        for row in stale_rows {
+            let stale_status = row
+                .status
+                .parse::<Status>()
+                .expect("active status should parse");
+            migrate_session_off_retired_model(&db, &row.id, &row.agent, &row.model, stale_status)
+                .await;
+        }
+
+        // Assert
+        for (session_id, terminal_status) in race_cases {
+            let row = db
+                .sessions()
+                .load_session(session_id)
+                .await
+                .expect("failed to load transitioned session")
+                .expect("missing transitioned session");
+            assert_eq!(row.status, terminal_status);
+            assert_eq!(row.agent, "claude");
+            assert_eq!(row.model, "claude-opus-4-6");
+        }
+    }
+
+    /// Ensures startup remains usable when active-session migration cannot
+    /// query a degraded database.
+    #[tokio::test]
+    async fn test_migrate_active_sessions_off_retired_models_ignores_query_failures() {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        sqlx::query("DROP TABLE session")
+            .execute(&pool)
+            .await
+            .expect("session table should be dropped");
+
+        // Act
+        migrate_active_sessions_off_retired_models(&db).await;
+
+        // Assert
+        assert!(
+            db.sessions()
+                .load_active_session_agent_models()
+                .await
+                .is_err()
+        );
+    }
+
+    /// Ensures finished sessions keep their retired model id in the database
+    /// as history while loading with the replacement model in memory.
+    #[tokio::test]
+    async fn test_load_sessions_keeps_retired_model_in_db_for_finished_session() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        let session_id = "retired-finished-session";
+        db.sessions()
+            .insert_session(session_id, "claude-opus-4-6", "main", "Done", project_id)
+            .await
+            .expect("failed to insert session");
+        let base_path = Path::new("/virtual/session-base");
+        let mock_fs_client = create_folder_lookup_mock(Vec::new());
+        let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
+
+        // Act
+        let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+            SessionLoadInput {
+                active_project_id: project_id,
+                active_session_id: None,
+                base: base_path,
+                clock: &RealClock,
+                db: &db,
+                fs_client: &mock_fs_client,
+                working_dir: Path::new("/tmp/test"),
+            },
+            &mut handles,
+        )
+        .await;
+
+        // Assert
+        let session = sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing reloaded session");
+        assert_eq!(session.agent.model(), AgentModel::ClaudeOpus5);
+        let row = db
+            .sessions()
+            .load_session(session_id)
+            .await
+            .expect("failed to load session row")
+            .expect("missing session row");
+        assert_eq!(row.model, "claude-opus-4-6");
+    }
+
     /// Ensures persisted review-request metadata is mapped onto loaded session
     /// snapshots.
     #[tokio::test]
@@ -1284,13 +1629,7 @@ mod tests {
 
         let session_id = "test-session";
         db.sessions()
-            .insert_session(
-                session_id,
-                "gemini-3-flash-preview",
-                "main",
-                "Done",
-                project_id,
-            )
+            .insert_session(session_id, "gemini-3.6-flash", "main", "Done", project_id)
             .await
             .expect("failed to insert session");
         db.reviews()
@@ -1472,7 +1811,7 @@ mod tests {
             in_progress_total_seconds: 0,
             input_tokens: 0,
             is_draft: false,
-            model: "gpt-5.5".to_string(),
+            model: "gpt-5.6-sol".to_string(),
             output_tokens: 0,
             parent_session_id: None,
             personality_id: None,
