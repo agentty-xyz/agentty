@@ -2577,6 +2577,31 @@ fn app_event_batch_collect_event_keeps_latest_at_mention_entries_update() {
     );
 }
 
+#[tokio::test]
+async fn app_event_applies_at_mention_entries_to_session_runtime() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_test_app().await;
+    let session_id = SessionId::from("missing-session");
+    let lookup_root = app.at_mention_lookup_root(&session_id);
+    let entries = vec![FileEntry {
+        is_dir: false,
+        path: "src/main.rs".to_string(),
+    }];
+
+    // Act
+    app.apply_app_events(AppEvent::AtMentionEntriesLoaded {
+        entries: entries.clone(),
+        session_id,
+    })
+    .await;
+
+    // Assert
+    assert_eq!(
+        app.sessions.at_mention_index_for_root(&lookup_root),
+        Some(entries)
+    );
+}
+
 #[test]
 /// Verifies repeated `AgentResponseReceived` events keep the newest
 /// reducer projection while accumulating token usage for the session.

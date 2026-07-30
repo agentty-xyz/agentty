@@ -19,4 +19,7 @@ pub use model::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session, SessionId,
     SessionSettings, SessionStatus, activity_day_key_with_offset,
 };
-pub use service::{CreateSessionMode, CreateSessionRequest, SessionBackend, SessionService};
+pub use service::{
+    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, QuestionAnswer,
+    SessionBackend, SessionService,
+};

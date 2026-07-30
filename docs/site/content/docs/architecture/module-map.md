@@ -39,8 +39,9 @@ For file-level detail, read the module docstrings directly.
   helpers.
 - `crates/ag-session/`: Frontend-neutral session library with stable identity,
   lifecycle, review-link, and transcript models; complete session aggregates; and the
-  object-safe `SessionBackend` port exposed through `SessionService` for creation,
-  lookup, messaging, merge, and review-request workflows.
+  object-safe `SessionBackend` port exposed through the owned, cloneable
+  `SessionService` for creation, lookup, messaging, structured question answers,
+  cancellation, merge, and review-request workflows.
 - `crates/ag-tui-text/`: Shared Ratatui text-rendering library crate with markdown
   parsing/styling, bounded mermaid-to-terminal diagram rendering, and terminal-width
   wrapping/truncation helpers. Host applications inject semantic palette and cache
@@ -60,11 +61,11 @@ For file-level detail, read the module docstrings directly.
 - `app/`: Orchestration layer. Owns the `App` state, the `AppEvent` reducer, project and
   settings persistence manager, the merge queue, the sync orchestrator, branch publish,
   review, typed prompt workflow requests and outcomes, the `session_api.rs` adapter for
-  `ag-session`, and the session module (`app/session/`) with its per-session worker
-  queues and workflow steps (`lifecycle`, `turn`, `post_turn`, `merge`, `task`,
-  `worker`). Prompt composers, slash-menu state, and mode navigation remain
-  presentation-owned. No direct process, filesystem, or clock calls — everything
-  external goes through `infra/` traits.
+  `ag-session`, the bounded `session_runtime.rs` command actor, and the session module
+  (`app/session/`) with its per-session worker queues and workflow steps (`lifecycle`,
+  `turn`, `post_turn`, `merge`, `task`, `worker`). Prompt composers, slash-menu state,
+  and mode navigation remain presentation-owned. No direct process, filesystem, or clock
+  calls — everything external goes through `infra/` traits.
 - `domain/`: Pure Agentty-specific business entities and logic — render/runtime session
   snapshots, projects, settings keys, themes, structured questions, explicit
   transient-message slots and lifecycles, prompt-composer logic, the shared `InputState`

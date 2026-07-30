@@ -19,6 +19,7 @@ mod review_request;
 mod service;
 pub(crate) mod session;
 mod session_api;
+mod session_runtime;
 pub mod session_state;
 pub(crate) mod setting;
 mod startup;
@@ -30,8 +31,8 @@ mod view;
 
 #[cfg(test)]
 pub(crate) use core::AppClients;
-pub(crate) use core::AppEvent;
 pub use core::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
+pub(crate) use core::{AppEvent, AppRuntimeEvent};
 
 pub(crate) use assigned_issue::AssignedIssueState;
 pub use error::AppError;
@@ -46,6 +47,7 @@ pub use service::AppServices;
 pub use session::{SessionError, SessionManager, SessionState};
 #[cfg(test)]
 pub(crate) use session::{SyncMainOutcome, SyncSessionStartError};
+pub(crate) use session_runtime::{SessionRuntimeCommand, SessionRuntimeHandle};
 pub use setting::SettingsManager;
 #[cfg(test)]
 pub(crate) use sync::MockSyncMainRunner;

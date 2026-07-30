@@ -1,5 +1,7 @@
 //! Programmatic session orchestration facade and host backend port.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use crate::{ReviewRequest, Session, SessionError, SessionId};
@@ -22,10 +24,30 @@ pub enum CreateSessionMode {
 /// Explicit input for creating one session.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CreateSessionRequest {
+    /// Existing session whose launch settings should be copied.
+    ///
+    /// When absent, the host resolves the owning project's current defaults.
+    pub inherit_from_session_id: Option<SessionId>,
     /// Determines whether the session is regular, deferred, or stacked.
     pub mode: CreateSessionMode,
     /// Project that owns the new session.
     pub project_id: i64,
+}
+
+/// One structured response to a persisted clarification question.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuestionAnswer {
+    /// User response paired with `question`.
+    pub answer: String,
+    /// Exact persisted question text being answered.
+    pub question: String,
+}
+
+/// Structured input for resuming one session from clarification questions.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnswerQuestionsRequest {
+    /// Ordered question and answer pairs for the current question set.
+    pub answers: Vec<QuestionAnswer>,
 }
 
 /// Host implementation boundary for session persistence and workflows.
@@ -33,10 +55,10 @@ pub struct CreateSessionRequest {
 /// The trait is object-safe so agent loops and future orchestrators can hold a
 /// programmatic session capability without depending on a concrete frontend.
 #[async_trait]
-pub trait SessionBackend: Send {
+pub trait SessionBackend: Send + Sync {
     /// Creates one session and returns its stable identifier.
     async fn create_session(
-        &mut self,
+        &self,
         request: CreateSessionRequest,
     ) -> Result<SessionId, SessionError>;
 
@@ -45,30 +67,41 @@ pub trait SessionBackend: Send {
 
     /// Sends one text message, starting, resuming, or queueing as appropriate.
     async fn send_message(
-        &mut self,
+        &self,
         session_id: &SessionId,
         message: String,
     ) -> Result<(), SessionError>;
 
+    /// Answers the complete current clarification-question set.
+    async fn answer_questions(
+        &self,
+        session_id: &SessionId,
+        request: AnswerQuestionsRequest,
+    ) -> Result<(), SessionError>;
+
+    /// Cancels one session through the host lifecycle workflow.
+    async fn cancel_session(&self, session_id: &SessionId) -> Result<(), SessionError>;
+
     /// Requests merge processing for one review-ready session.
-    async fn merge_session(&mut self, session_id: &SessionId) -> Result<(), SessionError>;
+    async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError>;
 
     /// Publishes one session branch and creates or refreshes its review
     /// request.
     async fn create_review_request(
-        &mut self,
+        &self,
         session_id: &SessionId,
     ) -> Result<ReviewRequest, SessionError>;
 }
 
 /// Stable programmatic facade for session lifecycle operations.
-pub struct SessionService<'backend> {
-    backend: &'backend mut dyn SessionBackend,
+#[derive(Clone)]
+pub struct SessionService {
+    backend: Arc<dyn SessionBackend>,
 }
 
-impl<'backend> SessionService<'backend> {
-    /// Binds the stable session API to one host backend.
-    pub fn new(backend: &'backend mut dyn SessionBackend) -> Self {
+impl SessionService {
+    /// Creates an owned session capability backed by a shared host handle.
+    pub fn new(backend: Arc<dyn SessionBackend>) -> Self {
         Self { backend }
     }
 
@@ -77,7 +110,7 @@ impl<'backend> SessionService<'backend> {
     /// # Errors
     /// Returns an error when the host cannot create the requested session.
     pub async fn create_session(
-        &mut self,
+        &self,
         request: CreateSessionRequest,
     ) -> Result<SessionId, SessionError> {
         self.backend.create_session(request).await
@@ -99,18 +132,40 @@ impl<'backend> SessionService<'backend> {
     /// # Errors
     /// Returns an error when the session cannot accept or enqueue the message.
     pub async fn send_message(
-        &mut self,
+        &self,
         session_id: &SessionId,
         message: impl Into<String> + Send,
     ) -> Result<(), SessionError> {
         self.backend.send_message(session_id, message.into()).await
     }
 
+    /// Answers the complete current clarification-question set.
+    ///
+    /// # Errors
+    /// Returns an error when the answers are stale, incomplete, or cannot be
+    /// enqueued as a follow-up turn.
+    pub async fn answer_questions(
+        &self,
+        session_id: &SessionId,
+        request: AnswerQuestionsRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.answer_questions(session_id, request).await
+    }
+
+    /// Cancels one session through its host lifecycle workflow.
+    ///
+    /// # Errors
+    /// Returns an error when the session does not exist or cannot be canceled
+    /// in its current state.
+    pub async fn cancel_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.backend.cancel_session(session_id).await
+    }
+
     /// Requests merge processing for one session.
     ///
     /// # Errors
     /// Returns an error when the session is not mergeable or queueing fails.
-    pub async fn merge_session(&mut self, session_id: &SessionId) -> Result<(), SessionError> {
+    pub async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.backend.merge_session(session_id).await
     }
 
@@ -120,7 +175,7 @@ impl<'backend> SessionService<'backend> {
     /// Returns an error when branch publication, forge access, or persistence
     /// fails.
     pub async fn create_review_request(
-        &mut self,
+        &self,
         session_id: &SessionId,
     ) -> Result<ReviewRequest, SessionError> {
         self.backend.create_review_request(session_id).await
@@ -130,6 +185,7 @@ impl<'backend> SessionService<'backend> {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::sync::Mutex;
 
     use ag_agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
     use ag_forge::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
@@ -139,6 +195,26 @@ mod tests {
 
     #[derive(Default)]
     struct FakeBackend {
+        state: Mutex<FakeBackendState>,
+    }
+
+    impl FakeBackend {
+        fn from_state(state: FakeBackendState) -> Self {
+            Self {
+                state: Mutex::new(state),
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.state
+                .lock()
+                .map(|state| state.calls.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeBackendState {
         calls: Vec<String>,
         create_results: VecDeque<Result<SessionId, SessionError>>,
         get_result: Option<Result<Option<Session>, SessionError>>,
@@ -149,12 +225,17 @@ mod tests {
     #[async_trait]
     impl SessionBackend for FakeBackend {
         async fn create_session(
-            &mut self,
+            &self,
             request: CreateSessionRequest,
         ) -> Result<SessionId, SessionError> {
-            self.calls.push(format!("create:{:?}", request.mode));
+            let mut state = self
+                .state
+                .lock()
+                .expect("fake backend state should remain available");
+            state.calls.push(format!("create:{:?}", request.mode));
 
-            self.create_results
+            state
+                .create_results
                 .pop_front()
                 .unwrap_or_else(|| Err(SessionError::Operation("missing result".to_string())))
         }
@@ -163,38 +244,88 @@ mod tests {
             &self,
             _session_id: &SessionId,
         ) -> Result<Option<Session>, SessionError> {
-            self.get_result
+            self.state
+                .lock()
+                .expect("fake backend state should remain available")
+                .get_result
                 .clone()
                 .unwrap_or_else(|| Err(SessionError::Operation("missing result".to_string())))
         }
 
         async fn send_message(
-            &mut self,
+            &self,
             session_id: &SessionId,
             message: String,
         ) -> Result<(), SessionError> {
-            self.calls.push(format!("send:{session_id}:{message}"));
+            let mut state = self
+                .state
+                .lock()
+                .expect("fake backend state should remain available");
+            state.calls.push(format!("send:{session_id}:{message}"));
 
-            self.unit_results
+            state
+                .unit_results
                 .pop_front()
                 .unwrap_or_else(|| Err(SessionError::Operation("missing result".to_string())))
         }
 
-        async fn merge_session(&mut self, session_id: &SessionId) -> Result<(), SessionError> {
-            self.calls.push(format!("merge:{session_id}"));
+        async fn answer_questions(
+            &self,
+            session_id: &SessionId,
+            request: AnswerQuestionsRequest,
+        ) -> Result<(), SessionError> {
+            let mut state = self
+                .state
+                .lock()
+                .expect("fake backend state should remain available");
+            state
+                .calls
+                .push(format!("answer:{session_id}:{}", request.answers.len()));
 
-            self.unit_results
+            state
+                .unit_results
+                .pop_front()
+                .unwrap_or_else(|| Err(SessionError::Operation("missing result".to_string())))
+        }
+
+        async fn cancel_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+            let mut state = self
+                .state
+                .lock()
+                .expect("fake backend state should remain available");
+            state.calls.push(format!("cancel:{session_id}"));
+
+            state
+                .unit_results
+                .pop_front()
+                .unwrap_or_else(|| Err(SessionError::Operation("missing result".to_string())))
+        }
+
+        async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+            let mut state = self
+                .state
+                .lock()
+                .expect("fake backend state should remain available");
+            state.calls.push(format!("merge:{session_id}"));
+
+            state
+                .unit_results
                 .pop_front()
                 .unwrap_or_else(|| Err(SessionError::Operation("missing result".to_string())))
         }
 
         async fn create_review_request(
-            &mut self,
+            &self,
             session_id: &SessionId,
         ) -> Result<ReviewRequest, SessionError> {
-            self.calls.push(format!("review:{session_id}"));
+            let mut state = self
+                .state
+                .lock()
+                .expect("fake backend state should remain available");
+            state.calls.push(format!("review:{session_id}"));
 
-            self.review_result
+            state
+                .review_result
                 .clone()
                 .unwrap_or_else(|| Err(SessionError::Operation("missing result".to_string())))
         }
@@ -250,67 +381,81 @@ mod tests {
     async fn service_delegates_create_and_get() {
         // Arrange
         let expected_session = session_fixture();
-        let mut backend = FakeBackend {
+        let backend = Arc::new(FakeBackend::from_state(FakeBackendState {
             create_results: VecDeque::from([Ok(SessionId::from("session-1"))]),
             get_result: Some(Ok(Some(expected_session.clone()))),
-            ..FakeBackend::default()
-        };
-        // Act
-        let loaded_session = {
-            let mut service = SessionService::new(&mut backend);
-            let session_id = service
-                .create_session(CreateSessionRequest {
-                    mode: CreateSessionMode::Regular,
-                    project_id: 7,
-                })
-                .await
-                .expect("session should be created");
+            ..FakeBackendState::default()
+        }));
+        let service = SessionService::new(backend.clone());
 
-            service
-                .get_session(&session_id)
-                .await
-                .expect("session should load")
-        };
+        // Act
+        let session_id = service
+            .create_session(CreateSessionRequest {
+                inherit_from_session_id: None,
+                mode: CreateSessionMode::Regular,
+                project_id: 7,
+            })
+            .await
+            .expect("session should be created");
+        let loaded_session = service
+            .get_session(&session_id)
+            .await
+            .expect("session should load");
 
         // Assert
         assert_eq!(loaded_session, Some(expected_session));
-        assert_eq!(backend.calls, ["create:Regular"]);
+        assert_eq!(backend.calls(), ["create:Regular"]);
     }
 
     #[tokio::test]
-    async fn service_delegates_send_merge_and_review() {
+    async fn service_delegates_mutating_operations_through_clones() {
         // Arrange
         let expected_review_request = review_request_fixture();
-        let mut backend = FakeBackend {
+        let backend = Arc::new(FakeBackend::from_state(FakeBackendState {
             review_result: Some(Ok(expected_review_request.clone())),
-            unit_results: VecDeque::from([Ok(()), Ok(())]),
-            ..FakeBackend::default()
-        };
+            unit_results: VecDeque::from([Ok(()), Ok(()), Ok(()), Ok(())]),
+            ..FakeBackendState::default()
+        }));
         let session_id = SessionId::from("session-1");
-        // Act
-        let review_request = {
-            let mut service = SessionService::new(&mut backend);
-            service
-                .send_message(&session_id, "continue")
-                .await
-                .expect("message should be sent");
-            service
-                .merge_session(&session_id)
-                .await
-                .expect("merge should be requested");
-
-            service
-                .create_review_request(&session_id)
-                .await
-                .expect("review request should be created")
+        let service = SessionService::new(backend.clone());
+        let cloned_service = service.clone();
+        let answers = AnswerQuestionsRequest {
+            answers: vec![QuestionAnswer {
+                answer: "main".to_string(),
+                question: "Which branch?".to_string(),
+            }],
         };
+
+        // Act
+        service
+            .send_message(&session_id, "continue")
+            .await
+            .expect("message should be sent");
+        cloned_service
+            .answer_questions(&session_id, answers)
+            .await
+            .expect("questions should be answered");
+        service
+            .cancel_session(&session_id)
+            .await
+            .expect("cancel should be requested");
+        cloned_service
+            .merge_session(&session_id)
+            .await
+            .expect("merge should be requested");
+        let review_request = service
+            .create_review_request(&session_id)
+            .await
+            .expect("review request should be created");
 
         // Assert
         assert_eq!(review_request, expected_review_request);
         assert_eq!(
-            backend.calls,
+            backend.calls(),
             [
                 "send:session-1:continue",
+                "answer:session-1:1",
+                "cancel:session-1",
                 "merge:session-1",
                 "review:session-1"
             ]
@@ -321,15 +466,16 @@ mod tests {
     async fn service_preserves_backend_errors() {
         // Arrange
         let expected_error = SessionError::Operation("cannot create".to_string());
-        let mut backend = FakeBackend {
+        let backend = Arc::new(FakeBackend::from_state(FakeBackendState {
             create_results: VecDeque::from([Err(expected_error.clone())]),
-            ..FakeBackend::default()
-        };
-        let mut service = SessionService::new(&mut backend);
+            ..FakeBackendState::default()
+        }));
+        let service = SessionService::new(backend);
 
         // Act
         let error = service
             .create_session(CreateSessionRequest {
+                inherit_from_session_id: None,
                 mode: CreateSessionMode::Draft,
                 project_id: 7,
             })
@@ -343,44 +489,57 @@ mod tests {
     #[tokio::test]
     async fn fake_backend_requires_explicit_results() {
         // Arrange
-        let mut backend = FakeBackend::default();
+        let backend = Arc::new(FakeBackend::default());
         let session_id = SessionId::from("session-1");
+        let service = SessionService::new(backend);
 
         // Act
-        let errors = {
-            let mut service = SessionService::new(&mut backend);
-            let create_error = service
-                .create_session(CreateSessionRequest {
-                    mode: CreateSessionMode::Regular,
-                    project_id: 7,
-                })
-                .await
-                .expect_err("create should require a result");
-            let get_error = service
-                .get_session(&session_id)
-                .await
-                .expect_err("get should require a result");
-            let send_error = service
-                .send_message(&session_id, "continue")
-                .await
-                .expect_err("send should require a result");
-            let merge_error = service
-                .merge_session(&session_id)
-                .await
-                .expect_err("merge should require a result");
-            let review_error = service
-                .create_review_request(&session_id)
-                .await
-                .expect_err("review should require a result");
-
-            [
-                create_error,
-                get_error,
-                send_error,
-                merge_error,
-                review_error,
-            ]
-        };
+        let create_error = service
+            .create_session(CreateSessionRequest {
+                inherit_from_session_id: None,
+                mode: CreateSessionMode::Regular,
+                project_id: 7,
+            })
+            .await
+            .expect_err("create should require a result");
+        let get_error = service
+            .get_session(&session_id)
+            .await
+            .expect_err("get should require a result");
+        let send_error = service
+            .send_message(&session_id, "continue")
+            .await
+            .expect_err("send should require a result");
+        let answer_error = service
+            .answer_questions(
+                &session_id,
+                AnswerQuestionsRequest {
+                    answers: Vec::new(),
+                },
+            )
+            .await
+            .expect_err("answers should require a result");
+        let cancel_error = service
+            .cancel_session(&session_id)
+            .await
+            .expect_err("cancel should require a result");
+        let merge_error = service
+            .merge_session(&session_id)
+            .await
+            .expect_err("merge should require a result");
+        let review_error = service
+            .create_review_request(&session_id)
+            .await
+            .expect_err("review should require a result");
+        let errors = [
+            create_error,
+            get_error,
+            send_error,
+            answer_error,
+            cancel_error,
+            merge_error,
+            review_error,
+        ];
 
         // Assert
         assert!(

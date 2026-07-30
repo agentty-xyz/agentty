@@ -176,7 +176,7 @@ impl App {
             prompt_progress: std::collections::HashMap::new(),
             projects,
             services,
-            sessions,
+            sessions: sessions.into(),
             question_progress: std::collections::HashMap::new(),
             question_reconcile_reload_attempted: None,
             requested_review_generation: 0,

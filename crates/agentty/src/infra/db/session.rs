@@ -55,6 +55,8 @@ pub struct PersistedSessionCreation<'a> {
     pub model: &'a str,
     /// Optional parent session id for one-level stacked drafts.
     pub parent_session_id: Option<&'a str>,
+    /// Workspace personality selected for future turns, when present.
+    pub personality_id: Option<&'a str>,
     /// Owning project identifier.
     pub project_id: i64,
     /// Reasoning level captured from the project default at creation.
@@ -1131,6 +1133,7 @@ WHERE id = ?
                 is_draft: true,
                 model,
                 parent_session_id: None,
+                personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
                 status,
@@ -1159,6 +1162,7 @@ WHERE id = ?
                 is_draft: true,
                 model,
                 parent_session_id: Some(parent_session_id),
+                personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
                 status,
@@ -1186,6 +1190,7 @@ WHERE id = ?
                 is_draft: false,
                 model,
                 parent_session_id: None,
+                personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
                 status,
@@ -1205,6 +1210,7 @@ WHERE id = ?
             is_draft,
             model,
             parent_session_id,
+            personality_id,
             project_id,
             reasoning_level,
             status,
@@ -1219,6 +1225,7 @@ WHERE id = ?
                 is_draft,
                 model,
                 parent_session_id,
+                personality_id,
                 project_id,
                 reasoning_level,
                 status,
@@ -2347,6 +2354,8 @@ struct InsertSessionRow<'a> {
     model: &'a str,
     /// Optional parent session id for one-level stacked drafts.
     parent_session_id: Option<&'a str>,
+    /// Workspace personality selected for future turns, when present.
+    personality_id: Option<&'a str>,
     /// Owning project identifier.
     project_id: i64,
     /// Reasoning level captured from the project default at creation.
@@ -2368,6 +2377,7 @@ async fn insert_session_with_draft_mode(
         is_draft,
         model,
         parent_session_id,
+        personality_id,
         project_id,
         reasoning_level,
         status,
@@ -2384,11 +2394,12 @@ INSERT INTO session (
     has_diff,
     is_draft,
     parent_session_id,
+    personality_id,
     project_id,
     reasoning_level,
     prompt
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
         id,
         agent,
@@ -2399,6 +2410,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         Option::<bool>::None,
         is_draft,
         parent_session_id,
+        personality_id,
         project_id,
         reasoning_level.as_str(),
         ""

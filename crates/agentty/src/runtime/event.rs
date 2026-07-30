@@ -12,7 +12,7 @@ use ratatui::backend::Backend;
 use tokio::sync::mpsc;
 use tracing::debug;
 
-use crate::app::{App, AppEvent};
+use crate::app::{App, AppRuntimeEvent};
 use crate::domain::input::InputCommand;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::settings::SettingsAction;
@@ -48,10 +48,10 @@ impl EventSource for CrosstermEventSource {
 
 /// Represents the next runtime wake-up source while awaiting input or redraw.
 enum LoopSignal {
-    /// One pending app-side event routed through the internal bus.
-    AppEvent(Box<Option<AppEvent>>),
     /// One terminal input event from the foreground reader thread.
     Event(Option<Event>),
+    /// One foreground-owned app event or session actor command.
+    Runtime(AppRuntimeEvent),
     /// One redraw tick with no immediate input payload.
     Tick,
 }
@@ -136,14 +136,19 @@ where
     // make progress on this worker thread.
     let signal = tokio::select! {
         event = event_rx.recv() => LoopSignal::Event(event),
-        app_event = app.next_app_event() => LoopSignal::AppEvent(Box::new(app_event)),
+        runtime_event = app.next_runtime_event() => LoopSignal::Runtime(runtime_event),
         _ = tick.tick() => LoopSignal::Tick,
     };
     let mut handled_terminal_events = 0;
     let maybe_event = match signal {
-        LoopSignal::AppEvent(app_event) => {
-            if let Some(event) = *app_event {
-                app.apply_app_events(event).await;
+        LoopSignal::Runtime(runtime_event) => {
+            match runtime_event {
+                AppRuntimeEvent::App(event) => {
+                    app.apply_app_events(*event).await;
+                }
+                AppRuntimeEvent::Session(command) => {
+                    app.apply_session_runtime_command(command).await;
+                }
             }
 
             None
@@ -310,6 +315,7 @@ mod tests {
     use mockall::predicate::eq;
 
     use super::*;
+    use crate::app::AppEvent;
     use crate::domain::input::InputState;
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{Session, SessionSize, SessionStats, Status};
@@ -697,6 +703,85 @@ mod tests {
             .err()
             .expect("handler error should exit the event loop");
         assert_eq!(error.to_string(), "handler failed");
+    }
+
+    #[tokio::test]
+    async fn test_process_events_with_handler_drives_session_runtime_commands() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let mut terminal = ();
+        let (_event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let mut tick = tokio::time::interval(Duration::from_mins(1));
+        tick.tick().await;
+        let _session_runtime_consumer = app.sessions.foreground_consumer();
+        let service = app.session_service();
+        let lookup = tokio::spawn(async move {
+            service
+                .get_session(&ag_session::SessionId::from("missing"))
+                .await
+        });
+
+        // Act
+        let result = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let result = process_events_with_handler(
+                    &mut app,
+                    &mut terminal,
+                    &mut event_rx,
+                    &mut tick,
+                    |_, (), event| {
+                        assert!(event.is_none());
+
+                        Box::pin(async { Ok(EventResult::Continue) })
+                    },
+                )
+                .await;
+                assert!(matches!(&result, Ok(EventResult::Continue)));
+
+                tokio::task::yield_now().await;
+                if lookup.is_finished() {
+                    break result;
+                }
+            }
+        })
+        .await
+        .expect("runtime should process the session command");
+        let session = lookup
+            .await
+            .expect("lookup task should finish")
+            .expect("lookup should succeed");
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert_eq!(session, None);
+    }
+
+    #[tokio::test]
+    async fn test_process_events_with_handler_drives_app_runtime_events() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.services.emit_app_event(AppEvent::RefreshSessions);
+        let mut terminal = ();
+        let (_event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let mut tick = tokio::time::interval(Duration::from_mins(1));
+        tick.tick().await;
+
+        // Act
+        let result = process_events_with_handler(
+            &mut app,
+            &mut terminal,
+            &mut event_rx,
+            &mut tick,
+            |_, (), event| {
+                assert!(event.is_none());
+
+                Box::pin(async { Ok(EventResult::Continue) })
+            },
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
     }
 
     /// Verifies queued terminal events beyond the foreground budget stay in

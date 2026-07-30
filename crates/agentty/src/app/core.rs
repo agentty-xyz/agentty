@@ -9,7 +9,7 @@ mod events;
 mod new;
 mod state;
 
-pub(crate) use events::AppEvent;
+pub(crate) use events::{AppEvent, AppRuntimeEvent};
 #[cfg(test)]
 pub(crate) use state::AppClients;
 pub(crate) use state::SyncReviewRequestTaskResult;

@@ -13,9 +13,12 @@ Application-layer workflows and orchestration.
 
 - Composition model:
   - `App` is a facade/orchestrator.
-  - `session_api.rs` adapts `App` to the frontend-neutral `ag-session` `SessionBackend`
-    port.
-  - `SessionManager` owns session snapshots, runtime handles, and session worker queues.
+  - `SessionRuntime` owns `SessionManager` plus a bounded command mailbox.
+  - `SessionRuntimeHandle` implements the frontend-neutral `ag-session` `SessionBackend`
+    port; `session_api.rs` executes accepted commands against the foreground-owned
+    runtime and host services.
+  - `SessionManager` inside the runtime owns session snapshots, runtime handles, and
+    session worker queues.
   - `ProjectManager` owns project list, active project context, and git status tracking
     state.
   - `AppServices` holds shared dependencies (`Database`, base path, app-event sender).
@@ -25,7 +28,22 @@ Application-layer workflows and orchestration.
   - `SessionState` performs handle-to-snapshot sync before render.
 - Event model:
   - `AppEvent` is the internal bus between background workflows and the runtime loop.
+  - `SessionRuntimeCommand` carries programmatic session requests through a bounded
+    channel and returns each result through a one-shot response channel.
+  - Runtime handles observe a reference-counted foreground-consumer signal, rejecting
+    requests while no command consumer is registered and abandoning pending waits when
+    the final consumer exits.
   - `apply_app_events()` is the reducer for app-side async mutations.
+  - The foreground event loop selects between `AppEvent` values and session-runtime
+    commands so both mutate reducer-owned state on the same task.
+  - Programmatic creation reloads the active-project session snapshot before
+    acknowledging, so unrelated queued app events cannot hide the new session from a
+    following command. A transient reload failure does not turn durable creation into an
+    ambiguous error; the API returns the created id and schedules another session
+    refresh.
+  - Programmatic question answers claim the persisted question set before enqueueing the
+    continuation directly on the per-session worker, bypassing the in-memory chat queue,
+    and restore it when enqueueing fails.
   - Background tasks and manager workflows emit events through `AppServices`.
   - Foreground `App` wrappers process queued events to keep reducer-driven state
     coherent.
@@ -35,6 +53,8 @@ Application-layer workflows and orchestration.
     persisted status/output.
 - Refresh model:
   - List reloads are event-driven (`RefreshSessions`) at lifecycle boundaries.
+  - API creation forces a direct active-project reload before returning its new session
+    id and queues a retry when that registration attempt does not load the durable row.
   - A low-frequency metadata poll remains as a safety fallback.
 - Recovery model:
   - Operation state is persisted so interrupted work can be reconciled on startup.
@@ -58,8 +78,9 @@ When app orchestration or session lifecycle behavior changes, update:
 ## Entry Points
 
 - `core.rs` owns the main `App` facade and reducer wiring.
-- `session_api.rs` owns complete session aggregate loading and the programmatic API
-  adapter.
+- `session_runtime.rs` owns the bounded actor mailbox and cloneable control handle.
+- `session_api.rs` owns actor-command execution, complete aggregate loading, and the
+  programmatic API adapter.
 - `session.rs` and `session/` own session lifecycle and worker orchestration.
 - `project.rs`, `setting.rs`, and `tab.rs` own project, settings, and top-level
   navigation concerns.

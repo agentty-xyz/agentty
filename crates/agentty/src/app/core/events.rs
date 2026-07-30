@@ -2,8 +2,10 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::future::poll_fn;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::task::Poll;
 
 use app::branch_publish::{
     BranchPublishActionUpdate, BranchPublishTaskResult, BranchPublishTaskSuccess,
@@ -26,7 +28,7 @@ use crate::app::session::{
     SessionTaskService, StatusTransition, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
 };
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{self, sync_message};
+use crate::app::{self, SessionRuntimeCommand, sync_message};
 use crate::domain::agent::AgentCliInfo;
 use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
@@ -45,6 +47,14 @@ use crate::presentation::app_mode::{
 use crate::presentation::app_mode::{ReviewCommentAction, ReviewCommentActionSelection};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::presentation::review_comment as review_comment_selection;
+
+/// Next foreground-owned runtime event accepted by the app.
+pub(crate) enum AppRuntimeEvent {
+    /// One event emitted by a background workflow.
+    App(Box<AppEvent>),
+    /// One API command accepted by the bounded session actor mailbox.
+    Session(SessionRuntimeCommand),
+}
 
 /// Internal app events emitted by background workers and workflows.
 ///
@@ -868,8 +878,23 @@ impl App {
     }
 
     /// Waits for the next internal app event.
+    #[cfg(test)]
     pub(crate) async fn next_app_event(&mut self) -> Option<AppEvent> {
         self.event_rx.recv().await
+    }
+
+    /// Waits for either a background app event or a session actor command.
+    pub(crate) async fn next_runtime_event(&mut self) -> AppRuntimeEvent {
+        let event_rx = &mut self.event_rx;
+        let sessions = &mut self.sessions;
+
+        tokio::select! {
+            event = poll_fn(|context| match event_rx.poll_recv(context) {
+                Poll::Ready(Some(event)) => Poll::Ready(event),
+                Poll::Ready(None) | Poll::Pending => Poll::Pending,
+            }) => AppRuntimeEvent::App(Box::new(event)),
+            command = sessions.next_command() => AppRuntimeEvent::Session(command),
+        }
     }
 
     /// Applies one reduced app-event batch to in-memory app state.
@@ -1540,10 +1565,9 @@ impl App {
         }
 
         for (session_id, entries) in std::mem::take(&mut event_batch.at_mention_entries_updates) {
-            self.sessions.set_at_mention_index_for_root(
-                self.at_mention_lookup_root(&session_id),
-                entries.clone(),
-            );
+            let lookup_root = self.at_mention_lookup_root(&session_id);
+            self.sessions
+                .set_at_mention_index_for_root(lookup_root, entries.clone());
 
             self.apply_prompt_at_mention_entries(&session_id, entries);
         }

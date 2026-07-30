@@ -12,6 +12,9 @@ Owns the frontend-neutral programmatic API and shared models for Agentty session
 - Keep TUI state, SQLite rows, Git worktree mechanics, agent workers, and forge clients
   out of this crate. Host adapters translate those implementation details through
   `SessionBackend`.
+- `SessionService` is an owned, cloneable capability over `Arc<dyn SessionBackend>`;
+  backends are `Send + Sync` and accept shared `&self` access so background coordinators
+  do not borrow a frontend.
 - Extend the API with explicit request or result types instead of exposing host-specific
   managers.
 
