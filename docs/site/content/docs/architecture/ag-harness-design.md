@@ -42,8 +42,8 @@ agentty/
 ```
 
 The current foundation lives entirely in `ag-harness`: the provider-neutral `Model`
-contract accepts a text `ModelRequest` and returns a text `ModelResponse`. `Qwen` is its
-first adapter and uses the OpenAI-compatible Chat Completions API.
+contract requires an `OutputSchema` on every `ModelRequest` and returns validated JSON
+in `ModelResponse`. `Qwen` is its first adapter.
 
 ## Session management
 
@@ -117,8 +117,7 @@ sequenceDiagram
 
 ## Structured output
 
-The next model-contract iteration evolves the current text-only response into
-provider-neutral structured output:
+The model contract requires provider-neutral structured output:
 
 - The caller supplies the expected JSON shape as a provider-independent schema.
 - Each adapter uses the strongest structured-output mechanism its provider supports,
@@ -176,8 +175,6 @@ best cost and performance:
 
 ## Next iterations
 
-1. **Structured model output.** Add the provider-neutral schema contract, Qwen JSON
-   Object mode translation, parsing, validation, and typed errors described above.
 1. **Tool round trip.** Support one model-requested tool through execution to the final
    response.
 1. **Second provider.** Integrate another model API through the structured-output
