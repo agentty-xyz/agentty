@@ -16,10 +16,10 @@ use tracing::warn;
 use super::task::SessionTranscriptMessageAppend;
 use super::worker::{SessionWorkerContext, TurnMetadata, has_unfinished_rebase_operation};
 use super::{SessionTaskService, StatusTransition, published_branch};
-use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, TurnAppliedState};
+use crate::app::{AppEvent, orchestration};
 use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -286,14 +286,15 @@ pub(super) async fn finalize_channel_turn(
     context: &TurnFinalizerContext,
     result: &Result<Status, SessionError>,
 ) {
-    if let Some(diff_stats) = SessionTaskService::refresh_persisted_session_diff_stats(
-        &context.db,
-        context.fs_client.as_ref(),
-        context.git_client.as_ref(),
-        &context.session_id,
-        &context.folder,
-    )
-    .await
+    if session_owns_branch_changes(&context.db, &context.session_id).await
+        && let Some(diff_stats) = SessionTaskService::refresh_persisted_session_diff_stats(
+            &context.db,
+            context.fs_client.as_ref(),
+            context.git_client.as_ref(),
+            &context.session_id,
+            &context.folder,
+        )
+        .await
     {
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = context
@@ -383,12 +384,16 @@ async fn apply_successful_turn_result(
     result: TurnResult,
 ) -> Result<Status, SessionError> {
     let TurnResult {
-        assistant_message,
+        mut assistant_message,
         context_reset: _,
         input_tokens,
         output_tokens,
         provider_conversation_id,
     } = result;
+
+    let db = &context.db;
+    let session_id = &context.session_id;
+    orchestration::persist_controller_plan(db, session_id, &mut assistant_message).await?;
 
     if let Some(message) = build_assistant_message_content(&assistant_message) {
         SessionTaskService::append_session_transcript_message(
@@ -438,32 +443,39 @@ async fn apply_successful_turn_result(
         session_id: context.session_id.clone(),
         turn_applied_state,
     });
-    let commit_outcome = SessionTaskService::handle_auto_commit(AssistContext {
-        app_event_tx: context.app_event_tx.clone(),
-        child_pid: Arc::clone(&context.child_pid),
-        db: context.db.clone(),
-        folder: context.folder.clone(),
-        git_client: Arc::clone(&context.git_client),
-        id: context.session_id.to_string(),
-        one_shot_client: Arc::clone(&context.one_shot_client),
-        session_agent: turn_metadata.session_agent,
-        session_update_versions: context.session_update_versions.clone(),
-        transcript: Arc::clone(&context.transcript),
-    })
-    .await;
+    let owns_branch_changes = session_owns_branch_changes(&context.db, &context.session_id).await;
+    let commit_outcome = if owns_branch_changes {
+        SessionTaskService::handle_auto_commit(AssistContext {
+            app_event_tx: context.app_event_tx.clone(),
+            child_pid: Arc::clone(&context.child_pid),
+            db: context.db.clone(),
+            folder: context.folder.clone(),
+            git_client: Arc::clone(&context.git_client),
+            id: context.session_id.to_string(),
+            one_shot_client: Arc::clone(&context.one_shot_client),
+            session_agent: turn_metadata.session_agent,
+            session_update_versions: context.session_update_versions.clone(),
+            transcript: Arc::clone(&context.transcript),
+        })
+        .await
+    } else {
+        None
+    };
     let review_request_commit_message = commit_outcome.map(|outcome| outcome.commit_message);
     let review_request_session_summary = assistant_message
         .summary
         .as_ref()
         .map(|summary| summary.session.clone());
-    start_published_branch_auto_push(
-        context,
-        turn_metadata,
-        review_request_commit_message,
-        review_request_session_summary,
-        review_comment_outcomes,
-    )
-    .await;
+    if owns_branch_changes {
+        start_published_branch_auto_push(
+            context,
+            turn_metadata,
+            review_request_commit_message,
+            review_request_session_summary,
+            review_comment_outcomes,
+        )
+        .await;
+    }
     if target_status.allows_review_actions() && has_review_ready_stacked_children(context).await {
         let _ = context
             .app_event_tx
@@ -473,6 +485,19 @@ async fn apply_successful_turn_result(
     }
 
     Ok(target_status)
+}
+
+/// Returns whether the persisted session role owns branch changes.
+async fn session_owns_branch_changes(db: &AppRepositories, session_id: &str) -> bool {
+    db.sessions()
+        .load_session(session_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|row| row.role)
+        .and_then(|role| role.parse::<ag_session::SessionRole>().ok())
+        .unwrap_or_default()
+        .owns_branch_changes()
 }
 
 /// Returns deduplicated outcomes whose thread identifiers were explicitly

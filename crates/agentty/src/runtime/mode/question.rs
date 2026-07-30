@@ -863,7 +863,7 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::AgentModel;
-    use crate::domain::session::Status;
+    use crate::domain::session::{SessionRole, Status};
     use crate::domain::transient_message::TransientMessageStore;
     use crate::presentation::app_mode::ChatFocus;
     use crate::ui::component::session_output::SessionOutputLineContext;
@@ -1326,6 +1326,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentModel::Gemini36Flash,
@@ -1403,6 +1406,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentModel::Gemini36Flash,
@@ -3101,6 +3107,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentModel::Gemini36Flash,

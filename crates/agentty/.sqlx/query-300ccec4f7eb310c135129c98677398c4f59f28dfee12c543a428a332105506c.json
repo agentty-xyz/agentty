@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration\nSET status = 'Done',\n    updated_at = ?\nWHERE id = ?\n  AND status = 'Submitting'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "300ccec4f7eb310c135129c98677398c4f59f28dfee12c543a428a332105506c"
+}

@@ -93,9 +93,12 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                     .then(|| (session.id.clone(), inline_text(session.display_title())))
             });
             if let Some((session_id, session_title)) = selected_session {
+                let running_child_count = app.orchestration_running_child_count(&session_id).await;
+                let confirmation_message =
+                    cancel_confirmation_message(&session_title, running_child_count);
                 app.mode = AppMode::Confirmation {
                     confirmation_intent: ConfirmationIntent::CancelSession,
-                    confirmation_message: format!("Cancel session \"{session_title}\"?"),
+                    confirmation_message,
                     confirmation_title: "Confirm Cancel".to_string(),
                     restore_view: None,
                     session_id: Some(session_id),
@@ -111,6 +114,14 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
     }
 
     Ok(EventResult::Continue)
+}
+
+fn cancel_confirmation_message(session_title: &str, running_child_count: usize) -> String {
+    if running_child_count > 0 {
+        return format!("Cancel orchestration and its {running_child_count} running children?");
+    }
+
+    format!("Cancel session \"{session_title}\"?")
 }
 
 /// Opens the session selector, preceded by an advisory when configured
@@ -395,7 +406,14 @@ mod tests {
             .project_rows
             .iter()
             .position(|(setting_name, _)| *setting_name == "Launch Configurations")
-            .map(|project_index| project_index + 1)
+            .map(|project_index| {
+                project_index
+                    + app
+                        .settings_presentation
+                        .snapshot(&app.settings.view())
+                        .global_rows
+                        .len()
+            })
             .expect("missing Launch Configurations setting row");
         for _ in 0..launch_configuration_row_index {
             handle(
@@ -1098,7 +1116,7 @@ mod tests {
             app.settings_presentation
                 .snapshot(&app.settings.view())
                 .selected_row_index,
-            Some(6)
+            Some(7)
         );
     }
 
@@ -1619,6 +1637,20 @@ mod tests {
                 && confirmation_title == "Confirm Cancel"
                 && confirmation_message == &format!("Cancel session \"{expected_session_title}\"?")
         ));
+    }
+
+    #[test]
+    fn cancel_confirmation_names_orchestration_child_count() {
+        // Arrange / Act
+        let orchestration_message = cancel_confirmation_message("Controller", 5);
+        let regular_message = cancel_confirmation_message("Worker", 0);
+
+        // Assert
+        assert_eq!(
+            orchestration_message,
+            "Cancel orchestration and its 5 running children?"
+        );
+        assert_eq!(regular_message, "Cancel session \"Worker\"?");
     }
 
     #[tokio::test]

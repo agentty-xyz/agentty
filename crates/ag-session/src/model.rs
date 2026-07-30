@@ -135,6 +135,56 @@ impl<'de> Deserialize<'de> for SessionId {
     }
 }
 
+/// Role one session plays in a multi-session workflow.
+///
+/// The role is orthogonal to [`SessionStatus`]: an orchestrator moves through
+/// the same lifecycle states as any other session, but its worktree exists only
+/// for repository reads and never receives commits. Diff, merge, and
+/// review-request affordances are therefore gated on the role rather than on a
+/// dedicated lifecycle state.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SessionRole {
+    /// Ordinary session that owns the changes on its own branch.
+    #[default]
+    Worker,
+    /// Controller session that plans and supervises child worker sessions.
+    Orchestrator,
+}
+
+impl SessionRole {
+    /// Returns whether this role produces commits on its own session branch.
+    ///
+    /// Orchestrators read the repository to plan work but delegate every edit
+    /// to child sessions, so their branch stays empty for the session's whole
+    /// lifetime.
+    pub fn owns_branch_changes(self) -> bool {
+        matches!(self, SessionRole::Worker)
+    }
+}
+
+impl fmt::Display for SessionRole {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            SessionRole::Worker => "Worker",
+            SessionRole::Orchestrator => "Orchestrator",
+        };
+
+        formatter.write_str(value)
+    }
+}
+
+impl FromStr for SessionRole {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "Worker" => Ok(SessionRole::Worker),
+            "Orchestrator" => Ok(SessionRole::Orchestrator),
+            _ => Err(format!("Unknown role: {value}")),
+        }
+    }
+}
+
 /// High-level lifecycle state for one session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionStatus {
@@ -339,6 +389,8 @@ pub struct SessionSettings {
     pub project_id: i64,
     /// Session-scoped reasoning level.
     pub reasoning_level: ReasoningLevel,
+    /// Role this session plays in a multi-session workflow.
+    pub role: SessionRole,
     /// Session-scoped response-speed preference.
     pub speed_mode: SpeedMode,
 }
@@ -448,6 +500,31 @@ mod tests {
             SessionStatus::InProgress
         );
         assert!("Unknown".parse::<SessionStatus>().is_err());
+    }
+
+    #[test]
+    fn session_role_round_trips_persisted_values() {
+        // Arrange
+        let roles = [SessionRole::Worker, SessionRole::Orchestrator];
+
+        // Act
+        let round_tripped = roles.map(|role| {
+            role.to_string()
+                .parse::<SessionRole>()
+                .expect("role should parse")
+        });
+
+        // Assert
+        assert_eq!(round_tripped, roles);
+        assert_eq!(SessionRole::default(), SessionRole::Worker);
+        assert!("Unknown".parse::<SessionRole>().is_err());
+    }
+
+    #[test]
+    fn only_worker_sessions_own_branch_changes() {
+        // Arrange / Act / Assert
+        assert!(SessionRole::Worker.owns_branch_changes());
+        assert!(!SessionRole::Orchestrator.owns_branch_changes());
     }
 
     #[test]

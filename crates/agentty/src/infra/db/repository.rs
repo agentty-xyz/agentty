@@ -7,10 +7,11 @@ use sqlx::SqlitePool;
 #[cfg(test)]
 use super::connection::open_in_memory_pool;
 use super::{
-    ActivityRepository, OperationRepository, ProjectRepository, ReviewRepository,
-    SessionRepository, SettingRepository, SqliteActivityRepository, SqliteOperationRepository,
-    SqliteProjectRepository, SqliteReviewRepository, SqliteSessionRepository,
-    SqliteSettingRepository, SqliteUsageRepository, UsageRepository,
+    ActivityRepository, OperationRepository, OrchestrationRepository, ProjectRepository,
+    ReviewRepository, SessionRepository, SettingRepository, SqliteActivityRepository,
+    SqliteOperationRepository, SqliteOrchestrationRepository, SqliteProjectRepository,
+    SqliteReviewRepository, SqliteSessionRepository, SqliteSettingRepository,
+    SqliteUsageRepository, UsageRepository,
 };
 
 /// App-layer repository bundle used for selective mock injection.
@@ -18,6 +19,7 @@ use super::{
 pub struct AppRepositories {
     activity: Arc<dyn ActivityRepository>,
     operation: Arc<dyn OperationRepository>,
+    orchestration: Arc<dyn OrchestrationRepository>,
     project: Arc<dyn ProjectRepository>,
     review: Arc<dyn ReviewRepository>,
     session: Arc<dyn SessionRepository>,
@@ -26,38 +28,18 @@ pub struct AppRepositories {
 }
 
 impl AppRepositories {
-    /// Creates a repository bundle from explicit repository implementations.
-    pub(crate) fn new(
-        activity: Arc<dyn ActivityRepository>,
-        operation: Arc<dyn OperationRepository>,
-        project: Arc<dyn ProjectRepository>,
-        review: Arc<dyn ReviewRepository>,
-        session: Arc<dyn SessionRepository>,
-        setting: Arc<dyn SettingRepository>,
-        usage: Arc<dyn UsageRepository>,
-    ) -> Self {
-        Self {
-            activity,
-            operation,
-            project,
-            review,
-            session,
-            setting,
-            usage,
-        }
-    }
-
     /// Creates a repository bundle backed by one shared `SQLite` pool.
     pub(crate) fn from_pool(pool: SqlitePool) -> Self {
-        Self::new(
-            Arc::new(SqliteActivityRepository::new(pool.clone())),
-            Arc::new(SqliteOperationRepository::new(pool.clone())),
-            Arc::new(SqliteProjectRepository::new(pool.clone())),
-            Arc::new(SqliteReviewRepository::new(pool.clone())),
-            Arc::new(SqliteSessionRepository::new(pool.clone())),
-            Arc::new(SqliteSettingRepository::new(pool.clone())),
-            Arc::new(SqliteUsageRepository::new(pool)),
-        )
+        Self {
+            activity: Arc::new(SqliteActivityRepository::new(pool.clone())),
+            operation: Arc::new(SqliteOperationRepository::new(pool.clone())),
+            orchestration: Arc::new(SqliteOrchestrationRepository::new(pool.clone())),
+            project: Arc::new(SqliteProjectRepository::new(pool.clone())),
+            review: Arc::new(SqliteReviewRepository::new(pool.clone())),
+            session: Arc::new(SqliteSessionRepository::new(pool.clone())),
+            setting: Arc::new(SqliteSettingRepository::new(pool.clone())),
+            usage: Arc::new(SqliteUsageRepository::new(pool)),
+        }
     }
 
     /// Opens an isolated in-memory repository bundle for tests.
@@ -94,6 +76,17 @@ impl AppRepositories {
     /// Returns the session-operation repository.
     pub fn operations(&self) -> &dyn OperationRepository {
         self.operation.as_ref()
+    }
+
+    /// Returns the orchestration repository.
+    pub fn orchestrations(&self) -> &dyn OrchestrationRepository {
+        self.orchestration.as_ref()
+    }
+
+    /// Returns a cloneable orchestration repository for background
+    /// reconciliation.
+    pub(crate) fn orchestration_repository(&self) -> Arc<dyn OrchestrationRepository> {
+        Arc::clone(&self.orchestration)
     }
 
     /// Returns the project repository.

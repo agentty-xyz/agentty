@@ -37,15 +37,15 @@ const USER_PROMPT_TAB_WIDTH: usize = 4;
 /// Fully assembled session-output lines plus metadata derived during assembly.
 pub(crate) struct SessionOutputLines {
     pub(crate) active_loader_line_index: Option<usize>,
-    pub(crate) branch_operation_loader_line_index: Option<usize>,
     pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) transient_loader_line_index: Option<usize>,
 }
 
 /// Cached transcript body that excludes the dynamic session-status tail.
 #[derive(Clone)]
 pub(crate) struct SessionOutputBody {
-    pub(crate) branch_operation_loader_line_index: Option<usize>,
     pub(crate) lines: Arc<[Line<'static>]>,
+    pub(crate) transient_loader_line_index: Option<usize>,
 }
 
 /// Assembles a complete session-output panel in canonical display order.
@@ -84,8 +84,8 @@ pub(crate) fn layout_from_body(
 
     SessionOutputLines {
         active_loader_line_index,
-        branch_operation_loader_line_index: body.branch_operation_loader_line_index,
         lines,
+        transient_loader_line_index: body.transient_loader_line_index,
     }
 }
 
@@ -182,13 +182,13 @@ struct SessionOutputAssembly<'a> {
     active_progress: Option<&'a str>,
     active_turn_has_visible_text: bool,
     active_turn_section: SessionOutputTranscriptSection<'a>,
-    branch_operation_loader_line_index: Option<usize>,
     completed_turn_section: SessionOutputTranscriptSection<'a>,
     inner_width: usize,
     lines: Vec<Line<'static>>,
     markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
     session: &'a Session,
     status: Status,
+    transient_loader_line_index: Option<usize>,
     trailing_notice_section: SessionOutputTranscriptSection<'a>,
 }
 
@@ -224,8 +224,8 @@ impl SessionOutputAssembly<'_> {
 
         SessionOutputLines {
             active_loader_line_index: self.active_loader_line_index,
-            branch_operation_loader_line_index: self.branch_operation_loader_line_index,
             lines: self.lines,
+            transient_loader_line_index: self.transient_loader_line_index,
         }
     }
 
@@ -237,8 +237,8 @@ impl SessionOutputAssembly<'_> {
         }
 
         SessionOutputBody {
-            branch_operation_loader_line_index: self.branch_operation_loader_line_index,
             lines: Arc::from(self.lines),
+            transient_loader_line_index: self.transient_loader_line_index,
         }
     }
 
@@ -289,13 +289,13 @@ impl SessionOutputAssembly<'_> {
             .iter()
             .filter(|message| message.anchor == anchor)
         {
-            if append_transient_message(
+            if let Some(loader_line_index) = append_transient_message(
                 &mut self.lines,
                 message,
                 self.inner_width,
                 self.markdown_render_cache,
             ) {
-                self.branch_operation_loader_line_index = Some(self.lines.len().saturating_sub(1));
+                self.transient_loader_line_index = Some(loader_line_index);
             }
         }
     }
@@ -338,13 +338,13 @@ fn output_assembly<'assembly>(
         active_progress,
         active_turn_has_visible_text,
         active_turn_section: transcript_sections.active_turn,
-        branch_operation_loader_line_index: None,
         completed_turn_section: transcript_sections.completed_turn,
         inner_width,
         lines: Vec::new(),
         markdown_render_cache,
         session,
         status,
+        transient_loader_line_index: None,
         trailing_notice_section: transcript_sections.trailing_notice,
     }
 }
@@ -408,7 +408,7 @@ fn append_transient_message(
     message: &TransientMessage,
     inner_width: usize,
     markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-) -> bool {
+) -> Option<usize> {
     match &message.body {
         TransientMessageBody::Markdown(markdown) => {
             let markdown = match message.slot {
@@ -417,31 +417,34 @@ fn append_transient_message(
                 }
                 TransientMessageSlot::Review => session_format::format_review_markdown(markdown),
                 TransientMessageSlot::WorkflowNotice
+                | TransientMessageSlot::Orchestration
                 | TransientMessageSlot::BranchPublish
                 | TransientMessageSlot::PublishedBranchSync => markdown.clone(),
             };
             append_markdown_lines(lines, &markdown, inner_width, markdown_render_cache);
+
+            None
         }
         TransientMessageBody::Plain(status_message) => {
             append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
             append_plain_status_lines(lines, status_message, inner_width);
+
+            None
         }
         TransientMessageBody::Loading(status_message) => {
             if message.slot == TransientMessageSlot::Review {
-                return false;
+                return None;
             }
 
             append_block_separator(lines, SessionOutputSeparator::Always);
-            lines.push(session_format::session_output_transient_loading_line(
+            let loader_line_index = lines.len();
+            lines.extend(session_format::session_output_transient_loading_lines(
                 status_message,
             ));
+
+            Some(loader_line_index)
         }
     }
-
-    matches!(
-        message.slot,
-        TransientMessageSlot::BranchPublish | TransientMessageSlot::PublishedBranchSync
-    ) && matches!(&message.body, TransientMessageBody::Loading(_))
 }
 
 fn output_text_sections(session: &Session, status: Status) -> SessionOutputTextSections<'_> {

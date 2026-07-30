@@ -143,7 +143,9 @@ mod tests {
     use crate::app::session::SessionDefaults;
     use crate::domain::agent::AgentModel;
     use crate::domain::selection::SelectionState;
-    use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
+    use crate::domain::session::{
+        Session, SessionHandles, SessionRole, SessionSize, SessionStats, Status,
+    };
     use crate::domain::transient_message::TransientMessageStore;
     use crate::infra::clock::RealClock;
 
@@ -349,6 +351,9 @@ mod tests {
                 in_progress_started_at: None,
                 in_progress_total_seconds: 0,
                 is_draft: false,
+                controller_session_id: None,
+                orchestration_progress: None,
+                role: SessionRole::default(),
                 agent: crate::domain::agent::AgentSelection::new(
                     crate::domain::agent::AgentKind::Codex,
                     AgentModel::Gpt56Sol,

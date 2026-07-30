@@ -6,6 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::question::QuestionItem;
+use super::subtask::SubtaskItem;
 
 /// Hard cap on the number of clarification questions extracted from one agent
 /// response. Prevents runaway output from flooding the question UI even when
@@ -15,8 +16,15 @@ use super::question::QuestionItem;
 /// templates so the prompt-level guidance and the server-side cap stay in
 /// sync automatically.
 pub(crate) const MAX_QUESTIONS: usize = 5;
+/// Hard cap on the number of subtasks accepted from one orchestrator planning
+/// turn. Bounds how many child sessions, worktrees, and agent CLI processes a
+/// single approved plan can create even when the agent ignores the
+/// prompt-level limit.
+pub(crate) const MAX_SUBTASKS: usize = 8;
 const QUESTIONS_FIELD_DESCRIPTION_TEMPLATE: &str =
     include_str!("template/questions_field_description.md");
+const SUBTASKS_FIELD_DESCRIPTION_TEMPLATE: &str =
+    include_str!("template/subtasks_field_description.md");
 
 /// Returns the canonical JSON Schema description for the `questions` field.
 ///
@@ -27,9 +35,56 @@ const QUESTIONS_FIELD_DESCRIPTION_TEMPLATE: &str =
 /// so all schema-facing call sites must route through this helper to stay in
 /// sync.
 pub(crate) fn questions_field_description() -> String {
-    QUESTIONS_FIELD_DESCRIPTION_TEMPLATE
-        .trim_end()
-        .replace("{{ max_questions }}", &MAX_QUESTIONS.to_string())
+    render_field_description_template(
+        QUESTIONS_FIELD_DESCRIPTION_TEMPLATE,
+        "{{ max_questions }}",
+        MAX_QUESTIONS,
+    )
+}
+
+/// Returns the canonical JSON Schema description for the `subtasks` field.
+///
+/// This mirrors [`questions_field_description`]: the static `schemars`
+/// metadata on `AgentResponse::subtasks` carries only the field title, and
+/// `inject_dynamic_schema_guidance` overwrites the description with this
+/// helper's output before any consumer observes the schema.
+pub(crate) fn subtasks_field_description() -> String {
+    render_field_description_template(
+        SUBTASKS_FIELD_DESCRIPTION_TEMPLATE,
+        "{{ max_subtasks }}",
+        MAX_SUBTASKS,
+    )
+}
+
+/// Substitutes one `{{ name }}` placeholder with a runtime cap value.
+///
+/// The placeholder is matched after collapsing whitespace runs inside every
+/// `{{ ... }}` span, because `mdformat` reflows these templates at a fixed
+/// column width and will break a line in the middle of a placeholder. Matching
+/// the literal text alone silently left the raw `{{ ... }}` in the description
+/// shown to models, so normalization keeps the templates safe to reformat.
+fn render_field_description_template(template: &str, placeholder: &str, value: usize) -> String {
+    let mut rendered = String::with_capacity(template.len());
+    let mut remaining = template.trim_end();
+
+    while let Some(open_index) = remaining.find("{{") {
+        let after_open = &remaining[open_index..];
+        let Some(close_end) = after_open.find("}}").map(|index| index + "}}".len()) else {
+            break;
+        };
+
+        rendered.push_str(&remaining[..open_index]);
+        rendered.push_str(&collapse_whitespace(&after_open[..close_end]));
+        remaining = &after_open[close_end..];
+    }
+    rendered.push_str(remaining);
+
+    rendered.replace(placeholder, &value.to_string())
+}
+
+/// Collapses every whitespace run in `text` to one space.
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Protocol-owned request family preserved across prompt submission and repair
@@ -165,6 +220,16 @@ pub struct AgentResponse {
                        IDs. Copy each reported `thread_id` exactly from the prompt."
     )]
     pub review_comment_outcomes: Vec<ReviewCommentOutcome>,
+    /// Proposed child-session subtasks for an orchestrator planning turn.
+    ///
+    /// The canonical JSON Schema description is produced by
+    /// [`subtasks_field_description`] and injected at schema generation time,
+    /// so the static `schemars` metadata here only sets the field title.
+    /// Ordinary session and utility turns leave this empty, and orchestration
+    /// consumers ignore it unless the turn prompt asked for a plan.
+    #[serde(default)]
+    #[schemars(title = "subtasks")]
+    pub subtasks: Vec<SubtaskItem>,
     /// Structured summary for session-discussion turns, or `None` for legacy
     /// payloads and one-shot prompts.
     #[serde(default)]
@@ -183,6 +248,7 @@ impl AgentResponse {
             answer: text.into(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
+            subtasks: Vec::new(),
             summary: None,
         }
     }
@@ -220,6 +286,14 @@ impl AgentResponse {
     /// order.
     pub fn question_items(&self) -> Vec<QuestionItem> {
         self.questions.iter().take(MAX_QUESTIONS).cloned().collect()
+    }
+
+    /// Returns up to [`MAX_SUBTASKS`] proposed subtasks in response order.
+    ///
+    /// Callers must still reject plans whose subtasks overlap or whose keys
+    /// collide; this only bounds how much of a runaway plan is considered.
+    pub fn subtask_items(&self) -> Vec<SubtaskItem> {
+        self.subtasks.iter().take(MAX_SUBTASKS).cloned().collect()
     }
 }
 
@@ -292,6 +366,7 @@ mod tests {
             answer: "Primary answer".to_string(),
             questions: vec![QuestionItem::new("Need one clarification.")],
             review_comment_outcomes: Vec::new(),
+            subtasks: Vec::new(),
             summary: None,
         };
 
@@ -314,6 +389,7 @@ mod tests {
                 resolution: ReviewCommentResolution::Fixed,
                 thread_id: "thread-42".to_string(),
             }],
+            subtasks: Vec::new(),
             summary: None,
         };
 
@@ -337,6 +413,7 @@ mod tests {
                 .map(|index| QuestionItem::new(format!("Question {index}")))
                 .collect(),
             review_comment_outcomes: Vec::new(),
+            subtasks: Vec::new(),
             summary: None,
         };
 
@@ -345,5 +422,118 @@ mod tests {
 
         // Assert
         assert_eq!(questions.len(), MAX_QUESTIONS);
+    }
+
+    #[test]
+    /// Ensures subtask extraction respects the protocol subtask cap so a
+    /// runaway plan cannot fan out past the bounded child-session budget.
+    fn test_agent_response_subtask_items_applies_subtask_cap() {
+        // Arrange
+        let response = AgentResponse {
+            answer: String::new(),
+            questions: Vec::new(),
+            review_comment_outcomes: Vec::new(),
+            subtasks: (0..=MAX_SUBTASKS).map(test_subtask).collect(),
+            summary: None,
+        };
+
+        // Act
+        let subtasks = response.subtask_items();
+
+        // Assert
+        assert_eq!(subtasks.len(), MAX_SUBTASKS);
+        assert_eq!(subtasks[0].task_key, "task-0");
+    }
+
+    #[test]
+    /// Preserves proposed subtasks through the wire JSON contract and keeps
+    /// them absent from ordinary responses.
+    fn test_agent_response_subtasks_round_trip() {
+        // Arrange
+        let response = AgentResponse {
+            answer: "Proposed a plan.".to_string(),
+            questions: Vec::new(),
+            review_comment_outcomes: Vec::new(),
+            subtasks: vec![test_subtask(1)],
+            summary: None,
+        };
+
+        // Act
+        let serialized = serde_json::to_string(&response).expect("response should serialize");
+        let deserialized = serde_json::from_str::<AgentResponse>(&serialized)
+            .expect("response should deserialize");
+
+        // Assert
+        assert_eq!(deserialized, response);
+        assert!(serialized.contains(r#""task_key":"task-1""#));
+        assert!(AgentResponse::plain("no plan").subtask_items().is_empty());
+    }
+
+    #[test]
+    /// Ensures `touched_areas` defaults to an empty list so a malformed
+    /// subtask still parses and can be rejected by plan validation instead of
+    /// failing the whole turn.
+    fn test_subtask_item_defaults_touched_areas() {
+        // Arrange
+        let raw = r#"{"prompt":"Do the work","task_key":"task-1","title":"Work"}"#;
+
+        // Act
+        let subtask =
+            serde_json::from_str::<SubtaskItem>(raw).expect("subtask should parse without areas");
+
+        // Assert
+        assert!(subtask.touched_areas.is_empty());
+    }
+
+    #[test]
+    /// Keeps the injected `subtasks` schema description in sync with the
+    /// server-side cap the parser enforces.
+    fn test_subtasks_field_description_reports_the_subtask_cap() {
+        // Arrange, Act
+        let description = subtasks_field_description();
+
+        // Assert
+        assert!(description.contains(&format!("at most {MAX_SUBTASKS} items")));
+        assert!(description.contains("without wildcard patterns"));
+        assert!(!description.contains("{{"));
+    }
+
+    #[test]
+    /// Substitutes a cap placeholder that markdown reflowing wrapped across a
+    /// line break, so reformatting a template cannot leak raw `{{ ... }}` text
+    /// into the schema description models read.
+    fn test_field_description_template_survives_a_wrapped_placeholder() {
+        // Arrange
+        let template = "Emit at most {{\nmax_items }} items, and no more.\n";
+
+        // Act
+        let rendered = render_field_description_template(template, "{{ max_items }}", 4);
+
+        // Assert
+        assert_eq!(rendered, "Emit at most 4 items, and no more.");
+    }
+
+    #[test]
+    /// Leaves an unterminated placeholder untouched instead of truncating the
+    /// remaining guidance text.
+    fn test_field_description_template_keeps_unterminated_placeholder_text() {
+        // Arrange
+        let template = "Emit at most {{ max_items items.";
+
+        // Act
+        let rendered = render_field_description_template(template, "{{ max_items }}", 4);
+
+        // Assert
+        assert_eq!(rendered, "Emit at most {{ max_items items.");
+    }
+
+    /// Builds one deterministic subtask with a file-disjoint touched area.
+    fn test_subtask(index: usize) -> SubtaskItem {
+        SubtaskItem {
+            prompt: format!("Complete work item {index}"),
+            task_key: format!("task-{index}"),
+            title: format!("Work item {index}"),
+            touched_areas: vec![format!("crates/area-{index}/")],
+        }
     }
 }

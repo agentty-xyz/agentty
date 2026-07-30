@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT orchestration.id AS \"id!: i64\",\n       session.project_id AS \"controller_project_id!: i64\",\n       orchestration.controller_session_id,\n       orchestration.status,\n       orchestration.max_parallelism\nFROM session_orchestration AS orchestration\nINNER JOIN session\nON session.id = orchestration.controller_session_id\nWHERE orchestration.controller_session_id = ?\nORDER BY orchestration.id DESC\nLIMIT 1\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "controller_project_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "project_id"
+          }
+        }
+      },
+      {
+        "name": "controller_session_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "controller_session_id"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "max_parallelism",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "max_parallelism"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "455f70112520fbf835d04111ac6b105e7afae7475fce03219551296b500da540"
+}

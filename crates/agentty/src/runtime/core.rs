@@ -8,17 +8,41 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
 use tokio::sync::mpsc;
 
-use crate::app::App;
+use crate::app::{App, OrchestrationCoordinator, OrchestrationSchedule};
 use crate::infra::clock::Clock;
 use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
 
 /// Fallback redraw cadence for visible spinner and timer UI when no new
 /// events arrive.
 const FORCED_REDRAW_INTERVAL: Duration = Duration::from_millis(200);
+/// Coordinator polling cadence while the terminal runtime is active.
+const ORCHESTRATION_RECONCILE_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Tokio-backed production schedule for orchestration reconciliation.
+struct RuntimeOrchestrationSchedule {
+    interval: tokio::time::Interval,
+}
+
+impl RuntimeOrchestrationSchedule {
+    fn new() -> Self {
+        let mut interval = tokio::time::interval(ORCHESTRATION_RECONCILE_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        Self { interval }
+    }
+}
+
+#[async_trait]
+impl OrchestrationSchedule for RuntimeOrchestrationSchedule {
+    async fn wait_for_reconciliation(&mut self) {
+        self.interval.tick().await;
+    }
+}
 
 /// Concrete terminal type used by the production runtime entry point.
 pub(crate) type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
@@ -106,6 +130,13 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     let _session_runtime_consumer = app.sessions.foreground_consumer();
+    let orchestration_coordinator = OrchestrationCoordinator::new(
+        app.services.event_sender(),
+        app.services.db().orchestration_repository(),
+        app.session_service(),
+    );
+    let orchestration_task =
+        tokio::spawn(orchestration_coordinator.run(RuntimeOrchestrationSchedule::new()));
     let clock = app.services.clock();
     let last_draw_at = clock.now_instant();
     let mut main_loop_state = MainLoopState {
@@ -118,7 +149,10 @@ where
         tick,
     };
 
-    run_until_quit(&mut main_loop_state, |state| Box::pin(state.run_cycle())).await
+    let result = run_until_quit(&mut main_loop_state, |state| Box::pin(state.run_cycle())).await;
+    orchestration_task.abort();
+
+    result
 }
 
 /// Borrowed runtime state required to process one main-loop cycle.

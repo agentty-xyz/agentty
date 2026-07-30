@@ -18,7 +18,7 @@ use super::{
     SessionTaskService, StatusTransition, draft, isolation, session_branch, session_folder,
     unix_timestamp_from_system_time,
 };
-use crate::app::session::{SessionCreationSettings, SessionError};
+use crate::app::session::{SessionCreationKind, SessionCreationSettings, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, setting};
 use crate::domain::agent::{
     AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
@@ -62,6 +62,7 @@ const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 /// Input bag for constructing a queued session command.
 struct BuildSessionCommandInput {
     is_first_message: bool,
+    operation_id: Option<String>,
     prompt: TurnPrompt,
     published_upstream_ref: Option<String>,
     replay_transcript: Option<String>,
@@ -100,6 +101,7 @@ impl ReplyEligibility {
 struct ReplyOptions {
     defer_prompt_until_enqueued: bool,
     eligibility: ReplyEligibility,
+    operation_id: Option<String>,
     requires_existing_worker: bool,
     review_comment_thread_ids: Vec<String>,
 }
@@ -110,6 +112,7 @@ impl ReplyOptions {
         Self {
             defer_prompt_until_enqueued: false,
             eligibility: ReplyEligibility::Standard,
+            operation_id: None,
             requires_existing_worker: false,
             review_comment_thread_ids,
         }
@@ -121,14 +124,38 @@ impl ReplyOptions {
         Self {
             defer_prompt_until_enqueued: true,
             eligibility: ReplyEligibility::QuestionAnswer,
+            operation_id: None,
             requires_existing_worker,
+            review_comment_thread_ids: Vec::new(),
+        }
+    }
+
+    /// Builds idempotent coordinator-turn behavior for one durable operation.
+    fn coordinator(operation_id: String) -> Self {
+        Self {
+            defer_prompt_until_enqueued: true,
+            eligibility: ReplyEligibility::Standard,
+            operation_id: Some(operation_id),
+            requires_existing_worker: false,
             review_comment_thread_ids: Vec::new(),
         }
     }
 }
 
+/// Result of attempting to persist and enqueue one reply command.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ReplyEnqueueOutcome {
+    /// A prior attempt already durably accepted the same operation.
+    AlreadyAccepted,
+    /// The command was newly persisted and reached the worker queue.
+    Enqueued,
+    /// Persistence or worker delivery failed.
+    Failed,
+}
+
 /// Worker-queue behavior selected after reply preparation.
 struct ReplyEnqueueOptions {
+    idempotent: bool,
     report_failure_in_transcript: bool,
     requires_existing_worker: bool,
 }
@@ -244,6 +271,7 @@ impl SessionManager {
             base_branch,
             projects.working_dir().to_path_buf(),
             None,
+            SessionCreationKind::Worker,
         )
         .await
     }
@@ -422,6 +450,7 @@ impl SessionManager {
             .await?;
         let session_agent = creation_settings.agent;
         let session_model = session_agent.model();
+        let session_role = creation_settings.role.to_string();
 
         let session_id = Uuid::new_v4().to_string();
         let folder = session_folder(services.base_path(), &session_id);
@@ -442,10 +471,12 @@ impl SessionManager {
                 id: &session_id,
                 is_draft: true,
                 model: session_model.as_str(),
+                orchestration_task_id: None,
                 parent_session_id,
                 personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
+                role: Some(&session_role),
                 speed_mode: creation_settings.speed_mode,
                 status: &status,
             })
@@ -598,12 +629,16 @@ impl SessionManager {
         base_branch: &str,
         working_dir: PathBuf,
         creation_settings: Option<SessionCreationSettings>,
+        creation_kind: SessionCreationKind,
     ) -> Result<String, SessionError> {
-        let creation_settings = self
+        let mut creation_settings = self
             .resolve_session_creation_settings(services, project_id, creation_settings)
             .await?;
+        creation_settings.role = creation_kind.role();
         let session_agent = creation_settings.agent;
         let session_model = session_agent.model();
+        let session_role = creation_settings.role.to_string();
+        let orchestration_task_id = creation_kind.orchestration_task_id();
 
         let session_id = Uuid::new_v4().to_string();
         let folder = session_folder(services.base_path(), &session_id);
@@ -643,10 +678,12 @@ impl SessionManager {
                 id: &session_id,
                 is_draft: false,
                 model: session_model.as_str(),
+                orchestration_task_id,
                 parent_session_id: None,
                 personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
+                role: Some(&session_role),
                 speed_mode: creation_settings.speed_mode,
                 status: &status,
             })
@@ -1420,6 +1457,34 @@ impl SessionManager {
         .await
     }
 
+    /// Queues one coordinator-owned prompt directly on the serialized worker.
+    ///
+    /// Callers gate this path to idle controller states, so it never falls
+    /// back to the lossy in-memory chat queue used by ordinary messages
+    /// submitted during an active turn.
+    pub(crate) async fn reply_to_coordinator_message(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        operation_id: String,
+        prompt: impl Into<TurnPrompt>,
+    ) -> bool {
+        let prompt = prompt.into();
+        let Ok(session) = self.session_or_err(session_id) else {
+            return false;
+        };
+        let session_agent = session.agent;
+
+        self.reply_impl(
+            services,
+            session_id,
+            prompt,
+            session_agent,
+            ReplyOptions::coordinator(operation_id),
+        )
+        .await
+    }
+
     /// Submits a follow-up prompt with an allowlist of forge review threads
     /// eligible for post-push reply and resolution.
     ///
@@ -1987,6 +2052,7 @@ impl SessionManager {
         let ReplyOptions {
             defer_prompt_until_enqueued,
             eligibility,
+            operation_id,
             requires_existing_worker,
             review_comment_thread_ids,
         } = options;
@@ -2050,9 +2116,11 @@ impl SessionManager {
             .session_or_err(&persisted_session_id)
             .ok()
             .and_then(|session| session.published_upstream_ref.clone());
+        let idempotent = operation_id.is_some();
 
         let command = Self::build_session_command(BuildSessionCommandInput {
             is_first_message,
+            operation_id,
             prompt: effective_prompt.clone(),
             published_upstream_ref,
             replay_transcript,
@@ -2067,12 +2135,13 @@ impl SessionManager {
                 &effective_prompt,
                 command,
                 ReplyEnqueueOptions {
+                    idempotent,
                     report_failure_in_transcript: !defer_prompt_until_enqueued,
                     requires_existing_worker,
                 },
             )
             .await;
-        if enqueued && defer_prompt_until_enqueued {
+        if enqueued == ReplyEnqueueOutcome::Enqueued && defer_prompt_until_enqueued {
             self.append_reply_prompt_line(
                 services,
                 &transcript,
@@ -2083,7 +2152,7 @@ impl SessionManager {
             .await;
         }
 
-        enqueued
+        enqueued != ReplyEnqueueOutcome::Failed
     }
 
     /// Validates reply eligibility and gathers per-session values needed for
@@ -2295,13 +2364,14 @@ impl SessionManager {
     fn build_session_command(input: BuildSessionCommandInput) -> SessionCommand {
         let BuildSessionCommandInput {
             is_first_message,
+            operation_id,
             prompt,
             published_upstream_ref,
             replay_transcript,
             review_comment_thread_ids,
             session_agent,
         } = input;
-        let operation_id = Uuid::new_v4().to_string();
+        let operation_id = operation_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let request_kind = if is_first_message {
             AgentRequestKind::SessionStart
         } else {
@@ -2346,8 +2416,8 @@ impl SessionManager {
         .await;
     }
 
-    /// Returns `true` when the command reached the session worker queue and
-    /// `false` when enqueueing failed and a reply-error notice was appended.
+    /// Returns whether the command was newly enqueued, previously accepted,
+    /// or rejected with a reply-error notice.
     async fn enqueue_reply_command(
         &mut self,
         services: &AppServices,
@@ -2356,37 +2426,49 @@ impl SessionManager {
         prompt: &TurnPrompt,
         command: SessionCommand,
         options: ReplyEnqueueOptions,
-    ) -> bool {
-        let enqueue_result = if options.requires_existing_worker {
+    ) -> ReplyEnqueueOutcome {
+        let enqueue_result = if options.idempotent {
+            self.enqueue_session_command_idempotently(services, persisted_session_id, command)
+                .await
+        } else if options.requires_existing_worker {
             let persisted_session_id = SessionId::from(persisted_session_id);
             self.worker_service_mut()
                 .enqueue_existing_session_command(services, &persisted_session_id, command)
                 .await
+                .map(|()| true)
         } else {
             self.enqueue_session_command(services, persisted_session_id, command)
                 .await
+                .map(|()| true)
         };
-        if let Err(error) = enqueue_result {
-            self.cleanup_prompt_attachment_files(services, prompt).await;
+        let newly_enqueued = match enqueue_result {
+            Ok(newly_enqueued) => newly_enqueued,
+            Err(error) => {
+                self.cleanup_prompt_attachment_files(services, prompt).await;
 
-            if options.report_failure_in_transcript {
-                let error_line = TranscriptNotice::ReplyError.format(error);
-                let app_event_tx = services.event_sender();
-                SessionTaskService::append_workflow_notice(
-                    transcript,
-                    services.db(),
-                    &app_event_tx,
-                    &services.session_update_versions(),
-                    persisted_session_id,
-                    &error_line,
-                )
-                .await;
+                if options.report_failure_in_transcript {
+                    let error_line = TranscriptNotice::ReplyError.format(error);
+                    let app_event_tx = services.event_sender();
+                    SessionTaskService::append_workflow_notice(
+                        transcript,
+                        services.db(),
+                        &app_event_tx,
+                        &services.session_update_versions(),
+                        persisted_session_id,
+                        &error_line,
+                    )
+                    .await;
+                }
+
+                return ReplyEnqueueOutcome::Failed;
             }
+        };
 
-            return false;
+        if newly_enqueued {
+            ReplyEnqueueOutcome::Enqueued
+        } else {
+            ReplyEnqueueOutcome::AlreadyAccepted
         }
-
-        true
     }
 
     /// Spawns one detached model command that generates a session title for
@@ -2734,6 +2816,7 @@ impl SessionManager {
             agent,
             personality_id: None,
             reasoning_level,
+            role: crate::domain::session::SessionRole::Worker,
             speed_mode: SpeedMode::Normal,
         })
     }
@@ -4347,6 +4430,126 @@ mod tests {
 
         // Assert
         assert!(!enqueued);
+    }
+
+    #[tokio::test]
+    /// Ensures a retried coordinator delivery with an already accepted
+    /// operation does not enqueue or append the roll-up prompt twice.
+    async fn test_reply_to_coordinator_message_accepts_existing_operation_without_duplicate_prompt()
+    {
+        // Arrange
+        let session = test_session("Initial prompt", Status::Review, Some("Title"), "");
+        let database = database_with_session(&session).await;
+        database
+            .operations()
+            .insert_session_operation("orchestration-rollup-1", &session.id, "reply")
+            .await
+            .expect("failed to insert accepted coordinator operation");
+        database
+            .operations()
+            .mark_session_operation_done("orchestration-rollup-1")
+            .await
+            .expect("failed to settle accepted coordinator operation");
+        let mut session_manager = session_manager_with_one_session(session);
+        let services = test_services(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let missing = session_manager
+            .reply_to_coordinator_message(
+                &services,
+                "missing-session",
+                "orchestration-rollup-missing".to_string(),
+                "Missing controller",
+            )
+            .await;
+        let accepted = session_manager
+            .reply_to_coordinator_message(
+                &services,
+                "session-id",
+                "orchestration-rollup-1".to_string(),
+                "Summarize the child results",
+            )
+            .await;
+        let messages = database
+            .sessions()
+            .load_session_messages("session-id")
+            .await
+            .expect("failed to load session messages");
+
+        // Assert
+        assert!(!missing);
+        assert!(accepted);
+        assert!(messages.is_empty());
+    }
+
+    #[tokio::test]
+    /// Ensures a normal reply enqueue failure remains visible in the durable
+    /// workflow transcript.
+    async fn test_enqueue_reply_command_reports_worker_failure_in_transcript() {
+        // Arrange
+        let session = test_session("Initial prompt", Status::Review, Some("Title"), "");
+        let session_agent = session.agent;
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let services = test_services(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+        let transcript = Arc::clone(
+            &session_manager
+                .session_handles_or_err("session-id")
+                .expect("session handles should exist")
+                .transcript,
+        );
+        let prompt = TurnPrompt::from_text("Continue".to_string());
+        let command = SessionManager::build_session_command(BuildSessionCommandInput {
+            is_first_message: false,
+            operation_id: None,
+            prompt: prompt.clone(),
+            published_upstream_ref: None,
+            replay_transcript: None,
+            review_comment_thread_ids: Vec::new(),
+            session_agent,
+        });
+
+        // Act
+        let outcome = session_manager
+            .enqueue_reply_command(
+                &services,
+                &transcript,
+                "session-id",
+                &prompt,
+                command,
+                ReplyEnqueueOptions {
+                    idempotent: false,
+                    report_failure_in_transcript: true,
+                    requires_existing_worker: true,
+                },
+            )
+            .await;
+        let messages = database
+            .sessions()
+            .load_session_messages("session-id")
+            .await
+            .expect("failed to load workflow transcript");
+
+        // Assert
+        assert!(outcome == ReplyEnqueueOutcome::Failed);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].kind,
+            SessionMessageKind::WorkflowNotice.to_string()
+        );
+        assert!(
+            messages[0]
+                .content
+                .contains("active session worker is unavailable")
+        );
     }
 
     #[test]

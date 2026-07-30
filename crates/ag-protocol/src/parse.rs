@@ -7,7 +7,13 @@ use super::model::{
 };
 
 /// Top-level keys the protocol recognizes in a structured response payload.
-const PROTOCOL_KEYS: &[&str] = &["answer", "questions", "review_comment_outcomes", "summary"];
+const PROTOCOL_KEYS: &[&str] = &[
+    "answer",
+    "questions",
+    "review_comment_outcomes",
+    "subtasks",
+    "summary",
+];
 
 /// Normalizes one parsed turn response according to the request profile.
 ///
@@ -35,7 +41,7 @@ pub fn normalize_turn_response(
 ///
 /// The final assistant payload must match [`AgentResponse`] and contain at
 /// least one recognized protocol key (`answer`, `questions`,
-/// `review_comment_outcomes`, or `summary`).
+/// `review_comment_outcomes`, `subtasks`, or `summary`).
 ///
 /// When a provider prepends stray prose before the final schema object, this
 /// still recovers the trailing protocol payload as long as nothing except
@@ -204,8 +210,8 @@ fn parse_structured_json_response_with_recovery(raw: &str) -> Option<AgentRespon
 /// Attempts to parse one schema-driven structured JSON response.
 ///
 /// The raw text must parse as a JSON object containing at least one
-/// recognized protocol key (`answer`, `questions`, or `summary`). Returns
-/// `None` when parsing fails or no recognized keys are present.
+/// recognized protocol key from [`PROTOCOL_KEYS`]. Returns `None` when parsing
+/// fails or no recognized keys are present.
 fn parse_structured_json_response(raw: &str) -> Option<AgentResponse> {
     parse_structured_json_response_with_reason(raw).ok()
 }
@@ -795,7 +801,7 @@ mod tests {
         assert!(details.contains("direct_json_recognized_protocol_keys: (none)"));
         assert!(details.contains(
             "direct_json_missing_protocol_keys: answer, questions, review_comment_outcomes, \
-             summary"
+             subtasks, summary"
         ));
     }
 }

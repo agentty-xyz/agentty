@@ -55,12 +55,14 @@ of pasted text.
 | `?`                 | Help                                                 |
 
 If pre-commit configuration exists without an executable hook, `a` first opens a
-warning. Press `Enter` to continue to the `Regular`, `Draft`, or `Stacked` selector, or
-`Esc` / `q` to cancel.
+warning. Press `Enter` to continue to the `Regular`, `Draft`, `Orchestrator`, or
+`Stacked` selector, or `Esc` / `q` to cancel. `Orchestrator` and an available `Stacked`
+option are marked `[Preview]`.
 
 In the `a` selector, `Stacked` is enabled only when the selected session is a root
 session with an active branch. `c` appears only for cancelable rows: running sessions,
-review-ready sessions, and unstarted draft sessions.
+review-ready sessions, and unstarted draft sessions. Canceling a running orchestrator
+opens a confirmation that names its running-child count and cascades to those children.
 
 <a id="usage-session-list-project-switcher"></a> The `p` popup lists registered projects
 in most-recently-opened order with the active project marked by a `* ` prefix. Each row
@@ -185,6 +187,9 @@ State-specific differences:
   `Alt+V` open the composer with an image paste; stacked drafts also hide `m` and show
   `s` only when the parent is review-ready and the stack is idle.
 - **Question** sessions hide `r` until they return to review-ready state.
+- **Orchestrator** sessions keep chat and question-answer actions but hide branch
+  actions: `d`, `o`, `p`, `F`, `m`, and `r`. Review and merge changes from each worker
+  session instead.
 - Review-ready stacked parents with a materialized child keep `Enter`, `/`, `m`, and `r`
   while the stack is idle.
 - Sessions with a linked pull request or merge request use `c` to open its comments page

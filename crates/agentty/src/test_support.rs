@@ -36,7 +36,8 @@ use crate::domain::question::QuestionItem;
 use crate::domain::selection::SelectionState;
 #[cfg(test)]
 use crate::domain::session::{
-    ReviewRequest, Session, SessionHandles, SessionId, SessionSize, SessionStats, Status,
+    ReviewRequest, Session, SessionHandles, SessionId, SessionRole, SessionSize, SessionStats,
+    Status,
 };
 #[cfg(test)]
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -216,6 +217,9 @@ impl SessionFixtureBuilder {
                 in_progress_started_at: None,
                 in_progress_total_seconds: 0,
                 is_draft: false,
+                controller_session_id: None,
+                orchestration_progress: None,
+                role: SessionRole::default(),
                 parent_session_id: None,
                 personality_id: None,
                 project_name: "project".to_string(),
@@ -321,6 +325,13 @@ impl SessionFixtureBuilder {
     /// Overrides the persisted forge review request.
     pub(crate) fn review_request(mut self, review_request: Option<ReviewRequest>) -> Self {
         self.session.review_request = review_request;
+
+        self
+    }
+
+    /// Overrides the session's orchestration role.
+    pub(crate) fn role(mut self, role: SessionRole) -> Self {
+        self.session.role = role;
 
         self
     }

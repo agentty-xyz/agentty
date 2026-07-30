@@ -316,12 +316,23 @@ pub fn session_output_status_line(
     )]))
 }
 
-/// Builds one animated loading row for an explicit transient workflow slot.
-pub(crate) fn session_output_transient_loading_line(message: &str) -> Line<'static> {
-    Line::from(vec![Span::styled(
-        format!("{} {}", Icon::Spinner, message.trim()),
-        Style::default().fg(style::palette::warning()),
-    )])
+/// Builds an animated loading header followed by any indented detail rows.
+pub(crate) fn session_output_transient_loading_lines(message: &str) -> Vec<Line<'static>> {
+    let warning_style = Style::default().fg(style::palette::warning());
+    let mut source_lines = message.trim().lines();
+    let header = source_lines.next().unwrap_or_default().trim();
+    let mut lines = vec![Line::from(vec![Span::styled(
+        format!("{} {header}", Icon::Spinner),
+        warning_style,
+    )])];
+    lines.extend(
+        source_lines
+            .map(str::trim)
+            .filter(|detail| !detail.is_empty())
+            .map(|detail| Line::from(Span::styled(format!("    {detail}"), warning_style))),
+    );
+
+    lines
 }
 
 /// Returns one rendered summary section or the shared empty placeholder.

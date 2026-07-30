@@ -191,6 +191,12 @@ pub(super) async fn run_channel_turn(
         prompt: personality,
     } = resolve_turn_personality(context).await;
 
+    let agent_prompt = crate::app::orchestration::controller_prompt(
+        &context.db,
+        &context.session_id,
+        prompt.clone(),
+    )
+    .await;
     let req = TurnRequest {
         continuation,
         folder: context.folder.clone(),
@@ -203,7 +209,7 @@ pub(super) async fn run_channel_turn(
             .provider_model_str()
             .to_string(),
         personality,
-        prompt: prompt.clone(),
+        prompt: agent_prompt,
         reasoning_level,
         request_kind: request_kind.clone(),
         speed_mode,

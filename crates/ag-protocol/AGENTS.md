@@ -15,6 +15,7 @@ prompt transport models.
 - `src/schema.rs` owns JSON Schema generation and provider transport normalization.
 - `src/prompt.rs` owns transport-neutral turn prompt payloads and attachment ordering.
 - `src/question.rs` owns clarification question payloads used by the response schema.
+- `src/subtask.rs` owns orchestrator subtask payloads used by the response schema.
 
 ## Change Guidance
 

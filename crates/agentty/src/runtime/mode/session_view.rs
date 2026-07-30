@@ -77,6 +77,7 @@ impl ViewActionState {
 
 /// Snapshot of session-derived state used by view-mode key handling.
 struct ViewSessionSnapshot {
+    branch_actions: ViewActionState,
     continue_terminal_session: ViewActionState,
     fork_session: ViewActionState,
     follow_up_task_action: Option<FollowUpTaskAction>,
@@ -96,7 +97,8 @@ impl ViewSessionSnapshot {
     /// Returns whether the active session can enter the merge queue from view
     /// mode.
     fn can_merge_session(&self) -> bool {
-        self.session_status.allows_session_actions()
+        self.branch_actions.is_enabled()
+            && self.session_status.allows_session_actions()
             && self.can_merge_session_branch()
             && self.session_state != ViewSessionState::StackedDraft
     }
@@ -104,7 +106,8 @@ impl ViewSessionSnapshot {
     /// Returns whether the active session can start the session sync action
     /// from view mode.
     fn can_rebase_session(&self) -> bool {
-        self.session_status.allows_rebase_action()
+        self.branch_actions.is_enabled()
+            && self.session_status.allows_rebase_action()
             && self.can_rebase_session_branch()
             && self.session_state != ViewSessionState::StackedDraft
     }
@@ -405,6 +408,7 @@ async fn handle_workflow_view_key(
     match key.code {
         KeyCode::Char('d')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
+                && view_session_snapshot.branch_actions.is_enabled()
                 && view_session_snapshot.session_status.allows_diff_view() =>
         {
             show_diff_for_view_session(app, view_context).await;
@@ -433,6 +437,7 @@ async fn handle_workflow_view_key(
         }
         KeyCode::Char('f')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
+                && view_session_snapshot.branch_actions.is_enabled()
                 && view_session_snapshot.session_status.allows_review_actions() =>
         {
             open_or_regenerate_review(app, view_context, pending_update).await;
@@ -587,24 +592,34 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
             .unwrap_or(&false);
 
     Some(ViewSessionSnapshot {
+        branch_actions: ViewActionState::from_bool(session.owns_branch_changes()),
         continue_terminal_session: ViewActionState::from_bool(
             session.allows_terminal_continuation(),
         ),
         fork_session: ViewActionState::from_bool(session.allows_fork_action()),
         follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
         merge_session_branch: ViewActionState::from_bool(
-            app.sessions
-                .can_merge_session_branch_in_stack(view_context.session_id.as_str()),
+            session.owns_branch_changes()
+                && app
+                    .sessions
+                    .can_merge_session_branch_in_stack(view_context.session_id.as_str()),
         ),
         mutate_session_branch: ViewActionState::from_bool(
-            app.sessions
-                .can_mutate_session_branch_in_stack(view_context.session_id.as_str()),
+            session.owns_branch_changes()
+                && app
+                    .sessions
+                    .can_mutate_session_branch_in_stack(view_context.session_id.as_str()),
         ),
         open_worktree: ViewActionState::from_bool(can_open_worktree),
-        publish_pull_request_action: session.publish_pull_request_action(),
+        publish_pull_request_action: session
+            .owns_branch_changes()
+            .then(|| session.publish_pull_request_action())
+            .flatten(),
         rebase_session_branch: ViewActionState::from_bool(
-            app.sessions
-                .can_rebase_session_branch_in_stack(view_context.session_id.as_str()),
+            session.owns_branch_changes()
+                && app
+                    .sessions
+                    .can_rebase_session_branch_in_stack(view_context.session_id.as_str()),
         ),
         reply_to_session: ViewActionState::from_bool(
             app.sessions
@@ -1186,6 +1201,7 @@ mod tests {
     /// Builds one reply-enabled review snapshot for primary-key routing tests.
     fn reply_enabled_review_snapshot() -> ViewSessionSnapshot {
         ViewSessionSnapshot {
+            branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Enabled,
             merge_session_branch: ViewActionState::Enabled,
@@ -2161,6 +2177,7 @@ mod tests {
             session_index: 0,
         };
         let view_session_snapshot = ViewSessionSnapshot {
+            branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Enabled,
             merge_session_branch: ViewActionState::Enabled,
@@ -2485,6 +2502,7 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
+            branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Disabled,
             merge_session_branch: ViewActionState::Enabled,
@@ -2542,6 +2560,7 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
+            branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Disabled,
             merge_session_branch: ViewActionState::Enabled,
@@ -3085,6 +3104,7 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
+            branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Enabled,
             merge_session_branch: ViewActionState::Enabled,
@@ -3140,6 +3160,7 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
+            branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Enabled,
             merge_session_branch: ViewActionState::Enabled,
@@ -3213,6 +3234,7 @@ mod tests {
         ] {
             let mut pending_update = ViewPendingUpdate::from_context(&view_context);
             let view_session_snapshot = ViewSessionSnapshot {
+                branch_actions: ViewActionState::Enabled,
                 continue_terminal_session: ViewActionState::Disabled,
                 fork_session: ViewActionState::Disabled,
                 merge_session_branch: ViewActionState::Enabled,

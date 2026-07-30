@@ -342,6 +342,9 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::StackedParentSyncCompleted { .. } => "StackedParentSyncCompleted",
         AppEvent::StackedParentMergeCompleted { .. } => "StackedParentMergeCompleted",
         AppEvent::SessionWorkflowNoticeUpdated { .. } => "SessionWorkflowNoticeUpdated",
+        AppEvent::SessionOrchestrationProgressUpdated { .. } => {
+            "SessionOrchestrationProgressUpdated"
+        }
         AppEvent::PublishedBranchSyncUpdated { .. } => "PublishedBranchSyncUpdated",
         AppEvent::ReviewRequestStatusUpdated { .. } => "ReviewRequestStatusUpdated",
     }
@@ -398,6 +401,21 @@ mod tests {
 
         // Assert
         assert_eq!(label, "SessionDiffStatsUpdated");
+    }
+
+    #[test]
+    fn app_event_label_names_orchestration_progress_updates() {
+        // Arrange
+        let event = AppEvent::SessionOrchestrationProgressUpdated {
+            progress: Some("Working... protocol: running".to_string()),
+            session_id: "controller".into(),
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "SessionOrchestrationProgressUpdated");
     }
 
     #[tokio::test]

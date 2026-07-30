@@ -31,8 +31,8 @@ use crate::domain::agent::{
 };
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{
-    DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
-    activity_day_key_with_offset,
+    DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionRole, SessionSize,
+    SessionStats, Status, activity_day_key_with_offset,
 };
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
@@ -711,6 +711,9 @@ fn add_manual_session_with_status(
         in_progress_started_at: None,
         in_progress_total_seconds: 0,
         is_draft: false,
+        controller_session_id: None,
+        orchestration_progress: None,
+        role: SessionRole::default(),
         agent: crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
             crate::domain::agent::AgentModel::Gemini36Flash,
@@ -772,6 +775,9 @@ fn test_session_manager_with_clock(
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Codex,
                 AgentModel::Gpt56Sol,
@@ -863,6 +869,55 @@ fn test_append_workflow_notice_anchors_active_status_notices_after_active_turn()
             "unexpected anchor for {status}"
         );
     }
+}
+
+#[test]
+fn test_update_orchestration_progress_replaces_and_clears_loader() {
+    // Arrange
+    let mut session_manager = test_session_manager("controller", None);
+
+    // Act
+    session_manager.update_orchestration_progress(
+        "controller",
+        Some("Working... Protocol: running".to_string()),
+    );
+    session_manager.update_orchestration_progress(
+        "controller",
+        Some("Working... Protocol: ready".to_string()),
+    );
+
+    // Assert
+    let orchestration_message = session_manager.sessions()[0]
+        .transient_messages
+        .get(TransientMessageSlot::Orchestration)
+        .expect("orchestration loader should be present");
+    assert_eq!(orchestration_message.anchor, TransientMessageAnchor::Tail);
+    assert!(matches!(
+        &orchestration_message.body,
+        TransientMessageBody::Loading(message)
+            if message == "Working... Protocol: ready"
+    ));
+    assert_eq!(
+        session_manager.sessions()[0]
+            .transient_messages
+            .messages()
+            .iter()
+            .filter(|message| message.slot == TransientMessageSlot::Orchestration)
+            .count(),
+        1
+    );
+
+    // Act
+    session_manager.update_orchestration_progress("controller", None);
+    session_manager.update_orchestration_progress("missing", Some("ignored".to_string()));
+
+    // Assert
+    assert!(
+        session_manager.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::Orchestration)
+            .is_none()
+    );
 }
 
 #[test]

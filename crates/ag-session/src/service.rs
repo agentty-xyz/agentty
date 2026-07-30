@@ -14,6 +14,13 @@ pub enum CreateSessionMode {
     Regular,
     /// Creates a root draft whose worktree is materialized on first send.
     Draft,
+    /// Creates a controller session that plans and supervises worker sessions.
+    Orchestrator,
+    /// Creates one worker owned by a persisted orchestration task.
+    OrchestrationChild {
+        /// Durable task row used to re-link the child after restart.
+        task_id: i64,
+    },
     /// Creates a one-level draft stacked on an existing parent session.
     Stacked {
         /// Review-ready parent session whose branch becomes the stack base.
@@ -50,6 +57,15 @@ pub struct AnswerQuestionsRequest {
     pub answers: Vec<QuestionAnswer>,
 }
 
+/// Durable coordinator-owned turn submitted to one controller session.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoordinatorMessageRequest {
+    /// Agent-facing roll-up or supervision prompt.
+    pub message: String,
+    /// Stable operation identifier reused when delivery is retried.
+    pub operation_id: String,
+}
+
 /// Host implementation boundary for session persistence and workflows.
 ///
 /// The trait is object-safe so agent loops and future orchestrators can hold a
@@ -70,6 +86,14 @@ pub trait SessionBackend: Send + Sync {
         &self,
         session_id: &SessionId,
         message: String,
+    ) -> Result<(), SessionError>;
+
+    /// Submits a coordinator-owned turn without entering the lossy live-chat
+    /// queue used while an ordinary user turn is active.
+    async fn submit_coordinator_message(
+        &self,
+        session_id: &SessionId,
+        request: CoordinatorMessageRequest,
     ) -> Result<(), SessionError>;
 
     /// Answers the complete current clarification-question set.
@@ -139,6 +163,20 @@ impl SessionService {
         self.backend.send_message(session_id, message.into()).await
     }
 
+    /// Submits one coordinator-owned turn directly to the serialized worker.
+    ///
+    /// # Errors
+    /// Returns an error when the session is busy or cannot accept the turn.
+    pub async fn submit_coordinator_message(
+        &self,
+        session_id: &SessionId,
+        request: CoordinatorMessageRequest,
+    ) -> Result<(), SessionError> {
+        self.backend
+            .submit_coordinator_message(session_id, request)
+            .await
+    }
+
     /// Answers the complete current clarification-question set.
     ///
     /// # Errors
@@ -191,7 +229,7 @@ mod tests {
     use ag_forge::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
 
     use super::*;
-    use crate::{SessionMessage, SessionMessageKind, SessionSettings, SessionStatus};
+    use crate::{SessionMessage, SessionMessageKind, SessionRole, SessionSettings, SessionStatus};
 
     #[derive(Default)]
     struct FakeBackend {
@@ -262,6 +300,26 @@ mod tests {
                 .lock()
                 .expect("fake backend state should remain available");
             state.calls.push(format!("send:{session_id}:{message}"));
+
+            state
+                .unit_results
+                .pop_front()
+                .unwrap_or_else(|| Err(SessionError::Operation("missing result".to_string())))
+        }
+
+        async fn submit_coordinator_message(
+            &self,
+            session_id: &SessionId,
+            request: CoordinatorMessageRequest,
+        ) -> Result<(), SessionError> {
+            let mut state = self
+                .state
+                .lock()
+                .expect("fake backend state should remain available");
+            state.calls.push(format!(
+                "submit-coordinator:{session_id}:{}:{}",
+                request.operation_id, request.message
+            ));
 
             state
                 .unit_results
@@ -353,6 +411,7 @@ mod tests {
                 personality_id: Some("reviewer".to_string()),
                 project_id: 7,
                 reasoning_level: ReasoningLevel::High,
+                role: SessionRole::Worker,
                 speed_mode: SpeedMode::Normal,
             },
             status: SessionStatus::Review,
@@ -414,7 +473,7 @@ mod tests {
         let expected_review_request = review_request_fixture();
         let backend = Arc::new(FakeBackend::from_state(FakeBackendState {
             review_result: Some(Ok(expected_review_request.clone())),
-            unit_results: VecDeque::from([Ok(()), Ok(()), Ok(()), Ok(())]),
+            unit_results: VecDeque::from([Ok(()), Ok(()), Ok(()), Ok(()), Ok(())]),
             ..FakeBackendState::default()
         }));
         let session_id = SessionId::from("session-1");
@@ -432,6 +491,16 @@ mod tests {
             .send_message(&session_id, "continue")
             .await
             .expect("message should be sent");
+        service
+            .submit_coordinator_message(
+                &session_id,
+                CoordinatorMessageRequest {
+                    message: "roll up".to_string(),
+                    operation_id: "rollup-7".to_string(),
+                },
+            )
+            .await
+            .expect("coordinator message should be submitted");
         cloned_service
             .answer_questions(&session_id, answers)
             .await
@@ -455,6 +524,7 @@ mod tests {
             backend.calls(),
             [
                 "send:session-1:continue",
+                "submit-coordinator:session-1:rollup-7:roll up",
                 "answer:session-1:1",
                 "cancel:session-1",
                 "merge:session-1",
@@ -511,6 +581,16 @@ mod tests {
             .send_message(&session_id, "continue")
             .await
             .expect_err("send should require a result");
+        let coordinator_error = service
+            .submit_coordinator_message(
+                &session_id,
+                CoordinatorMessageRequest {
+                    message: "roll up".to_string(),
+                    operation_id: "rollup-1".to_string(),
+                },
+            )
+            .await
+            .expect_err("coordinator submission should require a result");
         let answer_error = service
             .answer_questions(
                 &session_id,
@@ -536,6 +616,7 @@ mod tests {
             create_error,
             get_error,
             send_error,
+            coordinator_error,
             answer_error,
             cancel_error,
             merge_error,

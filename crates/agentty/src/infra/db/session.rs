@@ -53,6 +53,8 @@ pub struct PersistedSessionCreation<'a> {
     pub is_draft: bool,
     /// Persisted model identifier for the session.
     pub model: &'a str,
+    /// Orchestration task that owns this child session, when applicable.
+    pub orchestration_task_id: Option<i64>,
     /// Optional parent session id for one-level stacked drafts.
     pub parent_session_id: Option<&'a str>,
     /// Workspace personality selected for future turns, when present.
@@ -61,6 +63,8 @@ pub struct PersistedSessionCreation<'a> {
     pub project_id: i64,
     /// Reasoning level captured from the project default at creation.
     pub reasoning_level: ReasoningLevel,
+    /// Persisted session role, or `None` for the default worker role.
+    pub role: Option<&'a str>,
     /// Response-speed preference captured for the session.
     pub speed_mode: SpeedMode,
     /// Initial lifecycle status string.
@@ -127,6 +131,8 @@ pub struct SessionRow {
     pub reasoning_level_override: Option<String>,
     /// Joined forge review-request metadata, when present and complete.
     pub review_request: Option<SessionReviewRequestRow>,
+    /// Persisted session role string, or `None` for the default worker role.
+    pub role: Option<String>,
     /// Persisted size bucket string.
     pub size: String,
     /// Persisted session response-speed preference.
@@ -186,6 +192,8 @@ pub struct SessionListRow {
     pub reasoning_level_override: Option<String>,
     /// Joined forge review-request metadata, when present and complete.
     pub review_request: Option<SessionReviewRequestRow>,
+    /// Persisted session role string, or `None` for the default worker role.
+    pub role: Option<String>,
     /// Persisted size bucket string.
     pub size: String,
     /// Persisted session response-speed preference.
@@ -679,6 +687,7 @@ struct SessionRowMetadata {
     project_id: Option<i64>,
     published_upstream_ref: Option<String>,
     reasoning_level_override: Option<String>,
+    role: Option<String>,
     size: String,
     speed_mode: String,
     status: String,
@@ -717,6 +726,7 @@ impl SessionRowMetadata {
             questions,
             reasoning_level_override: self.reasoning_level_override,
             review_request,
+            role: self.role,
             size: self.size,
             speed_mode: self.speed_mode,
             status: self.status,
@@ -751,6 +761,7 @@ impl SessionRowMetadata {
             published_upstream_ref: self.published_upstream_ref,
             reasoning_level_override: self.reasoning_level_override,
             review_request,
+            role: self.role,
             size: self.size,
             speed_mode: self.speed_mode,
             status: self.status,
@@ -793,6 +804,7 @@ struct SessionJoinRow {
     review_request_target_branch: Option<String>,
     review_request_title: Option<String>,
     review_request_web_url: Option<String>,
+    role: Option<String>,
     size: String,
     speed_mode: String,
     status: String,
@@ -861,6 +873,7 @@ impl SessionJoinRow {
             review_request_target_branch,
             review_request_title,
             review_request_web_url,
+            role,
             size,
             speed_mode,
             status,
@@ -888,6 +901,7 @@ impl SessionJoinRow {
             project_id,
             published_upstream_ref,
             reasoning_level_override,
+            role,
             size,
             speed_mode,
             status,
@@ -1168,10 +1182,12 @@ WHERE id = ?
                 id,
                 is_draft: true,
                 model,
+                orchestration_task_id: None,
                 parent_session_id: None,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                role: None,
                 speed_mode: SpeedMode::Normal,
                 status,
             },
@@ -1198,10 +1214,12 @@ WHERE id = ?
                 id,
                 is_draft: true,
                 model,
+                orchestration_task_id: None,
                 parent_session_id: Some(parent_session_id),
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                role: None,
                 speed_mode: SpeedMode::Normal,
                 status,
             },
@@ -1227,10 +1245,12 @@ WHERE id = ?
                 id,
                 is_draft: false,
                 model,
+                orchestration_task_id: None,
                 parent_session_id: None,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                role: None,
                 speed_mode: SpeedMode::Normal,
                 status,
             },
@@ -1248,10 +1268,12 @@ WHERE id = ?
             id,
             is_draft,
             model,
+            orchestration_task_id,
             parent_session_id,
             personality_id,
             project_id,
             reasoning_level,
+            role,
             speed_mode,
             status,
         } = session;
@@ -1264,10 +1286,12 @@ WHERE id = ?
                 id,
                 is_draft,
                 model,
+                orchestration_task_id,
                 parent_session_id,
                 personality_id,
                 project_id,
                 reasoning_level,
+                role,
                 speed_mode,
                 status,
             },
@@ -1368,6 +1392,7 @@ SELECT session.base_branch AS base_branch,
        session_review_request.target_branch AS review_request_target_branch,
        session_review_request.title AS review_request_title,
        session_review_request.web_url AS review_request_web_url,
+       session.role,
        session.size AS size,
        session.status AS status,
        session.summary,
@@ -1439,6 +1464,7 @@ SELECT session.base_branch AS base_branch,
        session_review_request.target_branch AS review_request_target_branch,
        session_review_request.title AS review_request_title,
        session_review_request.web_url AS review_request_web_url,
+       session.role,
        session.size AS size,
        session.status AS status,
        session.summary,
@@ -1496,6 +1522,7 @@ SELECT session.base_branch AS base_branch,
        session_review_request.target_branch AS review_request_target_branch,
        session_review_request.title AS review_request_title,
        session_review_request.web_url AS review_request_web_url,
+       session.role,
        session.size AS size,
        session.status AS status,
        NULL AS "summary: String",
@@ -2490,6 +2517,8 @@ struct InsertSessionRow<'a> {
     is_draft: bool,
     /// Agent model identifier persisted for the session.
     model: &'a str,
+    /// Orchestration task that owns this child session, when applicable.
+    orchestration_task_id: Option<i64>,
     /// Optional parent session id for one-level stacked drafts.
     parent_session_id: Option<&'a str>,
     /// Workspace personality selected for future turns, when present.
@@ -2498,6 +2527,8 @@ struct InsertSessionRow<'a> {
     project_id: i64,
     /// Reasoning level captured from the project default at creation.
     reasoning_level: ReasoningLevel,
+    /// Persisted session role, or `None` for the default worker role.
+    role: Option<&'a str>,
     /// Response-speed preference captured for the session.
     speed_mode: SpeedMode,
     /// Initial lifecycle status string.
@@ -2516,10 +2547,12 @@ async fn insert_session_with_draft_mode(
         id,
         is_draft,
         model,
+        orchestration_task_id,
         parent_session_id,
         personality_id,
         project_id,
         reasoning_level,
+        role,
         speed_mode,
         status,
     } = row;
@@ -2538,10 +2571,12 @@ INSERT INTO session (
     personality_id,
     project_id,
     reasoning_level,
+    role,
     speed_mode,
+    orchestration_task_id,
     prompt
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
         id,
         agent,
@@ -2555,7 +2590,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         personality_id,
         project_id,
         reasoning_level.as_str(),
+        role,
         speed_mode.as_str(),
+        orchestration_task_id,
         ""
     )
     .execute(pool)
@@ -2674,6 +2711,7 @@ mod tests {
                 review_request_web_url: Some(
                     "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
                 ),
+                role: Some("Orchestrator".to_string()),
                 size: "M".to_string(),
                 speed_mode: "normal".to_string(),
                 status: "Review".to_string(),
