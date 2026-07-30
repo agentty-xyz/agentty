@@ -19,3 +19,5 @@ boundaries, and change paths.
   paths for common contribution scenarios.
 - [Testability Boundaries](@/docs/architecture/testability-boundaries.md) documents
   trait boundaries and deterministic testing guidance for external integrations.
+- [`ag-harness` Design](@/docs/architecture/ag-harness-design.md) documents the model
+  contract, request-duration metric, and local observability workflow.

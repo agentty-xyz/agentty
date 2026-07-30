@@ -132,6 +132,24 @@ Configurations that cannot satisfy the contract, such as Qwen thinking mode, ret
 explicit unsupported-configuration error rather than silently falling back to
 unstructured text.
 
+## Telemetry
+
+- **Metric** - records one duration observation per call, including Qwen/model
+  breakdowns.
+- **Labels** - provider and model only.
+- **Ownership** - model adapters record duration; binaries configure and flush the OTLP
+  metrics exporter.
+- **Lifecycle** - histogram state is cumulative and process-local; the one-shot example
+  verifies export rather than cross-run totals.
+
+```mermaid
+flowchart LR
+    C["Qwen model call"] --> M["Duration histogram"]
+    M --> O["OTLP collector"]
+    O --> P["Prometheus"]
+    P --> G["Grafana"]
+```
+
 ## Permissions
 
 All tools are denied by default. The session policy explicitly allows tools and, for

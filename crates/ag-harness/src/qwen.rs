@@ -4,10 +4,11 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{model, schema_contract};
+use crate::{model, schema_contract, telemetry};
 
 const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
 const JSON_STRING_MAX_EXPANSION: usize = 6;
+const PROVIDER_NAME: &str = "alibaba_cloud";
 const RESPONSE_ENVELOPE_LIMIT_BYTES: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_mins(1);
 const SUCCESS_BODY_LIMIT_BYTES: usize = schema_contract::RESPONSE_CONTENT_LIMIT_BYTES
@@ -32,6 +33,8 @@ pub struct QwenConfig {
 }
 
 /// Qwen implementation of the provider-neutral [`model::Model`] contract.
+///
+/// Calls record a duration metric without prompt or response content.
 pub struct Qwen {
     client: reqwest::Client,
     config: QwenConfig,
@@ -118,6 +121,8 @@ impl model::Model for Qwen {
         &self,
         request: model::ModelRequest,
     ) -> Result<model::ModelResponse, model::ModelError> {
+        let _duration = telemetry::RequestDuration::start(PROVIDER_NAME, &self.config.model);
+
         if !request.schema().has_object_root() {
             return Err(model::ModelError::UnsupportedOutputSchema {
                 reason: UNSUPPORTED_SCHEMA_REASON.to_string(),

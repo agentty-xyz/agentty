@@ -127,6 +127,15 @@ Configurations that cannot satisfy the contract, such as Qwen thinking mode, ret
 explicit unsupported-configuration error rather than silently falling back to
 unstructured text.
 
+## Telemetry
+
+- External OTLP metrics export is enabled when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+- The harness records only `gen_ai.client.operation.duration`, labeled by provider and
+  model.
+- Application binaries configure the metric exporter and flush it on exit.
+- Histogram state is cumulative and process-local; the one-shot example verifies export
+  rather than cross-run totals.
+
 ## Permissions
 
 All tools are denied by default. The session policy explicitly allows tools and, for
