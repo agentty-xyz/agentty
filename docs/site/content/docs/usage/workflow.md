@@ -59,11 +59,11 @@ on the left, while the selected entry's metadata, attached current-diff context,
 conversation appear on the right. In **Review**, **AgentReview**, or **Question**, press
 `a` to send the selected actionable inline thread to the active session agent or `A` to
 send every actionable inline thread. Standalone comments are read-only because they do
-not have forge thread IDs. The timer ticks only while the session is actively working. A
-linked terminal session keeps `C` available for starting a continuation draft.
-File-level comments show an explicit no-line-context message instead of a synthetic code
-anchor. Each session stores the project reasoning default when it is created, so later
-default changes affect new sessions without relabeling existing ones.
+not have forge thread IDs. The timer ticks only while the session is actively working.
+`Done` sessions use `c` to start a continuation draft and no longer expose review
+comments. File-level comments show an explicit no-line-context message instead of a
+synthetic code anchor. Each session stores the project reasoning default when it is
+created, so later default changes affect new sessions without relabeling existing ones.
 
 The top status bar shows the current version and update status, and rotates short
 page-scoped `FYI:` messages once per minute in the **Sessions** list and session chat

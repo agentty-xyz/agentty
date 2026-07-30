@@ -262,7 +262,7 @@ pub(crate) fn session_output_uses_tachyon_loader(status: Status) -> bool {
 /// Builds the inline shortcut hint for continuing a completed session.
 pub fn session_output_done_line() -> Line<'static> {
     Line::from(vec![Span::styled(
-        "Press 'C' to continue in a new session.",
+        "Press 'c' to continue in a new session.",
         Style::default().fg(style::palette::text_subtle()),
     )])
 }

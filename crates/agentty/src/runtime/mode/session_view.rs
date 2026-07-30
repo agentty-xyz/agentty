@@ -346,7 +346,10 @@ async fn handle_primary_view_key(
 
             return Some(false);
         }
-        KeyCode::Char('c' | 'C') if is_continue_terminal_shortcut(key, view_session_snapshot) => {
+        KeyCode::Char('c')
+            if key.modifiers == event::KeyModifiers::NONE
+                && view_session_snapshot.can_continue_terminal_session() =>
+        {
             open_continue_confirmation(app, view_context);
 
             return Some(false);
@@ -388,22 +391,6 @@ async fn handle_primary_view_key(
     }
 
     Some(true)
-}
-
-fn is_continue_terminal_shortcut(
-    key: KeyEvent,
-    view_session_snapshot: &ViewSessionSnapshot,
-) -> bool {
-    let has_supported_modifiers = matches!(
-        key.modifiers,
-        event::KeyModifiers::NONE | event::KeyModifiers::SHIFT
-    );
-    let has_unambiguous_key =
-        key.code == KeyCode::Char('C') || !view_session_snapshot.can_open_review_comments();
-
-    has_supported_modifiers
-        && view_session_snapshot.can_continue_terminal_session()
-        && has_unambiguous_key
 }
 
 /// Handles workflow actions in session view such as diff, publish, review,
@@ -623,7 +610,9 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
             app.sessions
                 .can_reply_to_session_in_stack(view_context.session_id.as_str()),
         ),
-        review_comments: ViewActionState::from_bool(session.has_review_request()),
+        review_comments: ViewActionState::from_bool(
+            session.has_review_request() && session_status != Status::Done,
+        ),
         session_state: help_action::session_view_state(session),
         session_status,
         start_staged_session: ViewActionState::from_bool(
@@ -2680,7 +2669,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_linked_terminal_session_routes_c_to_comments_and_shift_c_to_continue() {
+    async fn test_linked_done_session_routes_c_to_continue_without_comments() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let session = app
@@ -2702,46 +2691,20 @@ mod tests {
                 web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
             },
         });
+        session.status = Status::Done;
         app.mode = AppMode::View {
-            session_id: session_id.into(),
+            session_id: session_id.clone().into(),
             scroll_offset: Some(0),
         };
         let view_context = view_context(&mut app).expect("expected view context");
         let pending_update = ViewPendingUpdate::from_context(&view_context);
-        let view_session_snapshot = ViewSessionSnapshot {
-            continue_terminal_session: ViewActionState::Enabled,
-            fork_session: ViewActionState::Disabled,
-            follow_up_task_action: None,
-            merge_session_branch: ViewActionState::Disabled,
-            mutate_session_branch: ViewActionState::Disabled,
-            open_worktree: ViewActionState::Disabled,
-            publish_pull_request_action: None,
-            rebase_session_branch: ViewActionState::Disabled,
-            reply_to_session: ViewActionState::Disabled,
-            review_comments: ViewActionState::Enabled,
-            session_state: ViewSessionState::Done,
-            session_status: Status::Done,
-            start_staged_session: ViewActionState::Disabled,
-        };
+        let view_session_snapshot =
+            view_session_snapshot(&app, &view_context).expect("expected session snapshot");
 
         // Act
-        let lowercase_continues = is_continue_terminal_shortcut(
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
-            &view_session_snapshot,
-        );
-        let uppercase_continues = is_continue_terminal_shortcut(
-            KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT),
-            &view_session_snapshot,
-        );
-
-        // Assert
-        assert!(!lowercase_continues);
-        assert!(uppercase_continues);
-
-        // Act
-        let comments_result = handle_primary_view_key(
+        let uppercase_result = handle_primary_view_key(
             &mut app,
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT),
             &view_context,
             &view_session_snapshot,
             &pending_update,
@@ -2749,13 +2712,14 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(comments_result, Some(false));
-        assert!(matches!(app.mode, AppMode::ReviewComments { .. }));
+        assert_eq!(uppercase_result, None);
+        assert!(!view_session_snapshot.can_open_review_comments());
+        assert!(matches!(app.mode, AppMode::View { .. }));
 
         // Act
         let continue_result = handle_primary_view_key(
             &mut app,
-            KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
             &view_context,
             &view_session_snapshot,
             &pending_update,

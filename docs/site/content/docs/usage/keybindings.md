@@ -189,13 +189,14 @@ State-specific differences:
   while the stack is idle.
 - Sessions with a linked pull request or merge request use `c` to open its comments page
   and hide `m`; merge the linked request through its forge instead of Agentty's local
-  merge queue. Linked terminal sessions keep continuation available on `C`.
+  merge queue.
 - **Merged** sessions remain in Active and expose only read-only navigation, linked
   review comments, and `d` for the diff until list-mode `s` successfully syncs their
   local target branch.
-- **Done** sessions offer `C` to start a continuation draft (confirmation popup).
+- **Done** sessions offer `c` to start a continuation draft (confirmation popup) and
+  hide linked review comments.
 - **Canceled**, **Queued**, and **Merging** sessions are otherwise read-only (`q`,
-  scroll, help). Linked review requests remain available from any session state with
+  scroll, help). Linked review requests remain available from other session states with
   `c`.
 
 `o` runs the configured `Launch Configurations` entry, or opens a selector popup when
