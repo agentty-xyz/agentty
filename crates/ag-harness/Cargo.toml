@@ -10,14 +10,24 @@ homepage.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+httpdate.workspace = true
 jsonschema.workspace = true
+opentelemetry.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
+opentelemetry-appender-tracing.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+rustix.workspace = true
+tokio = { workspace = true, features = ["net", "signal"] }
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
 wiremock.workspace = true
 
 [lints]

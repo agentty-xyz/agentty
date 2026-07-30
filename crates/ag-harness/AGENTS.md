@@ -127,6 +127,20 @@ Configurations that cannot satisfy the contract, such as Qwen thinking mode, ret
 explicit unsupported-configuration error rather than silently falling back to
 unstructured text.
 
+## Telemetry
+
+- External OTLP export is off by default; enable it with `AG_HARNESS_EXTERNAL_OTEL=1`
+  and set `OTEL_EXPORTER_OTLP_ENDPOINT`.
+- The operator's collector receives traces, metrics, and trace-correlated logs.
+- Traces cover each model call, schema compilation, every HTTP attempt, and response
+  parsing and validation; the call span includes the session ID.
+- Metrics cover request duration and provider-reported token usage, labeled only by
+  provider and model.
+- Logs cover call lifecycle, retries, failures, cancellation, and telemetry shutdown.
+- Prompt and response text are not recorded.
+- Local Podman and Grafana setup is documented in
+  `docs/site/content/docs/architecture/ag-harness-design.md`.
+
 ## Permissions
 
 All tools are denied by default. The session policy explicitly allows tools and, for

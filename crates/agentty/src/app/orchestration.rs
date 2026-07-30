@@ -1,7 +1,7 @@
 //! Multi-session orchestration planning, reconciliation, and fan-in.
 //!
 //! Controller turns persist validated plans before approval. A background
-//! coordinator reads child state directly from SQLite and uses the foreground
+//! coordinator reads child state directly from `SQLite` and uses the foreground
 //! session runtime only for mutations, keeping polling off the bounded actor
 //! mailbox used by interactive commands.
 
