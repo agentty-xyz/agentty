@@ -956,10 +956,7 @@ fn render_mermaid_block(
         source.push_str(raw_line);
     }
 
-    let diagram = mermaid::render_mermaid(&source)?;
-    if diagram.width > width {
-        return None;
-    }
+    let diagram = mermaid::render_mermaid_for_width(&source, width)?;
 
     Some((diagram.lines, next_line_index))
 }
@@ -2281,6 +2278,40 @@ mod tests {
     }
 
     #[test]
+    fn test_render_markdown_stacks_over_wide_left_right_mermaid_block() {
+        // Arrange
+        let input = concat!(
+            "```mermaid\n",
+            "flowchart LR\n",
+            "    Q[Qwen complete] --> T[Tracing spans and events]\n",
+            "    Q --> M[OTel metrics API]\n",
+            "    T --> S[Trace and log providers]\n",
+            "    M --> P[Meter provider]\n",
+            "    S --> O[OTLP HTTP protobuf]\n",
+            "    P --> O\n",
+            "    O --> C[Collector on port 4318]\n",
+            "    C --> B[Telemetry backends]\n",
+            "    B --> G[Grafana on port 3000]\n",
+            "```",
+        );
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Qwen complete"));
+        assert!(text.contains("Tracing spans and events"));
+        assert!(text.contains("Grafana on port 3000"));
+        assert!(text.contains('▼'));
+        assert!(!text.contains("flowchart LR"));
+    }
+
+    #[test]
     fn test_render_markdown_keeps_code_fallback_for_mermaid_prefix_language() {
         // Arrange
         let input = "```mermaid-diagram\ngraph TD\n    A[Start] --> B[Finish]\n```";
@@ -2465,7 +2496,7 @@ mod tests {
     #[test]
     fn test_render_markdown_keeps_code_fallback_for_diagram_wider_than_width() {
         // Arrange
-        let input = "```mermaid\ngraph LR\n    A[Start] --> B[Finish]\n```";
+        let input = "```mermaid\ngraph TD\n    A[Start] --> B[Long finish label]\n```";
 
         // Act
         let lines = render_markdown(input, 10);
@@ -2476,7 +2507,7 @@ mod tests {
             .join("\n");
 
         // Assert
-        assert!(text.contains("graph LR"));
+        assert!(text.contains("graph TD"));
         assert!(!text.contains("┌"));
     }
 

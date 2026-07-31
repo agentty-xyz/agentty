@@ -60,6 +60,24 @@ pub fn render_mermaid_with_settings(
     style::with_render_settings(settings, || render_mermaid_active_settings(source))
 }
 
+/// Renders a diagram within `max_width`, stacking an over-wide left-to-right
+/// graph from top to bottom before giving up on its terminal preview.
+pub(crate) fn render_mermaid_for_width(source: &str, max_width: usize) -> Option<MermaidDiagram> {
+    let diagram = render_mermaid_active_settings(source)?;
+    if diagram.width <= max_width {
+        return Some(diagram);
+    }
+
+    let mut graph = parse_graph(source)?;
+    if !matches!(graph.direction, FlowDirection::LeftRight) {
+        return None;
+    }
+    graph.direction = FlowDirection::TopDown;
+
+    let diagram = render_graph(graph)?;
+    (diagram.width <= max_width).then_some(diagram)
+}
+
 fn render_mermaid_active_settings(source: &str) -> Option<MermaidDiagram> {
     if !is_source_within_bounds(source) {
         return None;
@@ -70,6 +88,11 @@ fn render_mermaid_active_settings(source: &str) -> Option<MermaidDiagram> {
     }
 
     let graph = parse_graph(source)?;
+    render_graph(graph)
+}
+
+/// Lays out one parsed graph using its current direction.
+fn render_graph(graph: MermaidGraph) -> Option<MermaidDiagram> {
     if let Some(diagram) = draw_left_right_feedback_graph(&graph) {
         return Some(diagram);
     }
