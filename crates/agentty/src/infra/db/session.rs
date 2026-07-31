@@ -558,12 +558,26 @@ pub trait SessionRepository: Send + Sync {
     /// Updates the display title for a session row.
     async fn update_session_title(&self, id: &str, title: &str) -> Result<(), DbError>;
 
-    /// Updates the display title for a session row only when the persisted
-    /// prompt still matches the prompt snapshot used to generate that title.
-    async fn update_session_title_for_prompt(
+    /// Stores a fallback title that can be refined by a later substantive
+    /// user prompt.
+    async fn update_session_provisional_title(&self, id: &str, title: &str) -> Result<(), DbError>;
+
+    /// Claims the next ordered title candidate for a session.
+    ///
+    /// When `requires_provisional_title` is true, no candidate is claimed
+    /// after a generated or commit-derived title becomes authoritative.
+    async fn begin_session_title_generation(
         &self,
         id: &str,
-        expected_prompt: &str,
+        requires_provisional_title: bool,
+    ) -> Result<Option<i64>, DbError>;
+
+    /// Applies one generated title unless a newer candidate or authoritative
+    /// title has already been accepted.
+    async fn update_session_title_for_generation(
+        &self,
+        id: &str,
+        expected_generation: i64,
         title: &str,
     ) -> Result<bool, DbError>;
 
@@ -2270,7 +2284,10 @@ WHERE id = ?
         sqlx::query!(
             r#"
 UPDATE session
-SET title = ?
+SET title = ?,
+    is_title_provisional = 0,
+    title_generation = title_generation + 1,
+    applied_title_generation = title_generation + 1
 WHERE id = ?
 "#,
             title,
@@ -2282,22 +2299,83 @@ WHERE id = ?
         Ok(())
     }
 
-    async fn update_session_title_for_prompt(
+    async fn update_session_provisional_title(&self, id: &str, title: &str) -> Result<(), DbError> {
+        sqlx::query!(
+            r#"
+UPDATE session
+SET title = ?,
+    is_title_provisional = 1,
+    title_generation = title_generation + 1,
+    applied_title_generation = title_generation + 1
+WHERE id = ?
+"#,
+            title,
+            id,
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn begin_session_title_generation(
         &self,
         id: &str,
-        expected_prompt: &str,
+        requires_provisional_title: bool,
+    ) -> Result<Option<i64>, DbError> {
+        let generation = if requires_provisional_title {
+            sqlx::query_scalar!(
+                r#"
+UPDATE session
+SET is_title_provisional = 1,
+    title_generation = title_generation + 1
+WHERE id = ?
+  AND is_title_provisional = 1
+RETURNING title_generation
+"#,
+                id,
+            )
+            .fetch_optional(&self.0)
+            .await?
+        } else {
+            sqlx::query_scalar!(
+                r#"
+UPDATE session
+SET is_title_provisional = 1,
+    title_generation = title_generation + 1
+WHERE id = ?
+RETURNING title_generation
+"#,
+                id,
+            )
+            .fetch_optional(&self.0)
+            .await?
+        };
+
+        Ok(generation)
+    }
+
+    async fn update_session_title_for_generation(
+        &self,
+        id: &str,
+        expected_generation: i64,
         title: &str,
     ) -> Result<bool, DbError> {
         let result = sqlx::query!(
             r#"
 UPDATE session
-SET title = ?
+SET title = ?,
+    is_title_provisional = 0,
+    applied_title_generation = ?
 WHERE id = ?
-  AND prompt = ?
+  AND title_generation >= ?
+  AND applied_title_generation < ?
 "#,
             title,
+            expected_generation,
             id,
-            expected_prompt,
+            expected_generation,
+            expected_generation,
         )
         .execute(&self.0)
         .await?;

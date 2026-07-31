@@ -11,6 +11,9 @@ Rules:
 - Do not use first-person phrasing like "I have", "I'm", or "I'll".
 - Do not use Conventional Commit prefixes like `feat:` or `fix:`.
 - Keep it under 72 characters.
+- If the request has no actionable session goal—for example, it is conversation,
+  context-only text, or an acknowledgement—leave `answer` empty so a later substantive
+  request can supply the title.
 - Put only the title text in `answer`, leave `questions` empty, and set `summary` to
   null.
 - The title text must not include markdown fences, quotes, explanations, or any extra

@@ -541,8 +541,12 @@ their triggers:
   placeholder. The backend supports macOS pasteboard, X11 reads, and Wayland reads via
   `wl-paste`; missing or unsupported backends report an inline paste error.
 
-- **Session title generation** (first start turn): runs a one-shot title prompt and
-  persists a concise generated title.
+- **Session title generation** (provisional start or resume title): runs a one-shot
+  title prompt and persists a concise generated title when the model identifies an
+  actionable session goal. Issued and accepted candidate generations are tracked
+  separately: empty responses leave older usable candidates eligible, newer accepted
+  candidates supersede older ones, and draft edits or commit-derived titles invalidate
+  every outstanding candidate.
 
 - **At-mention file indexing** (`@` in prompt or question input): lists session files
   for the mention picker, falling back to the project root for unstarted drafts.

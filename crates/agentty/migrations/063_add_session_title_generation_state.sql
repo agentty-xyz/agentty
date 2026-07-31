@@ -1,0 +1,5 @@
+ALTER TABLE session
+ADD COLUMN is_title_provisional INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE session
+ADD COLUMN title_generation INTEGER NOT NULL DEFAULT 0;
