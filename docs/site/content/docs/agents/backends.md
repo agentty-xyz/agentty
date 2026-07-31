@@ -217,6 +217,20 @@ locally available backends.
 You can also switch the reasoning level for the current session with the `/reasoning`
 slash command. The picker preselects the current effective reasoning level.
 
+Claude and Codex sessions also expose `/speed`. Choose Normal for standard provider
+routing or Fast for lower latency at higher provider cost. Agentty persists the choice
+per session and displays it after reasoning in the session header and beside the prompt
+title. Gemini and Antigravity sessions have no speed control, so they show neither the
+command nor the speed display. Claude Fast uses the noninteractive `fastMode` setting
+and requires `claude-opus-5`, so Agentty switches other Claude models to Opus 5 when
+Fast is enabled. Codex Fast uses the app-server `fast` service tier; Agentty switches
+`gpt-5.3-codex-spark` to `gpt-5.6-sol` first. Selecting Normal restores the provider's
+standard tier without reverting that model change. These automatic compatibility
+switches do not change the project's default model. Selecting a model that cannot use
+Fast resets the session to Normal before switching. See the provider guides for
+[Codex fast mode](https://learn.chatgpt.com/docs/agent-configuration/speed) and
+[Claude Code fast mode](https://code.claude.com/docs/en/fast-mode).
+
 <a id="backends-switching-default-model"></a> To change the **default model**
 persistently, use the **Settings** tab (`Tab` to navigate to it, `Enter` to open the
 selector).

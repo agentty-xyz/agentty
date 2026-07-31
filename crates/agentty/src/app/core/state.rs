@@ -1342,6 +1342,23 @@ impl App {
         Ok(())
     }
 
+    /// Persists and applies a response-speed preference for a session.
+    ///
+    /// # Errors
+    /// Returns an error if persistence fails.
+    pub async fn set_session_speed_mode(
+        &mut self,
+        session_id: &str,
+        speed_mode: crate::domain::agent::SpeedMode,
+    ) -> Result<(), AppError> {
+        self.sessions
+            .set_session_speed_mode(&self.services, session_id, speed_mode)
+            .await?;
+        self.process_pending_app_events().await;
+
+        Ok(())
+    }
+
     /// Returns the currently selected session, if any.
     pub fn selected_session(&self) -> Option<&Session> {
         self.sessions.selected_session()

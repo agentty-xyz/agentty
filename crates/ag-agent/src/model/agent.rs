@@ -637,6 +637,18 @@ impl AgentKind {
     pub fn supports_model(self, model: AgentModel) -> bool {
         self.models().contains(&model)
     }
+
+    /// Returns whether this provider exposes a response-speed control.
+    ///
+    /// Claude and Codex accept a per-turn speed selection, so `/speed` offers
+    /// the picker and session surfaces display the active [`SpeedMode`].
+    /// Gemini and Antigravity have no equivalent control, so neither the
+    /// command nor the speed display is offered for them.
+    ///
+    /// [`SpeedMode`]: crate::model::session::SpeedMode
+    pub fn supports_speed_mode(self) -> bool {
+        matches!(self, Self::Claude | Self::Codex)
+    }
 }
 
 impl AgentSelectionMetadata for AgentKind {
@@ -1130,6 +1142,24 @@ mod tests {
         assert_eq!(antigravity_supported, [true; 3]);
         assert_eq!(gemini_supported, [true; 3]);
         assert_eq!(codex_supported, [false; 3]);
+    }
+
+    #[test]
+    /// Ensures only providers with a response-speed control report support.
+    fn test_supports_speed_mode_covers_claude_and_codex_only() {
+        // Arrange
+        let kinds = [
+            AgentKind::Claude,
+            AgentKind::Codex,
+            AgentKind::Gemini,
+            AgentKind::Antigravity,
+        ];
+
+        // Act
+        let supported = kinds.map(AgentKind::supports_speed_mode);
+
+        // Assert
+        assert_eq!(supported, [true, true, false, false]);
     }
 
     #[test]

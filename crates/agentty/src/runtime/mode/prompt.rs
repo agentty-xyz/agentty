@@ -11,7 +11,7 @@ use crate::app::prompt_intent::{
     PromptApplyOutcome, PromptCancellation, PromptImagePaste, PromptSessionMode, PromptSubmission,
     PromptWorkflowOutcome,
 };
-use crate::domain::agent::{AgentKind, ReasoningLevel};
+use crate::domain::agent::{AgentKind, ReasoningLevel, SpeedMode};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::input::{InputCommand, InputEffect, InputState};
 use crate::domain::session::SessionId;
@@ -833,6 +833,9 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                 slash_state.selected_index = selected_index;
             }
         }
+        Some(PromptSuggestionSelection::Command("/speed")) => {
+            open_prompt_speed_stage(app, prompt_context.session_index);
+        }
         Some(PromptSuggestionSelection::Command("/personality")) => {
             let personalities = app
                 .list_prompt_personalities(&prompt_context.session_id)
@@ -884,7 +887,29 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             app.update_prompt_session_reasoning_level(&prompt_context.session_id, reasoning_level)
                 .await;
         }
+        Some(PromptSuggestionSelection::Speed(speed_mode)) => {
+            clear_prompt_slash_input(app).await;
+            app.update_prompt_session_speed_mode(&prompt_context.session_id, speed_mode)
+                .await;
+        }
         None => {}
+    }
+}
+
+/// Opens `/speed` with the current session preference preselected.
+fn open_prompt_speed_stage(app: &mut App, session_index: usize) {
+    let selected_speed_mode = app
+        .session_at(session_index)
+        .map_or_else(SpeedMode::default, |session| session.speed_mode);
+    let selected_index = SpeedMode::ALL
+        .iter()
+        .position(|speed_mode| *speed_mode == selected_speed_mode)
+        .unwrap_or(0);
+
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+        slash_state.stage = PromptSlashStage::Speed;
+        slash_state.selected_agent = None;
+        slash_state.selected_index = selected_index;
     }
 }
 
@@ -2272,7 +2297,7 @@ mod tests {
         // Assert
         assert_eq!(
             commands,
-            vec!["/apply", "/model", "/personality", "/reasoning"]
+            vec!["/apply", "/model", "/personality", "/reasoning", "/speed"]
         );
     }
 
@@ -2695,6 +2720,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_speed_slash_submit_enables_fast_mode_and_compatible_model() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/speed", None).await;
+        app.sessions.sessions_mut()[0].agent =
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5);
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.stage = PromptSlashStage::Speed;
+            slash_state.selected_index = 1;
+        }
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.process_pending_app_events().await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, slash_state, .. }
+                if input.is_empty() && *slash_state == PromptSlashState::default()
+        ));
+        assert_eq!(app.sessions.sessions()[0].speed_mode, SpeedMode::Fast);
+        assert_eq!(
+            app.sessions.sessions()[0].agent,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5)
+        );
+    }
+
+    #[tokio::test]
     async fn test_personality_slash_submit_loads_worktree_profile_and_selects_it() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/personality", None).await;
@@ -2798,6 +2852,26 @@ mod tests {
             assert_eq!(slash_state.stage, PromptSlashStage::Reasoning);
             assert_eq!(slash_state.selected_agent, None);
             assert_eq!(slash_state.selected_index, 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_prefills_speed_selection() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/speed", None).await;
+        app.sessions.sessions_mut()[0].agent =
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol);
+        app.sessions.sessions_mut()[0].speed_mode = SpeedMode::Fast;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        if let AppMode::Prompt { slash_state, .. } = &app.mode {
+            assert_eq!(slash_state.stage, PromptSlashStage::Speed);
+            assert_eq!(slash_state.selected_agent, None);
+            assert_eq!(slash_state.selected_index, 1);
         }
     }
 

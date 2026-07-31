@@ -351,6 +351,7 @@ mod tests {
             prompt,
             reasoning_level: ReasoningLevel::default(),
             request_kind,
+            speed_mode: crate::model::session::SpeedMode::default(),
             replay_transcript: None,
         }
     }

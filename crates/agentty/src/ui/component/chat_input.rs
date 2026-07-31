@@ -42,6 +42,7 @@ pub struct ChatInput<'a> {
     clear_style: Option<Style>,
     cursor: usize,
     input: &'a str,
+    status: Option<&'a str>,
     suggestion_list: Option<&'a SuggestionList>,
     title: &'a str,
 }
@@ -55,6 +56,7 @@ impl<'a> ChatInput<'a> {
             clear_style: None,
             cursor,
             input,
+            status: None,
             suggestion_list: None,
             title,
         }
@@ -84,6 +86,13 @@ impl<'a> ChatInput<'a> {
         self
     }
 
+    /// Sets compact session status text rendered beside the input title.
+    #[must_use]
+    pub fn status(mut self, status: &'a str) -> Self {
+        self.status = Some(status);
+        self
+    }
+
     /// Sets the style reapplied after clearing the input area.
     ///
     /// Overlay-hosted inputs use this to keep popup-local cells on the
@@ -98,7 +107,10 @@ impl<'a> ChatInput<'a> {
     ///
     /// Uses accent styling when active and muted styling when inactive.
     fn input_block(&self) -> Block<'a> {
-        let title = format!(" {} ", self.title);
+        let title = self.status.map_or_else(
+            || format!(" {} ", self.title),
+            |status| format!(" {} · {status} ", self.title),
+        );
         let (border_style, title_style) = if self.active {
             (Self::focused_border_style(), Self::focused_title_style())
         } else {
@@ -393,6 +405,27 @@ mod tests {
         assert!(top_row.starts_with("╭"));
         assert!(top_row.contains(" Prompt "));
         assert!(top_row.contains("╮"));
+    }
+
+    #[test]
+    fn test_render_shows_session_status_beside_prompt_title() {
+        // Arrange
+        let width = 32;
+        let backend = ratatui::backend::TestBackend::new(width, 5);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let chat_input = ChatInput::new("Prompt", "", 0).status("Fast");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                chat_input.render(frame, area);
+            })
+            .expect("failed to draw prompt input");
+
+        // Assert
+        let top_row = buffer_row_text(terminal.backend().buffer(), 0, width);
+        assert!(top_row.contains(" Prompt · Fast "));
     }
 
     #[test]

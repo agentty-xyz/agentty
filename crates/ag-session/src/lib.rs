@@ -17,7 +17,7 @@ pub use message::{
 };
 pub use model::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session, SessionId,
-    SessionSettings, SessionStatus, activity_day_key_with_offset,
+    SessionSettings, SessionStatus, SpeedMode, activity_day_key_with_offset,
 };
 pub use service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, QuestionAnswer,

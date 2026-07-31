@@ -6,7 +6,7 @@ use ag_forge::{ReviewCommentSnapshot, ReviewCommentThread};
 use tracing::warn;
 
 use crate::app::{App, ReviewCacheEntry, diff_content_hash};
-use crate::domain::agent::{AgentSelection, ReasoningLevel};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::personality::PersonalitySummary;
 use crate::domain::review;
@@ -247,6 +247,33 @@ impl App {
         session_id: &SessionId,
         selected_agent: AgentSelection,
     ) {
+        let should_disable_fast_mode = self
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == *session_id)
+            .is_some_and(|session| {
+                session.speed_mode == SpeedMode::Fast
+                    && !Self::agent_supports_fast_mode(selected_agent)
+            });
+        if should_disable_fast_mode
+            && let Err(error) = self
+                .set_session_speed_mode(session_id, SpeedMode::Normal)
+                .await
+        {
+            let agent_kind = selected_agent.kind();
+            let agent_model = selected_agent.model().as_str();
+            warn!(
+                session_id = %session_id,
+                agent = %agent_kind,
+                model = %agent_model,
+                error = %error,
+                "failed to disable fast mode before switching to an incompatible model"
+            );
+
+            return;
+        }
+
         if let Err(error) = self.set_session_model(session_id, selected_agent).await {
             warn!(
                 session_id = %session_id,
@@ -327,6 +354,89 @@ impl App {
                 "failed to update session reasoning level from prompt slash command"
             );
         }
+    }
+
+    /// Persists one slash-selected response-speed preference and logs any
+    /// failure with session context.
+    pub(crate) async fn update_prompt_session_speed_mode(
+        &mut self,
+        session_id: &SessionId,
+        speed_mode: SpeedMode,
+    ) {
+        if speed_mode == SpeedMode::Fast {
+            let fast_agent = self
+                .sessions
+                .sessions()
+                .iter()
+                .find(|session| session.id == *session_id)
+                .and_then(|session| Self::fast_compatible_agent(session.agent));
+
+            if let Some(fast_agent) = fast_agent {
+                if let Err(error) = self
+                    .sessions
+                    .set_session_model_for_speed_mode(
+                        &self.services,
+                        session_id.as_str(),
+                        fast_agent,
+                    )
+                    .await
+                {
+                    let agent_kind = fast_agent.kind();
+                    let agent_model = fast_agent.model().as_str();
+                    warn!(
+                        session_id = %session_id,
+                        agent = %agent_kind,
+                        model = %agent_model,
+                        error = %error,
+                        "failed to switch session model before enabling fast mode"
+                    );
+
+                    return;
+                }
+
+                self.process_pending_app_events().await;
+            }
+        }
+
+        if let Err(error) = self.set_session_speed_mode(session_id, speed_mode).await {
+            warn!(
+                session_id = %session_id,
+                speed_mode = ?speed_mode,
+                error = %error,
+                "failed to update session speed mode from prompt slash command"
+            );
+        }
+    }
+
+    /// Returns the model change required before enabling provider fast mode.
+    fn fast_compatible_agent(agent: AgentSelection) -> Option<AgentSelection> {
+        if Self::agent_supports_fast_mode(agent) {
+            return None;
+        }
+
+        match agent.kind() {
+            AgentKind::Claude => Some(AgentSelection::new(
+                AgentKind::Claude,
+                AgentModel::ClaudeOpus5,
+            )),
+            AgentKind::Codex if agent.model() == AgentModel::Gpt53CodexSpark => {
+                Some(AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol))
+            }
+            AgentKind::Antigravity | AgentKind::Gemini | AgentKind::Codex => None,
+        }
+    }
+
+    /// Returns whether a provider/model selection can use Fast without an
+    /// automatic compatibility switch.
+    fn agent_supports_fast_mode(agent: AgentSelection) -> bool {
+        matches!(
+            (agent.kind(), agent.model()),
+            (AgentKind::Claude, AgentModel::ClaudeOpus5)
+                | (
+                    AgentKind::Codex,
+                    AgentModel::Gpt56Sol | AgentModel::Gpt56Terra | AgentModel::Gpt56Luna
+                )
+        )
     }
 
     /// Handles `/apply` by extracting suggestions from the focused review and
@@ -600,7 +710,257 @@ mod tests {
 
     use super::*;
     use crate::domain::personality::Personality;
+    use crate::domain::setting::SettingName;
     use crate::infra::personality::MockPersonalityCatalogClient;
+
+    #[test]
+    fn fast_compatible_agent_switches_only_unsupported_fast_models() {
+        // Arrange
+        let cases = [
+            (
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
+                Some(AgentSelection::new(
+                    AgentKind::Claude,
+                    AgentModel::ClaudeOpus5,
+                )),
+                false,
+            ),
+            (
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
+                None,
+                true,
+            ),
+            (
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
+                Some(AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)),
+                false,
+            ),
+            (
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Terra),
+                None,
+                true,
+            ),
+            (
+                AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+                None,
+                false,
+            ),
+        ];
+
+        // Act, Assert
+        for (agent, expected_switch, expected_support) in cases {
+            assert_eq!(App::fast_compatible_agent(agent), expected_switch);
+            assert_eq!(
+                App::agent_supports_fast_mode(agent),
+                expected_support,
+                "unexpected Fast support for {agent:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn speed_mode_stays_normal_when_compatibility_model_switch_fails() {
+        // Arrange
+        let (mut app, _base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
+        let session_id = SessionId::from(
+            app.create_session()
+                .await
+                .expect("session should be created"),
+        );
+        app.set_session_model(
+            &session_id,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
+        )
+        .await
+        .expect("initial model should update");
+        sqlx::query(
+            "CREATE TRIGGER fail_fast_model_switch BEFORE UPDATE OF model ON session BEGIN SELECT \
+             RAISE(FAIL, 'forced model failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("failure trigger should be installed");
+
+        // Act
+        app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+            .with_subscriber(crate::test_support::TestSubscriber)
+            .await;
+        let persisted_speed_mode = app
+            .services
+            .db()
+            .sessions()
+            .load_session_speed_mode(&session_id)
+            .await
+            .expect("speed mode should load");
+
+        // Assert
+        assert_eq!(persisted_speed_mode, SpeedMode::Normal);
+        assert_eq!(
+            app.sessions
+                .session_for_id(&session_id)
+                .map(|session| (session.agent, session.speed_mode)),
+            Some((
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
+                SpeedMode::Normal,
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn compatibility_model_switch_preserves_last_used_project_default() {
+        // Arrange
+        let (mut app, _base_dir, _pool) = crate::test_support::new_git_test_app_with_pool().await;
+        let project_id = app.active_project_id();
+        app.services
+            .db()
+            .settings()
+            .upsert_project_setting(project_id, SettingName::LastUsedModelAsDefault, "true")
+            .await
+            .expect("last-used setting should update");
+        let session_id = SessionId::from(
+            app.create_session()
+                .await
+                .expect("session should be created"),
+        );
+        let selected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5);
+        app.set_session_model(&session_id, selected_agent)
+            .await
+            .expect("initial model should update");
+
+        // Act
+        app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+            .await;
+        let default_agent = app
+            .services
+            .db()
+            .settings()
+            .get_project_setting(project_id, SettingName::DefaultSmartAgent)
+            .await
+            .expect("default agent should load");
+        let default_model = app
+            .services
+            .db()
+            .settings()
+            .get_project_setting(project_id, SettingName::DefaultSmartModel)
+            .await
+            .expect("default model should load");
+
+        // Assert
+        assert_eq!(default_agent.as_deref(), Some("claude"));
+        assert_eq!(
+            default_model.as_deref(),
+            Some(AgentModel::ClaudeFable5.as_str())
+        );
+        assert_eq!(
+            app.sessions
+                .session_for_id(&session_id)
+                .map(|session| (session.agent, session.speed_mode)),
+            Some((
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
+                SpeedMode::Fast,
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn incompatible_prompt_model_switch_disables_fast_mode() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let session_id = SessionId::from(
+            app.create_session()
+                .await
+                .expect("session should be created"),
+        );
+        app.set_session_model(
+            &session_id,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        )
+        .await
+        .expect("initial model should update");
+        app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+            .await;
+
+        // Act
+        app.update_prompt_session_model(
+            &session_id,
+            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+        )
+        .await;
+        let persisted_speed_mode = app
+            .services
+            .db()
+            .sessions()
+            .load_session_speed_mode(&session_id)
+            .await
+            .expect("speed mode should load");
+
+        // Assert
+        assert_eq!(persisted_speed_mode, SpeedMode::Normal);
+        assert_eq!(
+            app.sessions
+                .session_for_id(&session_id)
+                .map(|session| (session.agent, session.speed_mode)),
+            Some((
+                AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+                SpeedMode::Normal,
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn incompatible_prompt_model_switch_keeps_model_when_disabling_fast_mode_fails() {
+        // Arrange
+        let (mut app, _base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
+        let session_id = SessionId::from(
+            app.create_session()
+                .await
+                .expect("session should be created"),
+        );
+        let fast_agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol);
+        app.set_session_model(&session_id, fast_agent)
+            .await
+            .expect("initial model should update");
+        app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
+            .await;
+        sqlx::query(
+            "CREATE TRIGGER fail_speed_mode_update BEFORE UPDATE OF speed_mode ON session BEGIN \
+             SELECT RAISE(FAIL, 'forced speed mode failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("failure trigger should be installed");
+
+        // Act
+        app.update_prompt_session_model(
+            &session_id,
+            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+        )
+        .with_subscriber(crate::test_support::TestSubscriber)
+        .await;
+
+        // Assert
+        assert_eq!(
+            app.sessions
+                .session_for_id(&session_id)
+                .map(|session| (session.agent, session.speed_mode)),
+            Some((fast_agent, SpeedMode::Fast))
+        );
+    }
+
+    #[tokio::test]
+    async fn prompt_speed_mode_update_ignores_missing_session() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let missing_session_id = SessionId::from("missing-session");
+
+        // Act
+        app.update_prompt_session_speed_mode(&missing_session_id, SpeedMode::Normal)
+            .with_subscriber(crate::test_support::TestSubscriber)
+            .await;
+
+        // Assert
+        assert!(app.sessions.sessions().is_empty());
+    }
 
     /// Verifies `/apply` submits the checked-in markdown prompt with the
     /// review suggestions fenced as data.

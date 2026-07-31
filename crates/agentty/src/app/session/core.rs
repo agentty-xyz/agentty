@@ -18,7 +18,7 @@ pub(crate) use super::workflow::task::{
 use super::workflow::worker::SessionWorkerService;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppServices, SessionState, setting};
-use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel};
+use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
@@ -53,6 +53,8 @@ pub(crate) struct SessionCreationSettings {
     pub(crate) personality_id: Option<String>,
     /// Session-scoped reasoning level.
     pub(crate) reasoning_level: ReasoningLevel,
+    /// Session-scoped response-speed preference.
+    pub(crate) speed_mode: SpeedMode,
 }
 
 /// Borrowed session state required to draw one UI frame.
@@ -418,6 +420,23 @@ impl SessionManager {
             .find(|session| session.id == session_id)
         {
             session.reasoning_level_override = Some(reasoning_level);
+        }
+    }
+
+    /// Applies one persisted response-speed update to the matching in-memory
+    /// session snapshot.
+    pub(crate) fn apply_session_speed_mode_updated(
+        &mut self,
+        session_id: &str,
+        speed_mode: SpeedMode,
+    ) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.speed_mode = speed_mode;
         }
     }
 

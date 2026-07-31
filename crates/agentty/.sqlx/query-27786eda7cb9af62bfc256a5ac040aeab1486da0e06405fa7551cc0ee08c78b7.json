@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT speed_mode FROM session WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "speed_mode",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "speed_mode"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "27786eda7cb9af62bfc256a5ac040aeab1486da0e06405fa7551cc0ee08c78b7"
+}

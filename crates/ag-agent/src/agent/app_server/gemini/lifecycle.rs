@@ -68,6 +68,7 @@ pub(super) async fn start_runtime(
             prompt: "",
             reasoning_level: request.reasoning_level,
             request_kind: &request_kind,
+            speed_mode: request.speed_mode,
         })
         .map_err(|error| {
             AppServerError::Provider(format!("Failed to build `gemini --acp` command: {error}"))

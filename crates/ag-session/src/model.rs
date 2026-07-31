@@ -7,6 +7,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+pub use ag_agent::SpeedMode;
 use ag_agent::{AgentSelection, ReasoningLevel};
 pub use ag_forge::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
 use ag_protocol::QuestionItem;
@@ -338,6 +339,8 @@ pub struct SessionSettings {
     pub project_id: i64,
     /// Session-scoped reasoning level.
     pub reasoning_level: ReasoningLevel,
+    /// Session-scoped response-speed preference.
+    pub speed_mode: SpeedMode,
 }
 
 /// Persisted forge linkage for one session.

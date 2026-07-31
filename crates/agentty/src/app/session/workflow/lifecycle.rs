@@ -20,7 +20,9 @@ use super::{
 };
 use crate::app::session::{SessionCreationSettings, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, setting};
-use crate::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel};
+use crate::domain::agent::{
+    AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
+};
 use crate::domain::session::{
     ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
     can_merge_session_branch_in_stack as stack_can_merge_session_branch,
@@ -444,6 +446,7 @@ impl SessionManager {
                 personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
+                speed_mode: creation_settings.speed_mode,
                 status: &status,
             })
             .await;
@@ -644,6 +647,7 @@ impl SessionManager {
                 personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
+                speed_mode: creation_settings.speed_mode,
                 status: &status,
             })
             .await
@@ -1525,6 +1529,113 @@ impl SessionManager {
         session_id: &str,
         session_agent: AgentSelection,
     ) -> Result<(), SessionError> {
+        self.set_session_model_with_default_persistence(services, session_id, session_agent, true)
+            .await
+    }
+
+    /// Updates and persists the reasoning level for a single session.
+    ///
+    /// # Errors
+    /// Returns an error if the session is missing or persistence fails.
+    pub async fn set_session_reasoning_level(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        reasoning_level: ReasoningLevel,
+    ) -> Result<(), SessionError> {
+        self.session_index_or_err(session_id)?;
+
+        services
+            .db()
+            .sessions()
+            .update_session_reasoning_level(session_id, reasoning_level)
+            .await?;
+
+        services.emit_app_event(AppEvent::SessionReasoningLevelUpdated {
+            reasoning_level,
+            session_id: SessionId::from(session_id),
+        });
+
+        Ok(())
+    }
+
+    /// Updates and persists the response-speed preference for a single
+    /// session.
+    ///
+    /// # Errors
+    /// Returns an error if the session is missing or persistence fails.
+    pub async fn set_session_speed_mode(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        speed_mode: SpeedMode,
+    ) -> Result<(), SessionError> {
+        self.session_index_or_err(session_id)?;
+
+        services
+            .db()
+            .sessions()
+            .update_session_speed_mode(session_id, speed_mode)
+            .await?;
+
+        services.emit_app_event(AppEvent::SessionSpeedModeUpdated {
+            session_id: SessionId::from(session_id),
+            speed_mode,
+        });
+
+        Ok(())
+    }
+
+    /// Updates and persists the personality selected for a single session.
+    ///
+    /// # Errors
+    /// Returns an error if the session is missing or persistence fails.
+    pub async fn set_session_personality(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        personality_id: Option<String>,
+    ) -> Result<(), SessionError> {
+        self.session_index_or_err(session_id)?;
+
+        services
+            .db()
+            .sessions()
+            .update_session_personality_id(session_id, personality_id.clone())
+            .await?;
+
+        services.emit_app_event(AppEvent::SessionPersonalityUpdated {
+            personality_id,
+            session_id: SessionId::from(session_id),
+        });
+
+        Ok(())
+    }
+
+    /// Updates one session model for automatic speed-mode compatibility
+    /// without changing the project's default model selection.
+    ///
+    /// # Errors
+    /// Returns an error if the session is missing or persistence fails.
+    pub(crate) async fn set_session_model_for_speed_mode(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        session_agent: AgentSelection,
+    ) -> Result<(), SessionError> {
+        self.set_session_model_with_default_persistence(services, session_id, session_agent, false)
+            .await
+    }
+
+    /// Applies a session model update with explicit project-default
+    /// persistence behavior.
+    async fn set_session_model_with_default_persistence(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        session_agent: AgentSelection,
+        persist_last_used_model_as_default: bool,
+    ) -> Result<(), SessionError> {
         let session_model = session_agent.model();
         let session_index = self.session_index_or_err(session_id)?;
         let agent_changed = self
@@ -1555,13 +1666,13 @@ impl SessionManager {
             self.clear_session_worker(session_id);
         }
 
-        let session_project_id = services
-            .db()
-            .sessions()
-            .load_session_project_id(session_id)
-            .await?;
-
-        if Self::should_persist_last_used_model_as_default(services, session_project_id).await?
+        if persist_last_used_model_as_default
+            && let session_project_id = services
+                .db()
+                .sessions()
+                .load_session_project_id(session_id)
+                .await?
+            && Self::should_persist_last_used_model_as_default(services, session_project_id).await?
             && let Some(project_id) = session_project_id
         {
             services
@@ -1592,58 +1703,6 @@ impl SessionManager {
         if agent_changed || model_changed {
             self.mark_history_replay_pending(session_id);
         }
-
-        Ok(())
-    }
-
-    /// Updates and persists the reasoning level for a single session.
-    ///
-    /// # Errors
-    /// Returns an error if the session is missing or persistence fails.
-    pub async fn set_session_reasoning_level(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-        reasoning_level: ReasoningLevel,
-    ) -> Result<(), SessionError> {
-        self.session_index_or_err(session_id)?;
-
-        services
-            .db()
-            .sessions()
-            .update_session_reasoning_level(session_id, reasoning_level)
-            .await?;
-
-        services.emit_app_event(AppEvent::SessionReasoningLevelUpdated {
-            reasoning_level,
-            session_id: SessionId::from(session_id),
-        });
-
-        Ok(())
-    }
-
-    /// Updates and persists the personality selected for a single session.
-    ///
-    /// # Errors
-    /// Returns an error if the session is missing or persistence fails.
-    pub async fn set_session_personality(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-        personality_id: Option<String>,
-    ) -> Result<(), SessionError> {
-        self.session_index_or_err(session_id)?;
-
-        services
-            .db()
-            .sessions()
-            .update_session_personality_id(session_id, personality_id.clone())
-            .await?;
-
-        services.emit_app_event(AppEvent::SessionPersonalityUpdated {
-            personality_id,
-            session_id: SessionId::from(session_id),
-        });
 
         Ok(())
     }
@@ -2675,6 +2734,7 @@ impl SessionManager {
             agent,
             personality_id: None,
             reasoning_level,
+            speed_mode: SpeedMode::Normal,
         })
     }
 
@@ -3647,6 +3707,44 @@ mod tests {
             AppEvent::SessionReasoningLevelUpdated {
                 reasoning_level: ReasoningLevel::High,
                 session_id: "session-id".into(),
+            }
+        );
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    /// Ensures `set_session_speed_mode()` persists the preference and emits
+    /// the matching reducer event.
+    async fn test_set_session_speed_mode_persists_mode_and_emits_event() {
+        // Arrange
+        let session = test_session("Prompt", Status::Review, Some("Title"), "");
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let (services, mut event_rx) = test_services_with_event_receiver(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        session_manager
+            .set_session_speed_mode(&services, "session-id", SpeedMode::Fast)
+            .await
+            .expect("speed mode update should succeed");
+        let persisted_speed_mode = database
+            .sessions()
+            .load_session_speed_mode("session-id")
+            .await
+            .expect("speed mode should load");
+        let emitted_event = event_rx.try_recv().expect("expected speed update event");
+
+        // Assert
+        assert_eq!(persisted_speed_mode, SpeedMode::Fast);
+        assert_eq!(
+            emitted_event,
+            AppEvent::SessionSpeedModeUpdated {
+                session_id: "session-id".into(),
+                speed_mode: SpeedMode::Fast,
             }
         );
         assert!(event_rx.try_recv().is_err());

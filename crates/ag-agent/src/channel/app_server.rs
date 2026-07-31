@@ -84,6 +84,7 @@ impl AgentChannel for AppServerAgentChannel {
                     .persisted_instruction_conversation_id,
                 reasoning_level: req.reasoning_level,
                 session_id,
+                speed_mode: req.speed_mode,
             };
             let protocol_profile = request.request_kind.protocol_profile();
             let repair_request = request.clone();
@@ -246,6 +247,7 @@ async fn parse_or_repair_app_server_response(
         persisted_instruction_conversation_id: None,
         reasoning_level: repair_request.reasoning_level,
         session_id: repair_request.session_id,
+        speed_mode: repair_request.speed_mode,
     };
     let (repair_stream_tx, _repair_stream_rx) = mpsc::unbounded_channel();
     let repair_result = client
@@ -298,6 +300,7 @@ mod tests {
             prompt: "Do something".into(),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            speed_mode: crate::model::session::SpeedMode::default(),
         }
     }
 

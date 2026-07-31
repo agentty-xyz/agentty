@@ -363,6 +363,7 @@ mod tests {
                 questions: Vec::new(),
                 review_request: None,
                 size: SessionSize::Xs,
+                speed_mode: crate::domain::agent::SpeedMode::default(),
                 stats: SessionStats::default(),
                 status: Status::Review,
                 summary: None,

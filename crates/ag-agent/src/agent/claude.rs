@@ -42,6 +42,7 @@ impl AgentBackend for ClaudeBackend {
             prompt: _prompt,
             replay_transcript: _replay_transcript,
             reasoning_level,
+            speed_mode,
             ..
         } = request;
         let mut command = Command::new("claude");
@@ -59,7 +60,7 @@ impl AgentBackend for ClaudeBackend {
 
         command.arg("-p");
         command.arg("--allowedTools").arg(CLAUDE_ALLOWED_TOOLS);
-        append_claude_workspace_settings(&mut command, folder, main_checkout_root);
+        append_claude_workspace_settings(&mut command, folder, main_checkout_root, speed_mode);
         command.arg("--input-format").arg("text");
         command.arg("--strict-mcp-config");
         command.arg("--verbose");
@@ -86,6 +87,7 @@ fn append_claude_workspace_settings(
     command: &mut Command,
     workspace_folder: &Path,
     main_checkout_root: Option<&Path>,
+    speed_mode: crate::model::session::SpeedMode,
 ) {
     let mut deny_rules = Vec::new();
     let mut deny_write_paths = Vec::new();
@@ -96,6 +98,7 @@ fn append_claude_workspace_settings(
     }
 
     let settings = serde_json::json!({
+        "fastMode": speed_mode.claude_fast_mode(),
         "permissions": {
             "deny": deny_rules,
         },
@@ -191,6 +194,7 @@ mod tests {
                 prompt: "Plan prompt",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("command should build");
@@ -217,6 +221,10 @@ mod tests {
         assert!(!args.iter().any(String::is_empty));
 
         let settings = settings_argument(&command);
+        assert_eq!(
+            settings.get("fastMode").and_then(Value::as_bool),
+            Some(false)
+        );
         let deny_rules = settings
             .pointer("/permissions/deny")
             .and_then(Value::as_array)
@@ -229,6 +237,40 @@ mod tests {
             settings
                 .pointer("/sandbox/enabled")
                 .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    /// Verifies Claude fast sessions enable the noninteractive `fastMode`
+    /// setting.
+    fn test_claude_fast_mode_sets_workspace_setting() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let backend = ClaudeBackend;
+
+        // Act
+        let command = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[],
+                folder: temp_directory.path(),
+                main_checkout_root: None,
+                replay_transcript: None,
+                model: "claude-opus-5",
+                personality_prompt: None,
+                prompt: "Respond quickly",
+                reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::Fast,
+            },
+        )
+        .expect("command should build");
+        let settings = settings_argument(&command);
+
+        // Assert
+        assert_eq!(
+            settings.get("fastMode").and_then(Value::as_bool),
             Some(true)
         );
     }
@@ -254,6 +296,7 @@ mod tests {
                 prompt: "Use Opus",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("command should build");
@@ -288,6 +331,7 @@ mod tests {
                 prompt: "Use Opus",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("command should build");
@@ -330,6 +374,7 @@ mod tests {
                     prompt: "Do work",
                     reasoning_level,
                     request_kind: &session_start_request_kind(),
+                    speed_mode: crate::model::session::SpeedMode::default(),
                 },
             )
             .expect("command should build");
@@ -382,6 +427,7 @@ mod tests {
                 prompt: "Inspect [Image #1] and [Image #2]",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("command should build");
@@ -419,6 +465,7 @@ mod tests {
                     prompt: "Plan prompt",
                     reasoning_level: ReasoningLevel::default(),
                     request_kind: &session_start_request_kind(),
+                    speed_mode: crate::model::session::SpeedMode::default(),
                 },
                 ProtocolSchemaInstructionMode::TransportSchema,
                 "Claude",
@@ -454,6 +501,7 @@ mod tests {
                 prompt: "Generate title",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &utility_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("command should build");
@@ -470,6 +518,7 @@ mod tests {
                     prompt: "Generate title",
                     reasoning_level: ReasoningLevel::default(),
                     request_kind: &utility_request_kind(),
+                    speed_mode: crate::model::session::SpeedMode::default(),
                 },
                 ProtocolSchemaInstructionMode::TransportSchema,
                 "Claude",
@@ -509,6 +558,7 @@ mod tests {
                 prompt: "Return protocol response",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("command should build");
@@ -525,6 +575,7 @@ mod tests {
                     prompt: "Return protocol response",
                     reasoning_level: ReasoningLevel::default(),
                     request_kind: &session_start_request_kind(),
+                    speed_mode: crate::model::session::SpeedMode::default(),
                 },
                 ProtocolSchemaInstructionMode::TransportSchema,
                 "Claude",

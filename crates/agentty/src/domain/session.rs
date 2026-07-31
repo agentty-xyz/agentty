@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-pub use ag_agent::{SessionDiffState, SessionStats};
+pub use ag_agent::{SessionDiffState, SessionStats, SpeedMode};
 pub use ag_session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId,
     SessionStatus as Status, activity_day_key_with_offset,
@@ -284,6 +284,8 @@ pub struct Session {
     pub review_request: Option<ReviewRequest>,
     /// Derived size bucket computed from diff size.
     pub size: SessionSize,
+    /// Response-speed preference selected through `/speed`.
+    pub speed_mode: SpeedMode,
     /// Token usage statistics associated with this session.
     pub stats: SessionStats,
     /// Current lifecycle status.
@@ -1867,6 +1869,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
+            speed_mode: SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::Review,
             summary: None,
@@ -1910,6 +1913,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
+            speed_mode: SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::AgentReview,
             summary: None,
@@ -1972,6 +1976,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
+            speed_mode: SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::InProgress,
             summary: None,
@@ -2015,6 +2020,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
+            speed_mode: SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::Done,
             summary: None,
@@ -2058,6 +2064,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
+            speed_mode: SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::InProgress,
             summary: None,
@@ -2101,6 +2108,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
+            speed_mode: SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::InProgress,
             summary: None,

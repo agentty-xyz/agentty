@@ -319,6 +319,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::SessionModelUpdated { .. } => "SessionModelUpdated",
         AppEvent::SessionPersonalityUpdated { .. } => "SessionPersonalityUpdated",
         AppEvent::SessionReasoningLevelUpdated { .. } => "SessionReasoningLevelUpdated",
+        AppEvent::SessionSpeedModeUpdated { .. } => "SessionSpeedModeUpdated",
         AppEvent::RefreshSessions => "RefreshSessions",
         AppEvent::RefreshProjects => "RefreshProjects",
         AppEvent::RefreshGitStatus => "RefreshGitStatus",

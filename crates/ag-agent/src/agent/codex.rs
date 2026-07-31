@@ -66,6 +66,7 @@ mod tests {
                 prompt: "Run checks",
                 reasoning_level: crate::model::agent::ReasoningLevel::High,
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("command build should succeed");
@@ -97,6 +98,7 @@ mod tests {
                 prompt: "Continue edits",
                 reasoning_level: crate::model::agent::ReasoningLevel::High,
                 request_kind: &session_resume_request_kind(Some("previous assistant output")),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("resume command build should succeed");
@@ -138,6 +140,7 @@ mod tests {
                 prompt: "Run a quick edit",
                 reasoning_level: crate::model::agent::ReasoningLevel::Medium,
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("luna model command build should succeed");
@@ -179,6 +182,7 @@ mod tests {
                 prompt: "Generate title",
                 reasoning_level: crate::model::agent::ReasoningLevel::Low,
                 request_kind: &AgentRequestKind::UtilityPrompt,
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("utility command build should succeed");

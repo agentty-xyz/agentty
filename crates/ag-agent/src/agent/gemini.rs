@@ -71,6 +71,7 @@ mod tests {
                 prompt: "Generate title",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &utility_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("command should build");

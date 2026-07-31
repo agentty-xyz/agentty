@@ -11,6 +11,7 @@ use crate::app_server::{
     BorrowedAppServerFuture,
 };
 use crate::model::agent::{AgentKind, ReasoningLevel};
+use crate::model::session::SpeedMode;
 use crate::{agent, app_server_transport};
 
 /// Production [`AppServerClient`] backed by `gemini --acp`.
@@ -52,6 +53,7 @@ impl RuntimeClientProvider for GeminiRuntimeProvider {
         runtime: &'scope mut Self::Runtime,
         prompt: &'scope TurnPrompt,
         _reasoning_level: ReasoningLevel,
+        _speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
         Box::pin(async move {
@@ -99,5 +101,61 @@ impl RuntimeClientRuntime for GeminiSessionRuntime {
             self.transport.close_stdin();
             app_server_transport::shutdown_child(&mut self.child).await;
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::model::agent::AgentModel;
+
+    /// Builds one Gemini session runtime whose stdin is already closed so turn
+    /// writes fail deterministically without a live ACP process.
+    fn build_stopped_session_runtime() -> GeminiSessionRuntime {
+        let (child, stdin, stdout) =
+            app_server_transport::spawn_runtime_command(std::process::Command::new("cat"), "cat")
+                .expect("`cat` should spawn as a runtime stand-in");
+        let mut transport = AppServerStdioTransport::new(
+            stdin,
+            stdout,
+            "Gemini ACP stdin is unavailable",
+            "Failed reading Gemini ACP stdout",
+        );
+        transport.close_stdin();
+        let mut state = GeminiRuntimeState::new(
+            PathBuf::from("/tmp/agentty-gemini-runtime"),
+            AgentModel::Gemini31Pro.as_str().to_string(),
+        );
+        state.session_id = "session-1".to_string();
+
+        GeminiSessionRuntime {
+            child,
+            state,
+            transport,
+        }
+    }
+
+    #[tokio::test]
+    async fn run_turn_ignores_speed_mode_and_surfaces_transport_failures() {
+        // Arrange
+        let mut runtime = build_stopped_session_runtime();
+        let prompt = TurnPrompt::from("Implement the task");
+        let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = GeminiRuntimeProvider::run_turn(
+            &mut runtime,
+            &prompt,
+            ReasoningLevel::default(),
+            SpeedMode::Fast,
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("a closed runtime stdin should fail the turn");
+        assert!(matches!(error, AppServerError::Transport(_)));
     }
 }

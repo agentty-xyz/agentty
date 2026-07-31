@@ -10,6 +10,7 @@ use crate::app_server::{
     AppServerStreamEvent, AppServerTurnRequest, AppServerTurnResponse, BorrowedAppServerFuture,
 };
 use crate::model::agent::ReasoningLevel;
+use crate::model::session::SpeedMode;
 
 /// Provider hook surface for the shared app-server client lifecycle.
 pub(crate) trait RuntimeClientProvider: Send + Sync + 'static {
@@ -35,6 +36,7 @@ pub(crate) trait RuntimeClientProvider: Send + Sync + 'static {
         runtime: &'scope mut Self::Runtime,
         prompt: &'scope TurnPrompt,
         reasoning_level: ReasoningLevel,
+        speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>>;
 }
@@ -80,6 +82,7 @@ impl<Provider: RuntimeClientProvider> ProviderRuntimeClient<Provider> {
     ) -> Result<AppServerTurnResponse, AppServerError> {
         let stream_tx = stream_tx.clone();
         let reasoning_level = request.reasoning_level;
+        let speed_mode = request.speed_mode;
 
         app_server::run_turn_with_restart_retry(
             sessions,
@@ -100,7 +103,7 @@ impl<Provider: RuntimeClientProvider> ProviderRuntimeClient<Provider> {
             move |runtime, prompt| {
                 let stream_tx = stream_tx.clone();
 
-                Provider::run_turn(runtime, prompt, reasoning_level, stream_tx)
+                Provider::run_turn(runtime, prompt, reasoning_level, speed_mode, stream_tx)
             },
             RuntimeClientRuntime::shutdown_runtime,
         )
@@ -212,6 +215,7 @@ mod tests {
             _runtime: &'scope mut Self::Runtime,
             _prompt: &'scope TurnPrompt,
             _reasoning_level: ReasoningLevel,
+            _speed_mode: SpeedMode,
             _stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
         ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
             Box::pin(async {
@@ -275,6 +279,7 @@ mod tests {
             request_kind: AgentRequestKind::SessionStart,
             replay_transcript: None,
             session_id: "session-1".to_string(),
+            speed_mode: SpeedMode::default(),
         };
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
 

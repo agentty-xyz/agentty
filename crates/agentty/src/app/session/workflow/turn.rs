@@ -184,6 +184,7 @@ pub(super) async fn run_channel_turn(
 
     let session_project_id = load_session_project_id(&context.db, &context.session_id).await;
     let reasoning_level = load_session_reasoning_level(&context.db, &context.session_id).await;
+    let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
     let continuation = load_turn_continuation(context, replay_transcript).await;
     let ResolvedTurnPersonality {
         persistence: personality_persistence,
@@ -205,6 +206,7 @@ pub(super) async fn run_channel_turn(
         prompt: prompt.clone(),
         reasoning_level,
         request_kind: request_kind.clone(),
+        speed_mode,
     };
 
     let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
@@ -488,6 +490,17 @@ pub(super) async fn load_session_reasoning_level(
 ) -> ReasoningLevel {
     db.sessions()
         .load_session_reasoning_level(session_id)
+        .await
+        .unwrap_or_default()
+}
+
+/// Loads the response-speed preference for one session context.
+pub(super) async fn load_session_speed_mode(
+    db: &AppRepositories,
+    session_id: &str,
+) -> crate::domain::agent::SpeedMode {
+    db.sessions()
+        .load_session_speed_mode(session_id)
         .await
         .unwrap_or_default()
 }

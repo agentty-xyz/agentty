@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use super::review::SessionReviewRequestRow;
-use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel, SpeedMode};
 use crate::domain::session::SessionStats;
 use crate::domain::session_message::{SessionMessageKind, stored_message_content};
 use crate::infra::db::DbError;
@@ -61,6 +61,8 @@ pub struct PersistedSessionCreation<'a> {
     pub project_id: i64,
     /// Reasoning level captured from the project default at creation.
     pub reasoning_level: ReasoningLevel,
+    /// Response-speed preference captured for the session.
+    pub speed_mode: SpeedMode,
     /// Initial lifecycle status string.
     pub status: &'a str,
 }
@@ -127,6 +129,8 @@ pub struct SessionRow {
     pub review_request: Option<SessionReviewRequestRow>,
     /// Persisted size bucket string.
     pub size: String,
+    /// Persisted session response-speed preference.
+    pub speed_mode: String,
     /// Persisted lifecycle status string.
     pub status: String,
     /// Persisted structured summary text, when present.
@@ -184,6 +188,8 @@ pub struct SessionListRow {
     pub review_request: Option<SessionReviewRequestRow>,
     /// Persisted size bucket string.
     pub size: String,
+    /// Persisted session response-speed preference.
+    pub speed_mode: String,
     /// Persisted lifecycle status string.
     pub status: String,
     /// Optional display title.
@@ -417,6 +423,9 @@ pub trait SessionRepository: Send + Sync {
         session_id: &str,
     ) -> Result<ReasoningLevel, DbError>;
 
+    /// Loads the persisted session response-speed preference.
+    async fn load_session_speed_mode(&self, session_id: &str) -> Result<SpeedMode, DbError>;
+
     /// Loads the persisted summary text associated with one session.
     async fn load_session_summary(&self, session_id: &str) -> Result<Option<String>, DbError>;
 
@@ -521,6 +530,13 @@ pub trait SessionRepository: Send + Sync {
         &self,
         id: &str,
         reasoning_level: ReasoningLevel,
+    ) -> Result<(), DbError>;
+
+    /// Updates the persisted session response-speed preference.
+    async fn update_session_speed_mode(
+        &self,
+        id: &str,
+        speed_mode: SpeedMode,
     ) -> Result<(), DbError>;
 
     /// Updates the persisted upstream reference for a published session
@@ -664,6 +680,7 @@ struct SessionRowMetadata {
     published_upstream_ref: Option<String>,
     reasoning_level_override: Option<String>,
     size: String,
+    speed_mode: String,
     status: String,
     title: Option<String>,
     updated_at: i64,
@@ -701,6 +718,7 @@ impl SessionRowMetadata {
             reasoning_level_override: self.reasoning_level_override,
             review_request,
             size: self.size,
+            speed_mode: self.speed_mode,
             status: self.status,
             summary,
             title: self.title,
@@ -734,6 +752,7 @@ impl SessionRowMetadata {
             reasoning_level_override: self.reasoning_level_override,
             review_request,
             size: self.size,
+            speed_mode: self.speed_mode,
             status: self.status,
             title: self.title,
             updated_at: self.updated_at,
@@ -775,6 +794,7 @@ struct SessionJoinRow {
     review_request_title: Option<String>,
     review_request_web_url: Option<String>,
     size: String,
+    speed_mode: String,
     status: String,
     summary: Option<String>,
     title: Option<String>,
@@ -842,6 +862,7 @@ impl SessionJoinRow {
             review_request_title,
             review_request_web_url,
             size,
+            speed_mode,
             status,
             summary,
             title,
@@ -868,6 +889,7 @@ impl SessionJoinRow {
             published_upstream_ref,
             reasoning_level_override,
             size,
+            speed_mode,
             status,
             title,
             updated_at,
@@ -1150,6 +1172,7 @@ WHERE id = ?
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
                 status,
             },
         )
@@ -1179,6 +1202,7 @@ WHERE id = ?
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
                 status,
             },
         )
@@ -1207,6 +1231,7 @@ WHERE id = ?
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
                 status,
             },
         )
@@ -1227,6 +1252,7 @@ WHERE id = ?
             personality_id,
             project_id,
             reasoning_level,
+            speed_mode,
             status,
         } = session;
 
@@ -1242,6 +1268,7 @@ WHERE id = ?
                 personality_id,
                 project_id,
                 reasoning_level,
+                speed_mode,
                 status,
             },
         )
@@ -1263,7 +1290,7 @@ WHERE id = ?
             r#"
 INSERT INTO session (
     id, agent, model, base_branch, status, project_id, prompt, summary,
-    title, reasoning_level, added_lines, deleted_lines, has_diff, size,
+    title, reasoning_level, speed_mode, added_lines, deleted_lines, has_diff, size,
     input_tokens, output_tokens, is_draft, parent_session_id, personality_id,
     provider_conversation_id, applied_personality_id, applied_personality_prompt_hash,
     app_server_instruction_provider_conversation_id, questions, published_upstream_ref,
@@ -1272,7 +1299,7 @@ INSERT INTO session (
     created_at, updated_at
 )
 SELECT ?, agent, model, base_branch, ?, project_id, prompt, summary,
-       title, reasoning_level, 0, 0, NULL, 'XS', 0, 0, 0, NULL, personality_id,
+       title, reasoning_level, speed_mode, 0, 0, NULL, 'XS', 0, 0, 0, NULL, personality_id,
        NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL,
        CAST(strftime('%s', 'now') AS INTEGER),
        CAST(strftime('%s', 'now') AS INTEGER)
@@ -1329,6 +1356,7 @@ SELECT session.base_branch AS base_branch,
        session.project_id,
        session.prompt AS prompt,
        session.reasoning_level AS reasoning_level_override,
+       session.speed_mode AS speed_mode,
        session.published_upstream_ref,
        session.questions,
        session_review_request.display_id AS review_request_display_id,
@@ -1399,6 +1427,7 @@ SELECT session.base_branch AS base_branch,
        session.project_id,
        session.prompt AS prompt,
        session.reasoning_level AS reasoning_level_override,
+       session.speed_mode AS speed_mode,
        session.published_upstream_ref,
        session.questions,
        session_review_request.display_id AS review_request_display_id,
@@ -1455,6 +1484,7 @@ SELECT session.base_branch AS base_branch,
        session.project_id,
        '' AS "prompt!: String",
        session.reasoning_level AS reasoning_level_override,
+       session.speed_mode AS speed_mode,
        session.published_upstream_ref,
        NULL AS "questions: String",
        session_review_request.display_id AS review_request_display_id,
@@ -1684,6 +1714,16 @@ WHERE id = ?
 
         Ok(value
             .and_then(|value| value.parse::<ReasoningLevel>().ok())
+            .unwrap_or_default())
+    }
+
+    async fn load_session_speed_mode(&self, session_id: &str) -> Result<SpeedMode, DbError> {
+        let value = sqlx::query_scalar!(r"SELECT speed_mode FROM session WHERE id = ?", session_id)
+            .fetch_optional(&self.0)
+            .await?;
+
+        Ok(value
+            .and_then(|value| value.parse::<SpeedMode>().ok())
             .unwrap_or_default())
     }
 
@@ -2166,6 +2206,26 @@ WHERE id = ?
         Ok(())
     }
 
+    async fn update_session_speed_mode(
+        &self,
+        id: &str,
+        speed_mode: SpeedMode,
+    ) -> Result<(), DbError> {
+        sqlx::query!(
+            r#"
+UPDATE session
+SET speed_mode = ?
+WHERE id = ?
+            "#,
+            speed_mode.as_str(),
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
     async fn update_session_published_upstream_ref(
         &self,
         id: &str,
@@ -2438,6 +2498,8 @@ struct InsertSessionRow<'a> {
     project_id: i64,
     /// Reasoning level captured from the project default at creation.
     reasoning_level: ReasoningLevel,
+    /// Response-speed preference captured for the session.
+    speed_mode: SpeedMode,
     /// Initial lifecycle status string.
     status: &'a str,
 }
@@ -2458,6 +2520,7 @@ async fn insert_session_with_draft_mode(
         personality_id,
         project_id,
         reasoning_level,
+        speed_mode,
         status,
     } = row;
 
@@ -2475,9 +2538,10 @@ INSERT INTO session (
     personality_id,
     project_id,
     reasoning_level,
+    speed_mode,
     prompt
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
         id,
         agent,
@@ -2491,6 +2555,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         personality_id,
         project_id,
         reasoning_level.as_str(),
+        speed_mode.as_str(),
         ""
     )
     .execute(pool)
@@ -2610,6 +2675,7 @@ mod tests {
                     "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
                 ),
                 size: "M".to_string(),
+                speed_mode: "normal".to_string(),
                 status: "Review".to_string(),
                 summary: Some("Summary text".to_string()),
                 title: Some("Review session".to_string()),

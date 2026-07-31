@@ -258,9 +258,10 @@ flowchart LR
    `.agents/agents` directory. The worker compares the resolved prompt fingerprint with
    the last successfully applied personality and prepares an active, updated, cleared,
    or unchanged personality payload.
-1. `workflow/turn.rs` builds a `TurnRequest`, including that personality payload, and
-   calls `AgentChannel::run_turn()`, which streams `TurnEvent` values (loader updates)
-   and returns a `TurnResult`.
+1. `workflow/turn.rs` loads the session's reasoning and speed preferences, then builds a
+   `TurnRequest`, including those settings and the personality payload. It calls
+   `AgentChannel::run_turn()`, which streams `TurnEvent` values (loader updates) and
+   returns a `TurnResult`.
 1. `workflow/post_turn.rs` appends the final assistant transcript output, then
    `TurnPersistence::apply(...)` transactionally stores the summary payload, question
    payload, token-usage deltas, and provider conversation markers.
@@ -391,13 +392,13 @@ flowchart TD
 with prompt payloads owned by `ag-protocol` and re-exported through
 `domain/turn_prompt.rs`):
 
-| Type               | Purpose                                         |
-| ------------------ | ----------------------------------------------- |
-| `TurnRequest`      | Turn inputs, continuation, and personality.     |
-| `TurnContinuation` | Fresh, replay, or provider-resume context.      |
-| `TurnEvent`        | Thought, completion, failure, or PID event.     |
-| `TurnResult`       | Assistant output, usage, and provider id.       |
-| `AgentRequestKind` | Start, resume, account-read, or utility intent. |
+| Type               | Purpose                                           |
+| ------------------ | ------------------------------------------------- |
+| `TurnRequest`      | Turn inputs, execution settings, and personality. |
+| `TurnContinuation` | Fresh, replay, or provider-resume context.        |
+| `TurnEvent`        | Thought, completion, failure, or PID event.       |
+| `TurnResult`       | Assistant output, usage, and provider id.         |
+| `AgentRequestKind` | Start, resume, account-read, or utility intent.   |
 
 <a id="architecture-provider-conversation-id-flow"></a> App-server providers return a
 `provider_conversation_id` in `TurnResult`. Post-turn application persists it, along

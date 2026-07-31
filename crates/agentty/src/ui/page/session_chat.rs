@@ -250,6 +250,10 @@ impl<'a> SessionChatPage<'a> {
                     .placeholder("Type your message")
                     .active(!prepared_prompt_panel.is_chat_focused);
 
+            if let Some(speed_mode) = session_format::session_speed_display(session) {
+                chat_input = chat_input.status(speed_mode);
+            }
+
             if let Some(suggestion_list) = &prepared_prompt_panel.suggestion_list {
                 chat_input = chat_input.suggestion_list(suggestion_list);
             }
@@ -1031,6 +1035,55 @@ mod tests {
 
         // Assert
         assert!(with_review > without_review);
+    }
+
+    /// Renders prompt mode for one session and returns the painted text.
+    fn rendered_prompt_mode_text(session: &Session) -> String {
+        let mode = prompt_mode("draft");
+        let mut page = test_session_chat_page(session, &mode);
+        let backend = ratatui::backend::TestBackend::new(80, 14);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw prompt mode");
+
+        buffer_text(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn test_render_prompt_composer_shows_speed_status_for_supported_provider() {
+        // Arrange
+        let mut session = session_fixture();
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            crate::domain::agent::AgentModel::Gpt56Sol,
+        );
+
+        // Act
+        let text = rendered_prompt_mode_text(&session);
+
+        // Assert
+        assert!(text.contains("· Normal"));
+    }
+
+    #[test]
+    fn test_render_prompt_composer_omits_speed_status_for_unsupported_provider() {
+        // Arrange
+        let mut session = session_fixture();
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Gemini,
+            crate::domain::agent::AgentModel::Gemini31Pro,
+        );
+
+        // Act
+        let text = rendered_prompt_mode_text(&session);
+
+        // Assert
+        assert!(!text.contains("· Normal"));
     }
 
     #[test]
