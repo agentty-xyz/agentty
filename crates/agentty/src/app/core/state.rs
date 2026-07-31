@@ -1043,7 +1043,7 @@ impl App {
             .ok_or_else(|| AppError::Workflow("Session not found".to_string()))?;
         if !source_session.allows_terminal_continuation() {
             return Err(AppError::Workflow(
-                "Only `Done` sessions can be continued".to_string(),
+                "Only `Done` or `Canceled` sessions can be continued".to_string(),
             ));
         }
 
@@ -1060,12 +1060,14 @@ impl App {
                         .to_string(),
                 )
             })?;
-        let prompt_seed = if let Some(merged_commit_hash) = self
+        let merged_commit_hash = self
             .services
             .db()
             .sessions()
             .load_session_merged_commit_hash(source_session_id)
-            .await?
+            .await?;
+        let prompt_seed = if source_session.status == Status::Done
+            && let Some(merged_commit_hash) = merged_commit_hash
         {
             Self::merged_commit_continuation_prompt(source_session, &merged_commit_hash)
         } else {

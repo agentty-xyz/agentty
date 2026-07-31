@@ -2134,6 +2134,35 @@ fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn st
     Ok(())
 }
 
+/// Seeds one canceled session whose saved summary can drive the continuation
+/// draft flow.
+fn seed_canceled_session_for_continuation(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular("canceled-continue-0001", "gpt-5.6-sol", "main", "Canceled")
+            .with_title("Continue canceled session"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_summary(
+                "canceled-continue-0001",
+                "# Summary\n\nResume the remaining work.",
+            )
+            .await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    Ok(())
+}
+
 /// Seeds one in-progress session so the session view can show the active
 /// Tachyonfx loader without launching a live agent backend.
 fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -4691,6 +4720,69 @@ fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Use 704de31d0f4b5a12", &full);
                 assertion::assert_text_in_region(frame, "704de31d0f4b5a12", &full);
                 assertion::assert_text_in_region(frame, "commit as an initial context", &full);
+                assertion::assert_text_in_region(frame, "Type your message", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that pressing `c` in a canceled session opens a confirmation and,
+/// after acceptance, stages its saved context in a new draft composer.
+#[test]
+fn canceled_session_continue_opens_seeded_prompt() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("canceled_session_continue")
+        .with_git()
+        .setup(seed_canceled_session_for_continuation)
+        .zola(
+            "Continue canceled session",
+            "Continue a canceled session in a new draft with its saved summary staged as context.",
+            46,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("c: continue", 5000)
+                    .press_key("c")
+                    .wait_for_text("Confirm Continue", 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "continue_confirmation",
+                        "Continuation confirmation for the canceled session",
+                    )
+                    .press_key("y")
+                    .wait_for_text("Resume the remaining work.", 15000)
+                    .wait_for_stable_frame(500, 15000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "canceled_session_continue",
+                        "New draft composer with canceled-session context staged",
+                    )
+            },
+            |frame, report| {
+                let confirmation_frame = common::frame_from_capture(&report.captures[0]);
+                let confirmation_full =
+                    Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                assertion::assert_text_in_region(
+                    &confirmation_frame,
+                    "Confirm Continue",
+                    &confirmation_full,
+                );
+                assertion::assert_text_in_region(
+                    &confirmation_frame,
+                    "Create a new draft sess...",
+                    &confirmation_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+                assertion::assert_text_in_region(frame, "Status: Canceled", &full);
+                assertion::assert_text_in_region(frame, "Previous session summary:", &full);
+                assertion::assert_text_in_region(frame, "Resume the remaining work.", &full);
                 assertion::assert_text_in_region(frame, "Type your message", &full);
             },
         )?;

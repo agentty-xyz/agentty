@@ -197,7 +197,7 @@ impl ViewActionSet {
         Self {
             continue_terminal_session: ViewActionAvailability::from_bool(matches!(
                 state.session_state,
-                ViewSessionState::Done
+                ViewSessionState::Done | ViewSessionState::Canceled
             )),
             fork_session: ViewActionAvailability::from_bool(
                 state.can_fork_session.is_enabled() && can_show_review,
@@ -433,7 +433,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 }
 
 /// Returns full session-view help actions with linked review comments when
-/// available outside terminal `Done` sessions.
+/// available outside sessions that support terminal continuation.
 pub(crate) fn view_actions_with_review_comments(
     state: ViewHelpState,
     can_view_review_comments: bool,
@@ -441,7 +441,7 @@ pub(crate) fn view_actions_with_review_comments(
     let mut actions = view_actions(state);
     append_review_comment_action(
         &mut actions,
-        can_view_review_comments && state.session_state != ViewSessionState::Done,
+        can_append_review_comments(state.session_state, can_view_review_comments),
     );
 
     actions
@@ -474,7 +474,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
 }
 
 /// Returns compact session-view footer actions with linked review comments
-/// when available outside terminal `Done` sessions.
+/// when available outside sessions that support terminal continuation.
 pub(crate) fn view_footer_actions_with_review_comments(
     state: ViewHelpState,
     can_view_review_comments: bool,
@@ -482,10 +482,22 @@ pub(crate) fn view_footer_actions_with_review_comments(
     let mut actions = view_footer_actions(state);
     append_review_comment_action(
         &mut actions,
-        can_view_review_comments && state.session_state != ViewSessionState::Done,
+        can_append_review_comments(state.session_state, can_view_review_comments),
     );
 
     actions
+}
+
+/// Returns whether linked review comments should be added to session-view
+/// actions without competing with terminal continuation on `c`.
+fn can_append_review_comments(
+    session_state: ViewSessionState,
+    can_view_review_comments: bool,
+) -> bool {
+    match session_state {
+        ViewSessionState::Done | ViewSessionState::Canceled => false,
+        _ => can_view_review_comments,
+    }
 }
 
 /// Adds the comments shortcut before trailing navigation actions.
@@ -1629,7 +1641,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_canceled_without_branch_publish_action() {
+    fn test_view_actions_canceled_shows_continue_without_edit_actions() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
@@ -1647,7 +1659,11 @@ mod tests {
         let actions = view_actions(state);
 
         // Assert
-        assert!(!actions.iter().any(|action| action.key == "c"));
+        assert!(actions.iter().any(|action| {
+            action.key == "c"
+                && action.footer_label == "continue"
+                && action.popup_label == "Continue in new session"
+        }));
         assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "o"));
@@ -1678,7 +1694,44 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_done_hide_linked_review_comments() {
+    fn test_view_actions_terminal_sessions_hide_linked_review_comments() {
+        // Arrange
+        let terminal_states = [ViewSessionState::Done, ViewSessionState::Canceled];
+
+        for session_state in terminal_states {
+            let state = ViewHelpState {
+                can_fork_session: ViewActionAvailability::Enabled,
+                can_merge_session_branch: ViewActionAvailability::Enabled,
+                can_mutate_session_branch: ViewActionAvailability::Enabled,
+                can_rebase_session_branch: ViewActionAvailability::Enabled,
+                can_open_worktree: ViewActionAvailability::Enabled,
+                reply_to_session: ViewActionAvailability::Enabled,
+                can_start_staged_session: ViewActionAvailability::Disabled,
+                publish_pull_request_action: None,
+                session_state,
+            };
+
+            // Act
+            let full_actions = view_actions_with_review_comments(state, true);
+            let footer_actions = view_footer_actions_with_review_comments(state, true);
+
+            // Assert
+            for actions in [&full_actions, &footer_actions] {
+                assert_eq!(actions.iter().filter(|action| action.key == "c").count(), 1);
+                assert!(actions.iter().any(|action| {
+                    action.key == "c" && action.popup_label == "Continue in new session"
+                }));
+                assert!(
+                    !actions
+                        .iter()
+                        .any(|action| action.popup_label == "Show review comments")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_view_actions_non_terminal_review_comments_follow_availability() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
@@ -1689,19 +1742,24 @@ mod tests {
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
             publish_pull_request_action: None,
-            session_state: ViewSessionState::Done,
+            session_state: ViewSessionState::Review,
         };
 
         // Act
-        let full_actions = view_actions_with_review_comments(state, true);
-        let footer_actions = view_footer_actions_with_review_comments(state, true);
+        let available_actions = view_actions_with_review_comments(state, true);
+        let available_footer_actions = view_footer_actions_with_review_comments(state, true);
+        let unavailable_actions = view_actions_with_review_comments(state, false);
+        let unavailable_footer_actions = view_footer_actions_with_review_comments(state, false);
 
         // Assert
-        for actions in [&full_actions, &footer_actions] {
-            assert_eq!(actions.iter().filter(|action| action.key == "c").count(), 1);
-            assert!(actions.iter().any(|action| {
-                action.key == "c" && action.popup_label == "Continue in new session"
-            }));
+        for actions in [&available_actions, &available_footer_actions] {
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| action.popup_label == "Show review comments")
+            );
+        }
+        for actions in [&unavailable_actions, &unavailable_footer_actions] {
             assert!(
                 !actions
                     .iter()
@@ -1711,7 +1769,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_footer_actions_canceled_hides_continue() {
+    fn test_view_footer_actions_canceled_shows_continue_before_scroll() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
@@ -1730,7 +1788,7 @@ mod tests {
         let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(&ordered_keys[..3], ["q", "j/k", "?"]);
+        assert_eq!(&ordered_keys[..4], ["q", "c", "j/k", "?"]);
     }
 
     #[test]

@@ -1598,7 +1598,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_status_allows_terminal_continuation_only_for_done() {
+    fn test_status_allows_terminal_continuation_for_terminal_session_outcomes() {
         // Arrange
         let done_status = Status::Done;
         let canceled_status = Status::Canceled;
@@ -1611,7 +1611,7 @@ pub(crate) mod tests {
 
         // Assert
         assert!(done_allows_continuation);
-        assert!(!canceled_allows_continuation);
+        assert!(canceled_allows_continuation);
         assert!(!review_allows_continuation);
     }
 
@@ -1771,18 +1771,31 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
-    fn test_session_continuation_prompt_seed_disabled_for_canceled_session() {
+    fn test_session_continuation_prompt_seed_uses_summary_for_canceled_session() {
         // Arrange
         let session = SessionFixtureBuilder::new()
             .status(Status::Canceled)
             .project_name("project-beta")
+            .summary(Some("# Summary\n\nResume the remaining work.".to_string()))
+            .transcript("assistant transcript")
+            .title(Some("Canceled session".to_string()))
             .build();
 
         // Act
-        let continuation_prompt_seed = session.continuation_prompt_seed();
+        let continuation_prompt_seed = session
+            .continuation_prompt_seed()
+            .expect("expected canceled continuation prompt seed");
 
         // Assert
-        assert_eq!(continuation_prompt_seed, None);
+        assert!(continuation_prompt_seed.contains(TERMINAL_CONTINUATION_PROMPT_INTRO));
+        assert!(continuation_prompt_seed.contains("Previous session: Canceled session"));
+        assert!(continuation_prompt_seed.contains("Project: project-beta"));
+        assert!(continuation_prompt_seed.contains("Status: Canceled"));
+        assert!(
+            continuation_prompt_seed
+                .contains("Previous session summary:\n# Summary\n\nResume the remaining work.")
+        );
+        assert!(!continuation_prompt_seed.contains("assistant transcript"));
     }
 
     #[test]

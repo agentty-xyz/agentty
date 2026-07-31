@@ -611,7 +611,7 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
                 .can_reply_to_session_in_stack(view_context.session_id.as_str()),
         ),
         review_comments: ViewActionState::from_bool(
-            session.has_review_request() && session_status != Status::Done,
+            session.has_review_request() && !session.allows_terminal_continuation(),
         ),
         session_state: help_action::session_view_state(session),
         session_status,
@@ -1166,6 +1166,23 @@ mod tests {
         new_test_app_with_session_and_tmux_client(Arc::new(MockTmuxClient::new())).await
     }
 
+    /// Attaches one open GitHub review request to a session fixture.
+    fn attach_open_review_request(session: &mut crate::domain::session::Session) {
+        session.review_request = Some(ReviewRequest {
+            last_refreshed_at: 0,
+            summary: ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "wt/linked-terminal".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: None,
+                target_branch: "main".to_string(),
+                title: "Linked terminal session".to_string(),
+                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            },
+        });
+    }
+
     /// Builds one reply-enabled review snapshot for primary-key routing tests.
     fn reply_enabled_review_snapshot() -> ViewSessionSnapshot {
         ViewSessionSnapshot {
@@ -1328,7 +1345,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_view_session_snapshot_disables_continue_for_canceled_session() {
+    async fn test_view_session_snapshot_enables_continue_for_canceled_session() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions_mut()[0].status = Status::Canceled;
@@ -1342,7 +1359,7 @@ mod tests {
         let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
 
         // Assert
-        assert!(!snapshot.can_continue_terminal_session());
+        assert!(snapshot.can_continue_terminal_session());
         assert!(!snapshot.can_open_worktree());
         assert_eq!(snapshot.session_state, ViewSessionState::Canceled);
         assert_eq!(snapshot.session_status, Status::Canceled);
@@ -2678,19 +2695,7 @@ mod tests {
             .iter_mut()
             .find(|session| session.id == session_id)
             .expect("session should exist");
-        session.review_request = Some(ReviewRequest {
-            last_refreshed_at: 0,
-            summary: ReviewRequestSummary {
-                display_id: "#42".to_string(),
-                forge_kind: ForgeKind::GitHub,
-                source_branch: "wt/linked-terminal".to_string(),
-                state: ReviewRequestState::Open,
-                status_summary: None,
-                target_branch: "main".to_string(),
-                title: "Linked terminal session".to_string(),
-                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
-            },
-        });
+        attach_open_review_request(session);
         session.status = Status::Done;
         app.mode = AppMode::View {
             session_id: session_id.clone().into(),
@@ -2738,7 +2743,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_continue_key_does_not_open_confirmation_for_canceled_session() {
+    async fn test_linked_canceled_session_routes_c_to_continue_without_comments() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == session_id)
+            .expect("session should exist");
+        attach_open_review_request(session);
+        session.status = Status::Canceled;
+        app.mode = AppMode::View {
+            session_id: session_id.clone().into(),
+            scroll_offset: Some(0),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let pending_update = ViewPendingUpdate::from_context(&view_context);
+        let view_session_snapshot =
+            view_session_snapshot(&app, &view_context).expect("expected session snapshot");
+
+        // Act
+        let continue_result = handle_primary_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+            &view_context,
+            &view_session_snapshot,
+            &pending_update,
+        )
+        .await;
+
+        // Assert
+        assert!(!view_session_snapshot.can_open_review_comments());
+        assert_eq!(continue_result, Some(false));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::ContinueSession,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_continue_key_opens_confirmation_for_canceled_session() {
         // Arrange
         let (mut app, _base_dir, source_session_id) = new_test_app_with_session().await;
         app.sessions
@@ -2767,10 +2815,11 @@ mod tests {
         assert!(matches!(result, EventResult::Continue));
         assert!(matches!(
             app.mode,
-            AppMode::View {
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::ContinueSession,
                 ref session_id,
                 ..
-            } if session_id.as_str() == source_session_id
+            } if matches!(session_id, Some(session_id) if session_id.as_str() == source_session_id)
         ));
     }
 
