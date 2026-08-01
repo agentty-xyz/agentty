@@ -432,14 +432,17 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
     actions
 }
 
-/// Returns full session-view help actions with linked review comments on `c`
-/// and terminal continuation on `C` when both actions are available.
+/// Returns full session-view help actions with linked review comments when
+/// available outside terminal `Done` sessions.
 pub(crate) fn view_actions_with_review_comments(
     state: ViewHelpState,
     can_view_review_comments: bool,
 ) -> Vec<HelpAction> {
     let mut actions = view_actions(state);
-    append_review_comment_action(&mut actions, can_view_review_comments);
+    append_review_comment_action(
+        &mut actions,
+        can_view_review_comments && state.session_state != ViewSessionState::Done,
+    );
 
     actions
 }
@@ -470,14 +473,17 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     actions
 }
 
-/// Returns compact session-view footer actions with linked review comments on
-/// `c` and terminal continuation on `C` when both actions are available.
+/// Returns compact session-view footer actions with linked review comments
+/// when available outside terminal `Done` sessions.
 pub(crate) fn view_footer_actions_with_review_comments(
     state: ViewHelpState,
     can_view_review_comments: bool,
 ) -> Vec<HelpAction> {
     let mut actions = view_footer_actions(state);
-    append_review_comment_action(&mut actions, can_view_review_comments);
+    append_review_comment_action(
+        &mut actions,
+        can_view_review_comments && state.session_state != ViewSessionState::Done,
+    );
 
     actions
 }
@@ -542,7 +548,7 @@ fn append_view_review_actions(
 /// footer rows.
 fn append_view_continue_action(actions: &mut Vec<HelpAction>, action_set: ViewActionSet) {
     if action_set.continue_terminal_session.is_enabled() {
-        actions.push(HelpAction::new("continue", "C", "Continue in new session"));
+        actions.push(HelpAction::new("continue", "c", "Continue in new session"));
     }
 }
 
@@ -1335,7 +1341,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| {
-            action.key == "C"
+            action.key == "c"
                 && action.footer_label == "continue"
                 && action.popup_label == "Continue in new session"
         }));
@@ -1641,7 +1647,7 @@ mod tests {
         let actions = view_actions(state);
 
         // Assert
-        assert!(!actions.iter().any(|action| action.key == "C"));
+        assert!(!actions.iter().any(|action| action.key == "c"));
         assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "o"));
@@ -1668,11 +1674,11 @@ mod tests {
         let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(&ordered_keys[..4], ["q", "C", "j/k", "?"]);
+        assert_eq!(&ordered_keys[..4], ["q", "c", "j/k", "?"]);
     }
 
     #[test]
-    fn test_view_footer_actions_linked_review_uses_c_for_comments_before_other_actions() {
+    fn test_view_actions_done_hide_linked_review_comments() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
@@ -1687,17 +1693,21 @@ mod tests {
         };
 
         // Act
-        let actions = view_footer_actions_with_review_comments(state, true);
+        let full_actions = view_actions_with_review_comments(state, true);
+        let footer_actions = view_footer_actions_with_review_comments(state, true);
 
         // Assert
-        assert_eq!(actions[1].key, "c");
-        assert_eq!(actions[1].popup_label, "Show review comments");
-        assert_eq!(actions.iter().filter(|action| action.key == "c").count(), 1);
-        assert!(actions.iter().any(|action| {
-            action.key == "C"
-                && action.footer_label == "continue"
-                && action.popup_label == "Continue in new session"
-        }));
+        for actions in [&full_actions, &footer_actions] {
+            assert_eq!(actions.iter().filter(|action| action.key == "c").count(), 1);
+            assert!(actions.iter().any(|action| {
+                action.key == "c" && action.popup_label == "Continue in new session"
+            }));
+            assert!(
+                !actions
+                    .iter()
+                    .any(|action| action.popup_label == "Show review comments")
+            );
+        }
     }
 
     #[test]

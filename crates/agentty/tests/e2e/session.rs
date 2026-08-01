@@ -2012,12 +2012,29 @@ fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn st
 
     runtime.block_on(async {
         let database = common::open_database(env).await?;
+        let review_request = ReviewRequest {
+            last_refreshed_at: 55,
+            summary: ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "wt/done-continue".to_string(),
+                state: ReviewRequestState::Merged,
+                status_summary: Some("Merged".to_string()),
+                target_branch: "main".to_string(),
+                title: "Completed review request".to_string(),
+                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            },
+        };
         database
             .sessions()
             .update_session_merged_commit_hash(
                 "done-continue-0001",
                 Some(merged_commit_hash.to_string()),
             )
+            .await?;
+        database
+            .reviews()
+            .update_session_review_request("done-continue-0001", Some(review_request))
             .await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
@@ -4462,7 +4479,7 @@ fn session_output_scrollbar_is_visible() -> E2eResult {
     Ok(())
 }
 
-/// Verify that pressing `C` in a terminal session opens a confirmation and,
+/// Verify that pressing `c` in a terminal session opens a confirmation and,
 /// after acceptance, stages the continuation message before focusing an empty
 /// draft composer.
 #[test]
@@ -4483,9 +4500,14 @@ fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("C: continue", 5000)
-                    .wait_for_text("Press 'C' to continue in a new session.", 3000)
-                    .press_key("C")
+                    .wait_for_text("c: continue", 5000)
+                    .wait_for_text("Press 'c' to continue in a new session.", 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "done_session_actions",
+                        "Linked done session offers continuation without review comments",
+                    )
+                    .press_key("c")
                     .wait_for_text("Confirm Continue", 3000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
@@ -4501,7 +4523,17 @@ fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
                     )
             },
             |frame, report| {
-                let confirmation_frame = common::frame_from_capture(&report.captures[0]);
+                let done_session_frame = common::frame_from_capture(&report.captures[0]);
+                let done_session_full =
+                    Region::full(done_session_frame.cols(), done_session_frame.rows());
+                assertion::assert_text_in_region(
+                    &done_session_frame,
+                    "c: continue",
+                    &done_session_full,
+                );
+                assertion::assert_not_visible(&done_session_frame, "comments");
+
+                let confirmation_frame = common::frame_from_capture(&report.captures[1]);
                 let confirmation_full =
                     Region::full(confirmation_frame.cols(), confirmation_frame.rows());
                 assertion::assert_text_in_region(
