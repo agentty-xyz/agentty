@@ -5693,7 +5693,11 @@ fn merged_review_request_status_update(
     session_id: &str,
     display_id: &str,
     session_head_hash: &str,
+    target_branch: &str,
 ) -> ReviewRequestStatusUpdate {
+    let mut summary = test_review_request_summary(display_id, ReviewRequestState::Merged);
+    summary.target_branch = target_branch.to_string();
+
     ReviewRequestStatusUpdate {
         generation: 0,
         result: Ok(SyncReviewRequestTaskResult {
@@ -5701,10 +5705,7 @@ fn merged_review_request_status_update(
                 display_id: display_id.to_string(),
                 session_head_hash: Some(session_head_hash.to_string()),
             },
-            summary: Some(test_review_request_summary(
-                display_id,
-                ReviewRequestState::Merged,
-            )),
+            summary: Some(summary),
         }),
         session_id: session_id.into(),
     }
@@ -5800,7 +5801,7 @@ async fn manual_sync_defers_merged_session_when_commit_hash_cannot_load() {
     let session_id = "session-load-failure";
     insert_review_session_with_data_dir(&app, session_id).await;
     app.refresh_sessions_now().await;
-    let update = merged_review_request_status_update(session_id, "#12", "abc1234");
+    let update = merged_review_request_status_update(session_id, "#12", "abc1234", "main");
     app.apply_review_request_status_update(update).await;
     app.process_pending_app_events().await;
     pool.close().await;
@@ -5846,7 +5847,7 @@ async fn manual_sync_surfaces_restack_failure_and_keeps_parent_merged() {
         .await
         .expect("failed to insert child session");
     app.refresh_sessions_now().await;
-    let update = merged_review_request_status_update(session_id, "#13", "abc1234");
+    let update = merged_review_request_status_update(session_id, "#13", "abc1234", "main");
     app.apply_review_request_status_update(update).await;
     app.process_pending_app_events().await;
     sqlx::query!(
@@ -6162,7 +6163,7 @@ async fn merged_review_waits_for_successful_manual_sync_before_cleanup() {
         .returning(|_, _| Box::pin(async { Ok(()) }));
     install_mock_git_client(&mut app, mock_git_client);
 
-    let merged_update = merged_review_request_status_update(session_id, "#9", "abc1234");
+    let merged_update = merged_review_request_status_update(session_id, "#9", "abc1234", "main");
 
     // Act
     tokio::time::timeout(
@@ -6223,7 +6224,7 @@ async fn failed_or_unrelated_manual_sync_keeps_session_merged() {
     let session_id = "session-waiting";
     insert_review_session_with_data_dir(&app, session_id).await;
     app.refresh_sessions_now().await;
-    let update = merged_review_request_status_update(session_id, "#11", "def5678");
+    let update = merged_review_request_status_update(session_id, "#11", "def5678", "main");
     app.apply_review_request_status_update(update).await;
     app.process_pending_app_events().await;
 
@@ -6292,7 +6293,7 @@ async fn test_apply_review_request_status_update_merged_restacks_stacked_child()
         .returning(|_| Box::pin(async { Ok(()) }));
     install_mock_git_client(&mut app, mock_git_client);
 
-    let update = merged_review_request_status_update(session_id, "#9", "abc1234");
+    let update = merged_review_request_status_update(session_id, "#9", "abc1234", "main");
 
     // Act
     app.apply_review_request_status_update(update).await;
@@ -6340,4 +6341,181 @@ async fn test_apply_review_request_status_update_merged_restacks_stacked_child()
     assert_eq!(db_child_session.parent_session_id, None);
     assert_eq!(db_child_session.base_branch, "main");
     app.services.wait_for_cleanup_tasks().await;
+}
+
+#[tokio::test]
+async fn manual_sync_archives_merged_parent_and_merged_stacked_child() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let project_id = app.active_project_id();
+    let parent_session_id = "merged-parent";
+    let child_session_id = "merged-child";
+    insert_review_session_with_data_dir(&app, parent_session_id).await;
+    app.services
+        .db()
+        .sessions()
+        .insert_stacked_draft_session(
+            child_session_id,
+            "gemini-3.6-flash",
+            "wt/session-id",
+            &Status::Review.to_string(),
+            parent_session_id,
+            project_id,
+        )
+        .await
+        .expect("failed to insert stacked child session");
+    fs::create_dir_all(
+        app.services
+            .base_path()
+            .join(child_session_id.chars().take(8).collect::<String>())
+            .join(SESSION_DATA_DIR),
+    )
+    .expect("failed to create child session data dir");
+    app.refresh_sessions_now().await;
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_main_repo_root()
+        .times(2)
+        .returning(|_| Box::pin(async { Ok(PathBuf::from("/tmp/repo")) }));
+    mock_git_client
+        .expect_remove_worktree()
+        .times(2)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    mock_git_client
+        .expect_delete_branch()
+        .times(2)
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    install_mock_git_client(&mut app, mock_git_client);
+    let parent_update =
+        merged_review_request_status_update(parent_session_id, "#20", "parent-tip", "main");
+    let child_update =
+        merged_review_request_status_update(child_session_id, "#21", "child-tip", "wt/session-id");
+    app.apply_review_request_status_update(parent_update).await;
+    app.apply_review_request_status_update(child_update).await;
+    app.process_pending_app_events().await;
+
+    // Act
+    app.apply_app_events(successful_manual_sync("main", 1))
+        .await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    let parent_session = app
+        .sessions
+        .session_or_err(parent_session_id)
+        .expect("expected merged parent session");
+    let child_session = app
+        .sessions
+        .session_or_err(child_session_id)
+        .expect("expected merged child session");
+    assert_eq!(parent_session.status, Status::Done);
+    assert_eq!(child_session.status, Status::Done);
+    app.services.wait_for_cleanup_tasks().await;
+}
+
+#[tokio::test]
+async fn manual_sync_recovers_merged_child_after_parent_was_already_archived() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let child_session_id = "stuck-child";
+    insert_review_session_with_data_dir(&app, child_session_id).await;
+    app.services
+        .db()
+        .sessions()
+        .update_session_stack_base_commit_hash(child_session_id, Some("parent-tip".to_string()))
+        .await
+        .expect("failed to persist completed parent restack marker");
+    app.refresh_sessions_now().await;
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_main_repo_root()
+        .once()
+        .returning(|_| Box::pin(async { Ok(PathBuf::from("/tmp/repo")) }));
+    mock_git_client
+        .expect_remove_worktree()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    mock_git_client
+        .expect_delete_branch()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    install_mock_git_client(&mut app, mock_git_client);
+    let child_update = merged_review_request_status_update(
+        child_session_id,
+        "#21",
+        "child-tip",
+        "wt/archived-parent",
+    );
+    app.apply_review_request_status_update(child_update).await;
+    app.process_pending_app_events().await;
+
+    // Act
+    app.apply_app_events(successful_manual_sync("main", 1))
+        .await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    let child_session = app
+        .sessions
+        .session_or_err(child_session_id)
+        .expect("expected recovered child session");
+    assert_eq!(child_session.status, Status::Done);
+    app.services.wait_for_cleanup_tasks().await;
+}
+
+#[tokio::test]
+async fn manual_sync_defers_stranded_child_when_restack_marker_cannot_load() {
+    // Arrange
+    let (mut app, pool, _base_dir) = new_test_app_with_database_pool().await;
+    let child_session_id = "stranded-child";
+    insert_review_session_with_data_dir(&app, child_session_id).await;
+    app.services
+        .db()
+        .sessions()
+        .update_session_stack_base_commit_hash(child_session_id, Some("parent-tip".to_string()))
+        .await
+        .expect("failed to persist completed parent restack marker");
+    app.refresh_sessions_now().await;
+    let child_update = merged_review_request_status_update(
+        child_session_id,
+        "#22",
+        "child-tip",
+        "wt/archived-parent",
+    );
+    app.apply_review_request_status_update(child_update).await;
+    app.process_pending_app_events().await;
+    pool.close().await;
+
+    // Act
+    app.apply_app_events(successful_manual_sync("main", 1))
+        .await;
+
+    // Assert
+    let child_session = app
+        .sessions
+        .session_or_err(child_session_id)
+        .expect("expected stranded child session");
+    assert_eq!(child_session.status, Status::Merged);
+    assert!(matches!(
+        app.mode,
+        AppMode::SyncBlockedPopup { ref message, .. }
+            if message.contains("Merged sessions still waiting")
+                && message.contains(child_session_id)
+    ));
+    let workflow_output = app
+        .sessions
+        .session_handles_or_err(child_session_id)
+        .expect("expected stranded child handles")
+        .transcript
+        .lock()
+        .expect("transcript lock poisoned")
+        .replay_text()
+        .expect("expected durable marker warning");
+    assert!(workflow_output.contains("Durable restack marker load failed"));
 }

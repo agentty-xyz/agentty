@@ -462,6 +462,13 @@ after restart. If restack intent or archival cannot be persisted, the sync popup
 the session that remains in **Merged** so the user can inspect its workflow warning and
 retry safely. A closed request still moves an editable session to **Canceled**.
 
+When both a stacked parent and child review request have already merged, syncing the
+parent's local target branch moves both sessions to **Done**. This also applies while
+the child's stored review target still names the parent review branch, because the
+merged parent has carried the child's changes into the synchronized target. Retrying
+that sync also recovers a child left in **Merged** by an earlier Agentty run that
+already archived its parent.
+
 ## Clarification Interaction Loop
 
 <a id="usage-clarification-loop"></a> If an agent emits structured clarification
