@@ -398,6 +398,49 @@ flowchart LR
     Ok(())
 }
 
+/// Seeds one review-ready session with a left-to-right telemetry flow that is
+/// wider than its session output panel and must use the compact layout.
+fn seed_session_with_compact_mermaid_output(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular("compact-mermaid-0001", "qwen3-coder-plus", "main", "Review")
+            .with_title("Compact Mermaid output"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                "compact-mermaid-0001",
+                SessionMessageKind::AssistantAnswer,
+                "\
+```mermaid
+flowchart LR
+    Q[Qwen complete] --> T[Tracing spans and events]
+    Q --> M[OTel metrics API]
+    T --> S[Trace and log providers]
+    M --> P[Meter provider]
+    S --> O[OTLP HTTP protobuf]
+    P --> O
+    O --> C[Collector on port 4318]
+    C --> B[Telemetry backends]
+    B --> G[Grafana on port 3000]
+```
+",
+            )
+            .await
+    })?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("compact-"))?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session whose assistant answer begins a line with a
 /// workflow-notice prefix that must remain assistant text.
 fn seed_session_with_typed_marker_collision(
@@ -5463,6 +5506,63 @@ fn session_view_cyclic_mermaid_output() -> E2eResult {
                     &full,
                 );
                 assertion::assert_not_visible(frame, "flowchart LR");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify an over-wide left-to-right flowchart uses the compact top-down
+/// terminal layout instead of falling back to raw Mermaid source.
+#[test]
+fn session_view_compact_mermaid_output() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_compact_mermaid_output")
+        .with_terminal_size(100, 40)
+        .setup(seed_session_with_compact_mermaid_output)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("g")
+                    .wait_for_text("Qwen complete", 5000)
+                    .capture_labeled(
+                        "session_compact_mermaid_output_top",
+                        "Top of compacted over-wide Mermaid flow",
+                    )
+                    .write_text("G")
+                    .wait_for_text("Grafana on port 3000", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "session_compact_mermaid_output_bottom",
+                        "Bottom of compacted over-wide Mermaid flow",
+                    )
+            },
+            |_frame, report| {
+                assert_eq!(report.captures.len(), 2);
+                let top_frame = common::frame_from_capture(&report.captures[0]);
+                let bottom_frame = common::frame_from_capture(&report.captures[1]);
+                let top_region = Region::full(top_frame.cols(), top_frame.rows());
+                let bottom_region = Region::full(bottom_frame.cols(), bottom_frame.rows());
+
+                assertion::assert_text_in_region(&top_frame, "Qwen complete", &top_region);
+                assertion::assert_text_in_region(
+                    &top_frame,
+                    "Tracing spans and events",
+                    &top_region,
+                );
+                assertion::assert_text_in_region(
+                    &bottom_frame,
+                    "Grafana on port 3000",
+                    &bottom_region,
+                );
+                assertion::assert_text_in_region(&bottom_frame, "▼", &bottom_region);
+                assertion::assert_not_visible(&top_frame, "flowchart LR");
+                assertion::assert_not_visible(&bottom_frame, "flowchart LR");
             },
         )?;
 

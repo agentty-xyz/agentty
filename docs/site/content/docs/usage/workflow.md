@@ -255,9 +255,10 @@ regardless of padding stored with the message content.
 <a id="usage-session-mermaid"></a> Complete ```` ```mermaid ```` fenced blocks in
 session output render as Unicode diagrams. Simple `graph`/`flowchart` diagrams with
 `TD`, `TB`, or `LR` direction are supported, including edges that span multiple layers
-and cyclic feedback paths. Each feedback edge renders as an independent return row
-beneath the layered graph so unrelated cycles remain visually separate; larger `LR`
-cycles use a compact top-down layout so they remain useful in terminal-width panels.
+and cyclic feedback paths. An `LR` graph that is wider than the session panel
+automatically uses a top-down layout when that compact form fits. Each feedback edge
+renders as an independent return row beneath the layered graph so unrelated cycles
+remain visually separate; larger `LR` cycles also use the compact top-down layout.
 Common node shapes (stadium, subroutine, cylinder, hexagon, and more) draw as rectangle
 or rounded boxes, `&` groups fan out into one edge per pair, subgraphs are flattened
 into the surrounding graph, and styling statements such as `style`, `classDef`,
