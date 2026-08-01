@@ -447,6 +447,54 @@ fn seed_session_with_typed_marker_collision(
     Ok(())
 }
 
+/// Installs a deterministic Claude stub for non-actionable title generation
+/// and a resumed review turn.
+fn seed_session_title_candidate_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+case "$prompt" in
+  *"Generate a concise, commit-style title"*)
+    case "$prompt" in
+      *'\<user_request> Background context only. \</user_request>'*)
+        answer=''
+        ;;
+      *)
+        answer='Review the project'
+        ;;
+    esac
+    ;;
+  *"review the project"*)
+    answer='Review complete. No files were changed.'
+    ;;
+  *)
+    answer='Got it. What would you like me to do?'
+    ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '{"type":"result","subtype":"success","result":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[],\\"summary\\":null}","usage":{"input_tokens":5,"output_tokens":9}}\n' "$answer"
+"#;
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+        ],
+    )?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session plus its default source branch and
 /// propagates setup errors to the caller.
 fn seed_review_with_resolved_decision(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -2137,6 +2185,54 @@ fn session_list_empty_state() -> E2eResult {
                 assertion::assert_not_visible(frame, "Merge queue");
                 assertion::assert_not_visible(frame, "Archive");
                 assertion::assert_not_visible(frame, "No sessions");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that a prompt without an actionable goal remains provisional until
+/// a later actionable request supplies the visible session title.
+#[test]
+fn test_session_title_refines_after_non_actionable_prompt() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_title_refines_after_non_actionable_prompt")
+        .with_git()
+        .setup(seed_session_title_candidate_project)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Background context only.")
+                    .wait_for_text("Background context only.", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Got it. What would you like me to do?", 30000)
+                    .wait_for_text("Enter: reply", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("review the project")
+                    .wait_for_text("review the project", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Review complete. No files were changed.", 30000)
+                    .wait_for_text("Review the project", 30000)
+                    .capture_labeled(
+                        "refined_session_title",
+                        "An actionable request replaces the provisional context-only title",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Review the project", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Review complete. No files were changed.",
+                    &full,
+                );
+                assertion::assert_not_visible(frame, "Record background context");
             },
         )?;
 

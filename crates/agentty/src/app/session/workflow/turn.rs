@@ -133,8 +133,8 @@ impl MainCheckoutSnapshot {
 ///
 /// When `request_kind` is [`AgentRequestKind::SessionResume`], the session
 /// is first transitioned to `InProgress` (start turns set `InProgress` in
-/// the lifecycle before enqueueing). Start turns schedule detached title
-/// generation immediately before the main turn request runs. Progress
+/// the lifecycle before enqueueing). Start and resume turns schedule detached
+/// title generation while the current title remains provisional. Progress
 /// events update the UI indicator; `PidUpdate` events update the shared PID
 /// slot used for cancellation. If the turn fails, the error is appended to
 /// session output before transitioning to `Review`; user-stopped turns
@@ -215,11 +215,10 @@ pub(super) async fn run_channel_turn(
         Arc::clone(&context.child_pid),
     ));
 
-    spawn_start_turn_title_generation(
+    spawn_turn_title_generation(
         context,
         Arc::clone(&one_shot_client),
         session_project_id,
-        &request_kind,
         &prompt.text,
         turn_metadata.session_agent,
     )
@@ -672,19 +671,14 @@ async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: S
     .await;
 }
 
-/// Spawns first-turn session title generation from the initial user prompt.
-async fn spawn_start_turn_title_generation(
+/// Spawns title generation while a session still has its provisional title.
+async fn spawn_turn_title_generation(
     context: &SessionWorkerContext,
     one_shot_client: Arc<dyn OneShotClient>,
     session_project_id: Option<i64>,
-    request_kind: &AgentRequestKind,
     prompt: &str,
     session_agent: AgentSelection,
 ) {
-    if !matches!(request_kind, AgentRequestKind::SessionStart) {
-        return;
-    }
-
     let title_agent = setting::load_default_fast_agent_selection_from_repositories(
         &context.db,
         session_project_id,
@@ -700,10 +694,12 @@ async fn spawn_start_turn_title_generation(
             folder: context.folder.clone(),
             one_shot_client,
             prompt: prompt.to_string(),
+            requires_provisional_title: true,
             session_agent: title_agent,
             session_id: context.session_id.clone(),
             tracked_generation: None,
-        });
+        })
+        .await;
 }
 
 /// Returns one normalized thinking text line.
