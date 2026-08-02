@@ -25,15 +25,15 @@ ag-session = { path = "crates/ag-session", version = "0.13.7" }
 ag-tui-text = { path = "crates/ag-tui-text", version = "0.13.7" }
 testty = { path = "crates/testty", version = "0.13.7" }
 async-trait = "0.1"
-agent-client-protocol = "1.2.0"
+agent-client-protocol = "2.0.0"
 assert_cmd = "2"
 askama = "0.16.0"
-base64 = "0.22"
+base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 crossterm = { version = "0.29.0", default-features = false, features = ["bracketed-paste", "events"] }
 ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "gif"] }
-jsonschema = { version = "0.40.0", default-features = false }
+jsonschema = { version = "0.49.1", default-features = false }
 mockall = "0.15"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false }
