@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub use ag_agent::{SessionDiffState, SessionStats, SpeedMode};
@@ -795,10 +796,15 @@ pub struct SessionHandles {
     pub status: Arc<Mutex<Status>>,
     /// Shared typed transcript snapshot mirrored to the render layer.
     pub transcript: Arc<Mutex<SessionTranscript>>,
+    /// Whether [`Self::transcript`] contains the complete persisted history.
+    ///
+    /// Lazy session-list handles start unhydrated so background workflow
+    /// notices cannot make a partial transcript look authoritative.
+    transcript_is_hydrated: AtomicBool,
 }
 
 impl SessionHandles {
-    /// Creates handles initialized with the given status.
+    /// Creates handles with a loaded, empty transcript.
     pub fn new(status: Status) -> Self {
         Self {
             branch_operation_lock: Arc::new(AsyncMutex::new(())),
@@ -807,6 +813,20 @@ impl SessionHandles {
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             status: Arc::new(Mutex::new(status)),
             transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+            transcript_is_hydrated: AtomicBool::new(true),
+        }
+    }
+
+    /// Creates handles whose persisted transcript has not been loaded yet.
+    pub(crate) fn new_unloaded(status: Status) -> Self {
+        Self {
+            branch_operation_lock: Arc::new(AsyncMutex::new(())),
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            child_pid: Arc::new(Mutex::new(None)),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            status: Arc::new(Mutex::new(status)),
+            transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+            transcript_is_hydrated: AtomicBool::new(false),
         }
     }
 
@@ -819,7 +839,30 @@ impl SessionHandles {
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             status: Arc::new(Mutex::new(status)),
             transcript: Arc::new(Mutex::new(transcript)),
+            transcript_is_hydrated: AtomicBool::new(true),
         }
+    }
+
+    /// Returns the live transcript, hydrating an unloaded handle from the
+    /// persisted snapshot even when background notices made it non-empty.
+    pub(crate) fn transcript_snapshot_with_loaded(
+        &self,
+        loaded_transcript: Option<&SessionTranscript>,
+    ) -> Option<SessionTranscript> {
+        let Ok(mut transcript) = self.transcript.lock() else {
+            return None;
+        };
+        if !self.transcript_is_hydrated.load(Ordering::Acquire)
+            && let Some(loaded_transcript) = loaded_transcript
+        {
+            *transcript = Self::merge_unloaded_transcript(loaded_transcript, &transcript);
+            self.transcript_is_hydrated.store(true, Ordering::Release);
+        }
+        if transcript.is_empty() {
+            return None;
+        }
+
+        Some(transcript.clone())
     }
 
     /// Returns the transcript text for each queued message in submission
@@ -837,6 +880,36 @@ impl SessionHandles {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default()
+    }
+
+    /// Merges messages appended while persistence was in flight into a
+    /// database snapshot, deduplicating exact matches and retaining conflicts.
+    fn merge_unloaded_transcript(
+        loaded_transcript: &SessionTranscript,
+        live_transcript: &SessionTranscript,
+    ) -> SessionTranscript {
+        let mut messages = loaded_transcript.messages().to_vec();
+        for live_message in live_transcript.messages() {
+            if let Some(loaded_message) = messages
+                .iter()
+                .find(|message| message.position == live_message.position)
+            {
+                if loaded_message == live_message {
+                    continue;
+                }
+
+                let next_position = messages
+                    .last()
+                    .map_or(0, |message| message.position.saturating_add(1));
+                let mut appended_message = live_message.clone();
+                appended_message.position = next_position;
+                messages.push(appended_message);
+            } else {
+                messages.push(live_message.clone());
+            }
+        }
+
+        SessionTranscript::new(messages)
     }
 }
 
@@ -861,6 +934,29 @@ pub(crate) mod tests {
         // Assert
         assert_eq!(positive_offset_day_key, 1);
         assert_eq!(negative_offset_day_key, 0);
+    }
+
+    #[test]
+    fn test_transcript_snapshot_with_loaded_returns_none_for_poisoned_transcript_lock() {
+        // Arrange
+        let handles = SessionHandles::new_unloaded(Status::Review);
+        let transcript = Arc::clone(&handles.transcript);
+        let poison_transcript = |transcript: Arc<Mutex<SessionTranscript>>, should_poison: bool| {
+            let _transcript = transcript
+                .lock()
+                .expect("transcript lock should initially be available");
+
+            assert!(!should_poison, "poison transcript lock");
+        };
+        poison_transcript(Arc::clone(&transcript), false);
+        let poison_result = std::thread::spawn(move || poison_transcript(transcript, true)).join();
+        assert!(poison_result.is_err());
+
+        // Act
+        let snapshot = handles.transcript_snapshot_with_loaded(None);
+
+        // Assert
+        assert_eq!(snapshot, None);
     }
 
     #[test]

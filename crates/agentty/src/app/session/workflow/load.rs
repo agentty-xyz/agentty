@@ -518,7 +518,7 @@ fn insert_loaded_session_handle(
     let session_handle = if let Some(transcript) = session_transcript.clone() {
         SessionHandles::new_with_transcript(persisted_status, transcript)
     } else {
-        SessionHandles::new(persisted_status)
+        SessionHandles::new_unloaded(persisted_status)
     };
     handles.insert(session_id, session_handle);
 
@@ -535,25 +535,13 @@ async fn load_session_transcript(
     Ok(SessionTranscript::new(session_messages_from_rows(messages)))
 }
 
-/// Synchronizes a handle transcript from loaded rows when the handle does not
-/// already have live transcript messages.
+/// Synchronizes a handle from loaded rows while preserving complete live
+/// transcripts and replacing partial unhydrated snapshots.
 fn sync_handle_transcript_with_loaded(
     handles: &SessionHandles,
     loaded_transcript: Option<&SessionTranscript>,
 ) -> Option<SessionTranscript> {
-    let Ok(mut handle_transcript) = handles.transcript.lock() else {
-        return None;
-    };
-    if handle_transcript.is_empty()
-        && let Some(loaded_transcript) = loaded_transcript
-    {
-        handle_transcript.clone_from(loaded_transcript);
-    }
-    if handle_transcript.is_empty() {
-        return None;
-    }
-
-    Some(handle_transcript.clone())
+    handles.transcript_snapshot_with_loaded(loaded_transcript)
 }
 
 /// Converts database message rows into domain messages, skipping unknown
@@ -1182,7 +1170,7 @@ mod tests {
         let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
         handles.insert(
             session_id.to_string().into(),
-            SessionHandles::new(Status::Review),
+            SessionHandles::new_unloaded(Status::Review),
         );
 
         // Act
@@ -1718,6 +1706,99 @@ WHERE id = ?
         assert_eq!(
             handles.transcript.lock().ok().as_deref(),
             Some(&live_transcript)
+        );
+    }
+
+    #[test]
+    /// Verifies persisted history merges with a partial workflow notice
+    /// appended before a lazy transcript was hydrated.
+    fn sync_handle_transcript_with_loaded_merges_partial_unloaded_transcript() {
+        // Arrange
+        let handles = SessionHandles::new_unloaded(Status::Review);
+        handles
+            .transcript
+            .lock()
+            .expect("transcript lock should not be poisoned")
+            .clone_from(&SessionTranscript::new(vec![SessionMessage::new(
+                2,
+                SessionMessageKind::WorkflowNotice,
+                "\n[Sync] Successfully synced onto main\n",
+            )]));
+        let loaded_transcript = SessionTranscript::new(vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "original prompt"),
+            SessionMessage::conversation(1, SessionMessageKind::AssistantAnswer, "original answer"),
+        ]);
+        let expected_transcript = SessionTranscript::new(vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "original prompt"),
+            SessionMessage::conversation(1, SessionMessageKind::AssistantAnswer, "original answer"),
+            SessionMessage::new(
+                2,
+                SessionMessageKind::WorkflowNotice,
+                "\n[Sync] Successfully synced onto main\n",
+            ),
+        ]);
+
+        // Act
+        let transcript = sync_handle_transcript_with_loaded(&handles, Some(&loaded_transcript));
+
+        // Assert
+        assert_eq!(transcript, Some(expected_transcript.clone()));
+        assert_eq!(
+            handles.transcript.lock().ok().as_deref(),
+            Some(&expected_transcript)
+        );
+    }
+
+    #[test]
+    /// Verifies hydration deduplicates a persisted live append while retaining
+    /// an unpersisted message whose temporary position conflicts.
+    fn sync_handle_transcript_with_loaded_merges_matching_and_conflicting_messages() {
+        // Arrange
+        let handles = SessionHandles::new_unloaded(Status::Review);
+        let persisted_notice = SessionMessage::new(
+            2,
+            SessionMessageKind::WorkflowNotice,
+            "\n[Sync] Successfully synced onto main\n",
+        );
+        handles
+            .transcript
+            .lock()
+            .expect("transcript lock should not be poisoned")
+            .clone_from(&SessionTranscript::new(vec![
+                SessionMessage::new(
+                    0,
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Sync Error] persistence failed\n",
+                ),
+                persisted_notice.clone(),
+            ]));
+        let loaded_transcript = SessionTranscript::new(vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "original prompt"),
+            SessionMessage::conversation(1, SessionMessageKind::AssistantAnswer, "original answer"),
+            persisted_notice.clone(),
+        ]);
+
+        // Act
+        let transcript = sync_handle_transcript_with_loaded(&handles, Some(&loaded_transcript))
+            .expect("merged transcript should be available");
+
+        // Assert
+        assert_eq!(
+            transcript.messages(),
+            &[
+                SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "original prompt"),
+                SessionMessage::conversation(
+                    1,
+                    SessionMessageKind::AssistantAnswer,
+                    "original answer"
+                ),
+                persisted_notice,
+                SessionMessage::new(
+                    3,
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Sync Error] persistence failed\n"
+                ),
+            ]
         );
     }
 
