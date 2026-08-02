@@ -1,13 +1,20 @@
 //! Session-scoped persistence adapters and query helpers.
 
+use std::sync::Arc;
+
 use ag_agent as agent;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
+use tracing::warn;
 
 use super::review::SessionReviewRequestRow;
+use super::session_message::SessionMessageStore;
+use super::session_snapshot::SessionSnapshotStore;
+use super::status;
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel, SpeedMode};
 use crate::domain::session::SessionStats;
-use crate::domain::session_message::{SessionMessageKind, stored_message_content};
+use crate::domain::session_message::SessionMessageKind;
+use crate::infra::clock::{self, Clock};
 use crate::infra::db::DbError;
 
 /// Transactional turn-metadata payload persisted after one completed agent
@@ -616,12 +623,27 @@ pub trait SessionRepository: Send + Sync {
 
 /// `SQLite` implementation of [`SessionRepository`].
 #[derive(Clone)]
-pub(crate) struct SqliteSessionRepository(SqlitePool);
+pub(crate) struct SqliteSessionRepository(
+    SqlitePool,
+    Arc<dyn Clock>,
+    SessionMessageStore,
+    SessionSnapshotStore,
+);
 
 impl SqliteSessionRepository {
     /// Creates a session repository backed by the provided pool.
-    pub(crate) fn new(pool: SqlitePool) -> Self {
-        Self(pool)
+    pub(crate) fn new(pool: SqlitePool, clock: Arc<dyn Clock>) -> Self {
+        Self(
+            pool.clone(),
+            Arc::clone(&clock),
+            SessionMessageStore::new(pool.clone(), Arc::clone(&clock)),
+            SessionSnapshotStore::new(pool, clock),
+        )
+    }
+
+    /// Returns the shared persistence timestamp in Unix seconds.
+    fn now(&self) -> i64 {
+        clock::unix_timestamp_seconds(self.1.as_ref())
     }
 }
 
@@ -814,6 +836,24 @@ struct SessionJoinRow {
 }
 
 impl SessionJoinRow {
+    /// Returns whether this row can be included in a collection load.
+    ///
+    /// Invalid persisted statuses are logged and omitted so one corrupt row
+    /// cannot hide every otherwise valid session in the project list.
+    fn has_loadable_status(&self) -> bool {
+        if let Err(error) = status::validate_session(&self.status) {
+            warn!(
+                session_id = %self.id,
+                %error,
+                "Skipping session with invalid persisted status"
+            );
+
+            return false;
+        }
+
+        true
+    }
+
     /// Converts the query-mapped join row into a complete [`SessionRow`].
     fn into_session_row(self) -> SessionRow {
         let (metadata, detail, review_request) = self.into_parts();
@@ -982,58 +1022,21 @@ impl SessionRepository for SqliteSessionRepository {
         kind: SessionMessageKind,
         content: &str,
     ) -> Result<(), DbError> {
-        let content = stored_message_content(kind, content);
-        if content.trim().is_empty() {
-            return Ok(());
-        }
-
-        let mut transaction = self.0.begin().await?;
-
-        let update_result = sqlx::query!(
-            r"
-UPDATE session
-SET updated_at = CAST(strftime('%s', 'now') AS INTEGER)
-WHERE id = ?
-",
-            id
-        )
-        .execute(&mut *transaction)
-        .await?;
-
-        if update_result.rows_affected() == 0 {
-            transaction.commit().await?;
-
-            return Ok(());
-        }
-
-        sqlx::query!(
-            r"
-INSERT INTO session_message (session_id, position, kind, content, created_at)
-SELECT ?, COALESCE(MAX(position), -1) + 1, ?, ?, CAST(strftime('%s', 'now') AS INTEGER)
-FROM session_message
-WHERE session_id = ?
-",
-            id,
-            kind.as_str(),
-            content,
-            id
-        )
-        .execute(&mut *transaction)
-        .await?;
-
-        transaction.commit().await?;
-
-        Ok(())
+        self.2.append(id, kind, content).await
     }
 
     async fn backfill_session_project(&self, project_id: i64) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
-SET project_id = ?
+SET project_id = ?,
+    updated_at = ?
 WHERE project_id IS NULL
 ",
-            project_id
+            project_id,
+            now
         )
         .execute(&self.0)
         .await?;
@@ -1042,6 +1045,7 @@ WHERE project_id IS NULL
     }
 
     async fn delete_session(&self, id: &str) -> Result<(), DbError> {
+        let now = self.now();
         let mut transaction = self.0.begin().await?;
 
         // Retarget any stacked children onto this session's base branch before
@@ -1054,11 +1058,13 @@ WHERE project_id IS NULL
             r"
 UPDATE session
 SET parent_session_id = NULL,
-    base_branch = COALESCE((SELECT base_branch FROM session WHERE id = ?), base_branch)
+    base_branch = COALESCE((SELECT base_branch FROM session WHERE id = ?), base_branch),
+    updated_at = ?
 WHERE parent_session_id = ?
   AND status <> 'Canceled'
 ",
             id,
+            now,
             id
         )
         .execute(&mut *transaction)
@@ -1176,6 +1182,7 @@ WHERE id = ?
 
         insert_session_with_draft_mode(
             &self.0,
+            self.now(),
             InsertSessionRow {
                 agent: &agent,
                 base_branch,
@@ -1208,6 +1215,7 @@ WHERE id = ?
 
         insert_session_with_draft_mode(
             &self.0,
+            self.now(),
             InsertSessionRow {
                 agent: &agent,
                 base_branch,
@@ -1239,6 +1247,7 @@ WHERE id = ?
 
         insert_session_with_draft_mode(
             &self.0,
+            self.now(),
             InsertSessionRow {
                 agent: &agent,
                 base_branch,
@@ -1280,6 +1289,7 @@ WHERE id = ?
 
         insert_session_with_draft_mode(
             &self.0,
+            self.now(),
             InsertSessionRow {
                 agent,
                 base_branch,
@@ -1303,60 +1313,7 @@ WHERE id = ?
         &self,
         snapshot: ForkSessionSnapshot<'_>,
     ) -> Result<(), DbError> {
-        let ForkSessionSnapshot {
-            new_session_id,
-            source_session_id,
-            status,
-        } = snapshot;
-        let mut transaction = self.0.begin().await?;
-
-        let insert_result = sqlx::query!(
-            r#"
-INSERT INTO session (
-    id, agent, model, base_branch, status, project_id, prompt, summary,
-    title, reasoning_level, speed_mode, added_lines, deleted_lines, has_diff, size,
-    input_tokens, output_tokens, is_draft, parent_session_id, personality_id,
-    provider_conversation_id, applied_personality_id, applied_personality_prompt_hash,
-    app_server_instruction_provider_conversation_id, questions, published_upstream_ref,
-    merged_commit_hash, focused_review_text, focused_review_diff_hash,
-    stack_base_commit_hash, in_progress_total_seconds, in_progress_started_at,
-    created_at, updated_at
-)
-SELECT ?, agent, model, base_branch, ?, project_id, prompt, summary,
-       title, reasoning_level, speed_mode, 0, 0, NULL, 'XS', 0, 0, 0, NULL, personality_id,
-       NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL,
-       CAST(strftime('%s', 'now') AS INTEGER),
-       CAST(strftime('%s', 'now') AS INTEGER)
-FROM session
-WHERE id = ?
-"#,
-            new_session_id,
-            status,
-            source_session_id,
-        )
-        .execute(&mut *transaction)
-        .await?;
-        if insert_result.rows_affected() != 1 {
-            return Err(sqlx::Error::RowNotFound.into());
-        }
-
-        sqlx::query!(
-            r#"
-INSERT INTO session_message (session_id, position, kind, content, created_at)
-SELECT ?, position, kind, content, created_at
-FROM session_message
-WHERE session_id = ?
-ORDER BY position, id
-"#,
-            new_session_id,
-            source_session_id,
-        )
-        .execute(&mut *transaction)
-        .await?;
-
-        transaction.commit().await?;
-
-        Ok(())
+        self.3.fork(snapshot).await
     }
 
     async fn load_session(&self, session_id: &str) -> Result<Option<SessionRow>, DbError> {
@@ -1408,7 +1365,12 @@ WHERE session.id = ?
         .fetch_optional(&self.0)
         .await?;
 
-        Ok(row.map(SessionJoinRow::into_session_row))
+        let row = row.map(SessionJoinRow::into_session_row);
+        if let Some(row) = &row {
+            status::validate_session(&row.status)?;
+        }
+
+        Ok(row)
     }
 
     async fn load_active_session_agent_models(&self) -> Result<Vec<SessionAgentModelRow>, DbError> {
@@ -1479,10 +1441,13 @@ ORDER BY session.updated_at DESC, session.created_at DESC, session.id
         .fetch_all(&self.0)
         .await?;
 
-        Ok(rows
+        let rows = rows
             .into_iter()
+            .filter(SessionJoinRow::has_loadable_status)
             .map(SessionJoinRow::into_session_row)
-            .collect())
+            .collect::<Vec<_>>();
+
+        Ok(rows)
     }
 
     async fn load_sessions_for_project(
@@ -1539,10 +1504,13 @@ ORDER BY session.updated_at DESC, session.created_at DESC, session.id
         .fetch_all(&self.0)
         .await?;
 
-        Ok(rows
+        let rows = rows
             .into_iter()
+            .filter(SessionJoinRow::has_loadable_status)
             .map(SessionJoinRow::into_session_list_row)
-            .collect())
+            .collect::<Vec<_>>();
+
+        Ok(rows)
     }
 
     async fn load_session_detail(
@@ -1760,6 +1728,7 @@ WHERE id = ?
         base_branch: &str,
         parent_commit_hash: Option<String>,
     ) -> Result<Vec<String>, DbError> {
+        let now = self.now();
         let mut transaction = self.0.begin().await?;
         let materialized_child_ids = sqlx::query_scalar!(
             r"
@@ -1782,12 +1751,14 @@ SET parent_session_id = NULL,
     stack_base_commit_hash = CASE
         WHEN status = 'Draft' THEN NULL
         ELSE COALESCE(stack_base_commit_hash, ?)
-    END
+    END,
+    updated_at = ?
 WHERE parent_session_id = ?
   AND status <> 'Canceled'
 ",
             base_branch,
             parent_commit_hash,
+            now,
             parent_session_id
         )
         .execute(&mut *transaction)
@@ -1837,6 +1808,7 @@ WHERE id = ?
         session_id: &str,
         turn_metadata: &SessionTurnMetadata,
     ) -> Result<(), DbError> {
+        let now = self.now();
         let mut transaction = self.0.begin().await?;
 
         let session_update = sqlx::query!(
@@ -1847,7 +1819,8 @@ SET questions = ?,
     provider_conversation_id = ?,
     app_server_instruction_provider_conversation_id = ?,
     applied_personality_id = ?,
-    applied_personality_prompt_hash = ?
+    applied_personality_prompt_hash = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             turn_metadata.questions_json.as_str(),
@@ -1856,6 +1829,7 @@ WHERE id = ?
             turn_metadata.instruction_conversation_id.as_deref(),
             turn_metadata.applied_personality_id.as_deref(),
             turn_metadata.applied_personality_prompt_hash.as_deref(),
+            now,
             session_id
         )
         .execute(&mut *transaction)
@@ -1871,11 +1845,13 @@ WHERE id = ?
                 r"
 UPDATE session
 SET input_tokens = input_tokens + ?,
-    output_tokens = output_tokens + ?
+    output_tokens = output_tokens + ?,
+    updated_at = ?
 WHERE id = ?
 ",
                 turn_metadata.token_usage_delta.input_tokens.cast_signed(),
                 turn_metadata.token_usage_delta.output_tokens.cast_signed(),
+                now,
                 session_id
             )
             .execute(&mut *transaction)
@@ -1883,8 +1859,10 @@ WHERE id = ?
 
             sqlx::query!(
                 r"
-INSERT INTO session_usage (session_id, model, input_tokens, output_tokens, invocation_count)
-VALUES (?, ?, ?, ?, 1)
+INSERT INTO session_usage (
+    session_id, model, created_at, input_tokens, output_tokens, invocation_count
+)
+VALUES (?, ?, ?, ?, ?, 1)
 ON CONFLICT(session_id, model) DO UPDATE SET
     input_tokens = input_tokens + excluded.input_tokens,
     output_tokens = output_tokens + excluded.output_tokens,
@@ -1892,6 +1870,7 @@ ON CONFLICT(session_id, model) DO UPDATE SET
 ",
                 session_id,
                 turn_metadata.model.as_str(),
+                now,
                 turn_metadata.token_usage_delta.input_tokens.cast_signed(),
                 turn_metadata.token_usage_delta.output_tokens.cast_signed()
             )
@@ -1912,13 +1891,16 @@ ON CONFLICT(session_id, model) DO UPDATE SET
         id: &str,
         size: &str,
     ) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
 SET added_lines = ?,
     deleted_lines = ?,
     has_diff = ?,
-    size = ?
+    size = ?,
+    updated_at = ?
 WHERE id = ?
   AND (
       added_lines <> ?
@@ -1931,6 +1913,7 @@ WHERE id = ?
             deleted_lines.cast_signed(),
             has_diff,
             size,
+            now,
             id,
             added_lines.cast_signed(),
             deleted_lines.cast_signed(),
@@ -1944,13 +1927,17 @@ WHERE id = ?
     }
 
     async fn mark_session_diff_unknown(&self, id: &str) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
-SET has_diff = NULL
+SET has_diff = NULL,
+    updated_at = ?
 WHERE id = ?
   AND has_diff IS NOT NULL
 ",
+            now,
             id
         )
         .execute(&self.0)
@@ -1964,13 +1951,17 @@ WHERE id = ?
         id: &str,
         provider_conversation_id: Option<String>,
     ) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
-SET app_server_instruction_provider_conversation_id = ?
+SET app_server_instruction_provider_conversation_id = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             provider_conversation_id.as_deref(),
+            now,
             id
         )
         .execute(&self.0)
@@ -1981,16 +1972,19 @@ WHERE id = ?
 
     async fn update_session_model(&self, id: &str, model: &str) -> Result<(), DbError> {
         let agent = persisted_agent_for_model(model);
+        let now = self.now();
 
         sqlx::query!(
             r"
 UPDATE session
 SET agent = ?,
-    model = ?
+    model = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             agent,
             model,
+            now,
             id
         )
         .execute(&self.0)
@@ -2004,13 +1998,17 @@ WHERE id = ?
         id: &str,
         personality_id: Option<String>,
     ) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
-SET personality_id = ?
+SET personality_id = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             personality_id.as_deref(),
+            now,
             id
         )
         .execute(&self.0)
@@ -2025,15 +2023,19 @@ WHERE id = ?
         agent: &str,
         model: &str,
     ) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
 SET agent = ?,
-    model = ?
+    model = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             agent,
             model,
+            now,
             id
         )
         .execute(&self.0)
@@ -2048,70 +2050,35 @@ WHERE id = ?
         agent: &str,
         model: &str,
     ) -> Result<(), DbError> {
-        let mut transaction = self.0.begin().await?;
-        let updated_at = sqlx::query_scalar::<_, i64>(
-            r"
-SELECT updated_at
-FROM session
-WHERE id = ?
-",
-        )
-        .bind(id)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        let Some(updated_at) = updated_at else {
-            transaction.commit().await?;
-
-            return Ok(());
-        };
-        let temporary_updated_at = if updated_at == i64::MIN {
-            i64::MAX
-        } else {
-            i64::MIN
-        };
-        let update_result = sqlx::query(
+        sqlx::query!(
             r"
 UPDATE session
 SET agent = ?,
-    model = ?,
-    updated_at = ?
+    model = ?
 WHERE id = ?
   AND status NOT IN ('Merged', 'Done', 'Canceled')
 ",
+            agent,
+            model,
+            id
         )
-        .bind(agent)
-        .bind(model)
-        .bind(temporary_updated_at)
-        .bind(id)
-        .execute(&mut *transaction)
+        .execute(&self.0)
         .await?;
-        if update_result.rows_affected() > 0 {
-            sqlx::query(
-                r"
-UPDATE session
-SET updated_at = ?
-WHERE id = ?
-  AND updated_at = ?
-",
-            )
-            .bind(updated_at)
-            .bind(id)
-            .bind(temporary_updated_at)
-            .execute(&mut *transaction)
-            .await?;
-        }
-        transaction.commit().await?;
 
         Ok(())
     }
 
     async fn clear_session_draft_flag(&self, id: &str) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
-SET is_draft = 0
+SET is_draft = 0,
+    updated_at = ?
 WHERE id = ?
 ",
+            now,
             id
         )
         .execute(&self.0)
@@ -2125,13 +2092,17 @@ WHERE id = ?
         id: &str,
         merged_commit_hash: Option<String>,
     ) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
-SET merged_commit_hash = ?
+SET merged_commit_hash = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             merged_commit_hash.as_deref(),
+            now,
             id
         )
         .execute(&self.0)
@@ -2145,16 +2116,19 @@ WHERE id = ?
         id: &str,
         stack_base_commit_hash: Option<String>,
     ) -> Result<(), DbError> {
-        sqlx::query!(
+        let now = self.now();
+
+        sqlx::query(
             r"
 UPDATE session
 SET stack_base_commit_hash = ?,
-    updated_at = CAST(strftime('%s', 'now') AS INTEGER)
+    updated_at = ?
 WHERE id = ?
 ",
-            stack_base_commit_hash,
-            id
         )
+        .bind(stack_base_commit_hash)
+        .bind(now)
+        .bind(id)
         .execute(&self.0)
         .await?;
 
@@ -2162,13 +2136,17 @@ WHERE id = ?
     }
 
     async fn update_session_prompt(&self, id: &str, prompt: &str) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
-SET prompt = ?
+SET prompt = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             prompt,
+            now,
             id
         )
         .execute(&self.0)
@@ -2182,13 +2160,17 @@ WHERE id = ?
         id: &str,
         provider_conversation_id: Option<String>,
     ) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
-SET provider_conversation_id = ?
+SET provider_conversation_id = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             provider_conversation_id.as_deref(),
+            now,
             id
         )
         .execute(&self.0)
@@ -2198,13 +2180,17 @@ WHERE id = ?
     }
 
     async fn update_session_questions(&self, id: &str, questions: &str) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
-SET questions = ?
+SET questions = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             questions,
+            now,
             id
         )
         .execute(&self.0)
@@ -2218,13 +2204,17 @@ WHERE id = ?
         id: &str,
         reasoning_level: ReasoningLevel,
     ) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r#"
 UPDATE session
-SET reasoning_level = ?
+SET reasoning_level = ?,
+    updated_at = ?
 WHERE id = ?
             "#,
             reasoning_level.as_str(),
+            now,
             id
         )
         .execute(&self.0)
@@ -2238,13 +2228,17 @@ WHERE id = ?
         id: &str,
         speed_mode: SpeedMode,
     ) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r#"
 UPDATE session
-SET speed_mode = ?
+SET speed_mode = ?,
+    updated_at = ?
 WHERE id = ?
             "#,
             speed_mode.as_str(),
+            now,
             id
         )
         .execute(&self.0)
@@ -2258,13 +2252,17 @@ WHERE id = ?
         id: &str,
         published_upstream_ref: Option<String>,
     ) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
-SET published_upstream_ref = ?
+SET published_upstream_ref = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             published_upstream_ref.as_deref(),
+            now,
             id
         )
         .execute(&self.0)
@@ -2278,15 +2276,19 @@ WHERE id = ?
             return Ok(());
         }
 
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
 SET input_tokens = input_tokens + ?,
-    output_tokens = output_tokens + ?
+    output_tokens = output_tokens + ?,
+    updated_at = ?
 WHERE id = ?
 ",
             stats.input_tokens.cast_signed(),
             stats.output_tokens.cast_signed(),
+            now,
             id
         )
         .execute(&self.0)
@@ -2301,6 +2303,9 @@ WHERE id = ?
         status: &str,
         timestamp_seconds: i64,
     ) -> Result<(), DbError> {
+        status::validate_session(status)?;
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
@@ -2312,7 +2317,8 @@ SET status = ?,
     in_progress_started_at = CASE
         WHEN ? = 'InProgress' THEN COALESCE(in_progress_started_at, ?)
         ELSE NULL
-    END
+    END,
+    updated_at = ?
 WHERE id = ?
 ",
             status,
@@ -2320,6 +2326,7 @@ WHERE id = ?
             timestamp_seconds,
             status,
             timestamp_seconds,
+            now,
             id
         )
         .execute(&self.0)
@@ -2329,13 +2336,17 @@ WHERE id = ?
     }
 
     async fn update_session_summary(&self, id: &str, summary: &str) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
-SET summary = ?
+SET summary = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             summary,
+            now,
             id
         )
         .execute(&self.0)
@@ -2350,15 +2361,19 @@ WHERE id = ?
         diff_hash: Option<String>,
         text: Option<String>,
     ) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r"
 UPDATE session
 SET focused_review_diff_hash = ?,
-    focused_review_text = ?
+    focused_review_text = ?,
+    updated_at = ?
 WHERE id = ?
 ",
             diff_hash.as_deref(),
             text.as_deref(),
+            now,
             id
         )
         .execute(&self.0)
@@ -2368,16 +2383,20 @@ WHERE id = ?
     }
 
     async fn update_session_title(&self, id: &str, title: &str) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r#"
 UPDATE session
 SET title = ?,
     is_title_provisional = 0,
     title_generation = title_generation + 1,
-    applied_title_generation = title_generation + 1
+    applied_title_generation = title_generation + 1,
+    updated_at = ?
 WHERE id = ?
 "#,
             title,
+            now,
             id,
         )
         .execute(&self.0)
@@ -2387,16 +2406,20 @@ WHERE id = ?
     }
 
     async fn update_session_provisional_title(&self, id: &str, title: &str) -> Result<(), DbError> {
+        let now = self.now();
+
         sqlx::query!(
             r#"
 UPDATE session
 SET title = ?,
     is_title_provisional = 1,
     title_generation = title_generation + 1,
-    applied_title_generation = title_generation + 1
+    applied_title_generation = title_generation + 1,
+    updated_at = ?
 WHERE id = ?
 "#,
             title,
+            now,
             id,
         )
         .execute(&self.0)
@@ -2410,16 +2433,19 @@ WHERE id = ?
         id: &str,
         requires_provisional_title: bool,
     ) -> Result<Option<i64>, DbError> {
+        let now = self.now();
         let generation = if requires_provisional_title {
             sqlx::query_scalar!(
                 r#"
 UPDATE session
 SET is_title_provisional = 1,
-    title_generation = title_generation + 1
+    title_generation = title_generation + 1,
+    updated_at = ?
 WHERE id = ?
   AND is_title_provisional = 1
 RETURNING title_generation
 "#,
+                now,
                 id,
             )
             .fetch_optional(&self.0)
@@ -2429,10 +2455,12 @@ RETURNING title_generation
                 r#"
 UPDATE session
 SET is_title_provisional = 1,
-    title_generation = title_generation + 1
+    title_generation = title_generation + 1,
+    updated_at = ?
 WHERE id = ?
 RETURNING title_generation
 "#,
+                now,
                 id,
             )
             .fetch_optional(&self.0)
@@ -2448,18 +2476,22 @@ RETURNING title_generation
         expected_generation: i64,
         title: &str,
     ) -> Result<bool, DbError> {
+        let now = self.now();
+
         let result = sqlx::query!(
             r#"
 UPDATE session
 SET title = ?,
     is_title_provisional = 0,
-    applied_title_generation = ?
+    applied_title_generation = ?,
+    updated_at = ?
 WHERE id = ?
   AND title_generation >= ?
   AND applied_title_generation < ?
 "#,
             title,
             expected_generation,
+            now,
             id,
             expected_generation,
             expected_generation,
@@ -2539,6 +2571,7 @@ struct InsertSessionRow<'a> {
 /// persistence.
 async fn insert_session_with_draft_mode(
     pool: &SqlitePool,
+    timestamp_seconds: i64,
     row: InsertSessionRow<'_>,
 ) -> Result<(), DbError> {
     let InsertSessionRow {
@@ -2556,8 +2589,9 @@ async fn insert_session_with_draft_mode(
         speed_mode,
         status,
     } = row;
+    status::validate_session(status)?;
 
-    sqlx::query!(
+    sqlx::query(
         r"
 INSERT INTO session (
     id,
@@ -2574,27 +2608,31 @@ INSERT INTO session (
     role,
     speed_mode,
     orchestration_task_id,
-    prompt
+    prompt,
+    created_at,
+    updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
-        id,
-        agent,
-        model,
-        base_branch,
-        status,
-        // Diff availability remains unknown until the worktree is refreshed.
-        Option::<bool>::None,
-        is_draft,
-        parent_session_id,
-        personality_id,
-        project_id,
-        reasoning_level.as_str(),
-        role,
-        speed_mode.as_str(),
-        orchestration_task_id,
-        ""
     )
+    .bind(id)
+    .bind(agent)
+    .bind(model)
+    .bind(base_branch)
+    .bind(status)
+    // Diff availability remains unknown until the worktree is refreshed.
+    .bind(Option::<bool>::None)
+    .bind(is_draft)
+    .bind(parent_session_id)
+    .bind(personality_id)
+    .bind(project_id)
+    .bind(reasoning_level.as_str())
+    .bind(role)
+    .bind(speed_mode.as_str())
+    .bind(orchestration_task_id)
+    .bind("")
+    .bind(timestamp_seconds)
+    .bind(timestamp_seconds)
     .execute(pool)
     .await?;
 
@@ -3057,6 +3095,88 @@ WHERE id = ?
         assert_eq!(fork_reset_row.in_progress_started_at, None);
         assert_eq!(fork_reset_row.in_progress_total_seconds, 0);
         assert_eq!(fork_review_request, None);
+    }
+
+    #[tokio::test]
+    async fn test_load_session_rejects_unknown_status() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/invalid-session", None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .sessions()
+            .insert_session("session-a", "gpt-5.6-sol", "main", "Draft", project_id)
+            .await
+            .expect("failed to insert session");
+        sqlx::query("UPDATE session SET status = 'Unknown' WHERE id = 'session-a'")
+            .execute(&pool)
+            .await
+            .expect("failed to corrupt session status");
+
+        // Act
+        let result = database.sessions().load_session("session-a").await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(DbError::InvalidStatus {
+                entity: "session",
+                value,
+            }) if value == "Unknown"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_load_session_collections_skip_unknown_status() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/invalid-session-list", None)
+            .await
+            .expect("failed to upsert project");
+        for session_id in ["session-valid", "session-invalid"] {
+            database
+                .sessions()
+                .insert_session(session_id, "gpt-5.6-sol", "main", "Draft", project_id)
+                .await
+                .expect("failed to insert session");
+        }
+        sqlx::query("UPDATE session SET status = 'Unknown' WHERE id = 'session-invalid'")
+            .execute(&pool)
+            .await
+            .expect("failed to corrupt session status");
+
+        // Act
+        let all_sessions = database
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load all sessions");
+        let project_sessions = database
+            .sessions()
+            .load_sessions_for_project(project_id)
+            .await
+            .expect("failed to load project sessions");
+
+        // Assert
+        assert_eq!(
+            all_sessions
+                .iter()
+                .map(|session| session.id.as_str())
+                .collect::<Vec<_>>(),
+            ["session-valid"]
+        );
+        assert_eq!(
+            project_sessions
+                .iter()
+                .map(|session| session.id.as_str())
+                .collect::<Vec<_>>(),
+            ["session-valid"]
+        );
     }
 
     #[tokio::test]

@@ -1,9 +1,13 @@
 //! Session-operation persistence adapters and query helpers.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
-use crate::infra::db::{DbError, unix_timestamp_now};
+use super::status;
+use crate::infra::clock::{self, Clock};
+use crate::infra::db::{DbError, DbResultExt};
 
 /// Persisted operation lifecycle state for one session command.
 pub struct SessionOperationRow {
@@ -92,12 +96,20 @@ pub trait OperationRepository: Send + Sync {
 
 /// `SQLite` implementation of [`OperationRepository`].
 #[derive(Clone)]
-pub(crate) struct SqliteOperationRepository(SqlitePool);
+pub(crate) struct SqliteOperationRepository {
+    clock: Arc<dyn Clock>,
+    pool: SqlitePool,
+}
 
 impl SqliteOperationRepository {
     /// Creates an operation repository backed by the provided pool.
-    pub(crate) fn new(pool: SqlitePool) -> Self {
-        Self(pool)
+    pub(crate) fn new(pool: SqlitePool, clock: Arc<dyn Clock>) -> Self {
+        Self { clock, pool }
+    }
+
+    /// Returns the shared persistence timestamp in Unix seconds.
+    fn now(&self) -> i64 {
+        clock::unix_timestamp_seconds(self.clock.as_ref())
     }
 }
 
@@ -109,7 +121,7 @@ struct RequiredBoolValueRow {
 #[async_trait]
 impl OperationRepository for SqliteOperationRepository {
     async fn fail_unfinished_session_operations(&self, reason: &str) -> Result<(), DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         sqlx::query!(
             r"
@@ -125,8 +137,9 @@ WHERE status IN ('queued', 'running')
             now,
             reason
         )
-        .execute(&self.0)
-        .await?;
+        .execute(&self.pool)
+        .await
+        .db_context("fail unfinished session operations")?;
 
         Ok(())
     }
@@ -145,7 +158,7 @@ SELECT EXISTS(
 "#,
             operation_id
         )
-        .fetch_one(&self.0)
+        .fetch_one(&self.pool)
         .await?;
 
         Ok(row.value)
@@ -164,7 +177,7 @@ SELECT EXISTS(
 "#,
             operation_id
         )
-        .fetch_one(&self.0)
+        .fetch_one(&self.pool)
         .await?;
 
         Ok(row.value)
@@ -185,8 +198,11 @@ WHERE status IN ('queued', 'running')
 ORDER BY queued_at ASC, id ASC
             "#
         )
-        .fetch_all(&self.0)
+        .fetch_all(&self.pool)
         .await?;
+        for row in &rows {
+            status::validate_operation(&row.status)?;
+        }
 
         Ok(rows)
     }
@@ -196,7 +212,7 @@ ORDER BY queued_at ASC, id ASC
         operation_id: &str,
         reason: &str,
     ) -> Result<(), DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         sqlx::query!(
             r"
@@ -212,14 +228,14 @@ WHERE id = ?
             reason,
             operation_id
         )
-        .execute(&self.0)
+        .execute(&self.pool)
         .await?;
 
         Ok(())
     }
 
     async fn mark_session_operation_done(&self, operation_id: &str) -> Result<(), DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         sqlx::query!(
             r"
@@ -234,7 +250,7 @@ WHERE id = ?
             now,
             operation_id
         )
-        .execute(&self.0)
+        .execute(&self.pool)
         .await?;
 
         Ok(())
@@ -245,7 +261,7 @@ WHERE id = ?
         operation_id: &str,
         error: &str,
     ) -> Result<(), DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         sqlx::query!(
             r"
@@ -261,14 +277,14 @@ WHERE id = ?
             error,
             operation_id
         )
-        .execute(&self.0)
+        .execute(&self.pool)
         .await?;
 
         Ok(())
     }
 
     async fn mark_session_operation_running(&self, operation_id: &str) -> Result<(), DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         sqlx::query!(
             r"
@@ -283,7 +299,7 @@ WHERE id = ?
             now,
             operation_id
         )
-        .execute(&self.0)
+        .execute(&self.pool)
         .await?;
 
         Ok(())
@@ -295,7 +311,7 @@ WHERE id = ?
         session_id: &str,
         kind: &str,
     ) -> Result<bool, DbError> {
-        let queued_at = unix_timestamp_now();
+        let queued_at = self.now();
 
         let claimed = sqlx::query!(
             r#"
@@ -319,8 +335,9 @@ RETURNING id AS "id!: String"
             kind,
             queued_at
         )
-        .fetch_optional(&self.0)
-        .await?;
+        .fetch_optional(&self.pool)
+        .await
+        .db_context("claim session operation")?;
 
         Ok(claimed.is_some())
     }
@@ -331,7 +348,7 @@ RETURNING id AS "id!: String"
         session_id: &str,
         kind: &str,
     ) -> Result<(), DbError> {
-        let queued_at = unix_timestamp_now();
+        let queued_at = self.now();
 
         sqlx::query!(
             r"
@@ -343,7 +360,7 @@ VALUES (?, ?, ?, 'queued', ?)
             kind,
             queued_at
         )
-        .execute(&self.0)
+        .execute(&self.pool)
         .await?;
 
         Ok(())
@@ -359,7 +376,7 @@ WHERE session_id = ?
 ",
             session_id
         )
-        .execute(&self.0)
+        .execute(&self.pool)
         .await?;
 
         Ok(())
@@ -368,7 +385,7 @@ WHERE session_id = ?
 
 #[cfg(test)]
 mod tests {
-    use crate::infra::db::AppRepositories;
+    use crate::infra::db::{AppRepositories, DbError};
 
     #[tokio::test]
     /// Claims new and failed idempotent operations while leaving accepted
@@ -424,5 +441,31 @@ mod tests {
         assert!(!queued_claim);
         assert!(recovered_claim);
         assert!(!done_claim);
+    }
+
+    #[tokio::test]
+    async fn recovery_failure_reports_semantic_operation_context() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        sqlx::query("DROP TABLE session_operation")
+            .execute(&pool)
+            .await
+            .expect("failed to drop operation table");
+
+        // Act
+        let error = database
+            .operations()
+            .fail_unfinished_session_operations("restart")
+            .await
+            .expect_err("recovery should fail without its table");
+
+        // Assert
+        assert!(matches!(
+            error,
+            DbError::QueryContext {
+                operation: "fail unfinished session operations",
+                ..
+            }
+        ));
     }
 }

@@ -2,7 +2,7 @@
 
 use std::ops::Deref;
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -130,13 +130,6 @@ pub(crate) async fn open_in_memory_pool(max_connections: u32) -> Result<SqlitePo
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     Ok(pool)
-}
-
-/// Returns the current Unix timestamp in whole seconds.
-pub(crate) fn unix_timestamp_now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| i64::try_from(duration.as_secs()).unwrap_or(0))
 }
 
 #[cfg(test)]

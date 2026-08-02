@@ -25,8 +25,8 @@ pub(crate) const CLOCK_UNIX_ENV_VAR: &str = "AGENTTY_CLOCK_UNIX";
 /// when this variable is unset or invalid.
 pub(crate) const CLOCK_UTC_OFFSET_SECONDS_ENV_VAR: &str = "AGENTTY_CLOCK_UTC_OFFSET_SECONDS";
 
-/// Provides monotonic and system-time values used by session refresh logic,
-/// runtime render-throttle accounting, and clipboard image timestamps.
+/// Provides monotonic and system-time values used by runtime and persistence
+/// adapters.
 pub(crate) trait Clock: Send + Sync {
     /// Returns the UTC offset associated with one Unix timestamp.
     ///
@@ -76,6 +76,20 @@ pub(crate) fn unix_timestamp_millis(system_time: SystemTime) -> u128 {
     system_time
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis())
+}
+
+/// Converts one wall-clock value to a Unix timestamp in whole seconds.
+///
+/// Values before the Unix epoch and values too large for `i64` use zero. This
+/// matches the persistence layer's historical fallback while keeping the time
+/// read behind [`Clock`].
+pub(crate) fn unix_timestamp_seconds(clock: &dyn Clock) -> i64 {
+    clock
+        .now_system_time()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+        .unwrap_or_default()
 }
 
 /// Production clock backed by `std::time`.
@@ -212,6 +226,21 @@ mod tests {
 
         // Assert
         assert_eq!(timestamp_millis, 1_234);
+    }
+
+    #[test]
+    fn unix_timestamp_seconds_uses_injected_wall_clock() {
+        // Arrange
+        let clock = FixedClock {
+            local_utc_offset_seconds: 0,
+            system_time: UNIX_EPOCH + Duration::from_millis(1_234),
+        };
+
+        // Act
+        let timestamp_seconds = unix_timestamp_seconds(&clock);
+
+        // Assert
+        assert_eq!(timestamp_seconds, 1);
     }
 
     #[test]

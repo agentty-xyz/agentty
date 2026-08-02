@@ -5,10 +5,14 @@
 //! a retry reuses the `(session_orchestration_id, task_key)` unique key instead
 //! of creating a second child for the same subtask.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
-use crate::infra::db::{DbError, unix_timestamp_now};
+use super::status;
+use crate::infra::clock::{self, Clock};
+use crate::infra::db::{DbError, DbResultExt};
 
 /// Row returned when loading one `session_orchestration`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -192,12 +196,17 @@ pub trait OrchestrationRepository: Send + Sync {
 
 /// `SQLite` implementation of [`OrchestrationRepository`].
 #[derive(Clone)]
-pub(crate) struct SqliteOrchestrationRepository(SqlitePool);
+pub(crate) struct SqliteOrchestrationRepository(SqlitePool, Arc<dyn Clock>);
 
 impl SqliteOrchestrationRepository {
     /// Creates an orchestration repository backed by the provided pool.
-    pub(crate) fn new(pool: SqlitePool) -> Self {
-        Self(pool)
+    pub(crate) fn new(pool: SqlitePool, clock: Arc<dyn Clock>) -> Self {
+        Self(pool, clock)
+    }
+
+    /// Returns the shared persistence timestamp in Unix seconds.
+    fn now(&self) -> i64 {
+        clock::unix_timestamp_seconds(self.1.as_ref())
     }
 }
 
@@ -209,7 +218,8 @@ impl OrchestrationRepository for SqliteOrchestrationRepository {
         status: &str,
         max_parallelism: i64,
     ) -> Result<i64, DbError> {
-        let now = unix_timestamp_now();
+        status::validate_orchestration(status)?;
+        let now = self.now();
 
         let row = sqlx::query!(
             r#"
@@ -246,8 +256,12 @@ RETURNING id AS "id!: i64"
             title,
             touched_areas,
         } = task;
-        let now = unix_timestamp_now();
-        let mut transaction = self.0.begin().await?;
+        let now = self.now();
+        let mut transaction = self
+            .0
+            .begin()
+            .await
+            .db_context("upsert orchestration task")?;
 
         let row = sqlx::query!(
             r#"
@@ -282,20 +296,27 @@ RETURNING id AS "id!: i64"
             now
         )
         .fetch_one(&mut *transaction)
-        .await?;
+        .await
+        .db_context("upsert orchestration task")?;
 
         sqlx::query!(
             r"
 UPDATE session
-SET orchestration_task_id = NULL
+SET orchestration_task_id = NULL,
+    updated_at = ?
 WHERE orchestration_task_id = ?
 ",
+            now,
             row.id
         )
         .execute(&mut *transaction)
-        .await?;
+        .await
+        .db_context("upsert orchestration task")?;
 
-        transaction.commit().await?;
+        transaction
+            .commit()
+            .await
+            .db_context("upsert orchestration task")?;
 
         Ok(row.id)
     }
@@ -323,6 +344,9 @@ LIMIT 1
         )
         .fetch_optional(&self.0)
         .await?;
+        if let Some(row) = &row {
+            status::validate_orchestration(&row.status)?;
+        }
 
         Ok(row)
     }
@@ -345,6 +369,9 @@ ORDER BY orchestration.id
         )
         .fetch_all(&self.0)
         .await?;
+        for row in &rows {
+            status::validate_orchestration(&row.status)?;
+        }
 
         Ok(rows)
     }
@@ -413,6 +440,11 @@ ORDER BY session.id
         )
         .fetch_all(&self.0)
         .await?;
+        for row in &rows {
+            if let Some(orchestration_status) = &row.orchestration_status {
+                status::validate_orchestration(orchestration_status)?;
+            }
+        }
 
         Ok(rows)
     }
@@ -448,6 +480,12 @@ ORDER BY task.id
         )
         .fetch_all(&self.0)
         .await?;
+        for row in &rows {
+            status::validate_orchestration_task(&row.status)?;
+            if let Some(child_status) = &row.child_status {
+                status::validate_session(child_status)?;
+            }
+        }
 
         Ok(rows)
     }
@@ -471,7 +509,7 @@ WHERE orchestration_task_id = ?
     }
 
     async fn begin_orchestration_cancellation(&self, id: i64) -> Result<bool, DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         let result = sqlx::query!(
             r"
@@ -485,13 +523,14 @@ WHERE id = ?
             id
         )
         .execute(&self.0)
-        .await?;
+        .await
+        .db_context("begin orchestration cancellation")?;
 
         Ok(result.rows_affected() == 1)
     }
 
     async fn claim_orchestration_task(&self, id: i64) -> Result<bool, DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         let result = sqlx::query!(
             r"
@@ -512,13 +551,14 @@ WHERE id = ?
             id
         )
         .execute(&self.0)
-        .await?;
+        .await
+        .db_context("claim orchestration task")?;
 
         Ok(result.rows_affected() == 1)
     }
 
     async fn claim_orchestration_rollup(&self, id: i64) -> Result<bool, DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         let result = sqlx::query!(
             r"
@@ -532,13 +572,14 @@ WHERE id = ?
             id
         )
         .execute(&self.0)
-        .await?;
+        .await
+        .db_context("claim orchestration rollup")?;
 
         Ok(result.rows_affected() == 1)
     }
 
     async fn complete_orchestration_rollup(&self, id: i64) -> Result<bool, DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         let result = sqlx::query!(
             r"
@@ -552,7 +593,8 @@ WHERE id = ?
             id
         )
         .execute(&self.0)
-        .await?;
+        .await
+        .db_context("complete orchestration rollup")?;
 
         Ok(result.rows_affected() == 1)
     }
@@ -571,12 +613,16 @@ WHERE id = ?
         )
         .fetch_optional(&self.0)
         .await?;
+        if let Some(row) = &row {
+            status::validate_operation(&row.status)?;
+        }
 
         Ok(row.map(|row| row.status))
     }
 
     async fn update_orchestration_status(&self, id: i64, status: &str) -> Result<(), DbError> {
-        let now = unix_timestamp_now();
+        status::validate_orchestration(status)?;
+        let now = self.now();
 
         sqlx::query!(
             r"
@@ -600,7 +646,7 @@ WHERE id = ?
         id: i64,
         child_session_id: &str,
     ) -> Result<bool, DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         let result = sqlx::query!(
             r"
@@ -634,7 +680,8 @@ WHERE id = ?
         status: &str,
         last_error: Option<String>,
     ) -> Result<(), DbError> {
-        let now = unix_timestamp_now();
+        status::validate_orchestration_task(status)?;
+        let now = self.now();
 
         sqlx::query!(
             r"
@@ -660,7 +707,7 @@ WHERE id = ?
         id: i64,
         result_summary: &str,
     ) -> Result<(), DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         sqlx::query!(
             r"
@@ -703,6 +750,86 @@ mod tests {
             .expect("failed to insert controller session");
 
         database
+    }
+
+    #[tokio::test]
+    async fn hydration_rejects_unknown_orchestration_status() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/invalid-orchestration", None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .sessions()
+            .insert_session("controller", "gpt-5.6-sol", "main", "Draft", project_id)
+            .await
+            .expect("failed to insert controller session");
+        let orchestration_id = database
+            .orchestrations()
+            .insert_orchestration("controller", "Running", 1)
+            .await
+            .expect("failed to insert orchestration");
+        sqlx::query("UPDATE session_orchestration SET status = 'Unknown' WHERE id = ?")
+            .bind(orchestration_id)
+            .execute(&pool)
+            .await
+            .expect("failed to corrupt orchestration status");
+
+        // Act
+        let error = database
+            .orchestrations()
+            .load_orchestration_for_controller("controller")
+            .await
+            .expect_err("invalid status should fail hydration");
+
+        // Assert
+        assert!(matches!(
+            error,
+            DbError::InvalidStatus {
+                entity: "orchestration",
+                value,
+            } if value == "Unknown"
+        ));
+    }
+
+    #[tokio::test]
+    async fn rollup_recovery_failures_report_semantic_operation_context() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        sqlx::query("DROP TABLE session_orchestration")
+            .execute(&pool)
+            .await
+            .expect("failed to drop orchestration table");
+
+        // Act
+        let claim_error = database
+            .orchestrations()
+            .claim_orchestration_rollup(1)
+            .await
+            .expect_err("claim should fail");
+        let completion_error = database
+            .orchestrations()
+            .complete_orchestration_rollup(1)
+            .await
+            .expect_err("completion should fail");
+
+        // Assert
+        assert!(matches!(
+            claim_error,
+            DbError::QueryContext {
+                operation: "claim orchestration rollup",
+                ..
+            }
+        ));
+        assert!(matches!(
+            completion_error,
+            DbError::QueryContext {
+                operation: "complete orchestration rollup",
+                ..
+            }
+        ));
     }
 
     /// Builds one planned task payload for `orchestration_id`.

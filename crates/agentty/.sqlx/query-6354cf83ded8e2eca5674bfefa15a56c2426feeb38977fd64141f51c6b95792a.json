@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET app_server_instruction_provider_conversation_id = ?,\n    updated_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "6354cf83ded8e2eca5674bfefa15a56c2426feeb38977fd64141f51c6b95792a"
+}

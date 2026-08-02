@@ -1,9 +1,12 @@
 //! Session-usage persistence adapters and query helpers.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use crate::domain::session::SessionStats;
+use crate::infra::clock::{self, Clock};
 use crate::infra::db::DbError;
 
 /// Row returned when loading per-model token usage from the `session_usage`
@@ -41,12 +44,20 @@ pub trait UsageRepository: Send + Sync {
 
 /// `SQLite` implementation of [`UsageRepository`].
 #[derive(Clone)]
-pub(crate) struct SqliteUsageRepository(SqlitePool);
+pub(crate) struct SqliteUsageRepository {
+    clock: Arc<dyn Clock>,
+    pool: SqlitePool,
+}
 
 impl SqliteUsageRepository {
-    /// Creates a usage repository backed by the provided pool.
-    pub(crate) fn new(pool: SqlitePool) -> Self {
-        Self(pool)
+    /// Creates a usage repository backed by the provided pool and timestamp
+    /// source.
+    pub(crate) fn new(pool: SqlitePool, clock: Arc<dyn Clock>) -> Self {
+        Self { clock, pool }
+    }
+
+    fn now(&self) -> i64 {
+        clock::unix_timestamp_seconds(self.clock.as_ref())
     }
 }
 
@@ -63,7 +74,7 @@ ORDER BY model
             "#,
             session_id
         )
-        .fetch_all(&self.0)
+        .fetch_all(&self.pool)
         .await?;
 
         Ok(rows)
@@ -79,10 +90,14 @@ ORDER BY model
             return Ok(());
         }
 
+        let now = self.now();
+
         sqlx::query!(
             r"
-INSERT INTO session_usage (session_id, model, input_tokens, output_tokens, invocation_count)
-VALUES (?, ?, ?, ?, 1)
+INSERT INTO session_usage (
+    session_id, model, created_at, input_tokens, output_tokens, invocation_count
+)
+VALUES (?, ?, ?, ?, ?, 1)
 ON CONFLICT(session_id, model) DO UPDATE SET
     input_tokens = input_tokens + excluded.input_tokens,
     output_tokens = output_tokens + excluded.output_tokens,
@@ -90,10 +105,11 @@ ON CONFLICT(session_id, model) DO UPDATE SET
 ",
             session_id,
             model,
+            now,
             stats.input_tokens.cast_signed(),
             stats.output_tokens.cast_signed()
         )
-        .execute(&self.0)
+        .execute(&self.pool)
         .await?;
 
         Ok(())
