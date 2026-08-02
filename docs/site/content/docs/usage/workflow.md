@@ -345,12 +345,13 @@ and unchanged pre-existing tracked changes do not emit this warning. Projects ba
 a bare repository have no main working checkout, so this main-checkout dirty-state guard
 is skipped there.
 
-### Continuing a Done Session
+### Continuing a Terminal Session
 
-Pressing `C` on a **Done** session opens a confirmation, then creates a brand-new draft
-session with a continuation message staged from the merged commit hash (or the saved
-summary when the hash is unavailable). **Canceled** sessions remain terminal and
-read-only.
+Pressing `c` on a **Done** or **Canceled** session opens a confirmation, then creates a
+brand-new draft session. **Done** sessions stage a continuation message from the merged
+commit hash, or from saved context when the hash is unavailable. **Canceled** sessions
+stage the saved summary, transcript, or original prompt. The source session remains
+terminal and unchanged.
 
 ## Draft and Stacked Sessions
 

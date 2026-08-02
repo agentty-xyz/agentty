@@ -193,11 +193,12 @@ State-specific differences:
 - **Merged** sessions remain in Active and expose only read-only navigation, linked
   review comments, and `d` for the diff until list-mode `s` successfully syncs their
   local target branch.
-- **Done** sessions offer `c` to start a continuation draft (confirmation popup) and
-  hide linked review comments.
-- **Canceled**, **Queued**, and **Merging** sessions are otherwise read-only (`q`,
-  scroll, help). Linked review requests remain available from other session states with
-  `c`.
+- **Done** and **Canceled** sessions offer `c` to start a continuation draft
+  (confirmation popup). Done-session drafts use the merged commit hash when available;
+  canceled-session drafts use the saved summary, transcript, or original prompt. Both
+  terminal states hide linked review comments so continuation remains unambiguous.
+- **Queued** and **Merging** sessions are otherwise read-only (`q`, scroll, help).
+  Linked review requests remain available from other session states with `c`.
 
 `o` runs the configured `Launch Configurations` entry, or opens a selector popup when
 several are configured. Run Agentty inside `tmux` when you rely on

@@ -784,7 +784,7 @@ mod tests {
             .collect()
     }
 
-    /// Verifies the chat footer advertises continuation only for completed
+    /// Verifies the chat footer advertises continuation for completed
     /// sessions.
     #[test]
     fn test_render_done_session_shows_continue_footer_action() {
@@ -813,10 +813,10 @@ mod tests {
         assert!(!text.contains("comments"));
     }
 
-    /// Verifies canceled terminal sessions render without a continuation
-    /// shortcut in the chat footer.
+    /// Verifies canceled terminal sessions advertise continuation in the chat
+    /// footer.
     #[test]
-    fn test_render_canceled_session_hides_continue_footer_action() {
+    fn test_render_canceled_session_shows_continue_footer_action() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::Canceled;
@@ -838,7 +838,8 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(!text.contains("c: continue"));
+        assert!(text.contains("c: continue"));
+        assert!(!text.contains("comments"));
     }
 
     /// Verifies running sessions advertise sync as a queued action while

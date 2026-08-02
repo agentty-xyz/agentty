@@ -207,7 +207,7 @@ impl SessionStatus {
 
     /// Returns whether this status can seed a follow-on continuation session.
     pub fn allows_terminal_continuation(self) -> bool {
-        matches!(self, SessionStatus::Done)
+        matches!(self, SessionStatus::Done | SessionStatus::Canceled)
     }
 
     /// Returns whether this lifecycle state permits only local inspection.
@@ -459,6 +459,24 @@ mod tests {
         assert!(status.can_transition_to(SessionStatus::Merged));
         assert!(status.can_transition_to(SessionStatus::Done));
         assert!(!status.can_transition_to(SessionStatus::Review));
+    }
+
+    #[test]
+    fn terminal_continuation_is_available_for_done_and_canceled_sessions() {
+        // Arrange
+        let statuses = SessionStatus::ALL;
+
+        // Act
+        let continuation_statuses = statuses
+            .into_iter()
+            .filter(|status| status.allows_terminal_continuation())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            continuation_statuses,
+            vec![SessionStatus::Done, SessionStatus::Canceled]
+        );
     }
 
     #[test]

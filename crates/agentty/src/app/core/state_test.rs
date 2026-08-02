@@ -5082,32 +5082,101 @@ async fn test_continue_terminal_session_rejects_non_terminal_source_session() {
     assert!(matches!(
         result,
         Err(AppError::Workflow(message))
-            if message == "Only `Done` sessions can be continued"
+            if message == "Only `Done` or `Canceled` sessions can be continued"
     ));
 }
 
 #[tokio::test]
-async fn test_continue_terminal_session_rejects_canceled_source_session() {
+async fn test_continue_terminal_session_uses_persisted_context_for_canceled_source_session() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let base_path = base_dir.path().to_path_buf();
+    let database = AppRepositories::in_memory().await;
+    let clients = crate::test_support::test_app_clients()
+        .with_app_server_client_override(crate::test_support::mock_app_server())
+        .with_tmux_client(Arc::new(MockTmuxClient::new()));
+    let mut app = App::new_with_clients(
+        base_path.clone(),
+        base_path,
+        Some("main".to_string()),
+        database,
+        clients,
     )
-    .await;
+    .await
+    .expect("failed to build test app");
+    let project_id = app.active_project_id();
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            "canceled-source",
+            "gpt-5.6-sol",
+            "main",
+            "Canceled",
+            project_id,
+        )
+        .await
+        .expect("failed to insert source session row");
+    app.services
+        .db()
+        .sessions()
+        .update_session_merged_commit_hash("canceled-source", Some("stale-merged-hash".to_string()))
+        .await
+        .expect("failed to persist stale merged commit hash");
     let source_session = crate::test_support::SessionFixtureBuilder::new()
         .id("canceled-source")
         .status(Status::Canceled)
-        .summary(Some("summary".to_string()))
+        .summary(Some("# Summary\n\nResume the remaining work.".to_string()))
+        .title(Some("Canceled source".to_string()))
         .build();
     app.sessions.push_session(source_session);
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_find_git_repo_root()
+        .times(1..)
+        .returning(|path| Box::pin(async move { Some(path) }));
+    mock_git_client
+        .expect_fetch_remote()
+        .times(0..)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    mock_git_client
+        .expect_branch_tracking_statuses()
+        .times(0..)
+        .returning(|_| Box::pin(async { Ok(HashMap::new()) }));
+    mock_git_client
+        .expect_get_ref_ahead_behind()
+        .times(0..)
+        .returning(|_, _, _| Box::pin(async { Ok((0, 0)) }));
+    install_mock_git_client(&mut app, mock_git_client);
 
     // Act
-    let result = app.continue_terminal_session("canceled-source").await;
+    let continued_session_id = app
+        .continue_terminal_session("canceled-source")
+        .await
+        .expect("expected canceled continuation to succeed");
 
     // Assert
+    let continued_session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == continued_session_id)
+        .expect("expected created continuation draft");
+    assert_eq!(continued_session.status, Status::Draft);
+    assert_eq!(
+        continued_session.prompt,
+        "Continue the work from this previous Agentty session.\n\nPrevious session: Canceled \
+         source\nProject: project\nStatus: Canceled\n\nPrevious session summary:\n# \
+         Summary\n\nResume the remaining work.\n"
+    );
+    assert!(!continued_session.prompt.contains("stale-merged-hash"));
     assert!(matches!(
-        result,
-        Err(AppError::Workflow(message))
-            if message == "Only `Done` sessions can be continued"
+        app.mode,
+        AppMode::Prompt {
+            ref input,
+            ref session_id,
+            ..
+        } if session_id.as_str() == continued_session_id && input.text().is_empty()
     ));
 }
 
