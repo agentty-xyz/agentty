@@ -39,6 +39,7 @@ use crate::domain::session::{
 };
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageBody;
+use crate::infra::db::DbError;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffPreview, DiffPreviewUnavailableReason,
     HelpContext,
@@ -2030,33 +2031,49 @@ impl App {
         (!warnings.is_empty()).then(|| warnings.join("\n"))
     }
 
-    /// Finalizes read-only merged sessions targeting the branch updated by a
-    /// successful user-triggered main sync.
+    /// Finalizes read-only merged sessions that reached the branch updated by
+    /// a successful user-triggered main sync.
+    ///
+    /// A merged stacked child also reached that branch when its merged parent
+    /// targeted the branch directly, even if the child's persisted review
+    /// target still names the parent review branch.
     async fn finalize_merged_sessions_after_main_sync(
         &mut self,
         default_branch: &str,
     ) -> Vec<SessionId> {
         let mut deferred_session_ids = Vec::new();
-        let session_ids = self
+        let merged_session_ids = self
             .sessions
             .sessions()
             .iter()
             .filter(|session| {
-                session
-                    .review_request
-                    .as_ref()
-                    .is_some_and(|review_request| {
-                        review_request.summary.target_branch == default_branch
-                    })
-                    && self
-                        .sessions
-                        .session_handles_or_err(&session.id)
-                        .ok()
-                        .and_then(|handles| handles.status.lock().ok().map(|status| *status))
-                        == Some(Status::Merged)
+                self.sessions
+                    .session_handles_or_err(&session.id)
+                    .ok()
+                    .and_then(|handles| handles.status.lock().ok().map(|status| *status))
+                    == Some(Status::Merged)
             })
             .map(|session| session.id.clone())
             .collect::<Vec<_>>();
+        let mut session_ids = Vec::new();
+        for session_id in merged_session_ids {
+            match self
+                .merged_session_reached_synced_branch(&session_id, default_branch)
+                .await
+            {
+                Ok(true) => session_ids.push(session_id),
+                Ok(false) => {}
+                Err(error) => {
+                    self.append_output_for_session(
+                        &session_id,
+                        &TranscriptNotice::ReviewRequestSyncWarning
+                            .format(format!("Durable restack marker load failed: {error}")),
+                    )
+                    .await;
+                    deferred_session_ids.push(session_id);
+                }
+            }
+        }
 
         for session_id in session_ids {
             let session_head_hash = match self
@@ -2102,6 +2119,62 @@ impl App {
         }
 
         deferred_session_ids
+    }
+
+    /// Returns whether one merged review is now present on the manually
+    /// synchronized branch, directly, through its merged stack parent, or by
+    /// the durable restack marker left after that parent was archived.
+    ///
+    /// Returns an error when the durable marker cannot be loaded.
+    async fn merged_session_reached_synced_branch(
+        &self,
+        session_id: &SessionId,
+        default_branch: &str,
+    ) -> Result<bool, DbError> {
+        let Ok(session) = self.sessions.session_or_err(session_id) else {
+            return Ok(false);
+        };
+        let Some(review_request) = session.review_request.as_ref() else {
+            return Ok(false);
+        };
+        if review_request.summary.target_branch == default_branch {
+            return Ok(true);
+        }
+        if let Some(parent_session_id) = session.parent_session_id.as_ref() {
+            let Some(parent_session) = self
+                .sessions
+                .sessions()
+                .iter()
+                .find(|candidate| candidate.id == *parent_session_id)
+            else {
+                return Ok(false);
+            };
+            let Some(parent_review_request) = parent_session.review_request.as_ref() else {
+                return Ok(false);
+            };
+
+            return Ok(review_request.summary.target_branch
+                == parent_review_request.summary.source_branch
+                && parent_review_request.summary.target_branch == default_branch
+                && self
+                    .sessions
+                    .session_handles_or_err(parent_session_id)
+                    .ok()
+                    .and_then(|handles| handles.status.lock().ok().map(|status| *status))
+                    == Some(Status::Merged));
+        }
+        if session.base_branch != default_branch {
+            return Ok(false);
+        }
+
+        let stack_base_commit_hash = self
+            .services
+            .db()
+            .sessions()
+            .get_session_stack_base_commit_hash(session_id)
+            .await?;
+
+        Ok(stack_base_commit_hash.is_some())
     }
 
     /// Marks one externally merged session `Done` after manual target sync,
@@ -2436,6 +2509,76 @@ mod tests {
     };
 
     use super::*;
+    use crate::domain::session::{
+        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    };
+
+    #[tokio::test]
+    async fn merged_branch_eligibility_rejects_incomplete_session_context() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let review_request = ReviewRequest {
+            last_refreshed_at: 0,
+            summary: ReviewRequestSummary {
+                display_id: "#23".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "wt/child".to_string(),
+                state: ReviewRequestState::Merged,
+                status_summary: None,
+                target_branch: "wt/parent".to_string(),
+                title: "Merged child".to_string(),
+                web_url: "https://example.test/pull/23".to_string(),
+            },
+        };
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id("session-without-review")
+                .build(),
+        );
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id("child-with-missing-parent")
+                .parent_session_id(Some("missing-parent".into()))
+                .review_request(Some(review_request.clone()))
+                .build(),
+        );
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id("parent-without-review")
+                .build(),
+        );
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id("child-with-unlinked-parent")
+                .parent_session_id(Some("parent-without-review".into()))
+                .review_request(Some(review_request))
+                .build(),
+        );
+
+        // Act
+        let missing_session = app
+            .merged_session_reached_synced_branch(&"missing-session".into(), "main")
+            .await
+            .expect("missing session eligibility should not fail");
+        let session_without_review = app
+            .merged_session_reached_synced_branch(&"session-without-review".into(), "main")
+            .await
+            .expect("unlinked session eligibility should not fail");
+        let child_with_missing_parent = app
+            .merged_session_reached_synced_branch(&"child-with-missing-parent".into(), "main")
+            .await
+            .expect("missing parent eligibility should not fail");
+        let child_with_unlinked_parent = app
+            .merged_session_reached_synced_branch(&"child-with-unlinked-parent".into(), "main")
+            .await
+            .expect("unlinked parent eligibility should not fail");
+
+        // Assert
+        assert!(!missing_session);
+        assert!(!session_without_review);
+        assert!(!child_with_missing_parent);
+        assert!(!child_with_unlinked_parent);
+    }
 
     #[tokio::test]
     async fn test_issue_detail_success_preserves_action_error() {
