@@ -30,6 +30,17 @@ pub(crate) enum TransientMessageAnchor {
     Tail,
 }
 
+/// Order in which anchored transient blocks appear in session output.
+///
+/// Keep aligned with the anchored blocks in `SESSION_OUTPUT_BLOCK_ORDER`
+/// (`ui/session_output_assembly.rs`); the fingerprint stays stable only while
+/// this order matches the rendered block order.
+const TRANSIENT_MESSAGE_ANCHOR_ORDER: [TransientMessageAnchor; 3] = [
+    TransientMessageAnchor::AfterCompletedTurn,
+    TransientMessageAnchor::AfterActiveTurn,
+    TransientMessageAnchor::Tail,
+];
+
 /// Removal policy for one transient message.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum TransientMessageLifecycle {
@@ -75,8 +86,8 @@ pub(crate) struct TransientMessage {
 /// `version` changes only when observable slot content changes. `fingerprint`
 /// gives render caches a content identity that remains valid when refreshes
 /// reconstruct an equivalent store with a new local version sequence. Slots
-/// use canonical enum order rather than async event arrival order, so status
-/// replacement does not move surrounding output.
+/// retain insertion order so concurrently visible workflow rows follow their
+/// start chronology; replacing a slot does not move it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TransientMessageStore {
     fingerprint: u64,
@@ -124,7 +135,6 @@ impl TransientMessageStore {
         }
 
         self.messages.push(message);
-        self.messages.sort_by_key(|message| message.slot);
         self.bump_version();
     }
 
@@ -160,9 +170,17 @@ impl TransientMessageStore {
         self.fingerprint = Self::calculate_fingerprint(&self.messages);
     }
 
+    /// Hashes messages grouped by anchor in rendered block order so that
+    /// display-invisible cross-anchor insertion permutations keep one identity
+    /// while order changes within an anchor still invalidate render caches.
     fn calculate_fingerprint(messages: &[TransientMessage]) -> u64 {
         let mut hasher = FxHasher::default();
-        messages.hash(&mut hasher);
+        for anchor in TRANSIENT_MESSAGE_ANCHOR_ORDER {
+            anchor.hash(&mut hasher);
+            for message in messages.iter().filter(|message| message.anchor == anchor) {
+                message.hash(&mut hasher);
+            }
+        }
 
         hasher.finish()
     }
@@ -199,15 +217,15 @@ mod tests {
     fn upsert_replaces_slot_without_moving_it() {
         // Arrange
         let mut store = TransientMessageStore::default();
-        store.upsert(message(TransientMessageSlot::Summary, "summary", 1));
         store.upsert(message(TransientMessageSlot::Review, "review", 1));
+        store.upsert(message(TransientMessageSlot::Summary, "summary", 1));
 
         // Act
-        store.upsert(message(TransientMessageSlot::Summary, "new summary", 1));
+        store.upsert(message(TransientMessageSlot::Review, "new review", 1));
 
         // Assert
-        assert_eq!(store.messages[0].body.text(), "new summary");
-        assert_eq!(store.messages[1].slot, TransientMessageSlot::Review);
+        assert_eq!(store.messages[0].body.text(), "new review");
+        assert_eq!(store.messages[1].slot, TransientMessageSlot::Summary);
         assert_eq!(store.version(), 3);
     }
 
@@ -267,6 +285,55 @@ mod tests {
         // Assert
         assert_eq!(loading_store.version(), ready_store.version());
         assert_ne!(loading_fingerprint, ready_fingerprint);
+    }
+
+    #[test]
+    fn fingerprint_ignores_cross_anchor_insertion_order() {
+        // Arrange
+        let tail_message = TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Pushing...".to_string()),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::PublishedBranchSync,
+            turn_position: Some(1),
+        };
+        let completed_turn_message = message(TransientMessageSlot::WorkflowNotice, "commit", 1);
+
+        let mut notice_first_store = TransientMessageStore::default();
+        notice_first_store.upsert(completed_turn_message.clone());
+        notice_first_store.upsert(tail_message.clone());
+        let mut push_first_store = TransientMessageStore::default();
+        push_first_store.upsert(tail_message);
+        push_first_store.upsert(completed_turn_message);
+
+        // Act
+        let notice_first_fingerprint = notice_first_store.fingerprint();
+        let push_first_fingerprint = push_first_store.fingerprint();
+
+        // Assert
+        assert_ne!(notice_first_store.messages(), push_first_store.messages());
+        assert_eq!(notice_first_fingerprint, push_first_fingerprint);
+    }
+
+    #[test]
+    fn fingerprint_distinguishes_order_within_one_anchor() {
+        // Arrange
+        let notice = message(TransientMessageSlot::WorkflowNotice, "commit", 1);
+        let review = message(TransientMessageSlot::Review, "review", 1);
+
+        let mut notice_first_store = TransientMessageStore::default();
+        notice_first_store.upsert(notice.clone());
+        notice_first_store.upsert(review.clone());
+        let mut review_first_store = TransientMessageStore::default();
+        review_first_store.upsert(review);
+        review_first_store.upsert(notice);
+
+        // Act
+        let notice_first_fingerprint = notice_first_store.fingerprint();
+        let review_first_fingerprint = review_first_store.fingerprint();
+
+        // Assert
+        assert_ne!(notice_first_fingerprint, review_first_fingerprint);
     }
 
     #[test]

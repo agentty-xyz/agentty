@@ -5,11 +5,13 @@
 //! basics (typing, multiline via Alt+Enter and CSI-u Shift+Enter, cancel via
 //! Esc), and returning to the session list from session view.
 
+use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
@@ -82,6 +84,12 @@ const MISSING_DECISION_CONTEXT_POLICY_TEXT: &str =
 /// Diagnostic emitted when the focused-review prompt omits saved chat context.
 const MISSING_RESOLVED_DECISION_HISTORY_TEXT: &str =
     "Focused review prompt omitted the resolved session decision.";
+
+/// Wall-clock budget for one seeded git invocation before it is killed.
+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Poll interval used while waiting for a seeded git invocation to exit.
+const GIT_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Returns every scrollbar row and the subset occupied by its thumb in the
 /// session output's rightmost column.
@@ -692,6 +700,94 @@ fn seed_rebase_transcript_session(env: &BuilderEnv) -> Result<(), Box<dyn std::e
     std::fs::write(&pre_rebase_hook, "#!/bin/sh\nsleep 5\n")?;
     #[cfg(unix)]
     std::fs::set_permissions(&pre_rebase_hook, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
+/// Seeds one synced published session whose next completed turn appends a
+/// durable commit notice and then starts a delayed auto-push, leaving the
+/// earlier sync result, the turn commit notice, and the auto-push progress row
+/// visible in one frame.
+fn seed_published_session_output_chronology(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_session_title_candidate_project(env)?;
+
+    let session_id = "review-shortcut-0001";
+    common::seed_session(
+        env,
+        SessionSeed::regular(session_id, "claude-haiku-4-5-20251001", "main", "Review")
+            .with_title("Chronological session output"),
+    )?;
+
+    // The session worktree must stay a linked worktree of the project
+    // checkout; a standalone repository trips the session isolation guard and
+    // the turn never starts.
+    let remote_path = env.agentty_root.join("chronology-remote.git");
+    let remote_path_text = remote_path.to_string_lossy().into_owned();
+    run_git(&env.workdir, &["init", "--bare", remote_path_text.as_str()])?;
+    run_git(
+        &env.workdir,
+        &["remote", "add", "origin", remote_path_text.as_str()],
+    )?;
+    run_git(&env.workdir, &["push", "--set-upstream", "origin", "main"])?;
+
+    let session_worktree = test_support::session_folder(&env.agentty_root.join("wt"), session_id);
+    let session_worktree_text = session_worktree.to_string_lossy().into_owned();
+    run_git(
+        &env.workdir,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt/review-s",
+            session_worktree_text.as_str(),
+        ],
+    )?;
+    run_git(
+        &session_worktree,
+        &["push", "--set-upstream", "origin", "wt/review-s"],
+    )?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_published_upstream_ref(
+                session_id,
+                Some("origin/wt/review-s".to_string()),
+            )
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                session_id,
+                SessionMessageKind::WorkflowNotice,
+                "\n[Sync] Successfully synced wt/review-s onto origin/main\n",
+            )
+            .await
+    })?;
+
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
+    let git_path = env.stub_bin.join("git");
+    let script = format!(
+        r#"#!/bin/sh
+case "$1" in
+  push)
+    sleep 8
+    ;;
+esac
+exec '{}' "$@"
+"#,
+        real_git.display()
+    );
+    std::fs::write(&git_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
 
     Ok(())
 }
@@ -1848,43 +1944,83 @@ fn seed_binary_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::
 }
 
 /// Runs one git command in `working_directory`, returning an error with stderr
-/// detail when git fails.
+/// detail when git fails and discarding its stdout.
 fn run_git(working_directory: &Path, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(working_directory)
-        .output()?;
-    if !output.status.success() {
-        return Err(std::io::Error::other(format!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr)
-        ))
-        .into());
-    }
+    run_git_stdout(working_directory, args)?;
 
     Ok(())
 }
 
 /// Runs one git command in `working_directory` and returns trimmed stdout.
+///
+/// The child is killed and reported as an error once `GIT_COMMAND_TIMEOUT`
+/// elapses so a stalled git process fails the test instead of hanging CI.
 fn run_git_stdout(
     working_directory: &Path,
     args: &[&str],
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let output = Command::new("git")
+    let mut child = Command::new("git")
         .args(args)
         .current_dir(working_directory)
-        .output()?;
-    if !output.status.success() {
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    // Drain both pipes from reader threads so a chatty git command cannot fill
+    // a pipe buffer and block while the timeout loop polls for exit.
+    let mut child_stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("git stdout pipe missing"))?;
+    let mut child_stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| std::io::Error::other("git stderr pipe missing"))?;
+    let stdout_reader = thread::spawn(move || {
+        let mut stdout = Vec::new();
+        child_stdout.read_to_end(&mut stdout).map(|_| stdout)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut stderr = Vec::new();
+        child_stderr.read_to_end(&mut stderr).map(|_| stderr)
+    });
+
+    let deadline = Instant::now() + GIT_COMMAND_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+
+        if Instant::now() >= deadline {
+            child.kill()?;
+            child.wait()?;
+
+            return Err(std::io::Error::other(format!(
+                "git {} timed out after {GIT_COMMAND_TIMEOUT:?}",
+                args.join(" ")
+            ))
+            .into());
+        }
+
+        thread::sleep(GIT_COMMAND_POLL_INTERVAL);
+    };
+
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| std::io::Error::other("git stdout reader panicked"))??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| std::io::Error::other("git stderr reader panicked"))??;
+    if !status.success() {
         return Err(std::io::Error::other(format!(
             "git {} failed: {}",
             args.join(" "),
-            String::from_utf8_lossy(&output.stderr)
+            String::from_utf8_lossy(&stderr)
         ))
         .into());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&stdout).trim().to_string())
 }
 
 /// Installs a deterministic `gh` stub that returns review-request status.
@@ -3374,6 +3510,73 @@ fn session_rebase_keeps_completed_transcript_before_summary() -> E2eResult {
                     .rect
                     .row;
                 assert!(answer_row < summary_row);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify post-turn auto-push progress renders below every durable notice that
+/// preceded it — the earlier sync result and the completed turn's commit
+/// notice — preserving workflow chronology in session output.
+#[test]
+fn test_session_output_chronology() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_output_chronology")
+        .with_git()
+        .with_terminal_size(120, 30)
+        .setup(seed_published_session_output_chronology)
+        .zola(
+            "Chronological session output",
+            "Follow sync, commit, and auto-push progress in execution order.",
+            44,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Enter: reply", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("Continue after the sync")
+                    .press_key("Enter")
+                    .wait_for_text("Got it. What would you like me to do?", 30000)
+                    .wait_for_text("Auto-pushing", 10000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled(
+                        "session_output_chronology",
+                        "Earlier sync and commit results remain above later auto-push progress",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                let view_text = frame.text_in_region(&full);
+                // Row lookup goes through the rendered lines instead of
+                // `find_text` because unpainted terminal cells drop the spaces
+                // inside multi-word notices.
+                let notice_row =
+                    |needle: &str| view_text.lines().position(|line| line.contains(needle));
+                for needle in [
+                    "[Sync] Successfully synced",
+                    "[Commit] No changes to commit.",
+                    "Auto-pushing published branch",
+                ] {
+                    assert!(
+                        notice_row(needle).is_some(),
+                        "missing `{needle}` in frame:\n{view_text}"
+                    );
+                }
+
+                let sync_row = notice_row("[Sync] Successfully synced").expect("sync result row");
+                let commit_row =
+                    notice_row("[Commit] No changes to commit.").expect("turn commit notice row");
+                let auto_push_row =
+                    notice_row("Auto-pushing published branch").expect("auto-push status row");
+
+                assert!(sync_row < commit_row);
+                assert!(commit_row < auto_push_row);
             },
         )?;
 

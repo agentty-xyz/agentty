@@ -817,7 +817,8 @@ mod tests {
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::domain::theme::ColorTheme;
     use crate::domain::transient_message::{
-        TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageSlot,
+        TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
+        TransientMessageSlot,
     };
     use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX};
 
@@ -835,7 +836,7 @@ mod tests {
         session.transient_messages.upsert(TransientMessage {
             anchor: TransientMessageAnchor::AfterCompletedTurn,
             body,
-            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
             slot: TransientMessageSlot::Review,
             turn_position: session.latest_user_prompt_position(),
         });
@@ -1085,7 +1086,7 @@ mod tests {
         session.transient_messages.upsert(TransientMessage {
             anchor: TransientMessageAnchor::Tail,
             body: TransientMessageBody::Loading("Publishing review request...".to_string()),
-            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
+            lifecycle: TransientMessageLifecycle::UntilResolved,
             slot: TransientMessageSlot::BranchPublish,
             turn_position: None,
         });
@@ -1361,7 +1362,7 @@ mod tests {
         session.transient_messages.upsert(TransientMessage {
             anchor: TransientMessageAnchor::AfterCompletedTurn,
             body: TransientMessageBody::Markdown("[Commit] No changes to commit.".to_string()),
-            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
             slot: TransientMessageSlot::WorkflowNotice,
             turn_position: None,
         });
@@ -1409,7 +1410,7 @@ mod tests {
         session.transient_messages.upsert(TransientMessage {
             anchor: TransientMessageAnchor::AfterCompletedTurn,
             body: TransientMessageBody::Markdown("## Review\n\n- Cached finding".to_string()),
-            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
             slot: TransientMessageSlot::Review,
             turn_position: None,
         });
@@ -1433,7 +1434,7 @@ mod tests {
         loading_session.transient_messages.upsert(TransientMessage {
             anchor: TransientMessageAnchor::Tail,
             body: TransientMessageBody::Loading("Reviewing changes".to_string()),
-            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
             slot: TransientMessageSlot::Review,
             turn_position: None,
         });
@@ -2079,6 +2080,77 @@ mod tests {
         assert!(!text.contains("type \"/apply\" to verify and apply"));
     }
 
+    /// Verifies post-sync work remains below the durable sync result that
+    /// caused it, even while focused review starts in parallel.
+    #[test]
+    fn test_output_lines_orders_post_sync_statuses_chronologically() {
+        // Arrange
+        let mut session = session_fixture();
+        set_conversation_transcript(
+            &mut session,
+            vec![
+                (
+                    SessionMessageKind::AssistantAnswer,
+                    "implemented the change",
+                ),
+                (
+                    SessionMessageKind::WorkflowNotice,
+                    "\n[Sync] Successfully synced wt/session onto origin/main\n",
+                ),
+            ],
+        );
+        session.status = Status::Review;
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::AfterCompletedTurn,
+            body: TransientMessageBody::Markdown("[Commit] No changes to commit.".to_string()),
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::WorkflowNotice,
+            turn_position: session.latest_user_prompt_position(),
+        });
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading(
+                "Auto-pushing published branch after completed turn...".to_string(),
+            ),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::PublishedBranchSync,
+            turn_position: session.latest_user_prompt_position(),
+        });
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Markdown(
+                "## Review\n\nChronological review result.".to_string(),
+            ),
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::Review,
+            turn_position: session.latest_user_prompt_position(),
+        });
+
+        // Act
+        let text = output_lines(&session, Rect::new(0, 0, 120, 12), line_context(), None)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let commit_index = text
+            .find("[Commit] No changes to commit.")
+            .expect("commit notice should render");
+        let sync_index = text
+            .find("[Sync] Successfully synced")
+            .expect("sync result should render");
+        let auto_push_index = text
+            .find("Auto-pushing published branch")
+            .expect("auto-push status should render");
+        let review_index = text
+            .find("Chronological review result.")
+            .expect("focused-review status should render");
+
+        // Assert
+        assert!(commit_index < sync_index);
+        assert!(sync_index < auto_push_index);
+        assert!(auto_push_index < review_index);
+    }
+
     /// Verifies focused-review failures remain visible after the transient
     /// loading status returns to `Review`.
     #[test]
@@ -2114,7 +2186,7 @@ mod tests {
         session.transient_messages.upsert(TransientMessage {
             anchor: TransientMessageAnchor::Tail,
             body: TransientMessageBody::Loading("Publishing review request...".to_string()),
-            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
+            lifecycle: TransientMessageLifecycle::UntilResolved,
             slot: TransientMessageSlot::BranchPublish,
             turn_position: None,
         });
@@ -2552,7 +2624,7 @@ mod tests {
             body: TransientMessageBody::Markdown(
                 "[Sync] Queued until the current turn finishes.".to_string(),
             ),
-            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
             slot: TransientMessageSlot::WorkflowNotice,
             turn_position: session.latest_user_prompt_position(),
         });

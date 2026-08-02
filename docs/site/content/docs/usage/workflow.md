@@ -223,6 +223,10 @@ branch-publish ownership before it queues or starts, and retains that ownership 
 its post-rebase push. A completed turn or subsequent sync therefore cannot start a
 competing published-branch auto-push.
 
+Session output keeps workflow feedback in execution order. Commit feedback appears
+before its sync result, post-sync auto-push progress appears after that result, and
+focused-review progress remains at the tail while those branch operations finish.
+
 ### Focused Review
 
 When a session enters **Review**, Agentty starts generating a focused review in the

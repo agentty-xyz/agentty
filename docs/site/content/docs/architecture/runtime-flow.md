@@ -179,10 +179,12 @@ Published-branch auto-push completion sends one terminal reducer event carrying 
 `WorkflowNotice`. After accepting the current operation identifier, the reducer persists
 the notice, retracts the matching loading slot, and projects the durable transcript
 message in the same batch. Stale completions therefore cannot write a notice, and no
-frame can contain both the progress row and completed notice. The output-layout cache
-keys the transient-store version rather than maintaining a separate fingerprint for
-every temporary channel. Structured clarification questions render in the bottom
-question panel (`AppMode::Question`), not inside the output component.
+frame can contain both the progress row and completed notice. The in-progress auto-push
+slot uses the session-output tail so a durable sync result that started the push remains
+above it in chronological order; focused-review progress follows in the status tail. The
+output-layout cache keys the transient-store version rather than maintaining a separate
+fingerprint for every temporary channel. Structured clarification questions render in
+the bottom question panel (`AppMode::Question`), not inside the output component.
 
 Runtime owns one shared `RenderCacheStore` for markdown, diff, and session-output layout
 caches. The session-output cache keeps a bounded stable-body layer keyed by the typed
