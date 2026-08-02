@@ -344,6 +344,7 @@ fn settings_model_selector_uses_two_steps() {
                     .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("j")
+                    .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .capture_labeled(
                         "model_rows",
