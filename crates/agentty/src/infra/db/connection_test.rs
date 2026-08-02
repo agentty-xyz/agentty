@@ -144,6 +144,37 @@ async fn rerun_embedded_migration(pool: &SqlitePool, version: i64) {
         .expect("embedded migration should run");
 }
 
+/// Loads all project settings in deterministic name order for migration
+/// assertions.
+async fn load_project_setting_rows(database: &Database, project_id: i64) -> Vec<(String, String)> {
+    sqlx::query_as::<_, (String, String)>(
+        r"
+SELECT name, value
+FROM project_setting
+WHERE project_id = ?
+ORDER BY name
+",
+    )
+    .bind(project_id)
+    .fetch_all(database.pool())
+    .await
+    .expect("failed to load project settings")
+}
+
+/// Loads the legacy global reasoning value for migration cleanup assertions.
+async fn load_legacy_global_reasoning_level(database: &Database) -> Option<String> {
+    sqlx::query_scalar::<_, String>(
+        r"
+SELECT value
+FROM setting
+WHERE name = 'ReasoningLevel'
+",
+    )
+    .fetch_optional(database.pool())
+    .await
+    .expect("failed to load legacy global reasoning level")
+}
+
 /// Loads one session row by identifier through `load_sessions()`.
 async fn load_session_row(database: &Database, session_id: &str) -> SessionRow {
     database
@@ -1699,6 +1730,114 @@ async fn test_migrate_hacker_theme_to_green_preserves_theme_selection() {
 }
 
 #[tokio::test]
+async fn test_split_default_reasoning_level_migrates_each_project_role() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    sqlx::query(
+        r"
+INSERT INTO project_setting (project_id, name, value)
+VALUES (?, 'ReasoningLevel', 'xhigh')
+",
+    )
+    .bind(project_id)
+    .execute(database.pool())
+    .await
+    .expect("failed to seed legacy project reasoning level");
+    sqlx::query(
+        r"
+INSERT INTO setting (name, value)
+VALUES ('ReasoningLevel', 'medium')
+",
+    )
+    .execute(database.pool())
+    .await
+    .expect("failed to seed legacy global reasoning level");
+
+    // Act
+    rerun_embedded_migration(database.pool(), 70).await;
+    let migrated_rows = load_project_setting_rows(&database, project_id).await;
+    let legacy_global_reasoning_level = load_legacy_global_reasoning_level(&database).await;
+
+    // Assert
+    assert_eq!(
+        migrated_rows,
+        vec![
+            (
+                SettingName::DefaultFastReasoningLevel.as_str().to_string(),
+                "xhigh".to_string()
+            ),
+            (
+                SettingName::DefaultReviewReasoningLevel
+                    .as_str()
+                    .to_string(),
+                "xhigh".to_string()
+            ),
+            (
+                SettingName::DefaultSmartReasoningLevel.as_str().to_string(),
+                "xhigh".to_string()
+            ),
+        ]
+    );
+    assert_eq!(legacy_global_reasoning_level, None);
+}
+
+#[tokio::test]
+async fn test_split_default_reasoning_level_migrates_global_only_value() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/global-only-project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    sqlx::query(
+        r"
+INSERT INTO setting (name, value)
+VALUES ('ReasoningLevel', 'medium')
+",
+    )
+    .execute(database.pool())
+    .await
+    .expect("failed to seed legacy global reasoning level");
+
+    // Act
+    rerun_embedded_migration(database.pool(), 70).await;
+    let migrated_rows = load_project_setting_rows(&database, project_id).await;
+    let legacy_global_reasoning_level = load_legacy_global_reasoning_level(&database).await;
+
+    // Assert
+    assert_eq!(
+        migrated_rows,
+        vec![
+            (
+                SettingName::DefaultFastReasoningLevel.as_str().to_string(),
+                "medium".to_string()
+            ),
+            (
+                SettingName::DefaultReviewReasoningLevel
+                    .as_str()
+                    .to_string(),
+                "medium".to_string()
+            ),
+            (
+                SettingName::DefaultSmartReasoningLevel.as_str().to_string(),
+                "medium".to_string()
+            ),
+        ]
+    );
+    assert_eq!(legacy_global_reasoning_level, None);
+}
+
+#[tokio::test]
 async fn test_project_setting_round_trip_is_isolated_per_project() {
     // Arrange
     let database = Database::open_in_memory()
@@ -1752,7 +1891,7 @@ async fn test_project_setting_round_trip_is_isolated_per_project() {
 }
 
 #[tokio::test]
-async fn test_project_reasoning_level_round_trip_uses_typed_setting_helpers() {
+async fn test_project_role_reasoning_levels_round_trip_with_typed_setting_helpers() {
     // Arrange
     let database = Database::open_in_memory()
         .await
@@ -1764,19 +1903,44 @@ async fn test_project_reasoning_level_round_trip_uses_typed_setting_helpers() {
         .expect("failed to insert project");
 
     // Act
-    database
-        .settings()
-        .set_project_reasoning_level(project_id, ReasoningLevel::Low)
-        .await
-        .expect("failed to persist project reasoning level");
-    let reasoning_level = database
-        .settings()
-        .load_project_reasoning_level(project_id)
-        .await
-        .expect("failed to load project reasoning level");
+    let role_reasoning_levels = [
+        (
+            SettingName::DefaultSmartReasoningLevel,
+            ReasoningLevel::High,
+        ),
+        (SettingName::DefaultFastReasoningLevel, ReasoningLevel::Low),
+        (
+            SettingName::DefaultReviewReasoningLevel,
+            ReasoningLevel::XHigh,
+        ),
+    ];
+    for (name, reasoning_level) in role_reasoning_levels {
+        database
+            .settings()
+            .upsert_project_setting(project_id, name, reasoning_level.as_str())
+            .await
+            .expect("failed to persist project role reasoning level");
+    }
+    let mut loaded_reasoning_levels = Vec::new();
+    for (name, _) in role_reasoning_levels {
+        loaded_reasoning_levels.push(
+            database
+                .settings()
+                .load_project_reasoning_level(project_id, name)
+                .await
+                .expect("failed to load project role reasoning level"),
+        );
+    }
 
     // Assert
-    assert_eq!(reasoning_level, ReasoningLevel::Low);
+    assert_eq!(
+        loaded_reasoning_levels,
+        vec![
+            ReasoningLevel::High,
+            ReasoningLevel::Low,
+            ReasoningLevel::XHigh,
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1794,71 +1958,23 @@ async fn test_load_project_reasoning_level_defaults_when_setting_is_missing_or_i
     // Act
     let missing_setting_level = database
         .settings()
-        .load_project_reasoning_level(project_id)
+        .load_project_reasoning_level(project_id, SettingName::DefaultSmartReasoningLevel)
         .await
         .expect("failed to load default project reasoning level");
     database
         .settings()
-        .upsert_project_setting(project_id, SettingName::ReasoningLevel, "unsupported")
+        .upsert_project_setting(
+            project_id,
+            SettingName::DefaultSmartReasoningLevel,
+            "unsupported",
+        )
         .await
         .expect("failed to insert unsupported project reasoning level");
     let invalid_setting_level = database
         .settings()
-        .load_project_reasoning_level(project_id)
+        .load_project_reasoning_level(project_id, SettingName::DefaultSmartReasoningLevel)
         .await
         .expect("failed to load fallback project reasoning level");
-
-    // Assert
-    assert_eq!(missing_setting_level, ReasoningLevel::High);
-    assert_eq!(invalid_setting_level, ReasoningLevel::High);
-}
-
-#[tokio::test]
-async fn test_reasoning_level_round_trip_uses_typed_setting_helpers() {
-    // Arrange
-    let database = Database::open_in_memory()
-        .await
-        .expect("failed to open in-memory db");
-
-    // Act
-    database
-        .settings()
-        .set_reasoning_level(ReasoningLevel::Low)
-        .await
-        .expect("failed to persist reasoning level");
-    let reasoning_level = database
-        .settings()
-        .load_reasoning_level()
-        .await
-        .expect("failed to load reasoning level");
-
-    // Assert
-    assert_eq!(reasoning_level, ReasoningLevel::Low);
-}
-
-#[tokio::test]
-async fn test_load_reasoning_level_defaults_when_setting_is_missing_or_invalid() {
-    // Arrange
-    let database = Database::open_in_memory()
-        .await
-        .expect("failed to open in-memory db");
-
-    // Act
-    let missing_setting_level = database
-        .settings()
-        .load_reasoning_level()
-        .await
-        .expect("failed to load default reasoning level");
-    database
-        .settings()
-        .upsert_setting(SettingName::ReasoningLevel, "unsupported")
-        .await
-        .expect("failed to insert unsupported reasoning level");
-    let invalid_setting_level = database
-        .settings()
-        .load_reasoning_level()
-        .await
-        .expect("failed to load fallback reasoning level");
 
     // Assert
     assert_eq!(missing_setting_level, ReasoningLevel::High);

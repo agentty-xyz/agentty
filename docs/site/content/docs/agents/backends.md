@@ -147,20 +147,22 @@ validated discovery result instead of running `agy --version` on the async sessi
 Replacing or modifying the `agy` executable invalidates that result and asks you to wait
 for discovery or restart Agentty before retrying.
 
-<a id="backends-persistent-defaults"></a> For persistent defaults, choose a default
-model in the **Settings** tab (`Tab` to navigate, `Enter` to open the selector). The
-selected model is stored with its backend as `agent/model`, which keeps shared Gemini
-model ids tied to the selected Gemini or Antigravity provider. Stored defaults that
-point at an unavailable backend fall back to the first available backend default.
+<a id="backends-persistent-defaults"></a> For persistent defaults, configure each Smart,
+Fast, and Review role in the **Settings** tab (`Tab` to navigate, `Enter` to open the
+selector). Choose the `agent/model` first and press `Enter`, then choose its reasoning
+level and press `Enter` again to save. Each `agent/model [reasoning]` pair is stored per
+project. Keeping the backend in the selection ensures shared Gemini model ids remain
+tied to the selected Gemini or Antigravity provider. Stored defaults that point at an
+unavailable backend fall back to the first available backend default.
 
-<a id="backends-reasoning-level"></a> For Antigravity, Codex, and Claude sessions, the
-**Settings** tab also exposes `Default Reasoning Level` (`low`, `medium`, `high`,
-`xhigh`, `max`). The selected level is persisted per project and is sent with turns
-unless a session-specific override is active. Antigravity receives `--effort low`,
-`--effort medium`, or `--effort high`; `xhigh` and `max` map to its highest supported
-value, `--effort high`. Codex receives `max` as a distinct reasoning effort. For Claude,
-both `xhigh` and `max` map to `--effort max`, which is currently only supported by
-`claude-opus-5`.
+<a id="backends-reasoning-level"></a> Smart reasoning becomes the default for new
+sessions, Fast reasoning is used for title and commit-message utility prompts, and
+Review reasoning is used for focused review assists. A session-specific `/reasoning`
+override still takes precedence for that session's turns. Antigravity receives
+`--effort low`, `--effort medium`, or `--effort high`; `xhigh` and `max` map to its
+highest supported value, `--effort high`. Codex receives `max` as a distinct reasoning
+effort. For Claude, both `xhigh` and `max` map to `--effort max`, which is currently
+only supported by `claude-opus-5`.
 
 ## Available Models
 

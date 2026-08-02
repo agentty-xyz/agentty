@@ -6,7 +6,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 
 use crate::presentation::help_action;
-use crate::presentation::settings::{SettingsScreenSnapshot, SettingsSelectorDropdown};
+use crate::presentation::settings::{
+    SettingsScreenSnapshot, SettingsSelectorDropdown, SettingsSelectorDropdownOption,
+};
 use crate::ui::{Component, Page, component, layout, overlay, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.
@@ -184,7 +186,7 @@ fn render_settings_selector_dropdown(
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: true })
         .block(overlay::overlay_block(
-            "Select setting value",
+            selector_dropdown.title,
             style::palette::accent(),
         ));
 
@@ -288,7 +290,7 @@ fn settings_selector_dropdown_lines(
         .take(window_end.saturating_sub(window_start))
         .map(|(option_index, option)| {
             settings_selector_dropdown_option_line(
-                option.label.as_str(),
+                option,
                 label_width,
                 selected_index == option_index,
             )
@@ -335,11 +337,11 @@ fn settings_selector_option_window_start(
 
 /// Builds one option line for the settings selector dropdown.
 fn settings_selector_dropdown_option_line(
-    option_label: &str,
+    option: &SettingsSelectorDropdownOption,
     label_width: usize,
     is_selected: bool,
 ) -> Line<'static> {
-    let option_label = truncate_with_ellipsis(option_label, label_width);
+    let option_label = truncate_with_ellipsis(&option.label, label_width);
 
     if is_selected {
         let selected_label = format!("> {option_label:<label_width$}");
@@ -543,6 +545,7 @@ mod tests {
             ],
             row_index: 0,
             selected_index: 1,
+            title: "Select setting value",
         };
 
         // Act
@@ -566,6 +569,7 @@ mod tests {
                 .collect(),
             row_index: 2,
             selected_index: 10,
+            title: "Select model",
         };
 
         // Act
@@ -619,6 +623,7 @@ mod tests {
             ],
             row_index: 3,
             selected_index: 2,
+            title: "Select reasoning level",
         };
 
         // Act
@@ -629,6 +634,47 @@ mod tests {
         assert!(area.y >= main_area.y);
         assert!(area.x.saturating_add(area.width) <= main_area.x.saturating_add(main_area.width));
         assert!(area.y.saturating_add(area.height) <= main_area.y.saturating_add(main_area.height));
+    }
+
+    #[test]
+    fn test_settings_selector_dropdown_renders_stage_title() {
+        // Arrange
+        let selector_dropdown = SettingsSelectorDropdown {
+            options: vec![SettingsSelectorDropdownOption {
+                label: "codex/gpt-5.6-sol".to_string(),
+            }],
+            row_index: 2,
+            selected_index: 0,
+            title: "Select model",
+        };
+        let backend = ratatui::backend::TestBackend::new(80, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let main_area = frame.area();
+                let table_chunks = [Rect::new(0, 0, 80, 3), Rect::new(0, 3, 80, 8)];
+                render_settings_selector_dropdown(
+                    frame,
+                    main_area,
+                    &table_chunks,
+                    1,
+                    &selector_dropdown,
+                );
+            })
+            .expect("failed to draw selector dropdown");
+        let rendered_text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+
+        // Assert
+        assert!(rendered_text.contains("Select model"));
+        assert!(rendered_text.contains("codex/gpt-5.6-sol"));
     }
 
     #[test]

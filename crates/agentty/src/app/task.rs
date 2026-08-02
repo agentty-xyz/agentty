@@ -66,6 +66,7 @@ pub(super) struct ReviewAssistTaskInput {
     /// Hash of the diff that triggered this review, threaded back in the
     /// completion event so the reducer can store it without re-reading cache.
     pub(super) diff_hash: u64,
+    pub(super) reasoning_level: ReasoningLevel,
     pub(super) review_diff: String,
     pub(super) review_selection: AgentSelection,
     pub(super) session_chat_history: Option<String>,
@@ -466,6 +467,7 @@ impl TaskService {
         let ReviewAssistTaskInput {
             app_event_tx,
             diff_hash,
+            reasoning_level,
             review_diff,
             review_selection,
             session_chat_history,
@@ -477,6 +479,7 @@ impl TaskService {
             let review_result = Self::review_assist_text_with_client(
                 &session_folder,
                 review_selection,
+                reasoning_level,
                 &review_diff,
                 session_chat_history.as_deref(),
                 one_shot_client.as_ref(),
@@ -506,6 +509,7 @@ impl TaskService {
     async fn review_assist_text_with_client(
         session_folder: &Path,
         review_selection: AgentSelection,
+        reasoning_level: ReasoningLevel,
         review_diff: &str,
         session_chat_history: Option<&str>,
         one_shot_client: &dyn OneShotClient,
@@ -519,7 +523,7 @@ impl TaskService {
                 model: review_selection.model(),
                 prompt: review_prompt,
                 request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
-                reasoning_level: ReasoningLevel::default(),
+                reasoning_level,
             })
             .await
             .map_err(AppError::from)?;
@@ -1085,6 +1089,7 @@ mod tests {
             .times(1)
             .returning(|request| {
                 assert_eq!(request.agent_kind, AgentKind::Claude);
+                assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
                 assert!(
                     request
                         .prompt
@@ -1099,6 +1104,7 @@ mod tests {
         let input = ReviewAssistTaskInput {
             app_event_tx,
             diff_hash: 42,
+            reasoning_level: ReasoningLevel::XHigh,
             review_diff: "diff --git a/src/lib.rs b/src/lib.rs".to_string(),
             review_selection: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             session_chat_history: None,
@@ -1141,6 +1147,7 @@ mod tests {
         let result = TaskService::review_assist_text_with_client(
             session_folder,
             review_selection,
+            ReasoningLevel::XHigh,
             review_diff,
             None,
             &one_shot_client,
@@ -1170,6 +1177,7 @@ mod tests {
         one_shot_client.expect_submit().returning(|request| {
             assert_eq!(request.agent_kind, AgentKind::Antigravity);
             assert_eq!(request.model, AgentModel::Gemini36Flash);
+            assert_eq!(request.reasoning_level, ReasoningLevel::Low);
 
             Ok(agent::OneShotSubmission {
                 response: AgentResponse::plain("Review completed."),
@@ -1181,6 +1189,7 @@ mod tests {
         let result = TaskService::review_assist_text_with_client(
             session_folder,
             review_selection,
+            ReasoningLevel::Low,
             review_diff,
             None,
             &one_shot_client,

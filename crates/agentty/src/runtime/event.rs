@@ -600,7 +600,7 @@ mod tests {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.tabs.set(crate::app::Tab::Settings);
-        for _ in 0..7 {
+        for _ in 0..6 {
             let view = app.settings.view();
             let _ = app.settings_presentation.apply(&view, SettingsAction::Next);
         }

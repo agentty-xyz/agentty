@@ -307,7 +307,7 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Reasoning Level", &full);
+                assertion::assert_text_in_region(frame, "Default Smart Model", &full);
 
                 assert_eq!(
                     report.captures.len(),
@@ -331,7 +331,7 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                 let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
                 assertion::assert_text_in_region(
                     &settings_frame,
-                    "Reasoning Level",
+                    "Default Smart Model",
                     &settings_full,
                 );
             },
@@ -646,7 +646,7 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                 let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
                 assertion::assert_text_in_region(
                     &settings_frame,
-                    "Reasoning Level",
+                    "Default Smart Model",
                     &settings_full,
                 );
 

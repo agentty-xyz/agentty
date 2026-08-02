@@ -20,6 +20,7 @@ use crate::app::{AppEvent, SessionManager, setting};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
+use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::AppRepositories;
@@ -705,6 +706,7 @@ async fn spawn_turn_title_generation(
         AgentKind::ALL,
     )
     .await;
+    let title_reasoning_level = load_title_reasoning_level(&context.db, session_project_id).await;
 
     let _title_generation_task =
         SessionManager::spawn_session_title_generation_task(SessionTitleGenerationTaskInput {
@@ -714,11 +716,27 @@ async fn spawn_turn_title_generation(
             one_shot_client,
             prompt: prompt.to_string(),
             requires_provisional_title: true,
+            reasoning_level: title_reasoning_level,
             session_agent: title_agent,
             session_id: context.session_id.clone(),
             tracked_generation: None,
         })
         .await;
+}
+
+/// Loads the Fast-role reasoning default used by detached title generation.
+async fn load_title_reasoning_level(
+    db: &AppRepositories,
+    session_project_id: Option<i64>,
+) -> ReasoningLevel {
+    let Some(project_id) = session_project_id else {
+        return ReasoningLevel::default();
+    };
+
+    db.settings()
+        .load_project_reasoning_level(project_id, SettingName::DefaultFastReasoningLevel)
+        .await
+        .unwrap_or_default()
 }
 
 /// Returns one normalized thinking text line.
@@ -729,4 +747,21 @@ fn normalize_thinking_stream_text(text: &str) -> Option<String> {
     }
 
     Some(trimmed_text.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn title_reasoning_level_defaults_without_project() {
+        // Arrange
+        let repositories = AppRepositories::in_memory().await;
+
+        // Act
+        let reasoning_level = load_title_reasoning_level(&repositories, None).await;
+
+        // Assert
+        assert_eq!(reasoning_level, ReasoningLevel::High);
+    }
 }

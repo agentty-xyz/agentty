@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use super::core::AppEvent;
 use super::task;
 use crate::app::session_state::SessionState;
-use crate::domain::agent::{AgentModel, AgentSelection};
+use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transient_message::{
@@ -273,16 +273,19 @@ pub(crate) fn review_cache_from_rows(
 /// Spawns one focused review-assist task for the provided session diff.
 pub(crate) fn start_review_assist(
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    review_selection: AgentSelection,
+    review_agent: (AgentSelection, ReasoningLevel),
     session_id: &str,
     session_folder: &Path,
     diff_hash: u64,
     review_diff: &str,
     session_chat_history: Option<&str>,
 ) {
+    let (review_selection, reasoning_level) = review_agent;
+
     task::TaskService::spawn_review_assist_task(task::ReviewAssistTaskInput {
         app_event_tx,
         diff_hash,
+        reasoning_level,
         review_diff: review_diff.to_string(),
         review_selection,
         session_chat_history: session_chat_history.map(str::to_string),
@@ -341,6 +344,7 @@ pub(crate) async fn auto_start_reviews(
     session_state: &mut SessionState,
     git_client: Arc<dyn GitClient>,
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    reasoning_level: ReasoningLevel,
     review_selection: AgentSelection,
 ) {
     for session_id in session_ids {
@@ -349,6 +353,7 @@ pub(crate) async fn auto_start_reviews(
             session_state,
             git_client.as_ref(),
             &app_event_tx,
+            reasoning_level,
             review_selection,
             session_id,
         )
@@ -362,6 +367,7 @@ async fn auto_start_review_for_session(
     session_state: &mut SessionState,
     git_client: &dyn GitClient,
     app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+    reasoning_level: ReasoningLevel,
     review_selection: AgentSelection,
     session_id: &SessionId,
 ) {
@@ -431,7 +437,7 @@ async fn auto_start_review_for_session(
     }
     start_review_assist(
         app_event_tx.clone(),
-        review_selection,
+        (review_selection, reasoning_level),
         session_id,
         &session_folder,
         new_hash,

@@ -2009,11 +2009,13 @@ impl SessionManager {
             input.session_agent,
         )
         .await;
+        let auto_commit_reasoning_level =
+            SessionTaskService::load_auto_commit_reasoning_level(&input.db, &input.id).await;
         match SessionTaskService::commit_session_changes(
             input.git_client.as_ref(),
             &input.folder,
             input.rebase_plan.target_label(),
-            auto_commit_agent,
+            (auto_commit_agent, auto_commit_reasoning_level),
             input.one_shot_client.as_ref(),
             false,
             include_coauthored_by_agentty,

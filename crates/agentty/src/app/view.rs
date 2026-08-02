@@ -89,7 +89,7 @@ impl App {
             assigned_issues: &self.assigned_issues,
             available_agent_clis: self.services.available_agent_clis(),
             current_tab,
-            default_reasoning_level: self.settings.reasoning_level,
+            default_reasoning_level: self.settings.default_smart_reasoning_level,
             frame_time,
             git_branch: project.git_branch,
             git_status: project.git_status,

@@ -191,6 +191,7 @@ struct ClaimedSessionTitleGenerationTaskInput {
     folder: PathBuf,
     one_shot_client: Arc<dyn OneShotClient>,
     prompt: String,
+    reasoning_level: ReasoningLevel,
     session_agent: AgentSelection,
     session_id: SessionId,
     title_generation: i64,
@@ -212,6 +213,8 @@ pub(super) struct SessionTitleGenerationTaskInput {
     /// Whether title generation should run only while the visible title is
     /// still a provisional user-prompt fallback.
     pub(super) requires_provisional_title: bool,
+    /// Reasoning effort paired with the title-generation model.
+    pub(super) reasoning_level: ReasoningLevel,
     /// Agent/model selection used for title generation.
     pub(super) session_agent: AgentSelection,
     /// Session receiving the generated title.
@@ -1104,9 +1107,9 @@ impl SessionManager {
                     "Session project is required to stage draft prompts".to_string(),
                 )
             })?;
-        let (title_generation_folder, title_generation_agent) = self
-            .draft_title_generation_context(services, project_id, session_agent, folder)
-            .await?;
+        let (title_generation_folder, title_generation_agent, title_generation_reasoning_level) =
+            self.draft_title_generation_context(services, project_id, session_agent, folder)
+                .await?;
 
         Self::persist_staged_draft(
             services,
@@ -1137,6 +1140,7 @@ impl SessionManager {
                 one_shot_client: services.one_shot_client(),
                 prompt: title_generation_prompt,
                 requires_provisional_title: false,
+                reasoning_level: title_generation_reasoning_level,
                 session_agent: title_generation_agent,
                 session_id: persisted_session_id.clone(),
                 tracked_generation: Some(title_generation_task_generation),
@@ -1180,18 +1184,27 @@ impl SessionManager {
         project_id: i64,
         session_agent: AgentSelection,
         session_folder: PathBuf,
-    ) -> Result<(PathBuf, AgentSelection), SessionError> {
+    ) -> Result<(PathBuf, AgentSelection, ReasoningLevel), SessionError> {
         let project_working_dir = self.load_project_path(services, project_id).await?;
         let title_generation_agent =
             setting::load_default_fast_agent_setting(services, Some(project_id), session_agent)
                 .await;
+        let title_generation_reasoning_level = services
+            .db()
+            .settings()
+            .load_project_reasoning_level(project_id, SettingName::DefaultFastReasoningLevel)
+            .await?;
         let title_generation_folder = if services.fs_client().is_dir(session_folder.clone()) {
             session_folder
         } else {
             project_working_dir
         };
 
-        Ok((title_generation_folder, title_generation_agent))
+        Ok((
+            title_generation_folder,
+            title_generation_agent,
+            title_generation_reasoning_level,
+        ))
     }
 
     /// Returns whether a staged draft can start under the current one-level
@@ -2491,6 +2504,7 @@ impl SessionManager {
             one_shot_client,
             prompt,
             requires_provisional_title,
+            reasoning_level,
             session_agent,
             session_id: persisted_session_id,
             tracked_generation,
@@ -2538,6 +2552,7 @@ impl SessionManager {
                     folder,
                     one_shot_client,
                     prompt,
+                    reasoning_level,
                     session_agent,
                     session_id: persisted_session_id,
                     title_generation,
@@ -2558,6 +2573,7 @@ impl SessionManager {
             folder,
             one_shot_client,
             prompt,
+            reasoning_level,
             session_agent,
             session_id: persisted_session_id,
             title_generation,
@@ -2569,6 +2585,7 @@ impl SessionManager {
             folder.as_path(),
             &title_generation_prompt,
             session_agent,
+            reasoning_level,
             one_shot_client.as_ref(),
         )
         .await
@@ -2650,6 +2667,7 @@ impl SessionManager {
         folder: &Path,
         prompt: &str,
         session_agent: AgentSelection,
+        reasoning_level: ReasoningLevel,
         one_shot_client: &dyn OneShotClient,
     ) -> Option<String> {
         let submission = one_shot_client
@@ -2660,7 +2678,7 @@ impl SessionManager {
                 model: session_agent.model(),
                 prompt: prompt.to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
-                reasoning_level: ReasoningLevel::default(),
+                reasoning_level,
             })
             .await
             .ok()?;
@@ -2808,7 +2826,7 @@ impl SessionManager {
         let reasoning_level = services
             .db()
             .settings()
-            .load_project_reasoning_level(project_id)
+            .load_project_reasoning_level(project_id, SettingName::DefaultSmartReasoningLevel)
             .await?;
         self.default_session_model = agent.model();
 
@@ -3462,6 +3480,7 @@ mod tests {
             one_shot_client,
             prompt: prompt.to_string(),
             requires_provisional_title: true,
+            reasoning_level: ReasoningLevel::Low,
             session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             session_id: SessionId::from("session-id"),
             tracked_generation: None,
@@ -4707,6 +4726,7 @@ mod tests {
                 assert_eq!(request.folder, expected_folder);
                 assert_eq!(request.model, AgentModel::ClaudeSonnet5);
                 assert_eq!(request.prompt, "Generate a title");
+                assert_eq!(request.reasoning_level, ReasoningLevel::Low);
                 assert_eq!(request.request_kind, AgentRequestKind::UtilityPrompt);
 
                 Ok(agent::OneShotSubmission {
@@ -4726,6 +4746,7 @@ mod tests {
             &folder,
             "Generate a title",
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            ReasoningLevel::Low,
             &one_shot_client,
         )
         .await;
