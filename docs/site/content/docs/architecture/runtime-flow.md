@@ -102,7 +102,10 @@ instead of returning an ambiguous error that could prompt duplicate creation.
 <a id="architecture-runtime-flow-notes"></a> Foreground loop details:
 
 - `run_main_loop()` drains one bounded batch of queued app events before draw so touched
-  sessions sync from their live handles without a full list-wide sweep every frame.
+  sessions sync from their live handles without a full list-wide sweep every frame. The
+  batch then drains payload-bearing work into an `AppEventReductionPlan`: effects that
+  must precede snapshot mutation run first, cached snapshot updates run next, and
+  post-snapshot effects run last.
 - `run_main_loop()` owns `PresentationState`; input measurement and `ui::render_app()`
   share its bounded `RenderCacheStore`. `App` neither constructs Ratatui frames nor owns
   render caches.
@@ -137,7 +140,10 @@ channels:
 <a id="architecture-runtime-flow-app-events"></a> `App::apply_app_events()` is the
 single reducer path for async app events. Each cycle drains queued events up to a
 bounded budget, coalesces them into one `AppEventBatch` (refresh, git status, model, and
-loader updates), and applies side effects in stable order. Key behaviors:
+loader updates), then drains an explicit `AppEventReductionPlan`. The plan separates
+ordered effects that must run before cached snapshot updates from effects that consume
+the resulting snapshot afterward. Reload effects currently run before snapshot updates;
+focused-review state application and persistence run afterward. Key behaviors:
 
 - Refresh events set reload flags instead of reloading inline; the expensive
   home-directory project discovery runs only during `App::new()`.

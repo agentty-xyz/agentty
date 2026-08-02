@@ -2159,9 +2159,13 @@ async fn test_replace_title_generation_task_aborts_superseded_task() {
     .expect("superseded task should abort promptly");
 
     // Assert
-    assert_eq!(session_manager.title_generation_tasks.len(), 1);
+    assert_eq!(
+        session_manager.workflow_state.title_generation_tasks.len(),
+        1
+    );
     assert!(
         session_manager
+            .workflow_state
             .title_generation_tasks
             .contains_key(session_id.as_str())
     );
@@ -2194,9 +2198,13 @@ async fn test_clear_title_generation_task_if_matches_ignores_stale_generation() 
     session_manager.clear_title_generation_task_if_matches(&session_id, 1);
 
     // Assert
-    assert_eq!(session_manager.title_generation_tasks.len(), 1);
+    assert_eq!(
+        session_manager.workflow_state.title_generation_tasks.len(),
+        1
+    );
     assert!(
         session_manager
+            .workflow_state
             .title_generation_tasks
             .contains_key(session_id.as_str())
     );
@@ -2229,7 +2237,12 @@ async fn test_clear_title_generation_task_if_matches_removes_matching_generation
     session_manager.clear_title_generation_task_if_matches(&session_id, 2);
 
     // Assert
-    assert!(session_manager.title_generation_tasks.is_empty());
+    assert!(
+        session_manager
+            .workflow_state
+            .title_generation_tasks
+            .is_empty()
+    );
 }
 
 #[tokio::test]

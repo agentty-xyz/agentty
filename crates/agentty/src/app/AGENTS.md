@@ -17,15 +17,17 @@ Application-layer workflows and orchestration.
   - `SessionRuntimeHandle` implements the frontend-neutral `ag-session` `SessionBackend`
     port; `session_api.rs` executes accepted commands against the foreground-owned
     runtime and host services.
-  - `SessionManager` inside the runtime owns session snapshots, runtime handles, and
-    session worker queues.
+  - `SessionManager` inside the runtime coordinates session snapshots, workflow state,
+    and session worker queues.
   - `ProjectManager` owns project list, active project context, and git status tracking
     state.
   - `AppServices` holds shared dependencies (`Database`, base path, app-event sender).
 - Session state model:
   - `Session` is a render-friendly data snapshot.
-  - `SessionHandles` stores shared runtime channels used by background tasks.
-  - `SessionState` performs handle-to-snapshot sync before render.
+  - `SessionRuntimeState` owns `SessionHandles`, which store shared runtime channels
+    used by background tasks.
+  - `SessionState` owns persisted/render-friendly projections and performs
+    handle-to-snapshot sync before render.
 - Event model:
   - `AppEvent` is the internal bus between background workflows and the runtime loop.
   - `SessionRuntimeCommand` carries programmatic session requests through a bounded
@@ -33,7 +35,8 @@ Application-layer workflows and orchestration.
   - Runtime handles observe a reference-counted foreground-consumer signal, rejecting
     requests while no command consumer is registered and abandoning pending waits when
     the final consumer exits.
-  - `apply_app_events()` is the reducer for app-side async mutations.
+  - `apply_app_events()` coalesces app-side async mutations; each batch first produces a
+    deterministic state/effect plan, then the app executes the ordered effects.
   - The foreground event loop selects between `AppEvent` values and session-runtime
     commands so both mutate reducer-owned state on the same task.
   - Programmatic creation reloads the active-project session snapshot before

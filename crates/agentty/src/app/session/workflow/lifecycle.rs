@@ -1911,7 +1911,7 @@ impl SessionManager {
         }
 
         let session = self.remove_session_at(selected_index)?;
-        self.state.handles.remove(&session.id);
+        self.state.remove_handle(&session.id);
         self.remove_session_worktree_availability(&session.id);
         self.remove_at_mention_index_for_root(&session.folder);
         self.abort_title_generation_task(&session.id);
@@ -4675,7 +4675,12 @@ mod tests {
         session_manager.track_draft_title_generation_task("session-id", 2, None);
 
         // Assert
-        assert!(session_manager.title_generation_tasks.is_empty());
+        assert!(
+            session_manager
+                .workflow_state
+                .title_generation_tasks
+                .is_empty()
+        );
     }
 
     #[tokio::test]

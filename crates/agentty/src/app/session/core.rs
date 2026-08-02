@@ -160,12 +160,17 @@ pub struct SessionManager {
     pub(super) default_session_model: AgentModel,
     pub(super) git_client: Arc<dyn git::GitClient>,
     pub(super) merge_service: SessionMergeService,
-    pub(super) pending_history_replay: HashSet<SessionId>,
-    pub(super) published_branch_sync_operations: HashMap<SessionId, String>,
     pub(super) state: SessionState,
     pub(super) stats_activity: Vec<DailyActivity>,
-    pub(super) title_generation_tasks: HashMap<SessionId, TitleGenerationTask>,
+    pub(super) workflow_state: SessionWorkflowState,
     pub(super) worker_service: SessionWorkerService,
+}
+
+/// Live bookkeeping shared by session lifecycle workflows.
+pub(super) struct SessionWorkflowState {
+    pub(super) pending_history_replay: HashSet<SessionId>,
+    pub(super) published_branch_sync_operations: HashMap<SessionId, String>,
+    pub(super) title_generation_tasks: HashMap<SessionId, TitleGenerationTask>,
 }
 
 /// Tracks one draft-title generation task plus the generation used to identify
@@ -201,11 +206,13 @@ impl SessionManager {
             default_session_model: defaults.model,
             git_client,
             merge_service: SessionMergeService,
-            pending_history_replay,
-            published_branch_sync_operations: HashMap::new(),
             state,
             stats_activity,
-            title_generation_tasks: HashMap::new(),
+            workflow_state: SessionWorkflowState {
+                pending_history_replay,
+                published_branch_sync_operations: HashMap::new(),
+                title_generation_tasks: HashMap::new(),
+            },
             worker_service: SessionWorkerService::new(),
         }
     }
@@ -220,13 +227,16 @@ impl SessionManager {
         generation: u64,
         title_generation_task: JoinHandle<()>,
     ) {
-        if let Some(existing_task) = self.title_generation_tasks.remove(session_id)
+        if let Some(existing_task) = self
+            .workflow_state
+            .title_generation_tasks
+            .remove(session_id)
             && !existing_task.join_handle.is_finished()
         {
             existing_task.join_handle.abort();
         }
 
-        self.title_generation_tasks.insert(
+        self.workflow_state.title_generation_tasks.insert(
             SessionId::from(session_id),
             TitleGenerationTask {
                 generation,
@@ -238,7 +248,10 @@ impl SessionManager {
     /// Aborts and forgets any tracked staged title-generation task for one
     /// session.
     pub(crate) fn abort_title_generation_task(&mut self, session_id: &str) {
-        if let Some(existing_task) = self.title_generation_tasks.remove(session_id)
+        if let Some(existing_task) = self
+            .workflow_state
+            .title_generation_tasks
+            .remove(session_id)
             && !existing_task.join_handle.is_finished()
         {
             existing_task.join_handle.abort();
@@ -248,7 +261,8 @@ impl SessionManager {
     /// Returns the next tracked generation number for one session's draft
     /// title-generation task.
     pub(crate) fn next_title_generation_task_generation(&self, session_id: &str) -> u64 {
-        self.title_generation_tasks
+        self.workflow_state
+            .title_generation_tasks
             .get(session_id)
             .map_or(1, |tracked_task| tracked_task.generation.saturating_add(1))
     }
@@ -261,12 +275,15 @@ impl SessionManager {
         generation: u64,
     ) {
         let should_clear = self
+            .workflow_state
             .title_generation_tasks
             .get(session_id)
             .is_some_and(|tracked_task| tracked_task.generation == generation);
 
         if should_clear {
-            self.title_generation_tasks.remove(session_id);
+            self.workflow_state
+                .title_generation_tasks
+                .remove(session_id);
         }
     }
 
@@ -391,7 +408,7 @@ impl SessionManager {
     pub(crate) fn session_handles(
         &self,
     ) -> &HashMap<SessionId, crate::domain::session::SessionHandles> {
-        &self.state.handles
+        self.state.handles()
     }
 
     /// Returns mutable runtime handles keyed by stable session id.
@@ -399,7 +416,7 @@ impl SessionManager {
     pub(crate) fn session_handles_mut(
         &mut self,
     ) -> &mut HashMap<SessionId, crate::domain::session::SessionHandles> {
-        &mut self.state.handles
+        self.state.handles_mut()
     }
 
     /// Returns the active prompt transcript block cached for sessions that are
@@ -597,7 +614,8 @@ impl SessionManager {
         session_id: &str,
         sync_operation_id: String,
     ) {
-        self.published_branch_sync_operations
+        self.workflow_state
+            .published_branch_sync_operations
             .insert(SessionId::from(session_id), sync_operation_id);
 
         if let Some(session) = self
@@ -626,7 +644,10 @@ impl SessionManager {
         sync_operation_id: &str,
         persistent_notice: Option<&str>,
     ) -> bool {
-        let Some(current_operation_id) = self.published_branch_sync_operations.get(session_id)
+        let Some(current_operation_id) = self
+            .workflow_state
+            .published_branch_sync_operations
+            .get(session_id)
         else {
             return false;
         };
@@ -634,7 +655,9 @@ impl SessionManager {
             return false;
         }
 
-        self.published_branch_sync_operations.remove(session_id);
+        self.workflow_state
+            .published_branch_sync_operations
+            .remove(session_id);
 
         let appended_to_handle = persistent_notice.is_some_and(|persistent_notice| {
             self.append_workflow_notice_to_handle(session_id, persistent_notice)
@@ -1018,7 +1041,7 @@ impl SessionManager {
     /// Appends one workflow notice to a live transcript handle when the
     /// session currently owns one.
     fn append_workflow_notice_to_handle(&self, session_id: &str, persistent_notice: &str) -> bool {
-        let Some(handles) = self.state.handles.get(session_id) else {
+        let Some(handles) = self.state.handle(session_id) else {
             return false;
         };
         let Ok(mut transcript) = handles.transcript.lock() else {
