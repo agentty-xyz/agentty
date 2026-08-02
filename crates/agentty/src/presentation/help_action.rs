@@ -219,6 +219,15 @@ impl ViewActionSet {
 /// Maps one session snapshot into the shared view-mode shortcut state used by
 /// both runtime handlers and footer rendering.
 pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
+    if !session.owns_branch_changes()
+        && !matches!(
+            session.status,
+            Status::InProgress | Status::Done | Status::Canceled
+        )
+    {
+        return ViewSessionState::Interactive;
+    }
+
     match session.status {
         Status::Done => ViewSessionState::Done,
         Status::Canceled => ViewSessionState::Canceled,
@@ -822,6 +831,8 @@ fn publish_pull_request_help_action(action: PublishBranchAction) -> HelpAction {
 
 #[cfg(test)]
 mod tests {
+    use ag_session::SessionRole;
+
     use super::*;
     use crate::domain::session::PublishBranchAction;
     use crate::test_support::SessionFixtureBuilder;
@@ -1861,17 +1872,23 @@ mod tests {
     }
 
     #[test]
-    fn test_session_view_state_maps_agent_review_status() {
+    fn test_session_view_state_maps_agent_review_and_orchestrator_review_statuses() {
         // Arrange
         let session = SessionFixtureBuilder::new()
             .status(Status::AgentReview)
             .build();
+        let orchestrator = SessionFixtureBuilder::new()
+            .role(SessionRole::Orchestrator)
+            .status(Status::Review)
+            .build();
 
         // Act
         let state = session_view_state(&session);
+        let orchestrator_state = session_view_state(&orchestrator);
 
         // Assert
         assert_eq!(state, ViewSessionState::AgentReview);
+        assert_eq!(orchestrator_state, ViewSessionState::Interactive);
     }
 
     #[test]

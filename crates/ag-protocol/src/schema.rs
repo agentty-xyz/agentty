@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::model::{AgentResponse, questions_field_description};
+use super::model::{AgentResponse, questions_field_description, subtasks_field_description};
 
 /// Selects how a provider transport lists `required` schema properties.
 ///
@@ -78,17 +78,20 @@ fn inject_dynamic_schema_guidance(schema: &mut Value) {
     let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
         return;
     };
-    let Some(questions_property) = properties
-        .get_mut("questions")
-        .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
 
-    questions_property.insert(
-        "description".to_string(),
-        Value::String(questions_field_description()),
-    );
+    for (property_name, description) in [
+        ("questions", questions_field_description()),
+        ("subtasks", subtasks_field_description()),
+    ] {
+        let Some(property) = properties
+            .get_mut(property_name)
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+
+        property.insert("description".to_string(), Value::String(description));
+    }
 }
 
 /// Recursively injects `additionalProperties: false` into every schema object
@@ -299,12 +302,69 @@ mod tests {
         assert!(
             required_fields
                 .iter()
+                .any(|value| value.as_str() == Some("subtasks"))
+        );
+        assert!(
+            required_fields
+                .iter()
                 .any(|value| value.as_str() == Some("summary"))
         );
         assert!(properties.contains_key("answer"));
         assert!(properties.contains_key("questions"));
         assert!(properties.contains_key("review_comment_outcomes"));
+        assert!(properties.contains_key("subtasks"));
         assert!(properties.contains_key("summary"));
+    }
+
+    #[test]
+    /// Leaves a schema untouched when a guidance-carrying property is absent,
+    /// so injection cannot panic or invent properties for partial schemas.
+    fn test_inject_dynamic_schema_guidance_skips_absent_properties() {
+        // Arrange
+        let mut schema = serde_json::json!({
+            "properties": {
+                "answer": { "type": "string" }
+            }
+        });
+
+        // Act
+        inject_dynamic_schema_guidance(&mut schema);
+
+        // Assert
+        assert_eq!(
+            schema,
+            serde_json::json!({
+                "properties": {
+                    "answer": { "type": "string" }
+                }
+            })
+        );
+    }
+
+    #[test]
+    /// Routes the `subtasks` schema description through the shared template
+    /// helper so the prompt-visible cap cannot drift from the parser cap.
+    fn test_agent_response_json_schema_injects_subtasks_description() {
+        // Arrange / Act
+        let schema = agent_response_json_schema();
+        let response_properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("response properties should exist");
+        let subtask_properties = schema_definition_properties(&schema, "SubtaskItem");
+
+        // Assert
+        assert_eq!(
+            response_properties
+                .get("subtasks")
+                .and_then(|value| value.get("description"))
+                .and_then(Value::as_str),
+            Some(subtasks_field_description().as_str())
+        );
+        assert!(subtask_properties.contains_key("prompt"));
+        assert!(subtask_properties.contains_key("task_key"));
+        assert!(subtask_properties.contains_key("title"));
+        assert!(subtask_properties.contains_key("touched_areas"));
     }
 
     #[test]

@@ -235,6 +235,12 @@ pub(crate) enum AppEvent {
         notice: String,
         session_id: SessionId,
     },
+    /// Indicates that the replaceable child-status loader changed for an
+    /// orchestrator.
+    SessionOrchestrationProgressUpdated {
+        progress: Option<String>,
+        session_id: SessionId,
+    },
     /// Indicates that one published session branch started or finished a
     /// background auto-push after a completed turn.
     PublishedBranchSyncUpdated {
@@ -274,6 +280,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_ids: HashSet<SessionId>,
     pub(super) session_update_versions: HashMap<SessionId, u64>,
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
+    pub(super) session_orchestration_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_personality_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_reasoning_level_updates:
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
@@ -519,6 +526,13 @@ impl AppEventBatch {
             }
             AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
                 self.collect_session_workflow_notice_updated(session_id, notice);
+            }
+            AppEvent::SessionOrchestrationProgressUpdated {
+                progress,
+                session_id,
+            } => {
+                self.session_orchestration_progress_updates
+                    .insert(session_id, progress);
             }
             AppEvent::PublishedBranchSyncUpdated {
                 persistent_notice,
@@ -978,6 +992,12 @@ impl App {
         }
 
         self.sync_touched_sessions(&event_batch.session_ids);
+        for (session_id, progress) in
+            std::mem::take(&mut event_batch.session_orchestration_progress_updates)
+        {
+            self.sessions
+                .update_orchestration_progress(&session_id, progress);
+        }
         for (session_id, notices) in
             std::mem::take(&mut event_batch.session_workflow_notice_updates)
         {
@@ -1497,6 +1517,9 @@ impl App {
             || !event_batch.requested_review_comment_snapshots.is_empty()
             || !event_batch.review_updates.is_empty()
             || !event_batch.session_model_updates.is_empty()
+            || !event_batch
+                .session_orchestration_progress_updates
+                .is_empty()
             || !event_batch.session_personality_updates.is_empty()
             || !event_batch.session_progress_updates.is_empty()
             || !event_batch.session_review_comment_snapshots.is_empty()

@@ -317,8 +317,12 @@ struct SyncRebaseAssistInput {
 }
 
 /// Polymorphic input for shared assisted rebase loop orchestration.
+///
+/// The session variant is boxed because its input carries the whole repository
+/// bundle plus per-turn client handles, which makes it far larger than the
+/// project variant.
 enum RebaseAssistLoopInput {
-    Session(RebaseAssistInput),
+    Session(Box<RebaseAssistInput>),
     Project(SyncRebaseAssistInput),
 }
 
@@ -638,6 +642,11 @@ impl SessionMergeService {
         let session = manager
             .session_or_err(session_id)
             .map_err(|_| SessionError::NotFound)?;
+        if !session.owns_branch_changes() {
+            return Err(SessionError::Workflow(
+                "Orchestrator sessions do not own branch changes".to_string(),
+            ));
+        }
         if !(session.status.allows_review_actions() || session.status == Status::Queued) {
             return Err(SessionError::Workflow(
                 "Session must be in review or queued status".to_string(),
@@ -2421,7 +2430,7 @@ impl SessionManager {
         }
 
         Self::run_rebase_assist_loop_core(
-            RebaseAssistLoopInput::Session(input),
+            RebaseAssistLoopInput::Session(Box::new(input)),
             initial_conflict_detail,
         )
         .await
@@ -3036,6 +3045,7 @@ impl SessionManager {
 mod tests {
     use ag_agent::MockOneShotClient;
     use ag_git::GitError;
+    use ag_session::SessionRole;
     use mockall::Sequence;
     use tempfile::{TempDir, tempdir};
 
@@ -3138,6 +3148,32 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "Merge cannot run for linked review requests or while another stack session is active"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_session_rejects_orchestrator_before_workflow_start() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .role(SessionRole::Orchestrator)
+                .status(Status::Review)
+                .build(),
+        );
+
+        // Act
+        let result = app
+            .sessions
+            .merge_session("session-id", &app.projects, &app.services)
+            .await;
+
+        // Assert
+        assert_eq!(
+            result
+                .expect_err("orchestrator merge should fail")
+                .to_string(),
+            "Orchestrator sessions do not own branch changes"
         );
     }
 
@@ -4182,7 +4218,7 @@ mod tests {
 
         // Act
         let result = SessionManager::run_rebase_assist_loop_core(
-            RebaseAssistLoopInput::Session(input),
+            RebaseAssistLoopInput::Session(Box::new(input)),
             None,
         )
         .await;
@@ -4232,7 +4268,7 @@ mod tests {
 
         // Act
         let result = SessionManager::run_rebase_assist_loop_core(
-            RebaseAssistLoopInput::Session(input),
+            RebaseAssistLoopInput::Session(Box::new(input)),
             Some(repeated_detail.clone()),
         )
         .await;
@@ -4375,7 +4411,7 @@ mod tests {
 
         // Act
         let result = SessionManager::run_rebase_assist_loop_core(
-            RebaseAssistLoopInput::Session(input),
+            RebaseAssistLoopInput::Session(Box::new(input)),
             None,
         )
         .await;

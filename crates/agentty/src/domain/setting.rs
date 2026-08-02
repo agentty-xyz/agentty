@@ -2,6 +2,11 @@
 
 use std::fmt;
 
+/// Default number of orchestration children allowed to run concurrently.
+pub(crate) const DEFAULT_ORCHESTRATION_PARALLELISM: u8 = 3;
+/// Maximum orchestration concurrency exposed by the settings selector.
+pub(crate) const MAX_ORCHESTRATION_PARALLELISM: u8 = 8;
+
 /// Stable keys used in the `setting` and `project_setting` tables.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SettingName {
@@ -30,6 +35,8 @@ pub(crate) enum SettingName {
     LaunchConfiguration,
     /// Persists whether the last used model should become the default.
     LastUsedModelAsDefault,
+    /// Persists how many orchestration children may run at once.
+    OrchestrationParallelism,
     /// Persists the active terminal color theme.
     Theme,
 }
@@ -50,6 +57,7 @@ impl SettingName {
             Self::IncludeCoauthoredByAgentty => "IncludeCoauthoredByAgentty",
             Self::LaunchConfiguration => "LaunchConfiguration",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
+            Self::OrchestrationParallelism => "OrchestrationParallelism",
             Self::Theme => "Theme",
         }
     }
@@ -88,6 +96,10 @@ mod tests {
                 SettingName::LastUsedModelAsDefault,
                 "LastUsedModelAsDefault",
             ),
+            (
+                SettingName::OrchestrationParallelism,
+                "OrchestrationParallelism",
+            ),
             (SettingName::Theme, "Theme"),
         ];
 
@@ -114,6 +126,7 @@ mod tests {
             SettingName::IncludeCoauthoredByAgentty,
             SettingName::LaunchConfiguration,
             SettingName::LastUsedModelAsDefault,
+            SettingName::OrchestrationParallelism,
             SettingName::Theme,
         ];
 

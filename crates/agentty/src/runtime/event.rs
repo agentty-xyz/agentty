@@ -318,7 +318,7 @@ mod tests {
     use crate::app::AppEvent;
     use crate::domain::input::InputState;
     use crate::domain::question::QuestionItem;
-    use crate::domain::session::{Session, SessionSize, SessionStats, Status};
+    use crate::domain::session::{Session, SessionRole, SessionSize, SessionStats, Status};
     use crate::domain::transient_message::TransientMessageStore;
     use crate::presentation::app_mode::{AppMode, ChatFocus};
     use crate::presentation::prompt::{
@@ -472,6 +472,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
@@ -597,7 +600,7 @@ mod tests {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.tabs.set(crate::app::Tab::Settings);
-        for _ in 0..6 {
+        for _ in 0..7 {
             let view = app.settings.view();
             let _ = app.settings_presentation.apply(&view, SettingsAction::Next);
         }

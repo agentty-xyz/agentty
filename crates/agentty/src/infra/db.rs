@@ -4,6 +4,7 @@ mod activity;
 mod connection;
 mod error;
 mod operation;
+mod orchestration;
 mod project;
 mod repository;
 mod review;
@@ -18,6 +19,13 @@ pub use connection::{DB_DIR, DB_FILE, Database};
 pub use error::DbError;
 pub(crate) use operation::SqliteOperationRepository;
 pub use operation::{OperationRepository, SessionOperationRow};
+#[cfg(test)]
+pub(crate) use orchestration::MockOrchestrationRepository;
+pub(crate) use orchestration::SqliteOrchestrationRepository;
+pub use orchestration::{
+    OrchestrationRepository, PersistedOrchestrationTask, SessionOrchestrationMetadataRow,
+    SessionOrchestrationRow, SessionOrchestrationTaskRow,
+};
 pub(crate) use project::SqliteProjectRepository;
 pub use project::{ProjectListRow, ProjectRepository, ProjectRow};
 pub use repository::AppRepositories;

@@ -131,7 +131,7 @@ pub fn grouped_session_rows(sessions: &[Session]) -> Vec<GroupedSessionRow<'_>> 
     rows
 }
 
-/// Lookup of one-level stacked children by parent session id.
+/// Lookup of stacked or orchestrated children by display parent session id.
 type StackedChildIndex<'a> = HashMap<&'a str, Vec<(usize, &'a Session)>>;
 
 /// Builds a per-render child lookup so grouped rows do not rescan every
@@ -139,7 +139,11 @@ type StackedChildIndex<'a> = HashMap<&'a str, Vec<(usize, &'a Session)>>;
 fn stacked_child_index(sessions: &[Session]) -> StackedChildIndex<'_> {
     let mut children_by_parent = HashMap::new();
     for (index, session) in sessions.iter().enumerate() {
-        if let Some(parent_session_id) = session.parent_session_id.as_ref() {
+        if let Some(parent_session_id) = session
+            .parent_session_id
+            .as_ref()
+            .or(session.controller_session_id.as_ref())
+        {
             children_by_parent
                 .entry(parent_session_id.as_str())
                 .or_insert_with(Vec::new)
@@ -213,7 +217,11 @@ fn has_loaded_parent_session_in_group(
     session: &Session,
     group: SessionGroup,
 ) -> bool {
-    match session.parent_session_id.as_ref() {
+    match session
+        .parent_session_id
+        .as_ref()
+        .or(session.controller_session_id.as_ref())
+    {
         Some(parent_session_id) => sessions.iter().any(|candidate| {
             candidate.id.as_str() == parent_session_id.as_str() && session_group(candidate) == group
         }),
@@ -399,6 +407,35 @@ mod tests {
                 "parent-1".to_string(),
                 "child-1".to_string(),
                 "sibling-1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_selectable_session_indexes_places_orchestration_child_after_controller() {
+        // Arrange
+        let mut child_session =
+            crate::test_support::titled_session_fixture("child-1", Status::InProgress);
+        child_session.controller_session_id = Some("controller-1".into());
+        let sessions = vec![
+            child_session,
+            crate::test_support::titled_session_fixture("sibling-1", Status::Review),
+            crate::test_support::titled_session_fixture("controller-1", Status::Review),
+        ];
+
+        // Act
+        let ordered_ids = selectable_session_indexes(&sessions)
+            .into_iter()
+            .map(|index| sessions[index].id.clone())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            ordered_ids,
+            vec![
+                "sibling-1".to_string(),
+                "controller-1".to_string(),
+                "child-1".to_string(),
             ]
         );
     }

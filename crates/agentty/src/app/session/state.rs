@@ -4,6 +4,8 @@ use std::time::{Instant, SystemTime};
 
 use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
 use crate::domain::selection::SelectionState;
+#[cfg(test)]
+use crate::domain::session::SessionRole;
 use crate::domain::session::{Session, SessionDiffStats, SessionHandles, SessionId};
 
 /// Cached ahead/behind snapshots for one session branch.
@@ -430,6 +432,7 @@ mod tests {
     use std::time::{Duration, Instant, SystemTime};
 
     use super::*;
+    use crate::domain::agent::{AgentKind, AgentSelection};
     use crate::domain::selection::SelectionState;
     use crate::domain::session::{
         Session, SessionDiffState, SessionHandles, SessionSize, SessionStats, Status,
@@ -488,6 +491,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
@@ -549,6 +555,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
@@ -599,6 +608,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
@@ -674,6 +686,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
@@ -742,6 +757,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
@@ -775,6 +793,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
@@ -877,6 +898,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
@@ -910,6 +934,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
@@ -968,6 +995,9 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 crate::domain::agent::AgentKind::Antigravity.default_model(),
@@ -1055,6 +1085,10 @@ mod tests {
     /// pass.
     fn retain_follow_up_task_positions_clamps_and_drops_invalid_entries() {
         // Arrange
+        let agent = AgentSelection::new(
+            AgentKind::Antigravity,
+            AgentKind::Antigravity.default_model(),
+        );
         let mut surviving_session = Session {
             base_branch: "main".to_string(),
             created_at: 0,
@@ -1070,10 +1104,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentKind::Antigravity.default_model(),
-            ),
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
+            agent,
             parent_session_id: None,
             personality_id: None,
             project_name: "project".to_string(),
@@ -1111,10 +1145,10 @@ mod tests {
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentKind::Antigravity.default_model(),
-            ),
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
+            agent,
             parent_session_id: None,
             personality_id: None,
             project_name: "project".to_string(),

@@ -2,20 +2,23 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 
 use crate::ui::style::palette;
 use crate::ui::{Component, overlay};
 
 /// Minimum popup height that leaves room for title, options, and hints
 /// without adding unused vertical space.
-const MIN_OVERLAY_HEIGHT: u16 = 11;
-/// Minimum popup width sized for the longest hint plus shared overlay chrome.
-const MIN_OVERLAY_WIDTH: u16 = 44;
+const MIN_OVERLAY_HEIGHT: u16 = 12;
+/// Minimum popup width sized for the longest option row plus shared overlay
+/// chrome.
+const MIN_OVERLAY_WIDTH: u16 = 49;
 /// Fixed description width so option labels share one left edge.
 const OPTION_DETAIL_WIDTH: usize = 27;
-/// Fixed label width for `Regular`, `Draft`, and `Stacked`.
-const OPTION_LABEL_WIDTH: usize = 7;
+/// Fixed label width for the longest session-type label.
+const OPTION_LABEL_WIDTH: usize = 12;
+/// Detail text for the experimental orchestrator session creation path.
+const ORCHESTRATOR_SESSION_PREVIEW_DETAIL: &str = "[Preview] Plan workers";
 /// Detail text for the experimental stacked session creation path.
 const STACKED_SESSION_PREVIEW_DETAIL: &str = "[Preview] Stack on selected";
 /// Popup dimensions for the compact session selector.
@@ -58,6 +61,12 @@ impl SessionCreationOverlay {
             self.option_line(1, "Draft", "Stage locally first", false),
             self.option_line(
                 2,
+                "Orchestrator",
+                ORCHESTRATOR_SESSION_PREVIEW_DETAIL,
+                false,
+            ),
+            self.option_line(
+                3,
                 "Stacked",
                 if self.can_create_stacked_session {
                     STACKED_SESSION_PREVIEW_DETAIL
@@ -127,7 +136,6 @@ impl Component for SessionCreationOverlay {
         let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
         let paragraph = Paragraph::new(self.lines())
             .alignment(Alignment::Left)
-            .wrap(Wrap { trim: true })
             .block(overlay::overlay_block("New Session", palette::accent()));
 
         overlay::clear_popup_area(f, popup_area);
@@ -161,9 +169,9 @@ mod tests {
         let popup_area = OVERLAY_DIMENSIONS.centered_popup_area(area);
 
         // Assert
-        assert_eq!(popup_area.width, 44);
-        assert_eq!(popup_area.height, 11);
-        assert_eq!(popup_area.x, 18);
+        assert_eq!(popup_area.width, 49);
+        assert_eq!(popup_area.height, 12);
+        assert_eq!(popup_area.x, 15);
         assert_eq!(popup_area.y, 4);
     }
 
@@ -183,11 +191,11 @@ mod tests {
     }
 
     #[test]
-    fn test_session_creation_overlay_render_shows_regular_and_draft_options() {
+    fn test_session_creation_overlay_render_shows_session_options() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(80, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let overlay = SessionCreationOverlay::new(0, false);
+        let overlay = SessionCreationOverlay::new(0, true);
 
         // Act
         terminal
@@ -206,8 +214,9 @@ mod tests {
             .collect::<String>();
         assert!(text.contains("Regular"));
         assert!(text.contains("Draft"));
+        assert!(text.contains(ORCHESTRATOR_SESSION_PREVIEW_DETAIL));
         assert!(text.contains("Stacked"));
-        assert!(text.contains("Select parent first"));
+        assert!(text.contains(STACKED_SESSION_PREVIEW_DETAIL));
         assert!(text.contains("j/k: move | Enter: select | q: close"));
     }
 
@@ -255,7 +264,7 @@ mod tests {
 
         // Act
         let lines = overlay.lines();
-        let stacked_line = &lines[4];
+        let stacked_line = &lines[5];
 
         // Assert
         assert!(
@@ -275,11 +284,11 @@ mod tests {
     #[test]
     fn test_session_creation_overlay_lines_enable_stacked_option() {
         // Arrange
-        let overlay = SessionCreationOverlay::new(2, true);
+        let overlay = SessionCreationOverlay::new(3, true);
 
         // Act
         let lines = overlay.lines();
-        let stacked_line = &lines[4];
+        let stacked_line = &lines[5];
 
         // Assert
         assert!(

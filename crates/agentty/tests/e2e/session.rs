@@ -1678,6 +1678,50 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ne
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
 
+/// Installs a prompt-aware Claude stub for the full orchestration feature
+/// journey: plan, approval, concurrent child completion, and roll-up.
+fn install_orchestration_claude_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+input=$(cat)
+case "$input" in
+  *"Generate a concise, commit-style title"*)
+    result='{\"answer\":\"Coordinate parallel work\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":null}'
+    ;;
+  *"Orchestration roll-up"*)
+    result='{\"answer\":\"All workers finished. Review and merge protocol before UI.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Orchestration finished.\",\"turn\":\"Rolled up both worker results.\"}}'
+    ;;
+  *"Clarifications:"*"Approve"*)
+    result='{\"answer\":\"Approval received. Monitoring both workers.\",\"questions\":[{\"text\":\"Approve this orchestration plan?\",\"options\":[\"Approve\",\"Revise\"]}],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol slice.\",\"touched_areas\":[\"crates/ag-protocol/\"]},{\"task_key\":\"ui\",\"title\":\"UI worker\",\"prompt\":\"Implement the UI slice.\",\"touched_areas\":[\"crates/agentty/src/ui/\"]}],\"summary\":null}'
+    ;;
+  *"You are the controller for an Agentty orchestration"*)
+    result='{\"answer\":\"I propose independent protocol and UI workers, merged in that order.\",\"questions\":[{\"text\":\"Approve this orchestration plan?\",\"options\":[\"Approve\",\"Revise\"]}],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol slice.\",\"touched_areas\":[\"crates/ag-protocol/\"]},{\"task_key\":\"ui\",\"title\":\"UI worker\",\"prompt\":\"Implement the UI slice.\",\"touched_areas\":[\"crates/agentty/src/ui/\"]}],\"summary\":null}'
+    ;;
+  *"Task key: protocol"*)
+    sleep 4
+    result='{\"answer\":\"Protocol worker completed.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Protocol worker completed.\",\"turn\":\"Implemented and checked the protocol slice.\"}}'
+    ;;
+  *"Task key: ui"*)
+    sleep 4
+    result='{\"answer\":\"UI worker completed.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"UI worker completed.\",\"turn\":\"Implemented and checked the UI slice.\"}}'
+    ;;
+  *)
+    result='{\"answer\":\"Ready\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":null}'
+    ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_tokens":5,"output_tokens":9}}\n' "$result"
+"#;
+
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+}
+
 /// Answer emitted before the queued session sync is allowed to start.
 const QUEUED_SYNC_TURN_ANSWER: &str = "Running turn completed before sync";
 
@@ -2841,6 +2885,7 @@ fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
                     .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
+                    .press_key("j")
                     .press_key("j")
                     .press_key("Enter")
                     .press_key("j")
@@ -4016,7 +4061,7 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
         .with_git()
         .zola(
             "Session creation",
-            "Choose a regular, draft, or stacked session from the session creation selector.",
+            "Choose a regular, draft, orchestrator, or stacked session from the creation selector.",
             30,
         )
         .run(
@@ -4040,6 +4085,12 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
                 let selector_full = Region::full(selector_frame.cols(), selector_frame.rows());
                 assertion::assert_text_in_region(&selector_frame, "Regular", &selector_full);
                 assertion::assert_text_in_region(&selector_frame, "Draft", &selector_full);
+                assertion::assert_text_in_region(&selector_frame, "Orchestrator", &selector_full);
+                assertion::assert_text_in_region(
+                    &selector_frame,
+                    "[Preview] Plan workers",
+                    &selector_full,
+                );
                 assertion::assert_text_in_region(&selector_frame, "Stacked", &selector_full);
                 assertion::assert_text_in_region(
                     &selector_frame,
@@ -4051,6 +4102,118 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Tab: focus | Enter: send", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify the orchestrator proposes a durable plan for approval, fans out
+/// children, reports live status, and submits a final roll-up.
+#[test]
+fn session_orchestration_runs_approved_parallel_wave() -> E2eResult {
+    // Arrange
+    FeatureTest::new("session_orchestration")
+        .with_git()
+        .setup(install_orchestration_claude_stub)
+        .zola(
+            "Parallel orchestration",
+            "Approve a file-disjoint plan, watch workers run, and review the roll-up.",
+            35,
+        )
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Orchestrator", 5000)
+                    .capture_labeled("orchestrator_picker", "Choose an orchestrator session")
+                    .press_key("Down")
+                    .press_key("Down")
+                    .press_key("Enter")
+                    .wait_for_text("Tab: focus | Enter: send", 5000)
+                    .write_text("Build protocol and UI in parallel")
+                    .press_key("Enter")
+                    .wait_for_text("Question 1/1", 30000)
+                    .capture_labeled(
+                        "plan_approval",
+                        "Review the file-disjoint plan before fan-out",
+                    )
+                    .press_key("Enter")
+                    .wait_for_text("Orchestrating...", 10000)
+                    .capture_labeled("live_status", "Monitor child sessions in one live loader")
+                    .press_key("q")
+                    .wait_for_text("2 running, 0 waiting on you", 10000)
+                    .capture_labeled(
+                        "orchestration_sessions",
+                        "Workers stay grouped with their controller",
+                    )
+                    .sleep_ms(6000)
+                    .press_key("j")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("Enter")
+                    .wait_for_text("All workers finished", 30000)
+                    .capture_labeled(
+                        "orchestration_rollup",
+                        "Review worker summaries and merge order",
+                    )
+            },
+            |frame, report| {
+                // Assert
+                let picker_frame = common::frame_from_capture(&report.captures[0]);
+                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+                assertion::assert_text_in_region(&picker_frame, "Orchestrator", &picker_full);
+                assertion::assert_text_in_region(
+                    &picker_frame,
+                    "[Preview] Plan workers",
+                    &picker_full,
+                );
+
+                let approval_frame = common::frame_from_capture(&report.captures[1]);
+                let approval_full = Region::full(approval_frame.cols(), approval_frame.rows());
+                assertion::assert_text_in_region(
+                    &approval_frame,
+                    "Approve this orchestration plan?",
+                    &approval_full,
+                );
+                assertion::assert_text_in_region(&approval_frame, "Approve", &approval_full);
+                assertion::assert_text_in_region(&approval_frame, "Revise", &approval_full);
+
+                let status_frame = common::frame_from_capture(&report.captures[2]);
+                let status_full = Region::full(status_frame.cols(), status_frame.rows());
+                assertion::assert_text_in_region(&status_frame, "Orchestrating...", &status_full);
+                assertion::assert_text_in_region(
+                    &status_frame,
+                    "- Protocol worker: running",
+                    &status_full,
+                );
+                assertion::assert_text_in_region(
+                    &status_frame,
+                    "- UI worker: running",
+                    &status_full,
+                );
+                assertion::assert_match_count(&status_frame, "Orchestrating...", 1);
+                assertion::assert_match_count(&status_frame, "Approve this orchestration plan?", 1);
+                let protocol_status = status_frame.find_text("Protocol worker: running");
+                let ui_status = status_frame.find_text("UI worker: running");
+                assert_ne!(protocol_status[0].rect.row, ui_status[0].rect.row);
+
+                let list_frame = common::frame_from_capture(&report.captures[3]);
+                let list_full = Region::full(list_frame.cols(), list_frame.rows());
+                assertion::assert_text_in_region(
+                    &list_frame,
+                    "2 running, 0 waiting on you",
+                    &list_full,
+                );
+                assertion::assert_match_count(&list_frame, "├ ", 1);
+                assertion::assert_match_count(&list_frame, "└ ", 1);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "All workers finished", &full);
+                assertion::assert_text_in_region(frame, "merge protocol before UI", &full);
+                assertion::assert_not_visible(frame, "d: diff");
             },
         )?;
 
@@ -4109,6 +4272,7 @@ fn stacked_session_creation() -> E2eResult {
                     .viewing_pause_ms(1200)
                     .press_key("a")
                     .wait_for_text("Stacked", 5000)
+                    .press_key("Down")
                     .press_key("Down")
                     .press_key("Down")
                     .wait_for_text("[Preview] Stack on selected", 5000)
@@ -4296,6 +4460,7 @@ fn stacked_session_start_waits_for_parent_review() -> E2eResult {
                     .wait_for_text("Running session stop", 5000)
                     .press_key("a")
                     .wait_for_text("Stacked", 5000)
+                    .press_key("Down")
                     .press_key("Down")
                     .press_key("Down")
                     .wait_for_text("[Preview] Stack on selected", 5000)

@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, ReviewRequest, Session, SessionError, SessionId,
+    AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionRequest, ReviewRequest,
+    Session, SessionError, SessionId,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -40,6 +41,12 @@ pub(crate) enum SessionRuntimeCommand {
     /// Sends one user message.
     SendMessage {
         message: String,
+        response_tx: oneshot::Sender<Result<(), SessionError>>,
+        session_id: SessionId,
+    },
+    /// Submits one coordinator-owned turn directly on the session worker.
+    SubmitCoordinatorMessage {
+        request: CoordinatorMessageRequest,
         response_tx: oneshot::Sender<Result<(), SessionError>>,
         session_id: SessionId,
     },
@@ -114,6 +121,24 @@ impl SessionRuntimeHandle {
             response_tx,
             session_id,
         })
+        .await
+    }
+
+    /// Submits one coordinator-owned turn through the runtime actor.
+    pub(crate) async fn submit_coordinator_message(
+        &self,
+        session_id: &SessionId,
+        request: CoordinatorMessageRequest,
+    ) -> Result<(), SessionError> {
+        let session_id = session_id.clone();
+
+        self.request(
+            |response_tx| SessionRuntimeCommand::SubmitCoordinatorMessage {
+                request,
+                response_tx,
+                session_id,
+            },
+        )
         .await
     }
 

@@ -12,6 +12,7 @@ mod parse;
 mod prompt;
 mod question;
 mod schema;
+mod subtask;
 
 pub use envelope::{
     ProtocolSchemaInstructionMode, build_protocol_repair_prompt, prepend_protocol_instructions,
@@ -33,3 +34,4 @@ pub use schema::{
     SchemaRequiredPolicy, agent_response_json_schema_json, agent_response_output_schema,
     agent_response_output_schema_json,
 };
+pub use subtask::SubtaskItem;

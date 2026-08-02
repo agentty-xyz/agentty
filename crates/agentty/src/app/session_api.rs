@@ -7,9 +7,10 @@ use std::sync::Arc;
 use ag_agent::{ReasoningLevel, SpeedMode, parse_persisted_session_agent_model};
 use ag_protocol::QuestionItem;
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, QuestionAnswer, ReviewRequest,
-    ReviewRequestState, SessionBackend, SessionError as ApiSessionError, SessionId, SessionMessage,
-    SessionMessageKind, SessionService, SessionSettings, SessionStatus,
+    AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionMode, CreateSessionRequest,
+    QuestionAnswer, ReviewRequest, ReviewRequestState, SessionBackend,
+    SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind, SessionRole,
+    SessionService, SessionSettings, SessionStatus,
 };
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
@@ -18,10 +19,14 @@ use crate::app::branch_publish::{
     BranchPublishTaskFailure, BranchPublishTaskResult, BranchPublishTaskSuccess,
     branch_publish_loading_label, run_branch_publish_action,
 };
-use crate::app::session::{SessionCreationSettings, migrate_session_off_retired_model};
+use crate::app::orchestration::child_session_is_stopped;
+use crate::app::session::{
+    SessionCreationKind, SessionCreationSettings, migrate_session_off_retired_model,
+};
 use crate::app::{
     App, AppError, AppEvent, SessionError, SessionRuntimeCommand, SessionRuntimeHandle,
 };
+use crate::domain::orchestration::{OrchestrationStatus, OrchestrationTaskStatus};
 use crate::domain::session::PublishBranchAction;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
@@ -48,6 +53,14 @@ impl SessionBackend for SessionRuntimeHandle {
         message: String,
     ) -> Result<(), ApiSessionError> {
         SessionRuntimeHandle::send_message(self, session_id, message).await
+    }
+
+    async fn submit_coordinator_message(
+        &self,
+        session_id: &SessionId,
+        request: CoordinatorMessageRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::submit_coordinator_message(self, session_id, request).await
     }
 
     async fn answer_questions(
@@ -129,6 +142,16 @@ impl App {
             } => {
                 let _ = response_tx.send(self.send_api_message(&session_id, message).await);
             }
+            SessionRuntimeCommand::SubmitCoordinatorMessage {
+                request,
+                response_tx,
+                session_id,
+            } => {
+                let _ = response_tx.send(
+                    self.submit_api_coordinator_message(&session_id, request)
+                        .await,
+                );
+            }
             SessionRuntimeCommand::AnswerQuestions {
                 request,
                 response_tx,
@@ -140,10 +163,7 @@ impl App {
                 response_tx,
                 session_id,
             } => {
-                let result = self
-                    .cancel_session(&session_id)
-                    .await
-                    .map_err(api_error_from_app);
+                let result = self.cancel_api_session(&session_id).await;
                 let _ = response_tx.send(result);
             }
             SessionRuntimeCommand::Merge {
@@ -172,6 +192,17 @@ impl App {
         session_id: SessionId,
         response_tx: oneshot::Sender<Result<ReviewRequest, ApiSessionError>>,
     ) {
+        if self
+            .sessions
+            .session_for_id(&session_id)
+            .is_some_and(|session| !session.owns_branch_changes())
+        {
+            let _ = response_tx.send(Err(ApiSessionError::Operation(
+                "Orchestrator sessions cannot publish review requests".to_string(),
+            )));
+
+            return;
+        }
         let Some(branch_publish_context) = self.branch_publish_task_context(&session_id) else {
             let _ = response_tx.send(Err(ApiSessionError::NotFound));
 
@@ -240,17 +271,13 @@ impl App {
                 if creation_settings.is_none() {
                     App::create_session(self).await
                 } else {
-                    let project = self.api_project_creation_context(base_branch_override)?;
-                    self.sessions
-                        .create_session_for_project(
-                            &self.services,
-                            request.project_id,
-                            &project.base_branch,
-                            project.working_dir,
-                            creation_settings,
-                        )
-                        .await
-                        .map_err(AppError::from)
+                    self.create_api_materialized_session(
+                        request.project_id,
+                        base_branch_override,
+                        creation_settings,
+                        SessionCreationKind::Worker,
+                    )
+                    .await
                 }
             }
             CreateSessionMode::Draft => {
@@ -268,6 +295,24 @@ impl App {
                         .await
                         .map_err(AppError::from)
                 }
+            }
+            CreateSessionMode::Orchestrator => {
+                self.create_api_materialized_session(
+                    request.project_id,
+                    base_branch_override,
+                    creation_settings,
+                    SessionCreationKind::Orchestrator,
+                )
+                .await
+            }
+            CreateSessionMode::OrchestrationChild { task_id } => {
+                self.create_api_materialized_session(
+                    request.project_id,
+                    base_branch_override,
+                    creation_settings,
+                    SessionCreationKind::OrchestrationChild { task_id },
+                )
+                .await
             }
             CreateSessionMode::Stacked { parent_session_id } => {
                 if let Some(settings) = creation_settings {
@@ -289,6 +334,30 @@ impl App {
         self.finish_api_session_creation(&session_id).await;
 
         Ok(SessionId::from(session_id))
+    }
+
+    async fn create_api_materialized_session(
+        &mut self,
+        project_id: i64,
+        base_branch_override: Option<String>,
+        creation_settings: Option<SessionCreationSettings>,
+        creation_kind: SessionCreationKind,
+    ) -> Result<String, AppError> {
+        let project = self
+            .api_project_creation_context(base_branch_override)
+            .map_err(|error| AppError::Workflow(error.to_string()))?;
+
+        self.sessions
+            .create_session_for_project(
+                &self.services,
+                project_id,
+                &project.base_branch,
+                project.working_dir,
+                creation_settings,
+                creation_kind,
+            )
+            .await
+            .map_err(AppError::from)
     }
 
     /// Loads one complete session aggregate from persistence plus live queue
@@ -387,6 +456,147 @@ impl App {
         )))
     }
 
+    /// Submits a coordinator-owned turn only when it can bypass the lossy
+    /// in-memory chat queue and enter the serialized session worker directly.
+    async fn submit_api_coordinator_message(
+        &mut self,
+        session_id: &SessionId,
+        request: CoordinatorMessageRequest,
+    ) -> Result<(), ApiSessionError> {
+        if request.message.trim().is_empty() {
+            return Err(ApiSessionError::Operation(
+                "Cannot submit an empty coordinator message".to_string(),
+            ));
+        }
+        if request.operation_id.trim().is_empty() {
+            return Err(ApiSessionError::Operation(
+                "Cannot submit a coordinator message without an operation id".to_string(),
+            ));
+        }
+
+        let session = self
+            .sessions
+            .session_for_id(session_id)
+            .ok_or(ApiSessionError::NotFound)?;
+        let status = session.status;
+        if !matches!(
+            status,
+            SessionStatus::Review | SessionStatus::AgentReview | SessionStatus::Question
+        ) {
+            return Err(ApiSessionError::Operation(format!(
+                "Session `{session_id}` cannot accept a coordinator message in status `{status}`"
+            )));
+        }
+
+        if self
+            .sessions
+            .reply_to_coordinator_message(
+                &self.services,
+                session_id,
+                request.operation_id,
+                TurnPrompt::from_agent_data(request.message),
+            )
+            .await
+        {
+            return Ok(());
+        }
+
+        Err(ApiSessionError::Operation(format!(
+            "Session `{session_id}` could not enqueue the coordinator message"
+        )))
+    }
+
+    /// Cascades orchestrator cancellation to every active child before
+    /// canceling the controller itself.
+    ///
+    /// A child cancellation failure aborts the cascade and leaves the
+    /// orchestration active so the controller never reports a false terminal
+    /// cancellation while a worker may still be running.
+    async fn cancel_api_session(&mut self, session_id: &SessionId) -> Result<(), ApiSessionError> {
+        let is_orchestrator = self
+            .sessions
+            .session_for_id(session_id)
+            .is_some_and(|session| session.role == SessionRole::Orchestrator);
+        if is_orchestrator
+            && let Some(orchestration) = self
+                .services
+                .db()
+                .orchestrations()
+                .load_orchestration_for_controller(session_id)
+                .await
+                .map_err(|error| ApiSessionError::Operation(error.to_string()))?
+            && self
+                .services
+                .db()
+                .orchestrations()
+                .begin_orchestration_cancellation(orchestration.id)
+                .await
+                .map_err(|error| ApiSessionError::Operation(error.to_string()))?
+        {
+            let tasks = self
+                .services
+                .db()
+                .orchestrations()
+                .load_orchestration_tasks(orchestration.id)
+                .await
+                .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+            for task in tasks.into_iter().filter(|task| {
+                task.status
+                    .parse::<OrchestrationTaskStatus>()
+                    .is_ok_and(|status| !status.is_settled())
+            }) {
+                let child_session_id = if task.child_session_id.is_some() {
+                    task.child_session_id
+                } else {
+                    self.services
+                        .db()
+                        .orchestrations()
+                        .load_child_session_id_for_task(task.id)
+                        .await
+                        .map_err(|error| ApiSessionError::Operation(error.to_string()))?
+                };
+                if let Some(child_session_id) = child_session_id.as_deref()
+                    && !child_session_is_stopped(task.child_status.as_deref())
+                {
+                    self.cancel_session(child_session_id)
+                        .await
+                        .map_err(api_error_from_app)?;
+                }
+                self.services
+                    .db()
+                    .orchestrations()
+                    .update_orchestration_task_status(
+                        task.id,
+                        &OrchestrationTaskStatus::Canceled.to_string(),
+                        None,
+                    )
+                    .await
+                    .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+            }
+            self.services
+                .db()
+                .orchestrations()
+                .update_orchestration_status(
+                    orchestration.id,
+                    &OrchestrationStatus::Canceled.to_string(),
+                )
+                .await
+                .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+            self.sessions
+                .update_orchestration_progress(session_id, None);
+        }
+
+        self.cancel_session(session_id)
+            .await
+            .map_err(api_error_from_app)
+    }
+
+    /// Returns the active child count displayed in orchestration cancellation
+    /// confirmation.
+    pub(crate) async fn orchestration_running_child_count(&self, session_id: &str) -> usize {
+        crate::app::orchestration::running_child_count(self.services.db(), session_id).await
+    }
+
     /// Claims structured question answers against the current persisted
     /// question set before resuming the session.
     async fn answer_api_questions(
@@ -439,6 +649,15 @@ impl App {
 
             return Err(send_error);
         }
+        crate::app::orchestration::apply_plan_answer(
+            self.services.db(),
+            session_id,
+            &request.answers,
+        )
+        .await
+        .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+
+        self.services.emit_app_event(AppEvent::RefreshSessions);
 
         Ok(())
     }
@@ -470,6 +689,7 @@ impl App {
                 agent: source.settings.agent,
                 personality_id: source.settings.personality_id,
                 reasoning_level: source.settings.reasoning_level,
+                role: SessionRole::Worker,
                 speed_mode: source.settings.speed_mode,
             },
         }))
@@ -646,6 +866,13 @@ fn build_api_session(
         .as_deref()
         .and_then(|value| value.parse::<ReasoningLevel>().ok())
         .unwrap_or_default();
+    let role = row
+        .role
+        .as_deref()
+        .map(str::parse::<SessionRole>)
+        .transpose()
+        .map_err(|error| ApiSessionError::InvalidData(format!("session `{}`: {error}", row.id)))?
+        .unwrap_or_default();
     let speed_mode = row.speed_mode.parse::<SpeedMode>().unwrap_or_default();
     let messages = message_rows
         .into_iter()
@@ -675,6 +902,7 @@ fn build_api_session(
             personality_id: row.personality_id,
             project_id,
             reasoning_level,
+            role,
             speed_mode,
         },
         status,
@@ -771,6 +999,8 @@ mod tests {
     use ag_forge::ForgeKind;
 
     use super::*;
+    use crate::domain::session::Status;
+    use crate::infra::db::PersistedOrchestrationTask;
 
     async fn request_session_creation(
         app: &mut App,
@@ -802,6 +1032,21 @@ mod tests {
 
         app.drive_session_request(async move { service.send_message(&session_id, message).await })
             .await
+    }
+
+    async fn request_coordinator_message(
+        app: &mut App,
+        session_id: SessionId,
+        request: CoordinatorMessageRequest,
+    ) -> Result<(), ApiSessionError> {
+        let service = app.session_service();
+
+        app.drive_session_request(async move {
+            service
+                .submit_coordinator_message(&session_id, request)
+                .await
+        })
+        .await
     }
 
     async fn request_question_answers(
@@ -842,6 +1087,109 @@ mod tests {
 
         app.drive_session_request(async move { service.create_review_request(&session_id).await })
             .await
+    }
+
+    struct ActiveOrchestrationFixture {
+        child: SessionId,
+        controller: SessionId,
+        orchestration: i64,
+    }
+
+    async fn seed_active_orchestration_child(
+        app: &mut App,
+        link_child: bool,
+    ) -> ActiveOrchestrationFixture {
+        let project_id = app.active_project_id();
+        let controller_session_id = request_session_creation(
+            app,
+            CreateSessionRequest {
+                inherit_from_session_id: None,
+                mode: CreateSessionMode::Orchestrator,
+                project_id,
+            },
+        )
+        .await
+        .expect("orchestrator should be created");
+        let orchestration_id = app
+            .services
+            .db()
+            .orchestrations()
+            .insert_orchestration(
+                &controller_session_id,
+                &OrchestrationStatus::Running.to_string(),
+                2,
+            )
+            .await
+            .expect("orchestration should persist");
+        let task_id = app
+            .services
+            .db()
+            .orchestrations()
+            .upsert_orchestration_task(PersistedOrchestrationTask {
+                prompt: "Implement the worker task".to_string(),
+                session_orchestration_id: orchestration_id,
+                task_key: "worker-task".to_string(),
+                title: "Worker task".to_string(),
+                touched_areas: r#"["crates/worker/"]"#.to_string(),
+            })
+            .await
+            .expect("orchestration task should persist");
+        app.services
+            .db()
+            .orchestrations()
+            .upsert_orchestration_task(PersistedOrchestrationTask {
+                prompt: "Implement the unlinked task".to_string(),
+                session_orchestration_id: orchestration_id,
+                task_key: "unlinked-task".to_string(),
+                title: "Unlinked task".to_string(),
+                touched_areas: r#"["crates/unlinked/"]"#.to_string(),
+            })
+            .await
+            .expect("unlinked orchestration task should persist");
+        let claimed = app
+            .services
+            .db()
+            .orchestrations()
+            .claim_orchestration_task(task_id)
+            .await
+            .expect("orchestration task should be claimed");
+        assert!(claimed);
+        let child_session_id = request_session_creation(
+            app,
+            CreateSessionRequest {
+                inherit_from_session_id: Some(controller_session_id.clone()),
+                mode: CreateSessionMode::OrchestrationChild { task_id },
+                project_id,
+            },
+        )
+        .await
+        .expect("orchestration child should be created");
+        if link_child {
+            let linked = app
+                .services
+                .db()
+                .orchestrations()
+                .link_orchestration_task_child(task_id, &child_session_id)
+                .await
+                .expect("orchestration child should link");
+            assert!(linked);
+        }
+        crate::test_support::set_session_status_for_test(
+            app,
+            &controller_session_id,
+            SessionStatus::Review,
+        );
+        crate::test_support::set_session_status_for_test(
+            app,
+            &child_session_id,
+            SessionStatus::Review,
+        );
+
+        ActiveOrchestrationFixture {
+            child: child_session_id,
+            controller: controller_session_id,
+            orchestration: orchestration_id,
+        }
     }
 
     fn question_transition_app_server(
@@ -961,6 +1309,7 @@ mod tests {
                 title: "Build feature".to_string(),
                 web_url: "https://example.test/pull/42".to_string(),
             }),
+            role: None,
             size: "S".to_string(),
             speed_mode: "normal".to_string(),
             status: "Draft".to_string(),
@@ -1277,6 +1626,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_backend_accepts_one_durable_coordinator_turn() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let project_id = app.active_project_id();
+        let session_id = request_session_creation(
+            &mut app,
+            CreateSessionRequest {
+                inherit_from_session_id: None,
+                mode: CreateSessionMode::Orchestrator,
+                project_id,
+            },
+        )
+        .await
+        .expect("orchestrator should be created");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &session_id,
+            SessionStatus::Review,
+        );
+
+        // Act
+        let review_request_error = request_review_request(&mut app, session_id.clone())
+            .await
+            .expect_err("orchestrator review request should fail");
+        request_coordinator_message(
+            &mut app,
+            session_id.clone(),
+            CoordinatorMessageRequest {
+                message: "Summarize the worker results".to_string(),
+                operation_id: "orchestration-rollup-42".to_string(),
+            },
+        )
+        .await
+        .expect("coordinator turn should be accepted");
+        let messages = app
+            .services
+            .db()
+            .sessions()
+            .load_session_messages(&session_id)
+            .await
+            .expect("coordinator transcript should load");
+
+        // Assert
+        assert_eq!(
+            review_request_error,
+            ApiSessionError::Operation(
+                "Orchestrator sessions cannot publish review requests".to_string()
+            )
+        );
+        assert!(messages.iter().any(|message| {
+            message.kind == SessionMessageKind::UserPrompt.to_string()
+                && message.content == "Summarize the worker results"
+        }));
+    }
+
+    #[tokio::test]
     async fn runtime_backend_migrates_retired_model_for_inactive_project_lookup() {
         // Arrange
         let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
@@ -1354,6 +1759,156 @@ mod tests {
             creation_error,
             ApiSessionError::Operation(format!("Project `{inactive_project_id}` is not active"))
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_backend_cascade_cancels_orchestrator_children_and_tasks() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let fixture = seed_active_orchestration_child(&mut app, true).await;
+        app.sessions.update_orchestration_progress(
+            &fixture.controller,
+            Some("Working... child: running".to_string()),
+        );
+
+        // Act
+        request_cancellation(&mut app, fixture.controller.clone())
+            .await
+            .expect("orchestrator cancellation should cascade");
+        let controller = request_session(&mut app, fixture.controller.clone())
+            .await
+            .expect("controller should load")
+            .expect("controller should exist");
+        let child = request_session(&mut app, fixture.child)
+            .await
+            .expect("child should load")
+            .expect("child should exist");
+        let orchestration = app
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_for_controller(&fixture.controller)
+            .await
+            .expect("orchestration should load")
+            .expect("orchestration should exist");
+        let tasks = app
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_tasks(fixture.orchestration)
+            .await
+            .expect("orchestration tasks should load");
+
+        // Assert
+        assert_eq!(controller.status, SessionStatus::Canceled);
+        assert_eq!(child.status, SessionStatus::Canceled);
+        assert_eq!(
+            orchestration.status,
+            OrchestrationStatus::Canceled.to_string()
+        );
+        assert_eq!(
+            tasks[0].status,
+            OrchestrationTaskStatus::Canceled.to_string()
+        );
+        assert!(
+            app.sessions
+                .sessions()
+                .iter()
+                .find(|session| session.id == fixture.controller)
+                .and_then(|session| {
+                    session
+                        .transient_messages
+                        .get(crate::domain::transient_message::TransientMessageSlot::Orchestration)
+                })
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_backend_preserves_orchestration_when_child_cancellation_fails() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let fixture = seed_active_orchestration_child(&mut app, true).await;
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &fixture.child,
+            SessionStatus::Done,
+        );
+        let controller_before = request_session(&mut app, fixture.controller.clone())
+            .await
+            .expect("controller should load before cancellation")
+            .expect("controller should exist before cancellation");
+
+        // Act
+        let cancel_error = request_cancellation(&mut app, fixture.controller.clone())
+            .await
+            .expect_err("terminal child should prevent false cascade success");
+        let controller = request_session(&mut app, fixture.controller.clone())
+            .await
+            .expect("controller should load")
+            .expect("controller should exist");
+        let orchestration = app
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_for_controller(&fixture.controller)
+            .await
+            .expect("orchestration should load")
+            .expect("orchestration should exist");
+        let tasks = app
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_tasks(fixture.orchestration)
+            .await
+            .expect("orchestration tasks should load");
+
+        // Assert
+        assert!(
+            cancel_error
+                .to_string()
+                .contains("must be running, in review, or be an unstarted draft")
+        );
+        assert_eq!(controller.status, controller_before.status);
+        assert_eq!(
+            orchestration.status,
+            OrchestrationStatus::Canceling.to_string()
+        );
+        assert_eq!(
+            tasks[0].status,
+            OrchestrationTaskStatus::Running.to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_backend_cancels_reverse_linked_orchestration_child() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let fixture = seed_active_orchestration_child(&mut app, false).await;
+
+        // Act
+        request_cancellation(&mut app, fixture.controller.clone())
+            .await
+            .expect("reverse-linked child cancellation should cascade");
+        let child = request_session(&mut app, fixture.child)
+            .await
+            .expect("child should load")
+            .expect("child should exist");
+        let tasks = app
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_tasks(fixture.orchestration)
+            .await
+            .expect("orchestration tasks should load");
+
+        // Assert
+        assert_eq!(child.status, SessionStatus::Canceled);
+        assert_eq!(
+            tasks[0].status,
+            OrchestrationTaskStatus::Canceled.to_string()
+        );
+        assert!(tasks[0].child_session_id.is_none());
     }
 
     #[tokio::test]
@@ -2217,6 +2772,93 @@ mod tests {
         assert_eq!(
             message,
             "Clarifications:\n1. Q: Which target?\n   A: main\n2. Q: Run tests?\n   A: yes"
+        );
+    }
+
+    #[tokio::test]
+    async fn coordinator_messages_require_content_and_operation_id() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_test_app().await;
+        let session_id = SessionId::from("missing");
+        let (mut busy_app, _busy_temp_dir) = crate::test_support::new_test_app().await;
+        busy_app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .status(Status::InProgress)
+                .build(),
+        );
+        let (mut unbound_app, _unbound_temp_dir) = crate::test_support::new_test_app().await;
+        unbound_app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .status(Status::Review)
+                .build(),
+        );
+        let existing_session_id = SessionId::from("session-id");
+
+        // Act
+        let empty_message_error = app
+            .submit_api_coordinator_message(
+                &session_id,
+                CoordinatorMessageRequest {
+                    message: " ".to_string(),
+                    operation_id: "rollup-1".to_string(),
+                },
+            )
+            .await
+            .expect_err("empty coordinator message should fail");
+        let empty_operation_error = app
+            .submit_api_coordinator_message(
+                &session_id,
+                CoordinatorMessageRequest {
+                    message: "Roll up".to_string(),
+                    operation_id: " ".to_string(),
+                },
+            )
+            .await
+            .expect_err("empty coordinator operation id should fail");
+        let busy_error = busy_app
+            .submit_api_coordinator_message(
+                &existing_session_id,
+                CoordinatorMessageRequest {
+                    message: "Roll up".to_string(),
+                    operation_id: "rollup-busy".to_string(),
+                },
+            )
+            .await
+            .expect_err("busy coordinator should reject a roll-up");
+        let enqueue_error = unbound_app
+            .submit_api_coordinator_message(
+                &existing_session_id,
+                CoordinatorMessageRequest {
+                    message: "Roll up".to_string(),
+                    operation_id: "rollup-unbound".to_string(),
+                },
+            )
+            .await
+            .expect_err("coordinator without a worker should reject a roll-up");
+
+        // Assert
+        assert_eq!(
+            empty_message_error,
+            ApiSessionError::Operation("Cannot submit an empty coordinator message".to_string())
+        );
+        assert_eq!(
+            empty_operation_error,
+            ApiSessionError::Operation(
+                "Cannot submit a coordinator message without an operation id".to_string()
+            )
+        );
+        assert_eq!(
+            busy_error,
+            ApiSessionError::Operation(
+                "Session `session-id` cannot accept a coordinator message in status `InProgress`"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            enqueue_error,
+            ApiSessionError::Operation(
+                "Session `session-id` could not enqueue the coordinator message".to_string()
+            )
         );
     }
 

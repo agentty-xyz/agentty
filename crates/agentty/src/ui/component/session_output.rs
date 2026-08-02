@@ -177,12 +177,12 @@ impl TranscriptFingerprint {
 pub(crate) struct SessionOutputLayout {
     /// Index of the active Tachyon loader row within `lines`, when present.
     pub(crate) active_loader_line_index: Option<usize>,
-    /// Index of the branch-operation loader row within `lines`, when present.
-    pub(crate) branch_operation_loader_line_index: Option<usize>,
     /// Number of rendered lines, saturated for scroll metric arithmetic.
     pub(crate) line_count: u16,
     /// Rendered lines shared between scroll metrics and frame painting.
     pub(crate) lines: Arc<[Line<'static>]>,
+    /// Index of an explicit transient loader row within `lines`, when present.
+    pub(crate) transient_loader_line_index: Option<usize>,
 }
 
 /// Final session-output layout selected for the current viewport and
@@ -576,9 +576,9 @@ impl<'a> SessionOutput<'a> {
 
         SessionOutputLayout {
             active_loader_line_index: output_lines.active_loader_line_index,
-            branch_operation_loader_line_index: output_lines.branch_operation_loader_line_index,
             line_count,
             lines: Arc::from(output_lines.lines),
+            transient_loader_line_index: output_lines.transient_loader_line_index,
         }
     }
 
@@ -764,9 +764,9 @@ impl Component for SessionOutput<'_> {
         } else {
             None
         };
-        let branch_operation_loader_area = Self::loader_area(
+        let transient_loader_area = Self::loader_area(
             output_area,
-            layout.branch_operation_loader_line_index,
+            layout.transient_loader_line_index,
             final_scroll,
         );
 
@@ -797,7 +797,7 @@ impl Component for SessionOutput<'_> {
         if let Some(loader_area) = active_loader_area {
             self.apply_tachyon_loader_effect(f.buffer_mut(), loader_area, spinner_frame);
         }
-        if let Some(loader_area) = branch_operation_loader_area {
+        if let Some(loader_area) = transient_loader_area {
             TachyonLoaderEffect::apply_stateless(f.buffer_mut(), loader_area, spinner_frame);
         }
     }
@@ -1101,7 +1101,7 @@ mod tests {
             Some(&markdown_render_cache),
         );
         let loader_line_index = layout
-            .branch_operation_loader_line_index
+            .transient_loader_line_index
             .expect("manual publish loader should be tracked through the layout cache");
 
         // Assert
@@ -2194,7 +2194,7 @@ mod tests {
         // Act
         let lines = session_output_assembly::output_lines(&session, 78, None, None);
         let loader_line_index = lines
-            .branch_operation_loader_line_index
+            .transient_loader_line_index
             .expect("manual publish loader should be tracked");
 
         // Assert
@@ -2202,6 +2202,46 @@ mod tests {
             lines.lines[loader_line_index]
                 .to_string()
                 .contains("Publishing review request...")
+        );
+    }
+
+    /// Verifies an orchestrator renders one animated child-status loader.
+    #[test]
+    fn test_output_lines_tracks_orchestration_loader() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading(
+                "Orchestrating...\n- Protocol: running\n- UI: waiting".to_string(),
+            ),
+            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::Orchestration,
+            turn_position: None,
+        });
+
+        // Act
+        let lines = session_output_assembly::output_lines(&session, 78, None, None);
+        let loader_line_index = lines
+            .transient_loader_line_index
+            .expect("orchestration loader should be tracked");
+
+        // Assert
+        assert!(
+            lines.lines[loader_line_index]
+                .to_string()
+                .contains("Orchestrating...")
+        );
+        assert!(
+            lines.lines[loader_line_index + 1]
+                .to_string()
+                .contains("- Protocol: running")
+        );
+        assert!(
+            lines.lines[loader_line_index + 2]
+                .to_string()
+                .contains("- UI: waiting")
         );
     }
 
@@ -2416,7 +2456,7 @@ mod tests {
             .join("\n");
 
         // Assert
-        assert_eq!(lines.branch_operation_loader_line_index, None);
+        assert_eq!(lines.transient_loader_line_index, None);
         assert!(text.contains("[Branch Push]"));
         assert_eq!(
             text.matches("Auto-pushed published branch after completed turn.")

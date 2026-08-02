@@ -1,0 +1,172 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT task.id AS \"id!: i64\",\n       task.attempt_count,\n       COALESCE(child.input_tokens, 0) AS \"child_input_tokens!: i64\",\n       COALESCE(child.output_tokens, 0) AS \"child_output_tokens!: i64\",\n       task.child_session_id,\n       child.status AS child_status,\n       child.summary AS child_summary,\n       task.last_error,\n       task.prompt,\n       task.result_summary,\n       task.status,\n       task.task_key,\n       task.touched_areas,\n       task.title\nFROM session_orchestration_task AS task\nLEFT JOIN session AS child\nON child.id = task.child_session_id\nWHERE task.session_orchestration_id = ?\nORDER BY task.id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "attempt_count",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "attempt_count"
+          }
+        }
+      },
+      {
+        "name": "child_input_tokens!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "child_output_tokens!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "child_session_id",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "child_session_id"
+          }
+        }
+      },
+      {
+        "name": "child_status",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "child_summary",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "summary"
+          }
+        }
+      },
+      {
+        "name": "last_error",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "last_error"
+          }
+        }
+      },
+      {
+        "name": "prompt",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "prompt"
+          }
+        }
+      },
+      {
+        "name": "result_summary",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "result_summary"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "task_key",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "task_key"
+          }
+        }
+      },
+      {
+        "name": "touched_areas",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "touched_areas"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "title"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1abc0e0f301febdaf5102150ab90f2c2091f6a14607e882dd39488a7a8a489f7"
+}

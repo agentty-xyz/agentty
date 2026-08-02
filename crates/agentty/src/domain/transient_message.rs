@@ -13,6 +13,8 @@ pub(crate) enum TransientMessageSlot {
     Review,
     /// Short-lived workflow feedback produced while finalizing a turn.
     WorkflowNotice,
+    /// Live status for child sessions managed by an orchestrator.
+    Orchestration,
     /// Manual branch or review-request publish progress and result.
     BranchPublish,
     /// Published-branch auto-push progress replaced by its durable result.

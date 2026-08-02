@@ -4,7 +4,9 @@ use crate::app::AppServices;
 use crate::domain::agent::{
     self, AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
 };
-use crate::domain::setting::SettingName;
+use crate::domain::setting::{
+    DEFAULT_ORCHESTRATION_PARALLELISM, MAX_ORCHESTRATION_PARALLELISM, SettingName,
+};
 use crate::domain::theme::ColorTheme;
 use crate::infra::db::AppRepositories;
 use crate::presentation::settings::{SettingsOperation, SettingsView};
@@ -144,6 +146,8 @@ pub struct SettingsManager {
     pub default_smart_selection: AgentSelection,
     /// Optional command run in tmux when opening a session worktree.
     pub launch_configuration: String,
+    /// Maximum number of orchestration child sessions run concurrently.
+    pub orchestration_parallelism: u8,
     /// Default reasoning effort preference for models that support this
     /// setting.
     ///
@@ -230,6 +234,8 @@ impl SettingsManager {
         )
         .await;
         let theme = load_theme_setting_from_repositories(&repositories).await;
+        let orchestration_parallelism =
+            load_orchestration_parallelism_setting_from_repositories(&repositories).await;
 
         Self {
             default_fast_selection: default_fast_agent,
@@ -240,6 +246,7 @@ impl SettingsManager {
             theme,
             available_agent_kinds,
             include_coauthored_by_agentty,
+            orchestration_parallelism,
             project_id,
             repositories,
             use_last_used_model_as_default,
@@ -266,6 +273,7 @@ impl SettingsManager {
             default_smart_selection: self.default_smart_selection,
             include_coauthored_by_agentty: self.include_coauthored_by_agentty,
             launch_configuration: self.launch_configuration.clone(),
+            orchestration_parallelism: self.orchestration_parallelism,
             reasoning_level: self.reasoning_level,
             theme: self.theme,
             use_last_used_model_as_default: self.use_last_used_model_as_default,
@@ -299,6 +307,10 @@ impl SettingsManager {
                 self.launch_configuration = value;
                 self.persist_launch_configuration_setting().await;
             }
+            SettingsOperation::OrchestrationParallelism(value) => {
+                self.orchestration_parallelism = value.clamp(1, MAX_ORCHESTRATION_PARALLELISM);
+                self.persist_orchestration_parallelism_setting().await;
+            }
             SettingsOperation::ReasoningLevel(value) => {
                 self.reasoning_level = value;
                 self.persist_reasoning_level_setting().await;
@@ -320,6 +332,18 @@ impl SettingsManager {
                 SettingName::LaunchConfiguration,
                 &self.launch_configuration,
             )
+            .await;
+    }
+
+    /// Persists the global orchestration concurrency cap.
+    async fn persist_orchestration_parallelism_setting(&self) {
+        let value = self.orchestration_parallelism.to_string();
+
+        // Best-effort: settings persistence failure is non-critical.
+        let _ = self
+            .repositories
+            .settings()
+            .upsert_setting(SettingName::OrchestrationParallelism, &value)
             .await;
     }
 
@@ -663,6 +687,20 @@ async fn load_theme_setting_from_repositories(repositories: &AppRepositories) ->
         .unwrap_or_default()
 }
 
+/// Loads and bounds the global orchestration concurrency cap.
+async fn load_orchestration_parallelism_setting_from_repositories(
+    repositories: &AppRepositories,
+) -> u8 {
+    repositories
+        .settings()
+        .get_setting(SettingName::OrchestrationParallelism)
+        .await
+        .unwrap_or(None)
+        .and_then(|setting_value| setting_value.parse::<u8>().ok())
+        .unwrap_or(DEFAULT_ORCHESTRATION_PARALLELISM)
+        .clamp(1, MAX_ORCHESTRATION_PARALLELISM)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -748,6 +786,7 @@ mod tests {
                     default_smart_selection: default_selection,
                     include_coauthored_by_agentty: false,
                     launch_configuration: String::new(),
+                    orchestration_parallelism: DEFAULT_ORCHESTRATION_PARALLELISM,
                     reasoning_level: ReasoningLevel::High,
                     theme: ColorTheme::Current,
                     use_last_used_model_as_default: false,
@@ -1281,6 +1320,12 @@ mod tests {
             .upsert_setting(SettingName::Theme, ColorTheme::Green.as_str())
             .await
             .expect("failed to persist theme setting");
+        services
+            .db()
+            .settings()
+            .upsert_setting(SettingName::OrchestrationParallelism, "5")
+            .await
+            .expect("failed to persist orchestration parallelism");
 
         // Act
         let manager = settings_manager(&services, project_id).await;
@@ -1301,6 +1346,7 @@ mod tests {
         );
         assert_eq!(settings.launch_configuration, "nvim .");
         assert_eq!(settings.reasoning_level, ReasoningLevel::Low);
+        assert_eq!(settings.orchestration_parallelism, 5);
         assert_eq!(settings.theme, ColorTheme::Green);
         assert!(!settings.include_coauthored_by_agentty);
         assert!(settings.use_last_used_model_as_default);
@@ -1595,7 +1641,7 @@ mod tests {
     }
 
     #[test]
-    fn next_moves_selection_to_default_reasoning_level_row() {
+    fn next_moves_selection_to_orchestration_parallelism_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -1626,7 +1672,7 @@ mod tests {
                 .presentation
                 .snapshot(&manager.view)
                 .selected_row_index,
-            Some(6)
+            Some(7)
         );
     }
 
@@ -1651,14 +1697,15 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows.len(), 7);
+        assert_eq!(rows.len(), 8);
         assert_eq!(rows[0].0, "Theme");
-        assert_eq!(rows[1].0, "Default Reasoning Level");
-        assert_eq!(rows[2].0, "Default Smart Model");
-        assert_eq!(rows[3].0, "Default Fast Model");
-        assert_eq!(rows[4].0, "Default Review Model");
-        assert_eq!(rows[5].0, "Coauthored by Agentty");
-        assert_eq!(rows[6].0, "Launch Configurations");
+        assert_eq!(rows[1].0, "Orchestrator Parallelism");
+        assert_eq!(rows[2].0, "Default Reasoning Level");
+        assert_eq!(rows[3].0, "Default Smart Model");
+        assert_eq!(rows[4].0, "Default Fast Model");
+        assert_eq!(rows[5].0, "Default Review Model");
+        assert_eq!(rows[6].0, "Coauthored by Agentty");
+        assert_eq!(rows[7].0, "Launch Configurations");
     }
 
     #[test]
@@ -1671,8 +1718,9 @@ mod tests {
         let project_rows = manager.project_settings_rows();
 
         // Assert
-        assert_eq!(global_rows.len(), 1);
+        assert_eq!(global_rows.len(), 2);
         assert_eq!(global_rows[0].0, "Theme");
+        assert_eq!(global_rows[1].0, "Orchestrator Parallelism");
         assert_eq!(project_rows.len(), 6);
         assert_eq!(project_rows[0].0, "Default Reasoning Level");
         assert_eq!(project_rows[1].0, "Default Smart Model");
@@ -1686,7 +1734,7 @@ mod tests {
     fn footer_hint_returns_launch_configuration_input_hint_when_input_is_active() {
         // Arrange
         let mut manager = new_settings_manager();
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
 
@@ -1771,7 +1819,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "(none)");
+        assert_eq!(rows[7].1, "(none)");
     }
 
     #[test]
@@ -1784,7 +1832,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "http://localhost:5173");
+        assert_eq!(rows[7].1, "http://localhost:5173");
     }
 
     #[test]
@@ -1798,7 +1846,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "cargo test (+2 more)");
+        assert_eq!(rows[7].1, "cargo test (+2 more)");
     }
 
     #[test]
@@ -1811,7 +1859,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, "Last used model as default");
+        assert_eq!(rows[3].1, "Last used model as default");
     }
 
     #[test]
@@ -1825,7 +1873,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro");
+        assert_eq!(rows[3].1, "antigravity/gemini-3.1-pro");
     }
 
     #[test]
@@ -1844,7 +1892,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, "gemini/gemini-3.1-pro");
+        assert_eq!(rows[3].1, "gemini/gemini-3.1-pro");
     }
 
     #[test]
@@ -1858,7 +1906,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[3].1, "codex/gpt-5.6-sol");
+        assert_eq!(rows[4].1, "codex/gpt-5.6-sol");
     }
 
     #[test]
@@ -1872,7 +1920,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[4].1, "claude/claude-opus-5");
+        assert_eq!(rows[5].1, "claude/claude-opus-5");
     }
 
     #[test]
@@ -1885,7 +1933,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[5].1, "Disabled");
+        assert_eq!(rows[6].1, "Disabled");
     }
 
     #[test]
@@ -1898,7 +1946,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[1].1, "max");
+        assert_eq!(rows[2].1, "max");
     }
 
     #[test]
@@ -1919,7 +1967,7 @@ mod tests {
         // Arrange
         let mut manager = new_settings_manager();
         manager.fixture_view_mut().launch_configuration = "nvim .".to_string();
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
 
         // Act
         manager.handle_enter();
@@ -1936,7 +1984,7 @@ mod tests {
     fn next_and_previous_do_not_move_selection_while_launch_configuration_editor_is_open() {
         // Arrange
         let mut manager = new_settings_manager();
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
 
         // Act
@@ -1949,7 +1997,7 @@ mod tests {
                 .presentation
                 .snapshot(&manager.view)
                 .selected_row_index,
-            Some(6)
+            Some(7)
         );
         assert!(manager.is_launch_configuration_list_editor_open());
     }
@@ -1958,7 +2006,7 @@ mod tests {
     fn navigation_actions_do_not_request_launch_configuration_persistence() {
         // Arrange
         let mut manager = new_settings_manager();
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
 
         // Act
@@ -1997,7 +2045,7 @@ mod tests {
         // Arrange
         let mut manager = new_settings_manager();
         manager.fixture_view_mut().launch_configuration = "old command".to_string();
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
         manager.apply_launch_configuration_input_command(InputCommand::Insert('n'));
@@ -2019,7 +2067,7 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = settings_manager(&services, project_id).await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
 
@@ -2052,7 +2100,7 @@ mod tests {
             "cargo test\nnpm run dev",
         )
         .await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.next_launch_configuration_list_editor_item();
         manager.start_editing_selected_launch_configuration();
@@ -2093,7 +2141,7 @@ mod tests {
             "cargo test\nnpm run dev",
         )
         .await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.start_editing_selected_launch_configuration();
 
@@ -2127,7 +2175,7 @@ mod tests {
             "cargo test\nnpm run dev\nlazygit",
         )
         .await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.next_launch_configuration_list_editor_item();
 
@@ -2160,7 +2208,7 @@ mod tests {
             "cargo test\nnpm run dev\nlazygit",
         )
         .await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
 
         // Act
@@ -2191,7 +2239,7 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = settings_manager(&services, project_id).await;
-        select_row(&mut manager, 5);
+        select_row(&mut manager, 6);
 
         // Act
         manager.handle_enter();
@@ -2243,6 +2291,37 @@ mod tests {
         assert_eq!(
             persisted_theme,
             Some(ColorTheme::Green.as_str().to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn selector_dropdown_persists_bounded_orchestration_parallelism() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = settings_manager(&services, project_id).await;
+        select_row(&mut manager, 1);
+
+        // Act
+        manager.handle_enter();
+        manager.next_selector_dropdown_option();
+        manager.select_selector_dropdown_option().await;
+        manager
+            .persist_operation(SettingsOperation::OrchestrationParallelism(u8::MAX))
+            .await;
+
+        // Assert
+        assert_eq!(
+            manager.settings().orchestration_parallelism,
+            MAX_ORCHESTRATION_PARALLELISM
+        );
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_setting(SettingName::OrchestrationParallelism)
+                .await
+                .expect("failed to load orchestration parallelism"),
+            Some(MAX_ORCHESTRATION_PARALLELISM.to_string())
         );
     }
 
@@ -2314,7 +2393,7 @@ mod tests {
             .await
             .expect("failed to persist last-used fixture");
         let mut manager = settings_manager(&services, project_id).await;
-        select_row(&mut manager, 2);
+        select_row(&mut manager, 3);
 
         // Act
         manager.handle_enter();

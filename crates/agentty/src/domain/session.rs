@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 pub use ag_agent::{SessionDiffState, SessionStats, SpeedMode};
 pub use ag_session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, SessionRole,
     SessionStatus as Status, activity_day_key_with_offset,
 };
 use tokio::sync::Mutex as AsyncMutex;
@@ -243,6 +243,8 @@ pub struct Session {
     pub base_branch: String,
     /// Session creation timestamp (Unix seconds).
     pub created_at: i64,
+    /// Controller session that owns this orchestration child, when present.
+    pub controller_session_id: Option<SessionId>,
     /// Ordered image attachments staged for the draft-session prompt stored in
     /// `prompt` while the session remains `Draft`.
     pub draft_attachments: Vec<TurnPromptAttachment>,
@@ -261,6 +263,8 @@ pub struct Session {
     /// Whether the session was created through the explicit draft workflow
     /// from the sessions list.
     pub is_draft: bool,
+    /// Derived orchestration progress rendered in place of a lifecycle label.
+    pub orchestration_progress: Option<String>,
     /// Parent session this stacked session is based on while its parent branch
     /// remains active.
     pub parent_session_id: Option<SessionId>,
@@ -283,6 +287,8 @@ pub struct Session {
     pub questions: Vec<QuestionItem>,
     /// Persisted forge review-request link for this session, when available.
     pub review_request: Option<ReviewRequest>,
+    /// Role this session plays in multi-session orchestration.
+    pub role: SessionRole,
     /// Derived size bucket computed from diff size.
     pub size: SessionSize,
     /// Response-speed preference selected through `/speed`.
@@ -412,7 +418,8 @@ impl Session {
     /// statuses are excluded because active branch work or terminal cleanup
     /// could race with the snapshot.
     pub fn allows_fork_action(&self) -> bool {
-        self.parent_session_id.is_none()
+        self.role.owns_branch_changes()
+            && self.parent_session_id.is_none()
             && !self.is_draft_session()
             && self.status.allows_review_actions()
     }
@@ -420,7 +427,14 @@ impl Session {
     /// Returns whether the session can submit an agent reply for actionable
     /// forge review comments.
     pub fn allows_review_comment_reply(&self) -> bool {
-        self.status.allows_review_actions() || self.status == Status::Question
+        self.role.owns_branch_changes()
+            && (self.status.allows_review_actions() || self.status == Status::Question)
+    }
+
+    /// Returns whether this session exposes branch diff, merge, and publish
+    /// affordances.
+    pub fn owns_branch_changes(&self) -> bool {
+        self.role.owns_branch_changes()
     }
 
     /// Returns whether this session belongs to a one-level stack beneath a
@@ -1047,18 +1061,26 @@ pub(crate) mod tests {
             .draft(false)
             .status(Status::Done)
             .build();
+        let orchestrator_session = SessionFixtureBuilder::new()
+            .draft(false)
+            .role(SessionRole::Orchestrator)
+            .status(Status::Review)
+            .build();
 
         // Act
         let allows_draft_fork = draft_review_session.allows_fork_action();
         let allows_child_fork = child_review_session.allows_fork_action();
         let allows_active_fork = in_progress_session.allows_fork_action();
         let allows_done_fork = done_session.allows_fork_action();
+        let allows_orchestrator_fork = orchestrator_session.allows_fork_action();
 
         // Assert
         assert!(!allows_draft_fork);
         assert!(!allows_child_fork);
         assert!(!allows_active_fork);
         assert!(!allows_done_fork);
+        assert!(!allows_orchestrator_fork);
+        assert!(!orchestrator_session.owns_branch_changes());
     }
 
     #[test]
@@ -1964,6 +1986,9 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini36Flash,
@@ -2008,6 +2033,9 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini36Flash,
@@ -2071,6 +2099,9 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: Some(60),
             in_progress_total_seconds: 120,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini36Flash,
@@ -2115,6 +2146,9 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: None,
             in_progress_total_seconds: 180,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini36Flash,
@@ -2159,6 +2193,9 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: Some(120),
             in_progress_total_seconds: 0,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini36Flash,
@@ -2203,6 +2240,9 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             in_progress_started_at: Some(200),
             in_progress_total_seconds: 90,
             is_draft: false,
+            controller_session_id: None,
+            orchestration_progress: None,
+            role: SessionRole::default(),
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
                 AgentModel::Gemini36Flash,

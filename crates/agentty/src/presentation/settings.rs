@@ -3,6 +3,7 @@
 use crate::domain::agent::{AgentSelection, ReasoningLevel};
 use crate::domain::input::{InputCommand, InputState};
 use crate::domain::selection::SelectionState;
+use crate::domain::setting::MAX_ORCHESTRATION_PARALLELISM;
 use crate::domain::theme::ColorTheme;
 
 /// Immutable setting values and available choices required by the settings
@@ -15,6 +16,7 @@ pub(crate) struct SettingsView {
     pub(crate) default_smart_selection: AgentSelection,
     pub(crate) include_coauthored_by_agentty: bool,
     pub(crate) launch_configuration: String,
+    pub(crate) orchestration_parallelism: u8,
     pub(crate) reasoning_level: ReasoningLevel,
     pub(crate) theme: ColorTheme,
     pub(crate) use_last_used_model_as_default: bool,
@@ -31,6 +33,7 @@ pub(crate) enum SettingsOperation {
     },
     IncludeCoauthoredByAgentty(bool),
     LaunchConfiguration(String),
+    OrchestrationParallelism(u8),
     ReasoningLevel(ReasoningLevel),
     Theme(ColorTheme),
 }
@@ -497,6 +500,9 @@ fn settings_operation_for_selector(
         (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
             Some(SettingsOperation::IncludeCoauthoredByAgentty(value))
         }
+        (SettingRow::OrchestrationParallelism, SettingSelectorValue::Parallelism(value)) => {
+            Some(SettingsOperation::OrchestrationParallelism(value))
+        }
         (SettingRow::Theme, SettingSelectorValue::Theme(value)) => {
             Some(SettingsOperation::Theme(value))
         }
@@ -518,12 +524,14 @@ enum SettingRow {
     DefaultReviewModel,
     IncludeCoauthoredByAgentty,
     LaunchConfiguration,
+    OrchestrationParallelism,
     Theme,
 }
 
 impl SettingRow {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Theme,
+        Self::OrchestrationParallelism,
         Self::ReasoningLevel,
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
@@ -531,7 +539,7 @@ impl SettingRow {
         Self::IncludeCoauthoredByAgentty,
         Self::LaunchConfiguration,
     ];
-    const GLOBAL: [Self; 1] = [Self::Theme];
+    const GLOBAL: [Self; 2] = [Self::Theme, Self::OrchestrationParallelism];
     const PROJECT: [Self; 6] = [
         Self::ReasoningLevel,
         Self::DefaultSmartModel,
@@ -564,6 +572,7 @@ impl SettingRow {
             Self::DefaultReviewModel => "Default Review Model",
             Self::IncludeCoauthoredByAgentty => "Coauthored by Agentty",
             Self::LaunchConfiguration => "Launch Configurations",
+            Self::OrchestrationParallelism => "Orchestrator Parallelism",
             Self::Theme => "Theme",
         }
     }
@@ -650,6 +659,9 @@ impl SettingSelectorOption {
             (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
                 view.include_coauthored_by_agentty == value
             }
+            (SettingRow::OrchestrationParallelism, SettingSelectorValue::Parallelism(value)) => {
+                view.orchestration_parallelism == value
+            }
             (SettingRow::Theme, SettingSelectorValue::Theme(value)) => view.theme == value,
             _ => false,
         }
@@ -661,6 +673,7 @@ enum SettingSelectorValue {
     Bool(bool),
     LastUsedModel,
     ModelSelection(AgentSelection),
+    Parallelism(u8),
     ReasoningLevel(ReasoningLevel),
     Theme(ColorTheme),
 }
@@ -747,6 +760,12 @@ fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<Setting
             },
         ],
         SettingRow::LaunchConfiguration => Vec::new(),
+        SettingRow::OrchestrationParallelism => (1..=MAX_ORCHESTRATION_PARALLELISM)
+            .map(|value| SettingSelectorOption {
+                label: value.to_string(),
+                value: SettingSelectorValue::Parallelism(value),
+            })
+            .collect(),
         SettingRow::Theme => ColorTheme::ALL
             .iter()
             .copied()
@@ -786,6 +805,7 @@ fn display_value_for_row(view: &SettingsView, row: SettingRow) -> String {
         SettingRow::LaunchConfiguration => {
             display_launch_configuration_summary(&view.launch_configuration)
         }
+        SettingRow::OrchestrationParallelism => view.orchestration_parallelism.to_string(),
         SettingRow::Theme => view.theme.label().to_string(),
     }
 }
@@ -857,6 +877,7 @@ mod tests {
             default_smart_selection: smart_selection,
             include_coauthored_by_agentty: false,
             launch_configuration: launch_configuration.to_string(),
+            orchestration_parallelism: 3,
             reasoning_level: ReasoningLevel::High,
             theme: ColorTheme::Current,
             use_last_used_model_as_default: false,
@@ -876,7 +897,7 @@ mod tests {
         let empty_view = test_settings_view("");
         let mut selector_state = SettingsPresentationState::default();
         let mut editor_state = SettingsPresentationState::default();
-        select_row(&mut editor_state, &empty_view, 6);
+        select_row(&mut editor_state, &empty_view, 7);
 
         // Act
         let opened_selector = selector_state.apply(&empty_view, SettingsAction::Activate);
@@ -900,7 +921,7 @@ mod tests {
         // Arrange
         let view = test_settings_view("cargo test");
         let mut state = SettingsPresentationState::default();
-        select_row(&mut state, &view, 6);
+        select_row(&mut state, &view, 7);
         let _ = state.apply(&view, SettingsAction::Activate);
 
         // Act
@@ -922,11 +943,11 @@ mod tests {
         // Arrange
         let one_command_view = test_settings_view("cargo test");
         let mut one_command_state = SettingsPresentationState::default();
-        select_row(&mut one_command_state, &one_command_view, 6);
+        select_row(&mut one_command_state, &one_command_view, 7);
         let _ = one_command_state.apply(&one_command_view, SettingsAction::Activate);
         let two_command_view = test_settings_view("cargo test\nnpm run dev");
         let mut two_command_state = SettingsPresentationState::default();
-        select_row(&mut two_command_state, &two_command_view, 6);
+        select_row(&mut two_command_state, &two_command_view, 7);
         let _ = two_command_state.apply(&two_command_view, SettingsAction::Activate);
         let _ = two_command_state.apply(&two_command_view, SettingsAction::Next);
 
@@ -990,13 +1011,13 @@ mod tests {
 
         // Act
         let operations = [
-            (1, SettingsOperation::ReasoningLevel(ReasoningLevel::High)),
+            (2, SettingsOperation::ReasoningLevel(ReasoningLevel::High)),
             (
-                3,
+                4,
                 SettingsOperation::DefaultFastSelection(view.default_fast_selection),
             ),
             (
-                4,
+                5,
                 SettingsOperation::DefaultReviewSelection(view.default_review_selection),
             ),
         ]
@@ -1076,11 +1097,26 @@ mod tests {
         let reasoning_options = selector_options_for_row(&view, SettingRow::ReasoningLevel);
         let fast_options = selector_options_for_row(&view, SettingRow::DefaultFastModel);
         let launch_options = selector_options_for_row(&view, SettingRow::LaunchConfiguration);
+        let parallelism_options =
+            selector_options_for_row(&view, SettingRow::OrchestrationParallelism);
 
         // Assert
         assert_eq!(editor.selected_index, 1);
         assert_eq!(reasoning_options.len(), ReasoningLevel::ALL.len());
         assert_eq!(fast_options.len(), view.available_model_selections.len());
         assert!(launch_options.is_empty());
+        assert_eq!(
+            parallelism_options.len(),
+            usize::from(MAX_ORCHESTRATION_PARALLELISM)
+        );
+        assert!(parallelism_options[2].is_current_for(&view, SettingRow::OrchestrationParallelism));
+        assert_eq!(
+            settings_operation_for_selector(
+                &view,
+                SettingRow::OrchestrationParallelism,
+                SettingSelectorValue::Parallelism(4),
+            ),
+            Some(SettingsOperation::OrchestrationParallelism(4))
+        );
     }
 }

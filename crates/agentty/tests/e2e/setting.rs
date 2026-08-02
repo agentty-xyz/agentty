@@ -110,6 +110,7 @@ fn settings_tab_shows_content() {
                 assertion::assert_text_in_region(frame, "Launch Configurations", &full);
                 assertion::assert_text_in_region(frame, "Theme", &full);
                 assertion::assert_text_in_region(frame, "Agentty Default", &full);
+                assertion::assert_text_in_region(frame, "Orchestrator Parallelism", &full);
             },
         )
         .expect("feature test failed");
@@ -151,6 +152,9 @@ fn settings_jk_navigation() {
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("j")
@@ -159,7 +163,7 @@ fn settings_jk_navigation() {
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
-                    .capture_labeled("moved_down", "Selection moved down three rows")
+                    .capture_labeled("moved_down", "Selection moved down four rows")
                     .press_key("k")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
@@ -225,6 +229,7 @@ fn settings_dropdown_selects_value() {
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
                     .press_key("j")
+                    .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .capture_labeled("before_edit", "Reasoning Level before selection")
                     .press_key("Enter")
@@ -289,6 +294,7 @@ fn settings_launch_configurations_list_editor() {
                     .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(1500)
+                    .press_key("j")
                     .press_key("j")
                     .press_key("j")
                     .press_key("j")
@@ -396,6 +402,7 @@ fn test_input_undo_redo() {
                     .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
+                    .press_key("j")
                     .press_key("j")
                     .press_key("j")
                     .press_key("j")

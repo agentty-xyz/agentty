@@ -218,13 +218,19 @@ aggregate. Creation is restricted to the active project while `SessionRuntime` o
 single active-project `SessionManager`, and can copy the agent, model, reasoning,
 personality, and base-branch snapshot from another session in that project without
 changing defaults for later ordinary sessions. The adapter deliberately contains no
-orchestrator policy, so a future coordinator owns sequencing while calling the same API
-as the TUI.
+orchestrator policy. `app/orchestration.rs` owns that sequencing: it persists proposed
+task rows before approval, reads child status, summary, and token totals in one SQLite
+task snapshot during reconciliation, and uses the session API mailbox only for child
+creation, mutation, and a durable roll-up submission. The terminal runtime injects the
+reconciliation schedule, keeping direct timer APIs out of the coordinator. The database
+link from task to child makes restart re-linking independent of branch-name parsing.
+Session-list refreshes load controller progress and child adjacency in one project-wide
+orchestration query instead of issuing queries for each saved session.
 
 ```mermaid
 flowchart LR
   tui["TUI runtime"]
-  future["Future orchestrator"]
+  coordinator["Orchestration coordinator"]
   api["ag-session service"]
   handle["Session runtime handle"]
   mailbox["Bounded command mailbox"]
@@ -233,7 +239,8 @@ flowchart LR
   repos["Session repositories"]
 
   tui --> api
-  future --> api
+  coordinator --> api
+  coordinator --> repos
   api --> handle
   handle --> mailbox
   mailbox --> adapter
@@ -270,6 +277,29 @@ flowchart LR
 1. `AppEvent::AgentResponseReceived` carries the reducer projection so the active
    session updates without a forced reload. If persistence fails, the worker appends a
    recovery error and falls back to a durable-state reload.
+1. For orchestrator turns, validated file-disjoint subtasks are stored in
+   `session_orchestration_task` before the approval question is shown. Approval moves
+   the orchestration to running, and the coordinator creates workers up to the persisted
+   parallelism cap. Reconciliation treats persisted child session status as truth,
+   including out-of-band merges and cancellations. Once a plan is awaiting approval or
+   running, repeated subtask payloads cannot create another approval or orchestration.
+   Pre-link child-creation errors and interrupted `Creating` rows settle as failed tasks
+   instead of occupying a parallelism slot indefinitely. Retrying a failed task
+   transactionally detaches the prior child session's reverse task link before a
+   replacement child is created. Cascade cancellation atomically moves the orchestration
+   to `Canceling` before inspecting tasks, so a stale coordinator snapshot cannot claim
+   or link another worker. It moves to `Canceled` only after every active child
+   cancellation succeeds; a child failure is surfaced while the cancellation remains
+   retryable. Startup reconciliation also resumes `Canceling` rows and discovers
+   children from their reverse task links when a crash interrupted forward linking.
+   Changed child status snapshots replace one transient multiline orchestration loader;
+   unchanged polls produce no chat update. When all tasks settle, the loader is
+   retracted and the orchestration atomically moves from `Running` to `Submitting`. A
+   dedicated coordinator submission bypasses the in-memory queued-message path and
+   starts the controller roll-up from a review-ready or question state. The
+   orchestration stays `Submitting` while its `session_operation` is queued or running,
+   moves to `Done` only after that operation succeeds, and reclaims failed or canceled
+   attempts with the same identifier without starting duplicate successful turns.
 1. When `a` requests the session-type selector, the app asks `GitClient` to verify the
    effective pre-commit hook whenever the project contains `.pre-commit-config.yaml` or
    `.pre-commit-config.yml`. A missing executable hook opens a warning overlay with
@@ -282,7 +312,8 @@ flowchart LR
    persists the first copy of each distinct `[Commit Warning]` when configured
    validation did not run, avoiding repeated identical notices across later turns.
    Installed-hook failures continue through normal commit error handling. The session
-   title is synced from the commit text.
+   title is synced from the commit text. Orchestrator controllers skip diff refresh,
+   commit, publish, sync, and merge work; only their worker sessions own branch changes.
 1. If the session already tracks a published upstream branch and no chat message or sync
    operation is queued, a per-session branch-operation guard transfers to the detached
    auto-push until it finishes. Every sync request holds the same guard through status
@@ -319,6 +350,9 @@ flowchart LR
 restart-safe:
 
 - Before enqueue: insert `session_operation` row (`queued`).
+- Idempotent coordinator turns claim a stable operation ID; an existing queued, running,
+  or completed row is already accepted, while a failed or canceled attempt can be
+  reclaimed after recovery.
 - Worker transitions: `queued -> running -> done/failed/canceled`.
 - Cancel requests are persisted and checked before command execution.
 - On startup, active sessions across every saved project are migrated from retired model

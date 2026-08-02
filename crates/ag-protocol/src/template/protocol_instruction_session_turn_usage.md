@@ -21,3 +21,6 @@ sequence participants with short message labels. Cyclic flowcharts render each f
 edge as an independent return row beneath the layered graph; larger `LR` cycles use a
 compact top-down layout. Unsupported, self-linked, oversized, or too-wide diagrams fall
 back to the plain fenced-code presentation.
+
+Leave `subtasks` empty unless the turn prompt explicitly asks you to decompose a goal
+into child sessions.

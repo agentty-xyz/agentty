@@ -134,7 +134,9 @@ impl App {
             || session.transient_messages.messages().iter().any(|message| {
                 matches!(
                     message.slot,
-                    TransientMessageSlot::BranchPublish | TransientMessageSlot::PublishedBranchSync
+                    TransientMessageSlot::Orchestration
+                        | TransientMessageSlot::BranchPublish
+                        | TransientMessageSlot::PublishedBranchSync
                 ) && matches!(&message.body, TransientMessageBody::Loading(_))
             })
     }

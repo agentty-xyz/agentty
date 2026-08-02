@@ -31,7 +31,7 @@ use crate::domain::agent::AgentSelection;
 use crate::domain::session::{SessionId, SessionStats, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::turn_prompt::TurnPrompt;
-use crate::infra::db::{AppRepositories, SessionOperationRow};
+use crate::infra::db::{AppRepositories, OperationRepository, SessionOperationRow};
 use crate::infra::fs::FsClient;
 use crate::infra::personality::PersonalityCatalogClient;
 use crate::infra::process;
@@ -614,6 +614,38 @@ impl SessionWorkerService {
             .await
     }
 
+    /// Claims and enqueues one command under its stable operation identifier.
+    ///
+    /// Returns `true` when this call enqueued the command and `false` when an
+    /// earlier attempt already durably accepted it.
+    ///
+    /// # Errors
+    /// Returns an error if operation persistence fails or no worker is
+    /// available.
+    pub(super) async fn enqueue_session_command_idempotently(
+        &mut self,
+        services: &AppServices,
+        runtime: SessionWorkerRuntime,
+        command: SessionCommand,
+    ) -> Result<bool, SessionError> {
+        let session_id = runtime.session_id.clone();
+        let operation_id = command.operation_id().to_string();
+        let claimed = services
+            .db()
+            .operations()
+            .claim_session_operation(&operation_id, &session_id, command.kind())
+            .await?;
+        if !claimed {
+            return Ok(false);
+        }
+
+        let sender = self.ensure_session_worker(services, &runtime);
+        self.send_persisted_command(services.db().operations(), &session_id, sender, command)
+            .await?;
+
+        Ok(true)
+    }
+
     /// Persists and enqueues a command only when the session already owns a
     /// worker sender.
     ///
@@ -717,12 +749,23 @@ impl SessionWorkerService {
             .insert_session_operation(&operation_id, session_id, command.kind())
             .await?;
 
+        self.send_persisted_command(services.db().operations(), session_id, sender, command)
+            .await
+    }
+
+    /// Sends one command whose operation row has already been persisted.
+    async fn send_persisted_command(
+        &mut self,
+        operations: &dyn OperationRepository,
+        session_id: &SessionId,
+        sender: mpsc::UnboundedSender<SessionCommand>,
+        command: SessionCommand,
+    ) -> Result<(), SessionError> {
+        let operation_id = command.operation_id().to_string();
         if sender.send(command).is_err() {
             self.workers.remove(session_id);
             // Best-effort: operation tracking metadata is non-critical.
-            let _ = services
-                .db()
-                .operations()
+            let _ = operations
                 .mark_session_operation_failed(&operation_id, "Session worker is not available")
                 .await;
 
@@ -1059,6 +1102,24 @@ impl SessionManager {
             .await
     }
 
+    /// Claims and enqueues a command by its stable operation identifier.
+    ///
+    /// # Errors
+    /// Returns an error if the session runtime cannot be built, operation
+    /// persistence fails, or no worker is available.
+    pub(super) async fn enqueue_session_command_idempotently(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        command: SessionCommand,
+    ) -> Result<bool, SessionError> {
+        let runtime = self.session_worker_runtime_or_err(services, session_id)?;
+
+        self.worker_service_mut()
+            .enqueue_session_command_idempotently(services, runtime, command)
+            .await
+    }
+
     /// Drops the in-memory worker sender for a session.
     pub(super) fn clear_session_worker(&mut self, session_id: &str) {
         self.worker_service_mut().clear_session_worker(session_id);
@@ -1162,11 +1223,11 @@ mod tests {
         run_turn_with_cancellation, terminate_child_process,
     };
     use super::*;
-    use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+    use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel, SpeedMode};
     use crate::domain::personality::Personality;
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState};
-    use crate::infra::db::{AppRepositories, SessionTurnMetadata};
+    use crate::infra::db::{AppRepositories, PersistedSessionCreation, SessionTurnMetadata};
     use crate::infra::fs;
     use crate::infra::personality::{MockPersonalityCatalogClient, RealPersonalityCatalogClient};
 
@@ -1227,6 +1288,23 @@ mod tests {
 
     fn empty_transcript() -> Arc<Mutex<SessionTranscript>> {
         Arc::new(Mutex::new(SessionTranscript::default()))
+    }
+
+    fn resume_command(operation_id: &str) -> SessionCommand {
+        SessionCommand::Run {
+            operation_id: operation_id.to_string(),
+            request_kind: AgentRequestKind::SessionResume,
+            replay_transcript: None,
+            prompt: "Continue".into(),
+            turn_metadata: TurnMetadata {
+                published_upstream_ref: None,
+                review_comment_thread_ids: Vec::new(),
+                session_agent: AgentSelection::new(
+                    crate::domain::agent::AgentKind::Claude,
+                    AgentModel::ClaudeSonnet5,
+                ),
+            },
+        }
     }
 
     fn cancel_token_after_short_delay(cancel_token: Arc<Mutex<CancellationToken>>) {
@@ -1403,6 +1481,44 @@ mod tests {
         assert_eq!(account_read_kind, "account_read");
     }
 
+    #[tokio::test]
+    async fn test_send_persisted_command_marks_failed_when_worker_receiver_is_closed() {
+        // Arrange
+        let database = AppRepositories::in_memory().await;
+        insert_in_progress_test_session(&database).await;
+        database
+            .operations()
+            .insert_session_operation("rollup-failed", "sess1", "reply")
+            .await
+            .expect("failed to insert operation");
+        let (sender, receiver) = mpsc::unbounded_channel();
+        drop(receiver);
+        let mut worker_service = SessionWorkerService::new();
+
+        // Act
+        let result = worker_service
+            .send_persisted_command(
+                database.operations(),
+                &SessionId::from("sess1"),
+                sender,
+                resume_command("rollup-failed"),
+            )
+            .await;
+        let unfinished = database
+            .operations()
+            .is_session_operation_unfinished("rollup-failed")
+            .await
+            .expect("failed to inspect operation");
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(SessionError::Workflow(error))
+                if error == "Session worker is not available"
+        ));
+        assert!(!unfinished);
+    }
+
     #[test]
     fn test_agent_response_questions_returns_only_question_messages() {
         // Arrange
@@ -1413,6 +1529,7 @@ mod tests {
                 QuestionItem::new("Need migration notes?"),
             ],
             review_comment_outcomes: Vec::new(),
+            subtasks: Vec::new(),
             summary: None,
         };
 
@@ -1439,6 +1556,7 @@ mod tests {
             answer: String::new(),
             questions: vec![QuestionItem::new(numbered_questions)],
             review_comment_outcomes: Vec::new(),
+            subtasks: Vec::new(),
             summary: None,
         };
 
@@ -1459,6 +1577,7 @@ mod tests {
             answer: "Implemented the fix.".to_string(),
             questions: vec![QuestionItem::new("Need me to run tests?")],
             review_comment_outcomes: Vec::new(),
+            subtasks: Vec::new(),
             summary: None,
         };
 
@@ -1481,6 +1600,7 @@ mod tests {
             answer: String::new(),
             questions: vec![QuestionItem::new("Should I apply the patch?")],
             review_comment_outcomes: Vec::new(),
+            subtasks: Vec::new(),
             summary: None,
         };
 
@@ -1502,6 +1622,7 @@ mod tests {
             answer: String::new(),
             questions: vec![QuestionItem::new("\n")],
             review_comment_outcomes: Vec::new(),
+            subtasks: Vec::new(),
             summary: None,
         };
 
@@ -1521,6 +1642,7 @@ mod tests {
             answer: "Implemented the fix.".to_string(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
+            subtasks: Vec::new(),
             summary: Some(AgentResponseSummary {
                 turn: "Updated the greeting flow.".to_string(),
                 session: "Session now greets users on startup.".to_string(),
@@ -1700,6 +1822,7 @@ mod tests {
                             answer: "done".to_string(),
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
+                            subtasks: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -1788,6 +1911,7 @@ mod tests {
                             answer: "done".to_string(),
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
+                            subtasks: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -1889,6 +2013,7 @@ mod tests {
                             answer: "done".to_string(),
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
+                            subtasks: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -1993,6 +2118,7 @@ mod tests {
                             answer: "done".to_string(),
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
+                            subtasks: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -2084,6 +2210,7 @@ mod tests {
                             answer: "done".to_string(),
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
+                            subtasks: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -2727,21 +2854,26 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session(
-                "sess1",
-                "gemini-3.6-flash",
-                "main",
-                "InProgress",
+            .insert_session_with_agent(PersistedSessionCreation {
+                agent: "antigravity",
+                base_branch: "main",
+                id: "sess1",
+                is_draft: false,
+                model: "gemini-3.6-flash",
+                orchestration_task_id: None,
+                parent_session_id: None,
+                personality_id: None,
                 project_id,
-            )
+                reasoning_level: ReasoningLevel::default(),
+                role: Some("Orchestrator"),
+                speed_mode: SpeedMode::Normal,
+                status: "InProgress",
+            })
             .await
             .expect("failed to insert session");
 
         let mut mock_git_client = MockGitClient::new();
-        mock_git_client
-            .expect_is_worktree_clean()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client.expect_is_worktree_clean().never();
         let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash);
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
@@ -2769,6 +2901,7 @@ mod tests {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
+                subtasks: Vec::new(),
                 summary: Some(AgentResponseSummary {
                     turn: "- Updated the worker flow.".to_string(),
                     session: "- Active review now reloads summary from persistence.".to_string(),
@@ -3303,6 +3436,7 @@ mod tests {
                 answer: answer.to_string(),
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
+                subtasks: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3378,6 +3512,7 @@ mod tests {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
+                subtasks: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3468,6 +3603,7 @@ mod tests {
                     resolution: ReviewCommentResolution::Fixed,
                     thread_id: "thread-42".to_string(),
                 }],
+                subtasks: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3583,6 +3719,7 @@ mod tests {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
+                subtasks: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3679,6 +3816,7 @@ mod tests {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
+                subtasks: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3878,6 +4016,7 @@ mod tests {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
+                subtasks: Vec::new(),
                 summary: Some(AgentResponseSummary {
                     turn: "- Attempted the update.".to_string(),
                     session: "- Session state should not project without persistence.".to_string(),
@@ -3985,6 +4124,7 @@ mod tests {
                 answer: "Hey! How can I help you today?".to_string(),
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
+                subtasks: Vec::new(),
                 summary: Some(AgentResponseSummary {
                     turn: "No changes".to_string(),
                     session: "No changes".to_string(),
@@ -4072,6 +4212,7 @@ mod tests {
                 answer: "Implemented the change.".to_string(),
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
+                subtasks: Vec::new(),
                 summary: None,
             },
             context_reset: true,
@@ -4186,6 +4327,7 @@ mod tests {
                             answer: "Resolved conflicts inside existing session.".to_string(),
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
+                            subtasks: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,

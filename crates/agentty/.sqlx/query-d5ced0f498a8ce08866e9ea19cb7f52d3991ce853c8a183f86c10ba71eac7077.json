@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT session.base_branch AS base_branch,\n       session.added_lines AS added_lines,\n       session.agent AS agent,\n       session.created_at AS created_at,\n       session.deleted_lines AS deleted_lines,\n       session.has_diff AS \"has_diff: bool\",\n       session.id AS id,\n       session.in_progress_started_at,\n       session.in_progress_total_seconds AS in_progress_total_seconds,\n       session.input_tokens AS input_tokens,\n       session.is_draft AS \"is_draft: bool\",\n       session.model AS model,\n       session.output_tokens AS output_tokens,\n       session.parent_session_id,\n       session.personality_id,\n       session.project_id,\n       '' AS \"prompt!: String\",\n       session.reasoning_level AS reasoning_level_override,\n       session.speed_mode AS speed_mode,\n       session.published_upstream_ref,\n       NULL AS \"questions: String\",\n       session_review_request.display_id AS review_request_display_id,\n       session_review_request.forge_kind AS review_request_forge_kind,\n       session_review_request.last_refreshed_at AS review_request_last_refreshed_at,\n       session_review_request.source_branch AS review_request_source_branch,\n       session_review_request.state AS review_request_state,\n       session_review_request.status_summary AS review_request_status_summary,\n       session_review_request.target_branch AS review_request_target_branch,\n       session_review_request.title AS review_request_title,\n       session_review_request.web_url AS review_request_web_url,\n       session.size AS size,\n       session.status AS status,\n       NULL AS \"summary: String\",\n       session.title,\n       session.updated_at AS updated_at\nFROM session\nLEFT JOIN session_review_request\nON session_review_request.session_id = session.id\nWHERE session.project_id = ?\nORDER BY session.updated_at DESC, session.created_at DESC, session.id\n",
+  "query": "\nSELECT session.base_branch AS base_branch,\n       session.added_lines AS added_lines,\n       session.agent AS agent,\n       session.created_at AS created_at,\n       session.deleted_lines AS deleted_lines,\n       session.has_diff AS \"has_diff: bool\",\n       session.id AS id,\n       session.in_progress_started_at,\n       session.in_progress_total_seconds AS in_progress_total_seconds,\n       session.input_tokens AS input_tokens,\n       session.is_draft AS \"is_draft: bool\",\n       session.model AS model,\n       session.output_tokens AS output_tokens,\n       session.parent_session_id,\n       session.personality_id,\n       session.project_id,\n       session.prompt AS prompt,\n       session.reasoning_level AS reasoning_level_override,\n       session.speed_mode AS speed_mode,\n       session.published_upstream_ref,\n       session.questions,\n       session_review_request.display_id AS review_request_display_id,\n       session_review_request.forge_kind AS review_request_forge_kind,\n       session_review_request.last_refreshed_at AS review_request_last_refreshed_at,\n       session_review_request.source_branch AS review_request_source_branch,\n       session_review_request.state AS review_request_state,\n       session_review_request.status_summary AS review_request_status_summary,\n       session_review_request.target_branch AS review_request_target_branch,\n       session_review_request.title AS review_request_title,\n       session_review_request.web_url AS review_request_web_url,\n       session.role,\n       session.size AS size,\n       session.status AS status,\n       session.summary,\n       session.title,\n       session.updated_at AS updated_at\nFROM session\nLEFT JOIN session_review_request\nON session_review_request.session_id = session.id\nORDER BY session.updated_at DESC, session.created_at DESC, session.id\n",
   "describe": {
     "columns": [
       {
@@ -180,10 +180,15 @@
         }
       },
       {
-        "name": "prompt!: String",
+        "name": "prompt",
         "ordinal": 16,
         "type_info": "Text",
-        "origin": "Expression"
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "prompt"
+          }
+        }
       },
       {
         "name": "reasoning_level_override",
@@ -219,10 +224,15 @@
         }
       },
       {
-        "name": "questions: String",
+        "name": "questions",
         "ordinal": 20,
-        "type_info": "Null",
-        "origin": "Expression"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "questions"
+          }
+        }
       },
       {
         "name": "review_request_display_id",
@@ -324,8 +334,19 @@
         }
       },
       {
-        "name": "size",
+        "name": "role",
         "ordinal": 30,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "size",
+        "ordinal": 31,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -336,7 +357,7 @@
       },
       {
         "name": "status",
-        "ordinal": 31,
+        "ordinal": 32,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -346,14 +367,19 @@
         }
       },
       {
-        "name": "summary: String",
-        "ordinal": 32,
-        "type_info": "Null",
-        "origin": "Expression"
+        "name": "summary",
+        "ordinal": 33,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "summary"
+          }
+        }
       },
       {
         "name": "title",
-        "ordinal": 33,
+        "ordinal": 34,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -364,7 +390,7 @@
       },
       {
         "name": "updated_at",
-        "ordinal": 34,
+        "ordinal": 35,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -375,7 +401,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
       false,
@@ -408,6 +434,7 @@
       true,
       true,
       true,
+      true,
       false,
       false,
       true,
@@ -415,5 +442,5 @@
       false
     ]
   },
-  "hash": "b9a5431ce0757753b1f137d9fd810b7c6d8a12540d606646dafb05bc1f758839"
+  "hash": "d5ced0f498a8ce08866e9ea19cb7f52d3991ce853c8a183f86c10ba71eac7077"
 }

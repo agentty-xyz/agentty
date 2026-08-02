@@ -256,15 +256,19 @@ fn render_session_row(
         String::new()
     };
     let forge_indicator = session.forge_indicator();
+    let status_label = session
+        .orchestration_progress
+        .clone()
+        .unwrap_or_else(|| status.to_string());
     let status_cell = if forge_indicator.is_empty() {
-        Cell::from(format!("{status}")).style(Style::default().fg(style::status_color(status)))
+        Cell::from(status_label).style(Style::default().fg(style::status_color(status)))
     } else {
         let review_state = session.review_request.as_ref().map(|rr| rr.summary.state);
         let indicator_color = style::forge_indicator_color(review_state);
 
         Cell::from(Line::from(vec![
             Span::styled(
-                format!("{status} "),
+                format!("{status_label} "),
                 Style::default().fg(style::status_color(status)),
             ),
             Span::styled(forge_indicator, Style::default().fg(indicator_color)),
@@ -355,10 +359,14 @@ fn status_column_width(sessions: &[Session]) -> Constraint {
         "Status",
         sessions.iter().map(|session| {
             let forge_indicator = session.forge_indicator();
+            let status_label = session
+                .orchestration_progress
+                .clone()
+                .unwrap_or_else(|| session.status.to_string());
             if forge_indicator.is_empty() {
-                session.status.to_string()
+                status_label
             } else {
-                format!("{} {forge_indicator}", session.status)
+                format!("{status_label} {forge_indicator}")
             }
         }),
     );
@@ -885,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn test_status_column_width_expands_for_forge_indicator() {
+    fn test_status_column_uses_orchestration_progress_with_forge_indicator() {
         // Arrange
         use crate::domain::session::{
             ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
@@ -904,15 +912,28 @@ mod tests {
                 web_url: String::new(),
             },
         });
+        session.orchestration_progress = Some("3 running, 1 waiting on you".to_string());
         let sessions = vec![session];
-        // "Review ⊙ #42" is wider than "AgentReview"
-        let expected_width = u16::try_from("Review ⊙ #42".chars().count()).unwrap_or(u16::MAX);
+        let expected_label = "3 running, 1 waiting on you ⊙ #42";
+        let expected_width = u16::try_from(expected_label.chars().count()).unwrap_or(u16::MAX);
+        let backend = ratatui::backend::TestBackend::new(120, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
 
         // Act
         let width = status_column_width(&sessions);
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::High, 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to render session list");
+        let rendered = buffer_text(terminal.backend().buffer());
 
         // Assert
         assert_eq!(width, Constraint::Length(expected_width));
+        assert!(rendered.contains(expected_label));
     }
 
     #[test]

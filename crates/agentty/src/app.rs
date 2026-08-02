@@ -10,6 +10,7 @@ mod branch_publish;
 mod core;
 mod error;
 mod merge_queue;
+mod orchestration;
 mod project;
 pub(crate) mod prompt_intent;
 mod reducer;
@@ -36,6 +37,7 @@ pub(crate) use core::{AppEvent, AppRuntimeEvent};
 
 pub(crate) use assigned_issue::AssignedIssueState;
 pub use error::AppError;
+pub(crate) use orchestration::{OrchestrationCoordinator, OrchestrationSchedule};
 pub use project::ProjectManager;
 pub(crate) use requested_review::RequestedReviewState;
 #[cfg(test)]

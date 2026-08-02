@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration\nSET status = 'Canceling',\n    updated_at = ?\nWHERE id = ?\n  AND status IN ('AwaitingApproval', 'Running', 'Submitting', 'Canceling')\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "008a1e38aa74bb72d2434bff4b39ae317d9f20ad74e6fb8ae1f80654d517209e"
+}

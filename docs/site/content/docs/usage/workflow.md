@@ -41,9 +41,10 @@ tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
   opens the recoverable session with the error in its transcript. Comments are not
   loaded in this iteration. Install the GitHub CLI and run `gh auth login` to enable
   this tab.
-- **Settings**: Configure the color theme, default reasoning level, smart/fast/review
-  model defaults, the optional `Last used model as default` mode, the session commit
-  coauthor trailer, and `Launch Configurations` for the active project.
+- **Settings**: Configure the color theme, orchestrator parallelism, default reasoning
+  level, smart/fast/review model defaults, the optional `Last used model as default`
+  mode, the session commit coauthor trailer, and `Launch Configurations` for the active
+  project.
 
 On startup, Agentty restores the last active list tab. If no tab has been saved yet but
 an active project is already persisted, Agentty opens on **Sessions** so you can resume
@@ -357,10 +358,11 @@ commit hash, or from saved context when the hash is unavailable. **Canceled** se
 stage the saved summary, transcript, or original prompt. The source session remains
 terminal and unchanged.
 
-## Draft and Stacked Sessions
+## Session Types
 
 <a id="usage-draft-stacked"></a> From the **Sessions** tab, press `a` to choose between
-`Regular`, `Draft`, and `Stacked` session creation:
+`Regular`, `Draft`, `Orchestrator`, and `Stacked` session creation. `Orchestrator` and
+an available `Stacked` option are marked `[Preview]`:
 
 - `Regular` starts the agent immediately on the first `Enter`.
 - `Draft` stages each `Enter` as one ordered draft message and starts only after you
@@ -368,6 +370,9 @@ terminal and unchanged.
   base branch at launch time. From a draft session view, `Ctrl+V`, `Ctrl+Shift+V`, or
   `Alt+V` opens the draft composer and pastes one clipboard image into the next staged
   draft.
+- `Orchestrator` turns a broad goal into a file-disjoint plan, waits for approval, runs
+  multiple worker sessions, and returns a roll-up. The controller reads the repository
+  but never owns branch changes.
 - `Stacked` creates a draft below the selected parent session, with its future branch
   based on the parent session branch. Only one stacking level is available.
 
@@ -381,6 +386,47 @@ branch and review-ready children are synced with `git rebase --onto` so they kee
 their own commits. If an automatic child sync cannot start or complete, the affected
 child session shows a `[Sync Error]` notice with the failure. When the parent is
 canceled, its stacked child is canceled too.
+
+### Parallel Orchestration
+
+Use an orchestrator when a goal contains at least two independent pieces of work:
+
+1. On the **Sessions** tab, press `a`, choose `Orchestrator` (marked `[Preview]`), and
+   press `Enter`.
+1. Enter the overall goal. The controller proposes between two and eight tasks. Each
+   task includes a stable task key, a standalone prompt, and the literal
+   repository-relative files or directories it expects to touch. Wildcard patterns are
+   rejected because Agentty cannot prove them file-disjoint.
+1. Review the plan in the question panel. Select `Approve` to start the worker wave, or
+   `Revise` to return the plan to the controller. Overlapping touched areas are rejected
+   before approval. If the goal does not meaningfully split, the controller recommends a
+   regular session instead of creating one ceremonial worker.
+1. Watch progress in the controller chat and the **Sessions** list. The chat keeps one
+   animated `Orchestrating...` block with each worker and status on its own line. The
+   block updates in place instead of adding status messages to the transcript. Worker
+   rows remain grouped next to their controller. A controller label such as
+   `2 running, 1 waiting on you` calls out questions that need attention.
+1. Open any worker marked **Question**, answer it normally, and return to the
+   controller. Waiting workers continue to occupy a parallelism slot.
+1. When every worker is ready, failed, or canceled, Agentty submits a durable roll-up
+   turn to the controller. The controller remains in the submitting phase until that
+   turn completes successfully; a failed turn is retried with the same operation ID. The
+   roll-up includes each task's status, branch, bounded summary, total child token
+   usage, and a recommended merge order.
+1. Open each worker, press `d` to review its diff, and use the existing `m` merge queue
+   in the recommended order. Integration remains manual; controller sessions do not
+   expose diff, publish, sync, fork, or merge actions.
+
+One approval starts one worker wave. Any follow-up wave is proposed and parked for
+approval again. Ask the controller to retry failed tasks to reuse their task keys and
+increment their attempts. Manually merging a child is treated as a completed result;
+manually canceling a child marks that task failed and lets roll-up continue.
+
+Press `c` on a running controller to cancel the orchestration. The confirmation names
+the number of running children. Approval first blocks new worker fan-out, then cancels
+the controller and its active children idempotently. If any child cannot be canceled,
+Agentty reports the error and leaves the orchestration in **Canceling** so `c` can retry
+without reporting a false terminal cancellation.
 
 ## Branch Publish Flow
 
@@ -592,10 +638,11 @@ commit-derived title.
 ## Settings Scope
 
 <a id="usage-settings-scope"></a> Settings for models, reasoning, commit trailers, and
-launch configurations are stored per active project; the `Theme` setting is global. The
-Settings tab renders these scopes as `Global settings` and `'<project>' settings`. Rows
-with fixed choices open dropdowns; use `j` / `k` to move through options and `Enter` to
-save the highlighted value.
+launch configurations are stored per active project. `Theme` and
+`Orchestrator Parallelism` are global. Parallelism defaults to three workers and accepts
+values from one through eight. The Settings tab renders these scopes as
+`Global settings` and `'<project>' settings`. Rows with fixed choices open dropdowns;
+use `j` / `k` to move through options and `Enter` to save the highlighted value.
 
 The `Launch Configurations` row opens a command-list editor instead of a multiline text
 field. Use `a` to add an entry, `e` or `Enter` to edit the selected entry, `d` to delete
