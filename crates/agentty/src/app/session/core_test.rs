@@ -5194,7 +5194,21 @@ async fn test_rebase_session_cancels_pending_focused_review() {
     // Assert
     assert!(!app.review_cache.contains_key(session_id.as_str()));
     assert!(matches!(app.mode, AppMode::View { .. }));
-    let restarted_app = new_test_app_with_git_and_db(dir.path(), db).await;
+    let clients = crate::test_support::test_app_clients()
+        .with_app_server_client_override(crate::test_support::mock_app_server())
+        .with_git_client(Arc::new(create_default_mock_git_client(
+            dir.path().to_path_buf(),
+        )));
+    let restarted_app = App::new_with_clients(
+        dir.path().to_path_buf(),
+        dir.path().to_path_buf(),
+        Some("main".to_string()),
+        db,
+        clients,
+    )
+    .await
+    .expect("failed to build app after recovery");
+
     assert!(!restarted_app.review_cache.contains_key(session_id.as_str()));
 }
 

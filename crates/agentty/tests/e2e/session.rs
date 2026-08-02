@@ -86,7 +86,7 @@ const MISSING_RESOLVED_DECISION_HISTORY_TEXT: &str =
     "Focused review prompt omitted the resolved session decision.";
 
 /// Wall-clock budget for one seeded git invocation before it is killed.
-const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Poll interval used while waiting for a seeded git invocation to exit.
 const GIT_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);

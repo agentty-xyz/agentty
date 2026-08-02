@@ -363,10 +363,12 @@ restart-safe:
 - Cancel requests are persisted and checked before command execution.
 - On startup, active sessions across every saved project are migrated from retired model
   ids to their current provider/model replacements before project-scoped snapshots load.
-- On startup, unfinished operations are failed with reason `Interrupted by app restart`,
-  interrupted rebase operations abort stale in-progress git rebase metadata, and
-  impacted sessions are reset to `Review`. Pending post-merge stacked-child syncs are
-  requeued.
+- On startup, recovery loads unfinished operations, aborts stale interrupted-rebase
+  metadata, resets impacted sessions to `Review`, then fails the operations with reason
+  `Interrupted by app restart`. Each step must succeed before the next begins. A storage
+  or Git failure stops startup before any sessions are admitted, preserving unfinished
+  operation rows so the next startup can retry recovery. Pending post-merge
+  stacked-child syncs are requeued only after this recovery completes.
 
 ### Status Transition Rules
 
