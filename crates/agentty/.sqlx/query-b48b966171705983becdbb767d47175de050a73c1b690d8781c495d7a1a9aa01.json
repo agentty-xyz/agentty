@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_usage (\n    session_id, model, created_at, input_tokens, output_tokens, invocation_count\n)\nVALUES (?, ?, ?, ?, ?, 1)\nON CONFLICT(session_id, model) DO UPDATE SET\n    input_tokens = input_tokens + excluded.input_tokens,\n    output_tokens = output_tokens + excluded.output_tokens,\n    invocation_count = invocation_count + 1\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "b48b966171705983becdbb767d47175de050a73c1b690d8781c495d7a1a9aa01"
+}

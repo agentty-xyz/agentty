@@ -1,9 +1,12 @@
 //! Project-scoped persistence adapters and query helpers.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
-use crate::infra::db::{DbError, unix_timestamp_now};
+use crate::infra::clock::{self, Clock};
+use crate::infra::db::DbError;
 
 /// Row returned when loading a project from the `project` table.
 pub struct ProjectRow {
@@ -79,12 +82,20 @@ pub trait ProjectRepository: Send + Sync {
 
 /// `SQLite` implementation of [`ProjectRepository`].
 #[derive(Clone)]
-pub(crate) struct SqliteProjectRepository(SqlitePool);
+pub(crate) struct SqliteProjectRepository {
+    clock: Arc<dyn Clock>,
+    pool: SqlitePool,
+}
 
 impl SqliteProjectRepository {
     /// Creates a project repository backed by the provided pool.
-    pub(crate) fn new(pool: SqlitePool) -> Self {
-        Self(pool)
+    pub(crate) fn new(pool: SqlitePool, clock: Arc<dyn Clock>) -> Self {
+        Self { clock, pool }
+    }
+
+    /// Returns the shared persistence timestamp in Unix seconds.
+    fn now(&self) -> i64 {
+        clock::unix_timestamp_seconds(self.clock.as_ref())
     }
 }
 
@@ -167,7 +178,7 @@ WHERE id = ?
 "#,
             id
         )
-        .fetch_optional(&self.0)
+        .fetch_optional(&self.pool)
         .await?;
 
         Ok(row)
@@ -210,7 +221,7 @@ ORDER BY p.is_favorite DESC,
          p.path
             "#
         )
-        .fetch_all(&self.0)
+        .fetch_all(&self.pool)
         .await?;
 
         Ok(rows
@@ -225,7 +236,7 @@ ORDER BY p.is_favorite DESC,
         project_id: i64,
         is_favorite: bool,
     ) -> Result<(), DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         sqlx::query!(
             r"
@@ -238,14 +249,14 @@ WHERE id = ?
             now,
             project_id
         )
-        .execute(&self.0)
+        .execute(&self.pool)
         .await?;
 
         Ok(())
     }
 
     async fn touch_project_last_opened(&self, project_id: i64) -> Result<(), DbError> {
-        let now = unix_timestamp_now();
+        let now = self.now();
 
         sqlx::query!(
             r"
@@ -258,25 +269,29 @@ WHERE id = ?
             now,
             project_id
         )
-        .execute(&self.0)
+        .execute(&self.pool)
         .await?;
 
         Ok(())
     }
 
     async fn upsert_project(&self, path: &str, git_branch: Option<String>) -> Result<i64, DbError> {
-        sqlx::query!(
+        let now = self.now();
+
+        sqlx::query(
             r"
 INSERT INTO project (path, git_branch, created_at, updated_at)
-VALUES (?, ?, unixepoch(), unixepoch())
+VALUES (?, ?, ?, ?)
 ON CONFLICT(path) DO UPDATE
 SET git_branch = excluded.git_branch,
-    updated_at = unixepoch()
+    updated_at = excluded.updated_at
 ",
-            path,
-            git_branch.as_deref()
         )
-        .execute(&self.0)
+        .bind(path)
+        .bind(git_branch.as_deref())
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
         .await?;
 
         let row = sqlx::query_as!(
@@ -288,7 +303,7 @@ WHERE path = ?
 "#,
             path
         )
-        .fetch_one(&self.0)
+        .fetch_one(&self.pool)
         .await?;
 
         Ok(row.value)

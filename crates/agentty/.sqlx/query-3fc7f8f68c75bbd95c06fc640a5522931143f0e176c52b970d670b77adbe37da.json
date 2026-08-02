@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET has_diff = NULL,\n    updated_at = ?\nWHERE id = ?\n  AND has_diff IS NOT NULL\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3fc7f8f68c75bbd95c06fc640a5522931143f0e176c52b970d670b77adbe37da"
+}

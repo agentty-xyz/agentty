@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET title = ?,\n    is_title_provisional = 0,\n    title_generation = title_generation + 1,\n    applied_title_generation = title_generation + 1,\n    updated_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "769389c813721e31e6190de0088e9ce7d2efcbe930429341450f3e16907814ef"
+}

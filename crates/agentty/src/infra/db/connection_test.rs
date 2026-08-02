@@ -1838,6 +1838,126 @@ VALUES ('ReasoningLevel', 'medium')
 }
 
 #[tokio::test]
+async fn test_remove_session_wall_clock_triggers_drops_legacy_timestamp_policy() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    seed_legacy_wall_clock_schema(&database).await;
+
+    // Act
+    rerun_embedded_migration(database.pool(), 71).await;
+    let trigger_count = sqlx::query_scalar::<_, i64>(
+        r"
+SELECT COUNT(*)
+FROM sqlite_master
+WHERE type = 'trigger'
+  AND name IN ('update_session_insert_timestamps', 'update_session_updated_at')
+",
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("failed to count legacy timestamp triggers");
+    let usage_created_at = sqlx::query_scalar::<_, i64>(
+        "SELECT created_at FROM session_usage WHERE session_id = 'session-a'",
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("failed to load migrated usage row");
+    let usage_created_at_default = sqlx::query_scalar::<_, Option<String>>(
+        r"
+SELECT dflt_value
+FROM pragma_table_info('session_usage')
+WHERE name = 'created_at'
+",
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("failed to load usage timestamp default");
+
+    // Assert
+    assert_eq!(trigger_count, 0);
+    assert_eq!(usage_created_at, 123);
+    assert_eq!(usage_created_at_default, None);
+}
+
+async fn seed_legacy_wall_clock_schema(database: &Database) {
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/clock-migration", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    database
+        .sessions()
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
+        .await
+        .expect("failed to insert session");
+    sqlx::query("DROP TABLE session_usage")
+        .execute(database.pool())
+        .await
+        .expect("failed to drop current usage table");
+    sqlx::query(
+        r"
+CREATE TABLE session_usage (
+    session_id TEXT REFERENCES session(id) ON DELETE SET NULL,
+    model TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    invocation_count INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(session_id, model)
+)
+",
+    )
+    .execute(database.pool())
+    .await
+    .expect("failed to recreate legacy usage table");
+    sqlx::query(
+        r"
+CREATE INDEX session_usage_session_id_idx ON session_usage (session_id)
+",
+    )
+    .execute(database.pool())
+    .await
+    .expect("failed to recreate legacy usage index");
+    sqlx::query(
+        r"
+INSERT INTO session_usage (
+    session_id, model, created_at, input_tokens, invocation_count, output_tokens
+)
+VALUES ('session-a', 'gpt-5.6-sol', 123, 3, 1, 5)
+",
+    )
+    .execute(database.pool())
+    .await
+    .expect("failed to seed legacy usage row");
+    sqlx::query(
+        r"
+CREATE TRIGGER update_session_insert_timestamps
+AFTER INSERT ON session
+BEGIN
+    UPDATE session SET updated_at = unixepoch() WHERE rowid = NEW.rowid;
+END
+",
+    )
+    .execute(database.pool())
+    .await
+    .expect("failed to recreate legacy insert trigger");
+    sqlx::query(
+        r"
+CREATE TRIGGER update_session_updated_at
+AFTER UPDATE ON session
+BEGIN
+    SELECT unixepoch();
+END
+",
+    )
+    .execute(database.pool())
+    .await
+    .expect("failed to recreate legacy update trigger");
+}
+
+#[tokio::test]
 async fn test_project_setting_round_trip_is_isolated_per_project() {
     // Arrange
     let database = Database::open_in_memory()

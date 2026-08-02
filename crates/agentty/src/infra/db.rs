@@ -9,14 +9,17 @@ mod project;
 mod repository;
 mod review;
 mod session;
+mod session_message;
+mod session_snapshot;
 mod setting;
+mod status;
 mod usage;
 
 pub use activity::ActivityRepository;
 pub(crate) use activity::SqliteActivityRepository;
-pub(crate) use connection::unix_timestamp_now;
 pub use connection::{DB_DIR, DB_FILE, Database};
 pub use error::DbError;
+pub(crate) use error::DbResultExt;
 pub(crate) use operation::SqliteOperationRepository;
 pub use operation::{OperationRepository, SessionOperationRow};
 #[cfg(test)]

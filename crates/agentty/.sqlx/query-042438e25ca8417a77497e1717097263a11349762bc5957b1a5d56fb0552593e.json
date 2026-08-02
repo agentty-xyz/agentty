@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET parent_session_id = NULL,\n    base_branch = ?,\n    stack_base_commit_hash = CASE\n        WHEN status = 'Draft' THEN NULL\n        ELSE COALESCE(stack_base_commit_hash, ?)\n    END,\n    updated_at = ?\nWHERE parent_session_id = ?\n  AND status <> 'Canceled'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "042438e25ca8417a77497e1717097263a11349762bc5957b1a5d56fb0552593e"
+}
