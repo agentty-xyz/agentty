@@ -13,7 +13,7 @@ use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
-use crate::ui::{component, layout, markdown, page, router};
+use crate::ui::{RenderCacheStore, component, layout, page, router};
 
 /// Focused-review display state projected from the app cache for one visible
 /// session.
@@ -58,23 +58,19 @@ pub struct RenderContext<'a> {
     pub(crate) frame_time: FrameTime,
     /// Current local branch name for the active project.
     pub git_branch: Option<&'a str>,
-    /// Shared cache for parsed and rendered diff-page layouts.
-    pub diff_layout_cache: &'a page::diff::DiffLayoutCache,
     /// Current upstream reference tracked by the active project branch.
     pub git_upstream_ref: Option<&'a str>,
     /// Latest ahead/behind counts for the active project branch.
     pub git_status: Option<(u32, u32)>,
     /// Newer stable version when one is available.
     pub latest_available_version: Option<&'a str>,
-    /// Shared render cache for session transcript markdown output.
-    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Current app mode and its transient state.
     pub mode: &'a AppMode,
     /// Cached most-recently-opened ordering over `projects`, reused by the
     /// project switcher popup instead of re-sorting each frame.
     pub mru_project_order: &'a [usize],
-    /// Shared cache for fully assembled session-output layouts.
-    pub output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
+    /// UI-owned cache resources shared by every page in this frame.
+    pub render_cache_store: &'a RenderCacheStore,
     /// Table selection state for the projects list.
     pub project_table_state: &'a mut TableState,
     /// Project rows available for rendering.

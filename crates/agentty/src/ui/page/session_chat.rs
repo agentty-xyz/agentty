@@ -54,6 +54,54 @@ impl PreparedPromptPanel {
     }
 }
 
+/// Complete geometry and prepared panel data for one session-chat frame.
+///
+/// Both painting and runtime scroll metrics construct this plan, keeping the
+/// transcript viewport, prompt dropdown, and question-panel allocation on one
+/// deterministic path.
+struct SessionChatLayoutPlan {
+    areas: layout::SessionChatAreas,
+    header_lines: Vec<Line<'static>>,
+    prompt_panel: Option<PreparedPromptPanel>,
+    question_panel_areas: Option<layout::QuestionPanelAreas>,
+}
+
+impl SessionChatLayoutPlan {
+    /// Resolves all session-chat geometry and prepared prompt data once.
+    fn new(input: SessionChatLayoutInput<'_>) -> Self {
+        let header_lines = session_format::session_header_lines(
+            input.session,
+            input.area.width.saturating_sub(2),
+            input.default_reasoning_level,
+            input.wall_clock_unix_seconds,
+        );
+        let prompt_panel =
+            prepare_prompt_panel(input.area, input.mode, input.review_text, input.session);
+        let bottom_height = prompt_panel.as_ref().map_or_else(
+            || non_prompt_bottom_height(input.area, input.mode),
+            PreparedPromptPanel::panel_height,
+        );
+        let areas =
+            layout::session_chat_areas(input.area, bottom_height, header_height(&header_lines));
+        let question_panel_areas = question_panel_areas(areas.bottom_area, input.mode);
+
+        Self {
+            areas,
+            header_lines,
+            prompt_panel,
+            question_panel_areas,
+        }
+    }
+
+    /// Returns the transcript rows inside the bordered output panel.
+    fn transcript_view_height(&self) -> u16 {
+        panel_inner_height(
+            self.areas.output_area,
+            session_format::session_output_panel_borders(),
+        )
+    }
+}
+
 /// Chat page renderer for a single session.
 pub struct SessionChatPage<'a> {
     /// Exact prompt transcript block for the active turn, when available.
@@ -186,20 +234,14 @@ impl<'a> SessionChatPage<'a> {
     /// Renders the session header, output panel, and context-aware bottom
     /// panel.
     fn render_session(&self, f: &mut Frame, area: Rect, session: &Session) {
-        let prepared_prompt_panel =
-            prepare_prompt_panel(area, self.mode, self.review_text, session);
-        let header_lines = session_format::session_header_lines(
+        let layout_plan = SessionChatLayoutPlan::new(SessionChatLayoutInput {
+            area,
+            default_reasoning_level: self.default_reasoning_level,
+            mode: self.mode,
+            review_text: self.review_text,
             session,
-            area.width.saturating_sub(2),
-            self.default_reasoning_level,
-            self.frame_time.unix_seconds(),
-        );
-        let header_height = header_height(&header_lines);
-        let bottom_height = prepared_prompt_panel.as_ref().map_or_else(
-            || non_prompt_bottom_height(area, self.mode),
-            PreparedPromptPanel::panel_height,
-        );
-        let session_areas = layout::session_chat_areas(area, bottom_height, header_height);
+            wall_clock_unix_seconds: self.frame_time.unix_seconds(),
+        });
 
         let mut output = SessionOutput::new(session)
             .markdown_render_cache(self.markdown_render_cache)
@@ -215,14 +257,9 @@ impl<'a> SessionChatPage<'a> {
         if let Some(active_progress) = self.active_progress {
             output = output.active_progress(active_progress);
         }
-        Self::render_session_header(f, session_areas.header_area, header_lines);
-        output.render(f, session_areas.output_area);
-        self.render_bottom_panel(
-            f,
-            session_areas.bottom_area,
-            session,
-            prepared_prompt_panel.as_ref(),
-        );
+        output.render(f, layout_plan.areas.output_area);
+        self.render_bottom_panel(f, session, &layout_plan);
+        Self::render_session_header(f, layout_plan.areas.header_area, layout_plan.header_lines);
     }
 
     /// Renders the header above the output panel border.
@@ -236,12 +273,13 @@ impl<'a> SessionChatPage<'a> {
     fn render_bottom_panel(
         &self,
         f: &mut Frame,
-        bottom_area: Rect,
         session: &Session,
-        prepared_prompt_panel: Option<&PreparedPromptPanel>,
+        layout_plan: &SessionChatLayoutPlan,
     ) {
+        let bottom_area = layout_plan.areas.bottom_area;
+
         if let AppMode::Prompt { input, .. } = self.mode {
-            let Some(prepared_prompt_panel) = prepared_prompt_panel else {
+            let Some(prepared_prompt_panel) = layout_plan.prompt_panel.as_ref() else {
                 return;
             };
 
@@ -288,6 +326,7 @@ impl<'a> SessionChatPage<'a> {
             render_question_panel(
                 f,
                 bottom_area,
+                layout_plan.question_panel_areas,
                 &QuestionPanelState {
                     at_mention_state: at_mention_state.as_ref(),
                     current_index: *current_index,
@@ -360,24 +399,7 @@ pub(crate) struct SessionChatLayoutInput<'a> {
 /// geometry the renderer uses, so a tall composer or an open suggestion
 /// dropdown shrinks the scroll viewport exactly as it does on screen.
 pub(crate) fn transcript_view_height(input: SessionChatLayoutInput<'_>) -> u16 {
-    let header_lines = session_format::session_header_lines(
-        input.session,
-        input.area.width.saturating_sub(2),
-        input.default_reasoning_level,
-        input.wall_clock_unix_seconds,
-    );
-    let bottom_height =
-        prepare_prompt_panel(input.area, input.mode, input.review_text, input.session).map_or_else(
-            || non_prompt_bottom_height(input.area, input.mode),
-            |prepared_prompt_panel| prepared_prompt_panel.panel_height(),
-        );
-    let session_areas =
-        layout::session_chat_areas(input.area, bottom_height, header_height(&header_lines));
-
-    panel_inner_height(
-        session_areas.output_area,
-        session_format::session_output_panel_borders(),
-    )
+    SessionChatLayoutPlan::new(input).transcript_view_height()
 }
 
 /// Returns the header rows reserved above the session output panel.
@@ -479,6 +501,38 @@ fn non_prompt_bottom_height(area: Rect, mode: &AppMode) -> u16 {
     )
 }
 
+/// Resolves question sub-areas from the already reserved bottom-panel area.
+fn question_panel_areas(bottom_area: Rect, mode: &AppMode) -> Option<layout::QuestionPanelAreas> {
+    let AppMode::Question {
+        questions,
+        current_index,
+        input,
+        selected_option_index,
+        ..
+    } = mode
+    else {
+        return None;
+    };
+    let question_item = questions.get(*current_index);
+    let question = question_item.map_or("", |item| item.text.as_str());
+    let options = question_item
+        .map(|item| item.options.as_slice())
+        .unwrap_or_default();
+    let input_text = if selected_option_index.is_none() {
+        input.text()
+    } else {
+        ""
+    };
+
+    Some(layout::question_panel_areas(
+        bottom_area,
+        question,
+        input_text,
+        options.len(),
+        CHAT_INPUT_MAX_PANEL_HEIGHT,
+    ))
+}
+
 /// Bundled question-mode state passed to the panel renderer.
 #[derive(Clone, Copy)]
 struct QuestionPanelState<'a> {
@@ -493,7 +547,12 @@ struct QuestionPanelState<'a> {
 
 /// Renders the question-mode bottom panel with question text, options, input,
 /// and help footer.
-fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanelState<'_>) {
+fn render_question_panel(
+    f: &mut Frame,
+    bottom_area: Rect,
+    panel_areas: Option<layout::QuestionPanelAreas>,
+    state: &QuestionPanelState<'_>,
+) {
     let QuestionPanelState {
         at_mention_state,
         current_index,
@@ -509,14 +568,9 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         .map(|item| item.options.as_slice())
         .unwrap_or_default();
     let is_free_text_mode = selected_option_index.is_none();
-    let input_text = if is_free_text_mode { input.text() } else { "" };
-    let panel_areas = layout::question_panel_areas(
-        bottom_area,
-        question,
-        input_text,
-        options.len(),
-        CHAT_INPUT_MAX_PANEL_HEIGHT,
-    );
+    let Some(panel_areas) = panel_areas else {
+        return;
+    };
 
     let is_chat_focused = focus == ChatFocus::Chat;
     let question_title = format!("Question {}/{}", current_index + 1, questions.len());
@@ -1085,6 +1139,38 @@ mod tests {
 
         // Assert
         assert!(!text.contains("· Normal"));
+    }
+
+    #[test]
+    fn test_render_question_panel_preserves_frame_without_prepared_areas() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(40, 10);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let input = InputState::default();
+        let questions = vec![QuestionItem {
+            options: vec![],
+            text: "Which path?".to_string(),
+        }];
+        let state = QuestionPanelState {
+            at_mention_state: None,
+            current_index: 0,
+            focus: ChatFocus::Input,
+            has_session_diff: false,
+            input: &input,
+            questions: &questions,
+            selected_option_index: None,
+        };
+
+        // Act
+        terminal
+            .draw(|frame| {
+                frame.render_widget(Paragraph::new("sentinel"), frame.area());
+                render_question_panel(frame, frame.area(), None, &state);
+            })
+            .expect("failed to draw question panel");
+
+        // Assert
+        assert!(buffer_text(terminal.backend().buffer()).contains("sentinel"));
     }
 
     #[test]
