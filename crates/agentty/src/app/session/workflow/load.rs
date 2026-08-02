@@ -468,8 +468,7 @@ impl SessionManager {
     ) {
         let session_transcript = self
             .state
-            .handles
-            .get(session_id)
+            .handle(session_id)
             .and_then(|handles| sync_handle_transcript_with_loaded(handles, Some(&transcript)))
             .or_else(|| Some(transcript).filter(|transcript| !transcript.is_empty()));
 

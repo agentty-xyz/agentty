@@ -513,21 +513,7 @@ fn update_transient_review_status(
     current_status: Status,
     next_status: Status,
 ) {
-    if let Some(session) = session_state
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == session_id)
-        && session.status == current_status
-    {
-        session.status = next_status;
-    }
-
-    if let Some(handles) = session_state.handles().get(session_id)
-        && let Ok(mut handle_status) = handles.status.lock()
-        && *handle_status == current_status
-    {
-        *handle_status = next_status;
-    }
+    session_state.transition_status_if_current(session_id, current_status, next_status);
 }
 
 #[cfg(test)]

@@ -5,8 +5,11 @@
 //! user's approval, actively fanning out, or settled; each task row tracks one
 //! child session through creation, execution, and settlement.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
+
+use super::session::Status as SessionStatus;
 
 /// Lifecycle state for one controller-owned orchestration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,6 +95,24 @@ pub enum OrchestrationTaskStatus {
 }
 
 impl OrchestrationTaskStatus {
+    /// Maps one observed child-session status into the task state owned by
+    /// orchestration.
+    pub fn from_child_status(status: SessionStatus) -> Self {
+        match status {
+            SessionStatus::Draft
+            | SessionStatus::InProgress
+            | SessionStatus::Queued
+            | SessionStatus::Rebasing
+            | SessionStatus::Merging => Self::Running,
+            SessionStatus::Question => Self::WaitingForInput,
+            SessionStatus::Review
+            | SessionStatus::AgentReview
+            | SessionStatus::Merged
+            | SessionStatus::Done => Self::Ready,
+            SessionStatus::Canceled => Self::Failed,
+        }
+    }
+
     /// Returns whether the task reached a state that fan-in treats as settled.
     ///
     /// A canceled straggler counts as settled so out-of-band cancellation
@@ -154,6 +175,145 @@ impl OrchestrationTaskStatus {
             )
         )
     }
+}
+
+/// Pure scheduling decision derived from one orchestration task snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OrchestrationScheduleDecision {
+    /// Number of planned tasks that may claim a parallelism slot.
+    pub spawn_count: usize,
+    /// Whether every non-empty task has settled and roll-up can be claimed.
+    pub should_submit: bool,
+}
+
+/// Pure orchestration policy over typed task observations.
+pub struct OrchestrationPolicy;
+
+impl OrchestrationPolicy {
+    /// Decides fan-out capacity and roll-up readiness without persistence or
+    /// runtime dependencies.
+    pub fn schedule(
+        max_parallelism: usize,
+        task_statuses: &[Option<OrchestrationTaskStatus>],
+    ) -> OrchestrationScheduleDecision {
+        let occupied_slots = task_statuses
+            .iter()
+            .filter(|status| status.is_some_and(OrchestrationTaskStatus::occupies_parallelism_slot))
+            .count();
+        let planned_tasks = task_statuses
+            .iter()
+            .filter(|status| **status == Some(OrchestrationTaskStatus::Planned))
+            .count();
+        let spawn_count = max_parallelism
+            .saturating_sub(occupied_slots)
+            .min(planned_tasks);
+        let should_submit = !task_statuses.is_empty()
+            && task_statuses
+                .iter()
+                .all(|status| status.is_some_and(OrchestrationTaskStatus::is_settled));
+
+        OrchestrationScheduleDecision {
+            spawn_count,
+            should_submit,
+        }
+    }
+}
+
+/// Protocol-independent snapshot of one task proposed by an orchestration
+/// controller.
+pub struct OrchestrationPlanTask {
+    /// Standalone task prompt delivered to the child session.
+    pub prompt: String,
+    /// Stable kebab-case identity used for retries.
+    pub task_key: String,
+    /// Short user-facing task title.
+    pub title: String,
+    /// Literal repository-relative files or directories owned by the task.
+    pub touched_areas: Vec<String>,
+}
+
+/// Validates one proposed subtask set before application code persists it.
+///
+/// # Errors
+///
+/// Returns a user-facing reason when the plan is too small, incomplete, uses
+/// invalid task keys or paths, or gives different tasks overlapping scopes.
+pub fn validate_subtasks(subtasks: &[OrchestrationPlanTask], is_retry: bool) -> Result<(), String> {
+    if subtasks.len() < 2 && !is_retry {
+        return Err("a meaningful orchestration requires at least two subtasks.".to_string());
+    }
+    let mut task_keys = HashSet::new();
+    let mut scopes = Vec::<(&str, String)>::new();
+    for subtask in subtasks {
+        if !is_kebab_case_task_key(&subtask.task_key)
+            || !task_keys.insert(subtask.task_key.as_str())
+        {
+            return Err("every subtask needs a unique kebab-case task key.".to_string());
+        }
+        if subtask.prompt.trim().is_empty()
+            || subtask.title.trim().is_empty()
+            || subtask.touched_areas.is_empty()
+        {
+            return Err(format!(
+                "subtask `{}` needs a title, standalone prompt, and touched areas.",
+                subtask.task_key
+            ));
+        }
+        for area in &subtask.touched_areas {
+            let scope = normalized_scope(area).map_err(|reason| {
+                format!(
+                    "subtask `{}` has invalid touched area `{area}`: {reason}.",
+                    subtask.task_key
+                )
+            })?;
+            if let Some((other_key, _)) = scopes.iter().find(|(other_key, other_scope)| {
+                *other_key != subtask.task_key && scopes_overlap(other_scope, &scope)
+            }) {
+                return Err(format!(
+                    "subtasks `{other_key}` and `{}` overlap at `{area}`.",
+                    subtask.task_key
+                ));
+            }
+            scopes.push((subtask.task_key.as_str(), scope));
+        }
+    }
+
+    Ok(())
+}
+
+fn is_kebab_case_task_key(task_key: &str) -> bool {
+    !task_key.is_empty()
+        && task_key.split('-').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+}
+
+fn normalized_scope(area: &str) -> Result<String, &'static str> {
+    let normalized = area.trim().trim_start_matches("./").trim_end_matches('/');
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.split('/').any(|part| part == "..")
+    {
+        return Err("use a non-empty repository-relative path");
+    }
+    if normalized.contains(['*', '?', '[', ']', '{', '}']) {
+        return Err("use a literal file or directory path; wildcard patterns are not supported");
+    }
+
+    Ok(normalized.to_string())
+}
+
+fn scopes_overlap(left: &str, right: &str) -> bool {
+    left == right
+        || left
+            .strip_prefix(right)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+        || right
+            .strip_prefix(left)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 impl fmt::Display for OrchestrationTaskStatus {
@@ -319,5 +479,83 @@ mod tests {
         assert!(
             !OrchestrationTaskStatus::Canceled.can_transition_to(OrchestrationTaskStatus::Ready)
         );
+    }
+
+    #[test]
+    /// Derives fan-out capacity and roll-up readiness from typed task states.
+    fn test_orchestration_policy_schedules_available_slots_and_settlement() {
+        // Arrange
+        let active_statuses = [
+            Some(OrchestrationTaskStatus::Running),
+            Some(OrchestrationTaskStatus::WaitingForInput),
+            Some(OrchestrationTaskStatus::Planned),
+            Some(OrchestrationTaskStatus::Planned),
+        ];
+        let settled_statuses = [
+            Some(OrchestrationTaskStatus::Ready),
+            Some(OrchestrationTaskStatus::Failed),
+            Some(OrchestrationTaskStatus::Canceled),
+        ];
+        let invalid_statuses = [Some(OrchestrationTaskStatus::Ready), None];
+
+        // Act
+        let active_decision = OrchestrationPolicy::schedule(3, &active_statuses);
+        let settled_decision = OrchestrationPolicy::schedule(3, &settled_statuses);
+        let empty_decision = OrchestrationPolicy::schedule(3, &[]);
+        let invalid_decision = OrchestrationPolicy::schedule(3, &invalid_statuses);
+
+        // Assert
+        assert_eq!(
+            active_decision,
+            OrchestrationScheduleDecision {
+                spawn_count: 1,
+                should_submit: false,
+            }
+        );
+        assert_eq!(
+            settled_decision,
+            OrchestrationScheduleDecision {
+                spawn_count: 0,
+                should_submit: true,
+            }
+        );
+        assert_eq!(
+            empty_decision,
+            OrchestrationScheduleDecision {
+                spawn_count: 0,
+                should_submit: false,
+            }
+        );
+        assert!(!invalid_decision.should_submit);
+    }
+
+    #[test]
+    /// Maps every child-session lifecycle family into orchestration policy.
+    fn test_task_status_from_child_status_covers_session_lifecycle() {
+        // Arrange
+        let cases = [
+            (SessionStatus::Draft, OrchestrationTaskStatus::Running),
+            (SessionStatus::InProgress, OrchestrationTaskStatus::Running),
+            (SessionStatus::Queued, OrchestrationTaskStatus::Running),
+            (SessionStatus::Rebasing, OrchestrationTaskStatus::Running),
+            (SessionStatus::Merging, OrchestrationTaskStatus::Running),
+            (
+                SessionStatus::Question,
+                OrchestrationTaskStatus::WaitingForInput,
+            ),
+            (SessionStatus::Review, OrchestrationTaskStatus::Ready),
+            (SessionStatus::AgentReview, OrchestrationTaskStatus::Ready),
+            (SessionStatus::Merged, OrchestrationTaskStatus::Ready),
+            (SessionStatus::Done, OrchestrationTaskStatus::Ready),
+            (SessionStatus::Canceled, OrchestrationTaskStatus::Failed),
+        ];
+
+        // Act / Assert
+        for (session_status, expected_task_status) in cases {
+            assert_eq!(
+                OrchestrationTaskStatus::from_child_status(session_status),
+                expected_task_status
+            );
+        }
     }
 }

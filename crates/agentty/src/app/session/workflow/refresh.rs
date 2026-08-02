@@ -122,7 +122,7 @@ impl SessionManager {
                     fs_client: fs_client.as_ref(),
                     working_dir: projects.working_dir(),
                 },
-                &mut self.state.handles,
+                self.state.handles_mut(),
             )
             .await;
         self.state.replace_sessions(sessions);

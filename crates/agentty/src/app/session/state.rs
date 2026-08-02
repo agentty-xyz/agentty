@@ -6,7 +6,7 @@ use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
 use crate::domain::selection::SelectionState;
 #[cfg(test)]
 use crate::domain::session::SessionRole;
-use crate::domain::session::{Session, SessionDiffStats, SessionHandles, SessionId};
+use crate::domain::session::{Session, SessionDiffStats, SessionHandles, SessionId, Status};
 
 /// Cached ahead/behind snapshots for one session branch.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -17,24 +17,51 @@ pub struct SessionGitStatus {
     pub remote_status: Option<(u32, u32)>,
 }
 
+/// Application-owned live state for active session workers.
+///
+/// Keeping synchronization handles behind this boundary distinguishes
+/// worker-owned mutable state from the persisted/render-friendly snapshots in
+/// [`SessionState::sessions`].
+struct SessionRuntimeState {
+    handles: HashMap<SessionId, SessionHandles>,
+}
+
+impl SessionRuntimeState {
+    fn handle(&self, session_id: &str) -> Option<&SessionHandles> {
+        self.handles.get(session_id)
+    }
+
+    fn handles(&self) -> &HashMap<SessionId, SessionHandles> {
+        &self.handles
+    }
+
+    fn handles_mut(&mut self) -> &mut HashMap<SessionId, SessionHandles> {
+        &mut self.handles
+    }
+
+    fn remove_handle(&mut self, session_id: &str) {
+        self.handles.remove(session_id);
+    }
+}
+
 /// Holds all in-memory state related to session listing and refresh tracking.
 pub struct SessionState {
+    pub(super) clock: Arc<dyn Clock>,
     /// Selected follow-up-task positions keyed by session id for session-view
     /// affordances.
     pub(super) follow_up_task_positions: HashMap<SessionId, usize>,
-    pub(super) handles: HashMap<SessionId, SessionHandles>,
-    /// Cached detected branch names keyed by session id.
-    pub(super) session_branch_names: HashMap<SessionId, String>,
-    /// Cached worktree-directory availability keyed by session id.
-    pub(super) session_worktree_availability: HashMap<SessionId, bool>,
-    /// Cached session list positions keyed by stable session id.
-    pub(super) session_index_by_id: HashMap<SessionId, usize>,
-    pub(super) sessions: Vec<Session>,
-    pub(super) table_state: SelectionState,
-    pub(super) clock: Arc<dyn Clock>,
     pub(super) refresh_deadline: Instant,
     pub(super) row_count: i64,
+    runtime: SessionRuntimeState,
+    /// Cached detected branch names keyed by session id.
+    pub(super) session_branch_names: HashMap<SessionId, String>,
     pub(super) session_git_statuses: HashMap<SessionId, SessionGitStatus>,
+    /// Cached session list positions keyed by stable session id.
+    pub(super) session_index_by_id: HashMap<SessionId, usize>,
+    /// Cached worktree-directory availability keyed by session id.
+    pub(super) session_worktree_availability: HashMap<SessionId, bool>,
+    pub(super) sessions: Vec<Session>,
+    pub(super) table_state: SelectionState,
     pub(super) updated_at_max: i64,
 }
 
@@ -54,17 +81,17 @@ impl SessionState {
         let _state_created_at = clock.now_system_time();
         let refresh_deadline = clock.now_instant() + SESSION_REFRESH_INTERVAL;
         let mut state = Self {
-            follow_up_task_positions: HashMap::new(),
-            handles,
-            session_branch_names: HashMap::new(),
-            session_worktree_availability: HashMap::new(),
-            session_index_by_id: HashMap::new(),
-            sessions: Vec::new(),
-            table_state,
             clock,
+            follow_up_task_positions: HashMap::new(),
             refresh_deadline,
             row_count,
+            runtime: SessionRuntimeState { handles },
+            session_branch_names: HashMap::new(),
             session_git_statuses: HashMap::new(),
+            session_index_by_id: HashMap::new(),
+            session_worktree_availability: HashMap::new(),
+            sessions: Vec::new(),
+            table_state,
             updated_at_max,
         };
 
@@ -92,8 +119,47 @@ impl SessionState {
     }
 
     /// Returns runtime handles keyed by stable session id.
-    pub(crate) fn handles(&self) -> &HashMap<SessionId, SessionHandles> {
-        &self.handles
+    pub(in crate::app::session) fn handles(&self) -> &HashMap<SessionId, SessionHandles> {
+        self.runtime.handles()
+    }
+
+    /// Returns mutable runtime handles for workflow loading and test setup.
+    pub(in crate::app::session) fn handles_mut(
+        &mut self,
+    ) -> &mut HashMap<SessionId, SessionHandles> {
+        self.runtime.handles_mut()
+    }
+
+    /// Returns one active session's live runtime handles.
+    pub(in crate::app::session) fn handle(&self, session_id: &str) -> Option<&SessionHandles> {
+        self.runtime.handle(session_id)
+    }
+
+    /// Removes live runtime state for one session that left the snapshot.
+    pub(in crate::app::session) fn remove_handle(&mut self, session_id: &str) {
+        self.runtime.remove_handle(session_id);
+    }
+
+    /// Applies one optimistic status transition to both the render snapshot
+    /// and live runtime handle when each still matches `current_status`.
+    pub(crate) fn transition_status_if_current(
+        &mut self,
+        session_id: &str,
+        current_status: Status,
+        next_status: Status,
+    ) {
+        if let Some(session) = self.session_mut_for_id(session_id)
+            && session.status == current_status
+        {
+            session.status = next_status;
+        }
+
+        if let Some(handles) = self.runtime.handle(session_id)
+            && let Ok(mut handle_status) = handles.status.lock()
+            && *handle_status == current_status
+        {
+            *handle_status = next_status;
+        }
     }
 
     /// Returns the current wall-clock value from the injected clock.
@@ -159,7 +225,7 @@ impl SessionState {
         let Some(session_index) = self.session_index_for_id(session_id) else {
             return;
         };
-        let Some(session_handles) = self.handles.get(session_id) else {
+        let Some(session_handles) = self.runtime.handle(session_id) else {
             return;
         };
         let Some(session) = self.sessions.get_mut(session_index) else {
@@ -176,7 +242,7 @@ impl SessionState {
     /// queued `SessionUpdated` events. This full sweep remains for explicit
     /// catch-up paths and focused tests.
     pub fn sync_from_handles(&mut self) {
-        let handles = &self.handles;
+        let handles = self.runtime.handles();
 
         for session in &mut self.sessions {
             let Some(session_handles) = handles.get(&session.id) else {
@@ -539,6 +605,46 @@ mod tests {
         // Assert
         assert_eq!(session_replay_text(&state.sessions[0]), "new\n\n");
         assert_eq!(state.sessions[0].status, Status::Review);
+    }
+
+    #[test]
+    /// Applies optimistic status transitions through the runtime-state
+    /// boundary without exposing the handle map.
+    fn transition_status_if_current_updates_snapshot_and_live_handle() {
+        // Arrange
+        let session_id = SessionId::from("session-status-transition");
+        let session = SessionFixtureBuilder::new()
+            .id(session_id.as_str())
+            .status(Status::Review)
+            .build();
+        let handles = HashMap::from([(session_id.clone(), SessionHandles::new(Status::Review))]);
+        let mut state = SessionState::new(
+            handles,
+            vec![session],
+            SelectionState::default(),
+            Arc::new(FixedClock::new()),
+            0,
+            0,
+        );
+
+        // Act
+        state.transition_status_if_current(
+            session_id.as_str(),
+            Status::Review,
+            Status::AgentReview,
+        );
+        state.transition_status_if_current(session_id.as_str(), Status::Question, Status::Done);
+
+        // Assert
+        assert_eq!(state.sessions()[0].status, Status::AgentReview);
+        assert_eq!(
+            state.handle(session_id.as_str()).and_then(|handles| handles
+                .status
+                .lock()
+                .ok()
+                .map(|status| *status)),
+            Some(Status::AgentReview)
+        );
     }
 
     #[test]

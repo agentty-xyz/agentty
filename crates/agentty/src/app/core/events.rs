@@ -312,6 +312,23 @@ pub(super) struct AppEventBatch {
     pub(super) update_status: Option<UpdateStatus>,
 }
 
+/// Ordered external effects planned before an app-event batch mutates state.
+#[derive(Debug, Eq, PartialEq)]
+enum AppEventEffect {
+    ReloadSessions,
+    ReloadProjects,
+    RefreshGitStatus,
+    ApplyReviewUpdates(HashMap<SessionId, ReviewUpdate>),
+}
+
+/// Deterministic state/effect plan derived from one coalesced event batch.
+#[derive(Debug, Eq, PartialEq)]
+struct AppEventReductionPlan {
+    after_snapshot_effects: Vec<AppEventEffect>,
+    before_snapshot_effects: Vec<AppEventEffect>,
+    changes_observable_state: bool,
+}
+
 /// Completed selected issue-detail load ready for reducer application.
 pub(super) struct IssueDetailUpdate {
     pub(super) display_id: String,
@@ -373,6 +390,66 @@ pub(super) struct RequestedReviewCommentSnapshotUpdate {
 }
 
 impl AppEventBatch {
+    /// Drains payload-bearing updates into an ordered effect plan without
+    /// mutating application state or performing I/O.
+    ///
+    /// The batch remains available for later reducer phases, but updates
+    /// moved into the returned plan must not be read from the batch again.
+    fn drain_reduction_plan(&mut self) -> AppEventReductionPlan {
+        let mut before_snapshot_effects = Vec::new();
+        if self.should_reload_sessions {
+            before_snapshot_effects.push(AppEventEffect::ReloadSessions);
+        }
+        if self.should_reload_projects {
+            before_snapshot_effects.push(AppEventEffect::ReloadProjects);
+        }
+        if self.should_refresh_git_status {
+            before_snapshot_effects.push(AppEventEffect::RefreshGitStatus);
+        }
+        let changes_observable_state = self.should_reload_sessions
+            || self.should_reload_projects
+            || self.agent_cli_updates.is_some()
+            || self.assigned_issues.is_some()
+            || self.git_status_update.is_some()
+            || !self.issue_details.is_empty()
+            || self.latest_available_version_update.is_some()
+            || self.update_status.is_some()
+            || !self.applied_turns.is_empty()
+            || !self.at_mention_entries_updates.is_empty()
+            || !self.branch_publish_action_updates.is_empty()
+            || !self.diff_preview_updates.is_empty()
+            || !self.published_branch_sync_updates.is_empty()
+            || !self.review_request_status_updates.is_empty()
+            || self.requested_reviews.is_some()
+            || !self.requested_review_comment_snapshots.is_empty()
+            || !self.review_updates.is_empty()
+            || !self.session_model_updates.is_empty()
+            || !self.session_orchestration_progress_updates.is_empty()
+            || !self.session_personality_updates.is_empty()
+            || !self.session_progress_updates.is_empty()
+            || !self.session_review_comment_snapshots.is_empty()
+            || !self.session_reasoning_level_updates.is_empty()
+            || !self.session_speed_mode_updates.is_empty()
+            || !self.session_diff_stats_updates.is_empty()
+            || !self.session_title_generation_finished.is_empty()
+            || !self.session_workflow_notice_updates.is_empty()
+            || !self.stacked_parent_merge_child_rebases.is_empty()
+            || !self.stacked_parent_syncs_completed.is_empty()
+            || !self.stacked_parent_turns_completed.is_empty()
+            || self.sync_main_conflicted_files.is_some()
+            || self.sync_main_result.is_some();
+        let after_snapshot_effects = (!self.review_updates.is_empty())
+            .then(|| AppEventEffect::ApplyReviewUpdates(std::mem::take(&mut self.review_updates)))
+            .into_iter()
+            .collect();
+
+        AppEventReductionPlan {
+            after_snapshot_effects,
+            before_snapshot_effects,
+            changes_observable_state,
+        }
+    }
+
     /// Collects one app event into the coalesced batch state.
     ///
     /// Most per-session projections use latest-wins semantics, but queued
@@ -941,23 +1018,22 @@ impl App {
     /// so background workers can shut down provider runtimes.
     async fn apply_app_event_batch(&mut self, mut event_batch: AppEventBatch) {
         let sync_generation_for_review_updates = self.sync_handle.current_generation();
-        let mut should_mark_dirty = Self::app_event_batch_changes_observable_state(&event_batch);
+        let AppEventReductionPlan {
+            after_snapshot_effects,
+            before_snapshot_effects,
+            changes_observable_state,
+        } = event_batch.drain_reduction_plan();
+        let mut should_mark_dirty = changes_observable_state;
         let previous_session_states = self.previous_session_states(&event_batch.session_ids);
 
         should_mark_dirty |=
             self.update_session_redraw_versions(&event_batch.session_update_versions);
 
-        self.apply_batch_runtime_updates(&mut event_batch).await;
+        self.apply_app_event_effects(before_snapshot_effects).await;
+        self.apply_batch_runtime_updates(&mut event_batch);
 
         self.apply_batch_session_snapshot_updates(&mut event_batch);
-
-        let focused_review_persistence = apply_review_updates(
-            &mut self.review_cache,
-            self.sessions.state_mut(),
-            std::mem::take(&mut event_batch.review_updates),
-        );
-        self.persist_focused_review_updates(focused_review_persistence)
-            .await;
+        self.apply_app_event_effects(after_snapshot_effects).await;
 
         for branch_publish_action_update in
             std::mem::take(&mut event_batch.branch_publish_action_updates)
@@ -1164,21 +1240,28 @@ impl App {
         );
     }
 
-    /// Applies reducer-batch updates that affect global app runtime state
-    /// before session-local projections are synchronized.
-    async fn apply_batch_runtime_updates(&mut self, event_batch: &mut AppEventBatch) {
-        if event_batch.should_reload_sessions {
-            self.refresh_sessions_now().await;
+    /// Executes the ordered external effects from a pure reduction plan.
+    async fn apply_app_event_effects(&mut self, effects: Vec<AppEventEffect>) {
+        for effect in effects {
+            match effect {
+                AppEventEffect::ReloadSessions => self.refresh_sessions_now().await,
+                AppEventEffect::ReloadProjects => self.reload_projects().await,
+                AppEventEffect::RefreshGitStatus => self.restart_git_status_task(),
+                AppEventEffect::ApplyReviewUpdates(review_updates) => {
+                    let focused_review_persistence = apply_review_updates(
+                        &mut self.review_cache,
+                        self.sessions.state_mut(),
+                        review_updates,
+                    );
+                    self.persist_focused_review_updates(focused_review_persistence)
+                        .await;
+                }
+            }
         }
+    }
 
-        if event_batch.should_reload_projects {
-            self.reload_projects().await;
-        }
-
-        if event_batch.should_refresh_git_status {
-            self.restart_git_status_task();
-        }
-
+    /// Applies reducer-batch payloads that mutate global app runtime state.
+    fn apply_batch_runtime_updates(&mut self, event_batch: &mut AppEventBatch) {
         if let Some(agent_clis) = event_batch.agent_cli_updates.take() {
             self.services.replace_available_agent_clis(agent_clis);
         }
@@ -1495,45 +1578,6 @@ impl App {
                     .map(|session| (session_id.clone(), session.status))
             })
             .collect()
-    }
-
-    /// Returns whether one reduced event batch changes any render-visible
-    /// application state before `SessionUpdated` version deduplication.
-    fn app_event_batch_changes_observable_state(event_batch: &AppEventBatch) -> bool {
-        event_batch.should_reload_sessions
-            || event_batch.should_reload_projects
-            || event_batch.agent_cli_updates.is_some()
-            || event_batch.assigned_issues.is_some()
-            || event_batch.git_status_update.is_some()
-            || !event_batch.issue_details.is_empty()
-            || event_batch.latest_available_version_update.is_some()
-            || event_batch.update_status.is_some()
-            || !event_batch.applied_turns.is_empty()
-            || !event_batch.at_mention_entries_updates.is_empty()
-            || !event_batch.branch_publish_action_updates.is_empty()
-            || !event_batch.diff_preview_updates.is_empty()
-            || !event_batch.published_branch_sync_updates.is_empty()
-            || !event_batch.review_request_status_updates.is_empty()
-            || event_batch.requested_reviews.is_some()
-            || !event_batch.requested_review_comment_snapshots.is_empty()
-            || !event_batch.review_updates.is_empty()
-            || !event_batch.session_model_updates.is_empty()
-            || !event_batch
-                .session_orchestration_progress_updates
-                .is_empty()
-            || !event_batch.session_personality_updates.is_empty()
-            || !event_batch.session_progress_updates.is_empty()
-            || !event_batch.session_review_comment_snapshots.is_empty()
-            || !event_batch.session_reasoning_level_updates.is_empty()
-            || !event_batch.session_speed_mode_updates.is_empty()
-            || !event_batch.session_diff_stats_updates.is_empty()
-            || !event_batch.session_title_generation_finished.is_empty()
-            || !event_batch.session_workflow_notice_updates.is_empty()
-            || !event_batch.stacked_parent_merge_child_rebases.is_empty()
-            || !event_batch.stacked_parent_syncs_completed.is_empty()
-            || !event_batch.stacked_parent_turns_completed.is_empty()
-            || event_batch.sync_main_conflicted_files.is_some()
-            || event_batch.sync_main_result.is_some()
     }
 
     /// Updates the loading sync popup with the current conflict-resolution
@@ -2913,7 +2957,7 @@ mod tests {
         });
 
         // Assert
-        assert!(App::app_event_batch_changes_observable_state(&event_batch));
+        assert!(event_batch.drain_reduction_plan().changes_observable_state);
     }
 
     #[test]
@@ -2930,7 +2974,82 @@ mod tests {
         });
 
         // Assert
-        assert!(App::app_event_batch_changes_observable_state(&event_batch));
+        assert!(event_batch.drain_reduction_plan().changes_observable_state);
+    }
+
+    #[test]
+    fn reduction_plan_orders_external_effects_without_running_them() {
+        // Arrange
+        let mut event_batch = AppEventBatch {
+            should_refresh_git_status: true,
+            should_reload_projects: true,
+            should_reload_sessions: true,
+            ..AppEventBatch::default()
+        };
+
+        // Act
+        let reduction_plan = event_batch.drain_reduction_plan();
+
+        // Assert
+        assert_eq!(
+            reduction_plan,
+            AppEventReductionPlan {
+                after_snapshot_effects: Vec::new(),
+                before_snapshot_effects: vec![
+                    AppEventEffect::ReloadSessions,
+                    AppEventEffect::ReloadProjects,
+                    AppEventEffect::RefreshGitStatus,
+                ],
+                changes_observable_state: true,
+            }
+        );
+    }
+
+    #[test]
+    fn reduction_plan_keeps_an_empty_batch_pure_and_invisible() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        let reduction_plan = event_batch.drain_reduction_plan();
+
+        // Assert
+        assert_eq!(
+            reduction_plan,
+            AppEventReductionPlan {
+                after_snapshot_effects: Vec::new(),
+                before_snapshot_effects: Vec::new(),
+                changes_observable_state: false,
+            }
+        );
+    }
+
+    #[test]
+    fn reduction_plan_orders_review_persistence_after_snapshot_updates() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+        event_batch.collect_event(AppEvent::ReviewPrepared {
+            diff_hash: 42,
+            review_text: "review output".to_string(),
+            session_id: "session-1".into(),
+        });
+
+        // Act
+        let reduction_plan = event_batch.drain_reduction_plan();
+
+        // Assert
+        assert_eq!(
+            reduction_plan.after_snapshot_effects,
+            vec![AppEventEffect::ApplyReviewUpdates(HashMap::from([(
+                "session-1".into(),
+                ReviewUpdate {
+                    diff_hash: 42,
+                    result: Ok("review output".to_string()),
+                },
+            )]))]
+        );
+        assert!(reduction_plan.before_snapshot_effects.is_empty());
+        assert!(reduction_plan.changes_observable_state);
     }
 
     #[tokio::test]

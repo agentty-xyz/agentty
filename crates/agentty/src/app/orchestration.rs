@@ -20,7 +20,10 @@ use tracing::warn;
 
 use crate::app::AppEvent;
 use crate::app::session::session_branch;
-use crate::domain::orchestration::{OrchestrationStatus, OrchestrationTaskStatus};
+use crate::domain::orchestration::{
+    OrchestrationPlanTask, OrchestrationPolicy, OrchestrationStatus, OrchestrationTaskStatus,
+    validate_subtasks as validate_orchestration_plan,
+};
 use crate::domain::setting::{
     DEFAULT_ORCHESTRATION_PARALLELISM, MAX_ORCHESTRATION_PARALLELISM, SettingName,
 };
@@ -420,19 +423,15 @@ impl OrchestrationCoordinator {
             self.reconcile_task(task).await?;
         }
 
-        let occupied_slots = tasks
-            .iter()
-            .filter(|task| {
-                task_status(task).is_some_and(OrchestrationTaskStatus::occupies_parallelism_slot)
-            })
-            .count();
-        let available_slots = usize::try_from(orchestration.max_parallelism)
-            .unwrap_or_default()
-            .saturating_sub(occupied_slots);
+        let task_statuses = tasks.iter().map(task_status).collect::<Vec<_>>();
+        let decision = OrchestrationPolicy::schedule(
+            usize::try_from(orchestration.max_parallelism).unwrap_or_default(),
+            &task_statuses,
+        );
         for task in tasks
             .iter_mut()
             .filter(|task| task_status(task) == Some(OrchestrationTaskStatus::Planned))
-            .take(available_slots)
+            .take(decision.spawn_count)
         {
             self.spawn_task(orchestration, task).await?;
         }
@@ -442,11 +441,12 @@ impl OrchestrationCoordinator {
             .load_orchestration_tasks(orchestration.id)
             .await
             .map_err(|error| error.to_string())?;
-        if !refreshed.is_empty()
-            && refreshed
-                .iter()
-                .all(|task| task_status(task).is_some_and(OrchestrationTaskStatus::is_settled))
-        {
+        let refreshed_statuses = refreshed.iter().map(task_status).collect::<Vec<_>>();
+        let refreshed_decision = OrchestrationPolicy::schedule(
+            usize::try_from(orchestration.max_parallelism).unwrap_or_default(),
+            &refreshed_statuses,
+        );
+        if refreshed_decision.should_submit {
             self.clear_live_status(orchestration);
             let claimed = self
                 .repository
@@ -537,7 +537,7 @@ impl OrchestrationCoordinator {
             .as_deref()
             .and_then(|status| status.parse::<SessionStatus>().ok())
             .unwrap_or(SessionStatus::Canceled);
-        let next = task_status_from_child(child_status);
+        let next = OrchestrationTaskStatus::from_child_status(child_status);
         self.update_task_status(task, next, None).await?;
         if next == OrchestrationTaskStatus::Ready {
             let summary = bounded_summary(task.child_summary.as_deref().unwrap_or("Completed"));
@@ -714,81 +714,17 @@ impl OrchestrationCoordinator {
 }
 
 fn validate_subtasks(subtasks: &[SubtaskItem], is_retry: bool) -> Result<(), String> {
-    if subtasks.len() < 2 && !is_retry {
-        return Err("a meaningful orchestration requires at least two subtasks.".to_string());
-    }
-    let mut task_keys = HashSet::new();
-    let mut scopes = Vec::<(&str, String)>::new();
-    for subtask in subtasks {
-        if !is_kebab_case_task_key(&subtask.task_key)
-            || !task_keys.insert(subtask.task_key.as_str())
-        {
-            return Err("every subtask needs a unique kebab-case task key.".to_string());
-        }
-        if subtask.prompt.trim().is_empty()
-            || subtask.title.trim().is_empty()
-            || subtask.touched_areas.is_empty()
-        {
-            return Err(format!(
-                "subtask `{}` needs a title, standalone prompt, and touched areas.",
-                subtask.task_key
-            ));
-        }
-        for area in &subtask.touched_areas {
-            let scope = normalized_scope(area).map_err(|reason| {
-                format!(
-                    "subtask `{}` has invalid touched area `{area}`: {reason}.",
-                    subtask.task_key
-                )
-            })?;
-            if let Some((other_key, _)) = scopes.iter().find(|(other_key, other_scope)| {
-                *other_key != subtask.task_key && scopes_overlap(other_scope, &scope)
-            }) {
-                return Err(format!(
-                    "subtasks `{other_key}` and `{}` overlap at `{area}`.",
-                    subtask.task_key
-                ));
-            }
-            scopes.push((subtask.task_key.as_str(), scope));
-        }
-    }
-
-    Ok(())
-}
-
-fn is_kebab_case_task_key(task_key: &str) -> bool {
-    !task_key.is_empty()
-        && task_key.split('-').all(|segment| {
-            !segment.is_empty()
-                && segment
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    let plan = subtasks
+        .iter()
+        .map(|subtask| OrchestrationPlanTask {
+            prompt: subtask.prompt.clone(),
+            task_key: subtask.task_key.clone(),
+            title: subtask.title.clone(),
+            touched_areas: subtask.touched_areas.clone(),
         })
-}
+        .collect::<Vec<_>>();
 
-fn normalized_scope(area: &str) -> Result<String, &'static str> {
-    let normalized = area.trim().trim_start_matches("./").trim_end_matches('/');
-    if normalized.is_empty()
-        || normalized.starts_with('/')
-        || normalized.split('/').any(|part| part == "..")
-    {
-        return Err("use a non-empty repository-relative path");
-    }
-    if normalized.contains(['*', '?', '[', ']', '{', '}']) {
-        return Err("use a literal file or directory path; wildcard patterns are not supported");
-    }
-
-    Ok(normalized.to_string())
-}
-
-fn scopes_overlap(left: &str, right: &str) -> bool {
-    left == right
-        || left
-            .strip_prefix(right)
-            .is_some_and(|suffix| suffix.starts_with('/'))
-        || right
-            .strip_prefix(left)
-            .is_some_and(|suffix| suffix.starts_with('/'))
+    validate_orchestration_plan(&plan, is_retry)
 }
 
 async fn reusable_retry_orchestration_id(
@@ -868,22 +804,6 @@ pub(crate) fn child_session_is_stopped(status: Option<&str>) -> bool {
                 SessionStatus::Merged | SessionStatus::Done | SessionStatus::Canceled
             )
         })
-}
-
-fn task_status_from_child(status: SessionStatus) -> OrchestrationTaskStatus {
-    match status {
-        SessionStatus::Draft
-        | SessionStatus::InProgress
-        | SessionStatus::Queued
-        | SessionStatus::Rebasing
-        | SessionStatus::Merging => OrchestrationTaskStatus::Running,
-        SessionStatus::Question => OrchestrationTaskStatus::WaitingForInput,
-        SessionStatus::Review
-        | SessionStatus::AgentReview
-        | SessionStatus::Merged
-        | SessionStatus::Done => OrchestrationTaskStatus::Ready,
-        SessionStatus::Canceled => OrchestrationTaskStatus::Failed,
-    }
 }
 
 fn child_prompt(task: &SessionOrchestrationTaskRow) -> String {
@@ -1531,7 +1451,10 @@ mod tests {
 
         // Act / Assert
         for (status, task_status) in expected {
-            assert_eq!(task_status_from_child(status), task_status);
+            assert_eq!(
+                OrchestrationTaskStatus::from_child_status(status),
+                task_status
+            );
         }
     }
 
