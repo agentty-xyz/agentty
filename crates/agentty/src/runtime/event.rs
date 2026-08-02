@@ -15,7 +15,6 @@ use tracing::debug;
 use crate::app::{App, AppRuntimeEvent};
 use crate::domain::input::InputCommand;
 use crate::presentation::app_mode::AppMode;
-use crate::presentation::settings::SettingsAction;
 use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState, key_handler, mode};
 
 /// Maximum terminal input events processed in one foreground cycle.
@@ -49,16 +48,42 @@ impl EventSource for CrosstermEventSource {
 /// Represents the next runtime wake-up source while awaiting input or redraw.
 enum LoopSignal {
     /// One terminal input event from the foreground reader thread.
-    Event(Option<Event>),
+    Event(Option<io::Result<Event>>),
     /// One foreground-owned app event or session actor command.
     Runtime(AppRuntimeEvent),
     /// One redraw tick with no immediate input payload.
     Tick,
 }
 
+/// Converts injected terminal messages into the fallible production event
+/// transport used by the runtime loop.
+pub(crate) trait TerminalEventMessage {
+    fn into_event_result(self) -> io::Result<Event>;
+}
+
+impl TerminalEventMessage for Event {
+    fn into_event_result(self) -> io::Result<Event> {
+        Ok(self)
+    }
+}
+
+impl TerminalEventMessage for io::Result<Event> {
+    fn into_event_result(self) -> io::Result<Event> {
+        self
+    }
+}
+
+/// Returns the terminal-reader failure used when any event sender disappears.
+fn terminal_event_channel_closed_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::UnexpectedEof,
+        "terminal event reader stopped",
+    )
+}
+
 /// Spawns the terminal event reader thread with production dependencies.
 pub(crate) fn spawn_event_reader(
-    event_tx: mpsc::UnboundedSender<Event>,
+    event_tx: mpsc::UnboundedSender<io::Result<Event>>,
     shutdown: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     let event_source: Arc<dyn EventSource> = Arc::new(CrosstermEventSource);
@@ -69,7 +94,7 @@ pub(crate) fn spawn_event_reader(
 /// Spawns the terminal event reader with injected dependencies.
 fn spawn_event_reader_with_source(
     event_source: Arc<dyn EventSource>,
-    event_tx: mpsc::UnboundedSender<Event>,
+    event_tx: mpsc::UnboundedSender<io::Result<Event>>,
     shutdown: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
@@ -79,15 +104,26 @@ fn spawn_event_reader_with_source(
             }
 
             match event_source.poll(FRAME_INTERVAL) {
-                Ok(true) => {
-                    if let Ok(event) = event_source.read()
-                        && event_tx.send(event).is_err()
-                    {
+                Ok(true) => match event_source.read() {
+                    Ok(event) => {
+                        if event_tx.send(Ok(event)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) => {
+                        let _ = event_tx.send(Err(error));
+
                         break;
                     }
-                }
+                },
                 Ok(false) => {}
-                Err(_) => break,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => {
+                    let _ = event_tx.send(Err(error));
+
+                    break;
+                }
             }
         }
     })
@@ -95,11 +131,11 @@ fn spawn_event_reader_with_source(
 
 /// Waits for the next terminal/app event or tick and dispatches one runtime
 /// processing cycle.
-pub(crate) async fn process_events<B: Backend>(
+pub(crate) async fn process_events<B: Backend, Message: TerminalEventMessage>(
     app: &mut App,
     presentation: Rc<PresentationState>,
     terminal: &mut Terminal<B>,
-    event_rx: &mut mpsc::UnboundedReceiver<Event>,
+    event_rx: &mut mpsc::UnboundedReceiver<Message>,
     tick: &mut tokio::time::Interval,
 ) -> io::Result<EventResult>
 where
@@ -115,14 +151,15 @@ where
 
 /// Processes one event/tick cycle with an injected event handler so loop exit
 /// branches can be tested without a real terminal.
-async fn process_events_with_handler<Terminal, EventHandler>(
+async fn process_events_with_handler<Terminal, Message, EventHandler>(
     app: &mut App,
     terminal: &mut Terminal,
-    event_rx: &mut mpsc::UnboundedReceiver<Event>,
+    event_rx: &mut mpsc::UnboundedReceiver<Message>,
     tick: &mut tokio::time::Interval,
     mut handle_event: EventHandler,
 ) -> io::Result<EventResult>
 where
+    Message: TerminalEventMessage,
     EventHandler: for<'handler> FnMut(
         &'handler mut App,
         &'handler mut Terminal,
@@ -135,7 +172,9 @@ where
     // This yields to tokio so spawned tasks (agent output, git status) can
     // make progress on this worker thread.
     let signal = tokio::select! {
-        event = event_rx.recv() => LoopSignal::Event(event),
+        event = event_rx.recv() => {
+            LoopSignal::Event(event.map(TerminalEventMessage::into_event_result))
+        },
         runtime_event = app.next_runtime_event() => LoopSignal::Runtime(runtime_event),
         _ = tick.tick() => LoopSignal::Tick,
     };
@@ -153,13 +192,13 @@ where
 
             None
         }
-        LoopSignal::Event(event) => {
-            if event.is_some() {
-                handled_terminal_events += 1;
-            }
+        LoopSignal::Event(Some(Ok(event))) => {
+            handled_terminal_events += 1;
 
-            event
+            Some(event)
         }
+        LoopSignal::Event(Some(Err(error))) => return Err(error),
+        LoopSignal::Event(None) => return Err(terminal_event_channel_closed_error()),
         LoopSignal::Tick => {
             if app.refresh_sessions_if_needed().await {
                 app.mark_dirty();
@@ -181,8 +220,12 @@ where
     let remaining_terminal_event_budget =
         TERMINAL_EVENT_DRAIN_BUDGET.saturating_sub(handled_terminal_events);
     for _ in 0..remaining_terminal_event_budget {
-        let Ok(event) = event_rx.try_recv() else {
-            break;
+        let event = match event_rx.try_recv() {
+            Ok(message) => message.into_event_result()?,
+            Err(mpsc::error::TryRecvError::Empty) => break,
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                return Err(terminal_event_channel_closed_error());
+            }
         };
 
         handled_terminal_events += 1;
@@ -293,15 +336,10 @@ async fn process_paste_event(app: &mut App, pasted_text: &str) {
     }
 
     if matches!(&app.mode, AppMode::List)
-        && app
-            .settings_presentation
-            .is_launch_configuration_list_editor_input_active()
+        && let Some(action) = app.settings_presentation.action_for_paste(pasted_text)
     {
-        let text = mode::input_key::normalize_single_line_pasted_text(pasted_text);
         let view = app.settings.view();
-        let _ = app
-            .settings_presentation
-            .apply(&view, SettingsAction::Input(InputCommand::InsertText(text)));
+        let _ = app.settings_presentation.apply(&view, action);
     }
 }
 
@@ -324,6 +362,38 @@ mod tests {
     use crate::presentation::prompt::{
         PromptAttachmentState, PromptHistoryState, PromptSlashState,
     };
+    use crate::presentation::settings::SettingsAction;
+
+    /// Continues a test cycle while asserting no terminal event was produced.
+    fn continue_without_terminal_event<'handler>(
+        _app: &'handler mut App,
+        _terminal: &'handler mut (),
+        event: Option<Event>,
+    ) -> Pin<Box<dyn Future<Output = io::Result<EventResult>> + 'handler>> {
+        assert_eq!(
+            event.into_iter().count(),
+            0,
+            "reader failures must not become events"
+        );
+
+        Box::pin(std::future::ready(Ok(EventResult::Continue)))
+    }
+
+    /// Verifies the production reader wiring honors a pre-requested shutdown
+    /// without polling the concrete terminal source.
+    #[test]
+    fn test_spawn_event_reader_exits_when_shutdown_is_already_requested() {
+        // Arrange
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let shutdown = Arc::new(AtomicBool::new(true));
+
+        // Act
+        let join_result = spawn_event_reader(event_tx, shutdown).join();
+
+        // Assert
+        assert!(join_result.is_ok());
+        assert!(event_rx.try_recv().is_err());
+    }
 
     /// Verifies the event reader forwards one queued event before stopping on
     /// a poll error.
@@ -353,7 +423,7 @@ mod tests {
             .with(eq(FRAME_INTERVAL))
             .times(1)
             .in_sequence(&mut sequence)
-            .returning(|_| Err(io::Error::new(ErrorKind::Interrupted, "stop")));
+            .returning(|_| Err(io::Error::new(ErrorKind::BrokenPipe, "stop")));
         let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -363,7 +433,8 @@ mod tests {
         let received_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
             .await
             .expect("timed out waiting for event")
-            .expect("failed to receive event");
+            .expect("failed to receive event")
+            .expect("event reader returned an error");
         join_handle
             .join()
             .expect("failed to join event reader thread");
@@ -402,9 +473,49 @@ mod tests {
         assert!(join_result.is_ok());
     }
 
-    /// Verifies a false poll result skips reads and leaves the channel empty.
+    /// Verifies an interrupted poll is retried before a later fatal failure is
+    /// forwarded.
     #[test]
-    fn test_spawn_event_reader_with_source_skips_read_when_poll_returns_false() {
+    fn test_spawn_event_reader_with_source_retries_interrupted_poll() {
+        // Arrange
+        let mut mock_source = MockEventSource::new();
+        let mut sequence = Sequence::new();
+        mock_source
+            .expect_poll()
+            .with(eq(FRAME_INTERVAL))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Err(io::Error::new(ErrorKind::Interrupted, "retry")));
+        mock_source
+            .expect_poll()
+            .with(eq(FRAME_INTERVAL))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Err(io::Error::new(ErrorKind::BrokenPipe, "stop")));
+        mock_source.expect_read().times(0);
+        let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let shutdown = Arc::new(AtomicBool::new(false));
+
+        // Act
+        let join_handle = spawn_event_reader_with_source(event_source, event_tx, shutdown);
+        let join_result = join_handle.join();
+        let queued_error = event_rx
+            .try_recv()
+            .expect("fatal poll failure should be forwarded after retry")
+            .expect_err("reader should forward the fatal poll error");
+
+        // Assert
+        assert!(join_result.is_ok());
+        assert_eq!(queued_error.kind(), ErrorKind::BrokenPipe);
+        assert_eq!(queued_error.to_string(), "stop");
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    /// Verifies a false poll result skips reads before forwarding the next
+    /// fatal poll failure.
+    #[test]
+    fn test_spawn_event_reader_with_source_forwards_poll_error_after_empty_poll() {
         // Arrange
         let mut mock_source = MockEventSource::new();
         let mut sequence = Sequence::new();
@@ -419,7 +530,7 @@ mod tests {
             .with(eq(FRAME_INTERVAL))
             .times(1)
             .in_sequence(&mut sequence)
-            .returning(|_| Err(io::Error::new(ErrorKind::Interrupted, "stop")));
+            .returning(|_| Err(io::Error::new(ErrorKind::BrokenPipe, "stop")));
         mock_source.expect_read().times(0);
         let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -428,11 +539,90 @@ mod tests {
         // Act
         let join_handle = spawn_event_reader_with_source(event_source, event_tx, shutdown);
         let join_result = join_handle.join();
-        let queued_event = event_rx.try_recv();
+        let queued_error = event_rx
+            .try_recv()
+            .expect("poll failure should be forwarded")
+            .expect_err("reader should forward the poll error");
 
         // Assert
         assert!(join_result.is_ok());
-        assert!(queued_event.is_err());
+        assert_eq!(queued_error.kind(), ErrorKind::BrokenPipe);
+        assert_eq!(queued_error.to_string(), "stop");
+    }
+
+    /// Verifies an interrupted read is retried from polling instead of being
+    /// forwarded to the runtime.
+    #[test]
+    fn test_spawn_event_reader_with_source_retries_interrupted_read() {
+        // Arrange
+        let mut mock_source = MockEventSource::new();
+        let mut sequence = Sequence::new();
+        mock_source
+            .expect_poll()
+            .with(eq(FRAME_INTERVAL))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Ok(true));
+        mock_source
+            .expect_read()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|| Err(io::Error::new(ErrorKind::Interrupted, "retry")));
+        mock_source
+            .expect_poll()
+            .with(eq(FRAME_INTERVAL))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Err(io::Error::new(ErrorKind::BrokenPipe, "stop")));
+        let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let shutdown = Arc::new(AtomicBool::new(false));
+
+        // Act
+        let join_handle = spawn_event_reader_with_source(event_source, event_tx, shutdown);
+        let join_result = join_handle.join();
+        let queued_error = event_rx
+            .try_recv()
+            .expect("fatal poll failure should be forwarded after read retry")
+            .expect_err("reader should forward the fatal poll error");
+
+        // Assert
+        assert!(join_result.is_ok());
+        assert_eq!(queued_error.kind(), ErrorKind::BrokenPipe);
+        assert_eq!(queued_error.to_string(), "stop");
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    /// Verifies terminal read failures are forwarded before the reader exits.
+    #[test]
+    fn test_spawn_event_reader_with_source_forwards_read_error() {
+        // Arrange
+        let mut mock_source = MockEventSource::new();
+        mock_source
+            .expect_poll()
+            .with(eq(FRAME_INTERVAL))
+            .once()
+            .returning(|_| Ok(true));
+        mock_source
+            .expect_read()
+            .once()
+            .returning(|| Err(io::Error::new(ErrorKind::BrokenPipe, "read failed")));
+        let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let shutdown = Arc::new(AtomicBool::new(false));
+
+        // Act
+        let join_handle = spawn_event_reader_with_source(event_source, event_tx, shutdown);
+        let join_result = join_handle.join();
+        let queued_error = event_rx
+            .try_recv()
+            .expect("read failure should be forwarded")
+            .expect_err("reader should forward the read error");
+
+        // Assert
+        assert!(join_result.is_ok());
+        assert_eq!(queued_error.kind(), ErrorKind::BrokenPipe);
+        assert_eq!(queued_error.to_string(), "read failed");
     }
 
     /// Verifies a pre-set shutdown flag exits the reader without touching the
@@ -684,10 +874,10 @@ mod tests {
         let mut terminal = ();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         event_tx
-            .send(Event::Key(KeyEvent::new(
+            .send(Ok(Event::Key(KeyEvent::new(
                 KeyCode::Char('x'),
                 KeyModifiers::NONE,
-            )))
+            ))))
             .expect("failed to queue event");
         let mut tick = tokio::time::interval(Duration::from_mins(1));
 
@@ -709,12 +899,90 @@ mod tests {
         assert_eq!(error.to_string(), "handler failed");
     }
 
+    /// Verifies a terminal reader failure exits the event cycle without being
+    /// converted into a terminal event.
+    #[tokio::test]
+    async fn test_process_events_with_handler_returns_reader_error() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let mut terminal = ();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let mut tick = tokio::time::interval(Duration::from_mins(1));
+        let initial_result = process_events_with_handler(
+            &mut app,
+            &mut terminal,
+            &mut event_rx,
+            &mut tick,
+            continue_without_terminal_event,
+        )
+        .await;
+        event_tx
+            .send(Err(io::Error::new(ErrorKind::BrokenPipe, "reader failed")))
+            .expect("failed to queue reader error");
+
+        // Act
+        let result = process_events_with_handler(
+            &mut app,
+            &mut terminal,
+            &mut event_rx,
+            &mut tick,
+            continue_without_terminal_event,
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(initial_result, Ok(EventResult::Continue)));
+        let error = result
+            .err()
+            .expect("reader failure should exit the event cycle");
+        assert_eq!(error.kind(), ErrorKind::BrokenPipe);
+        assert_eq!(error.to_string(), "reader failed");
+    }
+
+    /// Verifies a closed terminal channel exits instead of spinning through
+    /// no-input cycles.
+    #[tokio::test]
+    async fn test_process_events_with_handler_returns_error_when_reader_channel_closes() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let mut terminal = ();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<io::Result<Event>>();
+        let mut tick = tokio::time::interval(Duration::from_mins(1));
+        let initial_result = process_events_with_handler(
+            &mut app,
+            &mut terminal,
+            &mut event_rx,
+            &mut tick,
+            continue_without_terminal_event,
+        )
+        .await;
+        drop(event_tx);
+
+        // Act
+        let result = process_events_with_handler(
+            &mut app,
+            &mut terminal,
+            &mut event_rx,
+            &mut tick,
+            continue_without_terminal_event,
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(initial_result, Ok(EventResult::Continue)));
+        let error = result
+            .err()
+            .expect("closed reader channel should exit the event cycle");
+        assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
+        assert_eq!(error.to_string(), "terminal event reader stopped");
+    }
+
     #[tokio::test]
     async fn test_process_events_with_handler_drives_session_runtime_commands() {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let mut terminal = ();
-        let (_event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
         let mut tick = tokio::time::interval(Duration::from_mins(1));
         tick.tick().await;
         let _session_runtime_consumer = app.sessions.foreground_consumer();
@@ -766,7 +1034,7 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.services.emit_app_event(AppEvent::RefreshSessions);
         let mut terminal = ();
-        let (_event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
         let mut tick = tokio::time::interval(Duration::from_mins(1));
         tick.tick().await;
 
@@ -798,10 +1066,10 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         for _ in 0..(TERMINAL_EVENT_DRAIN_BUDGET + 2) {
             event_tx
-                .send(Event::Key(KeyEvent::new(
+                .send(Ok(Event::Key(KeyEvent::new(
                     KeyCode::Char('x'),
                     KeyModifiers::NONE,
-                )))
+                ))))
                 .expect("failed to queue event");
         }
         let handled_events = Arc::new(AtomicUsize::new(0));
@@ -829,5 +1097,47 @@ mod tests {
             TERMINAL_EVENT_DRAIN_BUDGET
         );
         assert_eq!(event_rx.len(), 2);
+    }
+
+    /// Verifies channel closure noticed while draining queued input exits the
+    /// event cycle after handling the final event.
+    #[tokio::test]
+    async fn test_process_events_with_handler_returns_error_when_channel_closes_during_drain() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let mut terminal = ();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        event_tx
+            .send(Ok(Event::Key(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::NONE,
+            ))))
+            .expect("failed to queue event");
+        drop(event_tx);
+        let handled_events = Arc::new(AtomicUsize::new(0));
+        let mut tick = tokio::time::interval(Duration::from_mins(1));
+        tick.tick().await;
+
+        // Act
+        let result =
+            process_events_with_handler(&mut app, &mut terminal, &mut event_rx, &mut tick, {
+                let handled_events = Arc::clone(&handled_events);
+
+                move |_, (), event| {
+                    if event.is_some() {
+                        handled_events.fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    Box::pin(async { Ok(EventResult::Continue) })
+                }
+            })
+            .await;
+
+        // Assert
+        let error = result
+            .err()
+            .expect("closed reader channel should exit during drain");
+        assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
+        assert_eq!(handled_events.load(Ordering::Relaxed), 1);
     }
 }

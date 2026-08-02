@@ -5,7 +5,7 @@ use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -64,6 +64,45 @@ pub(crate) enum EventResult {
     Quit,
 }
 
+/// Owns the blocking terminal-reader thread and its shutdown signal.
+struct EventReaderTask {
+    join_handle: std::thread::JoinHandle<()>,
+    shutdown: Arc<AtomicBool>,
+}
+
+impl EventReaderTask {
+    /// Starts the production terminal reader for `event_tx`.
+    fn spawn(event_tx: mpsc::UnboundedSender<io::Result<crossterm::event::Event>>) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let join_handle = event::spawn_event_reader(event_tx, Arc::clone(&shutdown));
+
+        Self {
+            join_handle,
+            shutdown,
+        }
+    }
+
+    /// Requests reader shutdown and waits for the blocking thread to finish.
+    async fn shutdown(self) -> io::Result<()> {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let join_result = tokio::task::spawn_blocking(move || self.join_handle.join()).await;
+
+        Self::map_join_result(join_result)
+    }
+
+    /// Maps the blocking join task and reader thread outcomes into one runtime
+    /// error surface.
+    fn map_join_result(
+        join_result: Result<std::thread::Result<()>, tokio::task::JoinError>,
+    ) -> io::Result<()> {
+        let reader_result = join_result.map_err(|error| {
+            io::Error::other(format!("failed to join event reader task: {error}"))
+        })?;
+
+        reader_result.map_err(|_| io::Error::other("terminal event reader panicked"))
+    }
+}
+
 /// Runs the TUI event/render loop until the user exits.
 ///
 /// # Errors
@@ -75,18 +114,17 @@ pub async fn run(app: &mut App) -> io::Result<()> {
     // Spawn a dedicated thread for crossterm event reading so the main async
     // loop can yield to tokio between iterations.
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-    let shutdown = Arc::new(AtomicBool::new(false));
-    event::spawn_event_reader(event_tx, shutdown.clone());
+    let event_reader_task = EventReaderTask::spawn(event_tx);
 
     let mut tick = tokio::time::interval(FRAME_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let run_result = run_main_loop(app, &mut terminal, &mut event_rx, &mut tick).await;
-    shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+    let reader_shutdown_result = event_reader_task.shutdown().await;
     app.wait_for_background_cleanup_tasks().await;
-    terminal.show_cursor()?;
+    let cursor_result = terminal.show_cursor().map_err(backend_err);
 
-    run_result
+    run_result.and(reader_shutdown_result).and(cursor_result)
 }
 
 /// Runs the TUI event/render loop with an externally provided backend and
@@ -120,10 +158,10 @@ where
 /// Reads the runtime clock from `app.services.clock()` so render-throttle
 /// timing is sourced through the same `Clock` trait used by session refresh
 /// logic, keeping `runtime` free of direct `Instant::now()` calls.
-async fn run_main_loop<B: Backend>(
+async fn run_main_loop<B: Backend, Message: event::TerminalEventMessage>(
     app: &mut App,
     terminal: &mut Terminal<B>,
-    event_rx: &mut mpsc::UnboundedReceiver<crossterm::event::Event>,
+    event_rx: &mut mpsc::UnboundedReceiver<Message>,
     tick: &mut tokio::time::Interval,
 ) -> io::Result<()>
 where
@@ -150,23 +188,38 @@ where
     };
 
     let result = run_until_quit(&mut main_loop_state, |state| Box::pin(state.run_cycle())).await;
+    let orchestration_shutdown_result = stop_orchestration_task(orchestration_task).await;
+
+    result.and(orchestration_shutdown_result)
+}
+
+/// Cancels the coordinator and observes its final task result.
+async fn stop_orchestration_task(
+    orchestration_task: tokio::task::JoinHandle<()>,
+) -> io::Result<()> {
     orchestration_task.abort();
 
-    result
+    match orchestration_task.await {
+        Ok(()) => Ok(()),
+        Err(error) if error.is_cancelled() => Ok(()),
+        Err(error) => Err(io::Error::other(format!(
+            "orchestration coordinator task failed: {error}"
+        ))),
+    }
 }
 
 /// Borrowed runtime state required to process one main-loop cycle.
-struct MainLoopState<'a, B: Backend> {
+struct MainLoopState<'a, B: Backend, Message> {
     app: &'a mut App,
     clock: Arc<dyn Clock>,
-    event_rx: &'a mut mpsc::UnboundedReceiver<crossterm::event::Event>,
+    event_rx: &'a mut mpsc::UnboundedReceiver<Message>,
     last_draw_at: Instant,
     presentation: Rc<PresentationState>,
     terminal: &'a mut Terminal<B>,
     tick: &'a mut tokio::time::Interval,
 }
 
-impl<B: Backend> MainLoopState<'_, B>
+impl<B: Backend, Message: event::TerminalEventMessage> MainLoopState<'_, B, Message>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
@@ -239,22 +292,10 @@ where
         return Ok(());
     }
 
-    let mut assigned_issue_table_state = presentation.assigned_issue_table_state();
-    let mut project_table_state = presentation.project_table_state();
-    let mut requested_review_table_state = presentation.requested_review_table_state();
-    let mut session_table_state = presentation.session_table_state();
     let snapshot = app.view_snapshot();
     terminal
         .draw(|frame| {
-            crate::ui::render_app(
-                &snapshot,
-                frame,
-                &mut assigned_issue_table_state,
-                &mut project_table_state,
-                presentation.render_cache_store(),
-                &mut requested_review_table_state,
-                &mut session_table_state,
-            );
+            presentation.render(&snapshot, frame);
         })
         .map_err(backend_err)?;
     app.clear_redraw();
@@ -281,6 +322,7 @@ mod tests {
     use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
     use ratatui::buffer::Cell;
     use ratatui::layout::{Position, Size};
+    use testty::session::PtySessionBuilder;
 
     use super::*;
     use crate::app::AppEvent;
@@ -288,6 +330,12 @@ mod tests {
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::presentation::app_mode::AppMode;
     use crate::test_support::SessionFixtureBuilder;
+
+    /// Environment marker used to distinguish the nested PTY test process.
+    const PRODUCTION_RUN_CHILD_ENV: &str = "AGENTTY_TEST_PRODUCTION_RUN_CHILD";
+    /// Fully-qualified libtest name invoked inside the nested PTY.
+    const PRODUCTION_RUN_CHILD_TEST: &str =
+        "runtime::core::tests::production_run_exits_cleanly_in_pty_child";
 
     /// Test-only loop state that records call counts and scripted outcomes.
     struct TestLoopState {
@@ -347,6 +395,184 @@ mod tests {
         let error = loop_result.expect_err("loop should return the cycle error");
         assert_eq!(error.to_string(), "cycle failed");
         assert_eq!(state.cycle_count, 1);
+    }
+
+    /// Drives the concrete terminal entrypoint in a PTY so its setup, event
+    /// reader, and ordered cleanup path remain covered by source tests.
+    #[test]
+    fn production_run_exits_cleanly_in_pty() {
+        // Arrange
+        let test_binary = std::env::current_exe().expect("test binary path should be available");
+        let mut session = PtySessionBuilder::new(test_binary)
+            .args(["--exact", PRODUCTION_RUN_CHILD_TEST, "--nocapture"])
+            .env(PRODUCTION_RUN_CHILD_ENV, "1")
+            .spawn()
+            .expect("failed to spawn production runtime test in a PTY");
+        session
+            .wait_for_text("Sessions", Duration::from_secs(10))
+            .expect("production runtime should render its initial list view");
+
+        // Act
+        session
+            .press_key("q")
+            .expect("failed to open quit confirmation");
+        session
+            .wait_for_text("Confirm Quit", Duration::from_secs(5))
+            .expect("quit confirmation should be rendered");
+        session
+            .press_key("y")
+            .expect("failed to confirm runtime exit");
+        let exited_successfully = session
+            .wait_for_exit(Duration::from_secs(5))
+            .expect("production runtime should exit before the timeout");
+
+        // Assert
+        assert!(exited_successfully);
+    }
+
+    /// Runs only when re-invoked by `production_run_exits_cleanly_in_pty`.
+    #[tokio::test]
+    async fn production_run_exits_cleanly_in_pty_child() {
+        // Arrange
+        if std::env::var_os(PRODUCTION_RUN_CHILD_ENV).is_none() {
+            return;
+        }
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+
+        // Act
+        let result = tokio::time::timeout(Duration::from_secs(10), run(&mut app))
+            .await
+            .expect("production runtime should not hang");
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn event_reader_task_spawn_starts_a_shutdown_capable_reader() {
+        // Arrange
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = EventReaderTask::spawn(event_tx).shutdown().await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn event_reader_task_shutdown_signals_and_joins_reader() {
+        // Arrange
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let reader_shutdown = Arc::clone(&shutdown);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let join_handle = std::thread::spawn(move || {
+            started_tx
+                .send(())
+                .expect("reader should signal that it started");
+            while !reader_shutdown.load(Ordering::Relaxed) {
+                std::thread::yield_now();
+            }
+        });
+        started_rx
+            .recv()
+            .expect("reader should start before shutdown is requested");
+        let task = EventReaderTask {
+            join_handle,
+            shutdown,
+        };
+
+        // Act
+        let result = task.shutdown().await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn event_reader_task_shutdown_reports_reader_panic() {
+        // Arrange
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let join_handle = std::thread::spawn(|| {
+            std::panic::resume_unwind(Box::new("reader panic"));
+        });
+        let task = EventReaderTask {
+            join_handle,
+            shutdown,
+        };
+
+        // Act
+        let result = task.shutdown().await;
+
+        // Assert
+        let error = result.expect_err("reader panic should be reported");
+        assert_eq!(error.to_string(), "terminal event reader panicked");
+    }
+
+    #[tokio::test]
+    async fn event_reader_task_maps_blocking_join_failure() {
+        // Arrange
+        let join_error = tokio::spawn(async {
+            std::panic::resume_unwind(Box::new("blocking join panic"));
+        })
+        .await
+        .expect_err("panicked task should return a join error");
+
+        // Act
+        let result = EventReaderTask::map_join_result(Err(join_error));
+
+        // Assert
+        let error = result.expect_err("blocking join failure should be reported");
+        assert!(
+            error
+                .to_string()
+                .starts_with("failed to join event reader task:")
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_orchestration_task_accepts_completed_task() {
+        // Arrange
+        let task = tokio::spawn(async {});
+        tokio::task::yield_now().await;
+
+        // Act
+        let result = stop_orchestration_task(task).await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn stop_orchestration_task_accepts_cancelled_task() {
+        // Arrange
+        let task = tokio::spawn(std::future::pending::<()>());
+
+        // Act
+        let result = stop_orchestration_task(task).await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn stop_orchestration_task_reports_panicked_task() {
+        // Arrange
+        let task = tokio::spawn(async {
+            std::panic::resume_unwind(Box::new("coordinator panic"));
+        });
+        tokio::task::yield_now().await;
+
+        // Act
+        let result = stop_orchestration_task(task).await;
+
+        // Assert
+        let error = result.expect_err("coordinator panic should be reported");
+        assert!(
+            error
+                .to_string()
+                .starts_with("orchestration coordinator task failed:")
+        );
     }
 
     /// Flattens a test terminal buffer into one searchable string.
@@ -468,6 +694,31 @@ mod tests {
         );
     }
 
+    /// Verifies a dropped injected event sender exits the full runtime loop
+    /// instead of repeatedly producing empty input cycles.
+    #[tokio::test]
+    async fn run_with_backend_returns_error_when_event_channel_closes() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        drop(event_tx);
+
+        // Act
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            run_with_backend(&mut app, &mut terminal, &mut event_rx),
+        )
+        .await
+        .expect("runtime should exit when its event channel closes");
+
+        // Assert
+        let error = result.expect_err("closed event channel should fail the runtime");
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        assert_eq!(error.to_string(), "terminal event reader stopped");
+    }
+
     #[tokio::test]
     async fn run_with_backend_waits_for_cleanup_tasks_after_quit() {
         // Arrange
@@ -570,7 +821,7 @@ mod tests {
         // Arrange
         let (mut app, base_dir) = crate::test_support::new_test_app().await;
         let session_id = "session-1".to_string();
-        let mut event_rx = mpsc::unbounded_channel().1;
+        let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
         let mut tick = tokio::time::interval(Duration::from_millis(1));

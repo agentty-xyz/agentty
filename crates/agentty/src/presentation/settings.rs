@@ -1,4 +1,4 @@
-//! Frontend-neutral settings screen state and actions.
+//! Presentation-owned settings screen state and input translation.
 
 use crate::domain::agent::{AgentSelection, ReasoningLevel};
 use crate::domain::input::{InputCommand, InputState};
@@ -60,6 +60,17 @@ pub(crate) enum SettingsAction {
     Next,
     Previous,
     StartAddingLaunchConfiguration,
+}
+
+/// One frontend-neutral input received while a settings overlay is active.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum SettingsInput {
+    Cancel,
+    Character(char),
+    Confirm,
+    Edit(InputCommand),
+    MoveDown,
+    MoveUp,
 }
 
 /// Render-ready option for an open settings selector dropdown.
@@ -167,6 +178,84 @@ impl SettingsPresentationState {
                 None
             }
         }
+    }
+
+    /// Reduces one frontend-neutral input into the semantic action accepted by
+    /// the active settings overlay.
+    pub(crate) fn action_for_input(&self, input: SettingsInput) -> Option<SettingsAction> {
+        if self.is_selector_dropdown_open() {
+            return match input {
+                SettingsInput::Cancel => Some(SettingsAction::Cancel),
+                SettingsInput::Character(character) if character.eq_ignore_ascii_case(&'q') => {
+                    Some(SettingsAction::Cancel)
+                }
+                SettingsInput::Character('j') | SettingsInput::MoveDown => {
+                    Some(SettingsAction::Next)
+                }
+                SettingsInput::Character('k') | SettingsInput::MoveUp => {
+                    Some(SettingsAction::Previous)
+                }
+                SettingsInput::Confirm => Some(SettingsAction::Confirm),
+                _ => None,
+            };
+        }
+
+        if self.is_launch_configuration_list_editor_input_active() {
+            return match input {
+                SettingsInput::Cancel => Some(SettingsAction::Cancel),
+                SettingsInput::Character(character) => {
+                    Some(SettingsAction::Input(InputCommand::Insert(character)))
+                }
+                SettingsInput::Confirm => Some(SettingsAction::Confirm),
+                SettingsInput::Edit(command) => Some(SettingsAction::Input(command)),
+                SettingsInput::MoveDown => Some(SettingsAction::Input(InputCommand::MoveDown)),
+                SettingsInput::MoveUp => Some(SettingsAction::Input(InputCommand::MoveUp)),
+            };
+        }
+
+        if self.is_launch_configuration_list_editor_open() {
+            return match input {
+                SettingsInput::Cancel => Some(SettingsAction::Cancel),
+                SettingsInput::Character(character) if character.eq_ignore_ascii_case(&'q') => {
+                    Some(SettingsAction::Cancel)
+                }
+                SettingsInput::Character('j') | SettingsInput::MoveDown => {
+                    Some(SettingsAction::Next)
+                }
+                SettingsInput::Character('k') | SettingsInput::MoveUp => {
+                    Some(SettingsAction::Previous)
+                }
+                SettingsInput::Character('J') => Some(SettingsAction::MoveLaunchConfigurationDown),
+                SettingsInput::Character('K') => Some(SettingsAction::MoveLaunchConfigurationUp),
+                SettingsInput::Character('a') => {
+                    Some(SettingsAction::StartAddingLaunchConfiguration)
+                }
+                SettingsInput::Character('e') | SettingsInput::Confirm => {
+                    Some(SettingsAction::EditLaunchConfiguration)
+                }
+                SettingsInput::Character('d') => Some(SettingsAction::DeleteLaunchConfiguration),
+                _ => None,
+            };
+        }
+
+        None
+    }
+
+    /// Translates pasted text into a single-line input action when the launch
+    /// configuration editor currently accepts text.
+    pub(crate) fn action_for_paste(&self, pasted_text: &str) -> Option<SettingsAction> {
+        if !self.is_launch_configuration_list_editor_input_active() {
+            return None;
+        }
+
+        let normalized_text = pasted_text.replace("\r\n", "\n").replace('\r', "\n");
+        let first_line = normalized_text
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string();
+
+        Some(SettingsAction::Input(InputCommand::InsertText(first_line)))
     }
 
     /// Returns whether the launch-configuration editor is open.
@@ -1049,6 +1138,164 @@ mod tests {
             let operation = state.apply(view, SettingsAction::Next);
             assert_eq!(operation, None);
         }
+    }
+
+    /// Opens the launch-configuration editor in browse mode.
+    fn launch_configuration_editor_state(view: &SettingsView) -> SettingsPresentationState {
+        let mut state = SettingsPresentationState::default();
+        select_row(
+            &mut state,
+            view,
+            SettingRow::LaunchConfiguration.table_index(),
+        );
+        let _ = state.apply(view, SettingsAction::Activate);
+
+        state
+    }
+
+    #[test]
+    fn action_for_input_maps_selector_inputs() {
+        // Arrange
+        let view = test_settings_view("");
+        let mut state = SettingsPresentationState::default();
+        let _ = state.apply(&view, SettingsAction::Activate);
+        let mappings = [
+            (SettingsInput::Cancel, Some(SettingsAction::Cancel)),
+            (SettingsInput::Character('q'), Some(SettingsAction::Cancel)),
+            (SettingsInput::Character('Q'), Some(SettingsAction::Cancel)),
+            (SettingsInput::Character('j'), Some(SettingsAction::Next)),
+            (SettingsInput::MoveDown, Some(SettingsAction::Next)),
+            (
+                SettingsInput::Character('k'),
+                Some(SettingsAction::Previous),
+            ),
+            (SettingsInput::MoveUp, Some(SettingsAction::Previous)),
+            (SettingsInput::Confirm, Some(SettingsAction::Confirm)),
+            (SettingsInput::Character('x'), None),
+            (SettingsInput::Edit(InputCommand::MoveLeft), None),
+        ];
+
+        // Act / Assert
+        for (input, expected_action) in mappings {
+            assert_eq!(state.action_for_input(input), expected_action);
+        }
+    }
+
+    #[test]
+    fn action_for_input_maps_launch_configuration_browse_inputs() {
+        // Arrange
+        let view = test_settings_view("cargo test\ncargo check");
+        let state = launch_configuration_editor_state(&view);
+        let mappings = [
+            (SettingsInput::Cancel, Some(SettingsAction::Cancel)),
+            (SettingsInput::Character('q'), Some(SettingsAction::Cancel)),
+            (SettingsInput::Character('Q'), Some(SettingsAction::Cancel)),
+            (SettingsInput::Character('j'), Some(SettingsAction::Next)),
+            (SettingsInput::MoveDown, Some(SettingsAction::Next)),
+            (
+                SettingsInput::Character('k'),
+                Some(SettingsAction::Previous),
+            ),
+            (SettingsInput::MoveUp, Some(SettingsAction::Previous)),
+            (
+                SettingsInput::Character('J'),
+                Some(SettingsAction::MoveLaunchConfigurationDown),
+            ),
+            (
+                SettingsInput::Character('K'),
+                Some(SettingsAction::MoveLaunchConfigurationUp),
+            ),
+            (
+                SettingsInput::Character('a'),
+                Some(SettingsAction::StartAddingLaunchConfiguration),
+            ),
+            (
+                SettingsInput::Character('e'),
+                Some(SettingsAction::EditLaunchConfiguration),
+            ),
+            (
+                SettingsInput::Confirm,
+                Some(SettingsAction::EditLaunchConfiguration),
+            ),
+            (
+                SettingsInput::Character('d'),
+                Some(SettingsAction::DeleteLaunchConfiguration),
+            ),
+            (SettingsInput::Character('x'), None),
+            (SettingsInput::Edit(InputCommand::MoveLeft), None),
+        ];
+
+        // Act / Assert
+        for (input, expected_action) in mappings {
+            assert_eq!(state.action_for_input(input), expected_action);
+        }
+    }
+
+    #[test]
+    fn action_for_input_maps_launch_configuration_text_input() {
+        // Arrange
+        let view = test_settings_view("");
+        let mut state = launch_configuration_editor_state(&view);
+        let _ = state.apply(&view, SettingsAction::StartAddingLaunchConfiguration);
+
+        // Act
+        let confirm = state.action_for_input(SettingsInput::Confirm);
+        let cancel = state.action_for_input(SettingsInput::Cancel);
+        let character = state.action_for_input(SettingsInput::Character('x'));
+        let edit = state.action_for_input(SettingsInput::Edit(InputCommand::DeleteBackward));
+        let move_down = state.action_for_input(SettingsInput::MoveDown);
+        let move_up = state.action_for_input(SettingsInput::MoveUp);
+
+        // Assert
+        assert_eq!(confirm, Some(SettingsAction::Confirm));
+        assert_eq!(cancel, Some(SettingsAction::Cancel));
+        assert_eq!(
+            character,
+            Some(SettingsAction::Input(InputCommand::Insert('x')))
+        );
+        assert_eq!(
+            edit,
+            Some(SettingsAction::Input(InputCommand::DeleteBackward))
+        );
+        assert_eq!(
+            move_down,
+            Some(SettingsAction::Input(InputCommand::MoveDown))
+        );
+        assert_eq!(move_up, Some(SettingsAction::Input(InputCommand::MoveUp)));
+    }
+
+    #[test]
+    fn action_for_input_ignores_input_without_open_overlay() {
+        // Arrange
+        let state = SettingsPresentationState::default();
+
+        // Act
+        let action = state.action_for_input(SettingsInput::Confirm);
+
+        // Assert
+        assert_eq!(action, None);
+    }
+
+    #[test]
+    fn action_for_paste_normalizes_active_single_line_input() {
+        // Arrange
+        let view = test_settings_view("");
+        let mut active_state = launch_configuration_editor_state(&view);
+        let _ = active_state.apply(&view, SettingsAction::StartAddingLaunchConfiguration);
+        let inactive_state = SettingsPresentationState::default();
+
+        // Act
+        let active_action = active_state.action_for_paste("cargo test\r\nignored");
+        let inactive_action = inactive_state.action_for_paste("cargo test");
+
+        // Assert
+        assert_eq!(
+            active_action,
+            Some(SettingsAction::Input(InputCommand::InsertText(
+                "cargo test".to_string()
+            )))
+        );
+        assert_eq!(inactive_action, None);
     }
 
     #[test]
