@@ -573,7 +573,7 @@ impl SessionManager {
             .find(|session| session.id == session_id)
         {
             session.transient_messages.upsert(TransientMessage {
-                anchor: TransientMessageAnchor::AfterCompletedTurn,
+                anchor: TransientMessageAnchor::Tail,
                 body: TransientMessageBody::Loading(
                     "Auto-pushing published branch after completed turn...".to_string(),
                 ),

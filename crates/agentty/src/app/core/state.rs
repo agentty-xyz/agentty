@@ -1271,8 +1271,9 @@ impl App {
             },
         );
         if let Some(session) = self.sessions.state_mut().session_mut_for_id(session_id) {
+            let anchor = app::review::focused_review_result_anchor(session);
             session.transient_messages.upsert(TransientMessage {
-                anchor: TransientMessageAnchor::AfterCompletedTurn,
+                anchor,
                 body: TransientMessageBody::Markdown(text),
                 lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
                 slot: TransientMessageSlot::Review,

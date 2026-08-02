@@ -184,6 +184,17 @@ pub(crate) fn prune_review_cache(
     });
 }
 
+/// Keeps a completed focused review at the position established by its
+/// loading row, falling back to completed-turn placement for restored output.
+pub(crate) fn focused_review_result_anchor(session: &Session) -> TransientMessageAnchor {
+    session
+        .transient_messages
+        .get(TransientMessageSlot::Review)
+        .map_or(TransientMessageAnchor::AfterCompletedTurn, |message| {
+            message.anchor
+        })
+}
+
 /// Synchronizes one session's focused-review display slot from the canonical
 /// cache state.
 fn hydrate_session_review_transient(
@@ -214,11 +225,11 @@ fn hydrate_session_review_transient(
             TransientMessageBody::Loading(review_loading_message(review_model)),
         ),
         ReviewCacheEntry::Ready { text, .. } => (
-            TransientMessageAnchor::AfterCompletedTurn,
+            focused_review_result_anchor(session),
             TransientMessageBody::Markdown(text.clone()),
         ),
         ReviewCacheEntry::Failed { error, .. } => (
-            TransientMessageAnchor::AfterCompletedTurn,
+            focused_review_result_anchor(session),
             TransientMessageBody::Plain(review_failure_message(error)),
         ),
         ReviewCacheEntry::Suppressed => {
@@ -459,12 +470,13 @@ fn apply_review_update(
         .iter_mut()
         .find(|session| session.id == session_id)
     {
+        let anchor = focused_review_result_anchor(session);
         let body = match &result {
             Ok(review_text) => TransientMessageBody::Markdown(review_text.clone()),
             Err(error) => TransientMessageBody::Plain(review_failure_message(error)),
         };
         session.transient_messages.upsert(TransientMessage {
-            anchor: TransientMessageAnchor::AfterCompletedTurn,
+            anchor,
             body,
             lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
             slot: TransientMessageSlot::Review,
@@ -905,6 +917,49 @@ mod tests {
             review_cache.get(session_id.as_str()),
             Some(ReviewCacheEntry::Ready { text, .. }) if text == review_text
         ));
+    }
+
+    #[test]
+    fn apply_review_updates_preserves_loading_row_tail_position() {
+        // Arrange
+        let session_id = SessionId::from("session-tail-review");
+        let diff_hash = 17;
+        let review_text = "## Review\nChronological finding.";
+        let mut review_cache = loading_review_cache(&session_id, diff_hash);
+        let mut session = SessionFixtureBuilder::new()
+            .id(session_id.as_str())
+            .status(Status::AgentReview)
+            .build();
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Reviewing changes".to_string()),
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::Review,
+            turn_position: None,
+        });
+        let mut session_state = SessionState::new(
+            HashMap::new(),
+            vec![session],
+            SelectionState::default(),
+            Arc::new(RealClock),
+            0,
+            0,
+        );
+        let review_updates = successful_review_update(&session_id, diff_hash, review_text);
+
+        // Act
+        apply_review_updates(&mut review_cache, &mut session_state, review_updates);
+
+        // Assert
+        let review_message = session_state.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::Review)
+            .expect("completed review should remain visible");
+        assert_eq!(review_message.anchor, TransientMessageAnchor::Tail);
+        assert_eq!(
+            review_message.body,
+            TransientMessageBody::Markdown(review_text.to_string())
+        );
     }
 
     #[test]
