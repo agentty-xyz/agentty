@@ -547,9 +547,18 @@ as `/o` for `/model`.
 | `/model`       | Switch the model for the current session.                     |
 | `/personality` | Choose an agent personality for the current session.          |
 | `/reasoning`   | Override the reasoning level for the current session.         |
+| `/speed`       | Choose normal or fast responses for this session.             |
 
-`/apply` requires a completed focused review (`f` key). `/model` and `/reasoning` only
-offer locally available backends; see [Agents & Models](@/docs/agents/backends.md).
+`/apply` requires a completed focused review (`f` key). `/model` offers only locally
+available backends; see [Agents & Models](@/docs/agents/backends.md). `/speed` is
+available for Claude and Codex sessions. The selected mode is stored with the session,
+shown after the reasoning level in the session header and beside the composer title, and
+applied to following turns. Gemini and Antigravity sessions have no speed control, so
+their header and composer omit the speed display entirely. Fast responses use the
+provider's higher-cost low-latency mode. Enabling Fast moves Claude sessions to
+`claude-opus-5` and Codex Spark sessions to `gpt-5.6-sol` without changing the project
+default model. Returning to Normal does not change the selected model. Selecting a model
+that does not support Fast resets the session to Normal before the model changes.
 
 `/personality` scans `.agents/agents/*/agent.md` in the session worktree when the picker
 opens. Agentty does not scan the global `~/.agents` directory. Each enabled definition

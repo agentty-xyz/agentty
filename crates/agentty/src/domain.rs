@@ -25,7 +25,7 @@ pub(crate) mod transient_message;
 pub mod agent {
     pub use ag_agent::{
         AgentCliInfo, AgentCliVersion, AgentKind, AgentModel, AgentSelection,
-        AgentSelectionMetadata, ReasoningLevel, parse_persisted_session_agent_model,
+        AgentSelectionMetadata, ReasoningLevel, SpeedMode, parse_persisted_session_agent_model,
         resolve_agent_kind_for_model, resolve_agent_selection_for_model,
         resolve_model_for_available_agent_kinds, resolve_prompt_model_agent_kind,
         selectable_models_for_agent_kinds,

@@ -7,6 +7,7 @@ use ag_protocol::TurnPromptAttachment;
 
 use crate::channel::AgentRequestKind;
 use crate::model::agent::ReasoningLevel;
+use crate::model::session::SpeedMode;
 
 /// Transport runtime used to execute turns for one backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +67,8 @@ pub struct BuildCommandRequest<'a> {
     pub request_kind: &'a AgentRequestKind,
     /// Replayable transcript text captured when the turn was queued.
     pub replay_transcript: Option<&'a str>,
+    /// Response-speed preference for this turn.
+    pub speed_mode: SpeedMode,
 }
 
 /// Error type for backend setup and command construction failures.

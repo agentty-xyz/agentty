@@ -6,7 +6,7 @@ use std::path::PathBuf;
 pub use ag_protocol::render_prompt_text_for_agent;
 
 use crate::domain::agent::{
-    self, AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
+    self, AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
 };
 use crate::domain::input::InputState;
 use crate::domain::personality::PersonalitySummary;
@@ -48,6 +48,8 @@ pub enum PromptSuggestionSelection {
     Personality(Option<PersonalitySummary>),
     /// Session-scoped reasoning selection chosen during `/reasoning`.
     Reasoning(ReasoningLevel),
+    /// Session-scoped response-speed selection chosen during `/speed`.
+    Speed(SpeedMode),
 }
 
 /// Concrete character location owned by an attachment in one input revision.
@@ -368,6 +370,8 @@ pub enum PromptSlashStage {
     Personality,
     /// Selecting a session-specific reasoning level override.
     Reasoning,
+    /// Selecting a session-specific response-speed preference.
+    Speed,
 }
 
 /// UI state for prompt-only slash command selection.
@@ -836,7 +840,7 @@ fn build_slash_suggestion_list(
 
     let (title, items): (&str, Vec<PromptSuggestionItem>) = match slash_state.stage {
         PromptSlashStage::Command => {
-            let commands = prompt_slash_commands(input, allow_apply_command)
+            let commands = prompt_slash_commands(input, session_agent_kind, allow_apply_command)
                 .into_iter()
                 .map(|command| PromptSuggestionItem {
                     badge: None,
@@ -888,6 +892,10 @@ fn build_slash_suggestion_list(
             "/reasoning Level (j/k move, Enter select)",
             reasoning_suggestion_items(),
         ),
+        PromptSlashStage::Speed => (
+            "/speed Mode (j/k move, Enter select)",
+            speed_suggestion_items(),
+        ),
     };
 
     if items.is_empty() {
@@ -912,7 +920,7 @@ fn selected_slash_action(
 ) -> Option<PromptSuggestionSelection> {
     match slash_state.stage {
         PromptSlashStage::Command => {
-            let commands = prompt_slash_commands(input, allow_apply_command);
+            let commands = prompt_slash_commands(input, session_agent_kind, allow_apply_command);
             let selected_command = commands
                 .get(clamp_selected_index(
                     slash_state.selected_index,
@@ -978,6 +986,17 @@ fn selected_slash_action(
 
             Some(PromptSuggestionSelection::Reasoning(selected_reasoning))
         }
+        PromptSlashStage::Speed => {
+            let options = SpeedMode::ALL;
+            let selected_speed_mode = options
+                .get(clamp_selected_index(
+                    slash_state.selected_index,
+                    options.len(),
+                ))
+                .copied()?;
+
+            Some(PromptSuggestionSelection::Speed(selected_speed_mode))
+        }
     }
 }
 
@@ -1009,16 +1028,24 @@ fn command_description(command: &str) -> &'static str {
         "/model" => "Choose an agent and model for this session.",
         "/personality" => "List: .agents/agents/. Choose a personality for this session.",
         "/reasoning" => "Override the reasoning level for this session.",
+        "/speed" => "Choose normal or fast responses for this session.",
         _ => "Prompt slash command.",
     }
 }
 
 /// Returns all slash commands whose fuzzy characters match the current input.
-fn prompt_slash_commands(input: &str, allow_apply_command: bool) -> Vec<&'static str> {
+fn prompt_slash_commands(
+    input: &str,
+    session_agent_kind: AgentKind,
+    allow_apply_command: bool,
+) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
-    let mut commands = vec!["/apply", "/model", "/personality", "/reasoning"];
+    let mut commands = vec!["/apply", "/model", "/personality", "/reasoning", "/speed"];
     if !allow_apply_command {
         commands.retain(|command| *command != "/apply");
+    }
+    if !session_agent_kind.supports_speed_mode() {
+        commands.retain(|command| *command != "/speed");
     }
     commands.retain(|command| slash_command_fuzzy_score(command, &lowered).is_some());
     commands.sort_by_key(|command| slash_command_fuzzy_score(command, &lowered).unwrap_or(0));
@@ -1086,6 +1113,19 @@ fn reasoning_suggestion_items() -> Vec<PromptSuggestionItem> {
             badge: None,
             detail: Some(reasoning_level.description().to_string()),
             label: reasoning_level.name().to_string(),
+            metadata: None,
+        })
+        .collect()
+}
+
+/// Returns the render-ready dropdown rows for `/speed`.
+fn speed_suggestion_items() -> Vec<PromptSuggestionItem> {
+    SpeedMode::ALL
+        .into_iter()
+        .map(|speed_mode| PromptSuggestionItem {
+            badge: None,
+            detail: Some(speed_mode.description().to_string()),
+            label: speed_mode.name().to_string(),
             metadata: None,
         })
         .collect()
@@ -1591,6 +1631,41 @@ mod tests {
     }
 
     #[test]
+    fn test_speed_stage_lists_modes_and_returns_selected_speed() {
+        // Arrange
+        let slash_state = PromptSlashState {
+            selected_index: 1,
+            stage: PromptSlashStage::Speed,
+            ..PromptSlashState::default()
+        };
+
+        // Act
+        let suggestion_list =
+            build_prompt_slash_suggestion_list("/speed", &slash_state, AgentKind::Codex, false)
+                .expect("speed suggestions should render");
+        let selection =
+            resolve_prompt_slash_selection("/speed", &slash_state, AgentKind::Codex, false);
+
+        // Assert
+        assert_eq!(
+            suggestion_list
+                .items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Normal", "Fast"]
+        );
+        assert_eq!(
+            suggestion_list.items[1].detail.as_deref(),
+            Some("Faster responses at a higher provider cost.")
+        );
+        assert_eq!(
+            selection,
+            Some(PromptSuggestionSelection::Speed(SpeedMode::Fast))
+        );
+    }
+
+    #[test]
     fn test_selected_slash_action_clamps_stale_command_index() {
         // Arrange
         let mut composer = PromptComposerState::with_input_and_history(
@@ -1849,8 +1924,32 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(labels, vec!["/model", "/personality", "/reasoning"]);
+        assert_eq!(
+            labels,
+            vec!["/model", "/personality", "/reasoning", "/speed"]
+        );
         assert_eq!(suggestion_list.selected_index, 0);
+    }
+
+    #[test]
+    fn test_prompt_slash_command_list_omits_speed_for_unsupported_agent() {
+        // Arrange
+        let slash_state = PromptSlashState::default();
+
+        // Act
+        let suggestion_list =
+            build_prompt_slash_suggestion_list("/", &slash_state, AgentKind::Gemini, false)
+                .expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(
+            suggestion_list
+                .items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/model", "/personality", "/reasoning"]
+        );
     }
 
     #[test]

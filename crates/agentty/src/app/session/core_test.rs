@@ -27,7 +27,7 @@ use crate::app::review::{review_failure_message, review_loading_message};
 use crate::app::session::SessionLoadInput;
 use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
 use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
 };
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{
@@ -725,6 +725,7 @@ fn add_manual_session_with_status(
         questions: Vec::new(),
         review_request: None,
         size: SessionSize::Xs,
+        speed_mode: crate::domain::agent::SpeedMode::default(),
         stats: SessionStats::default(),
         status,
         summary: None,
@@ -785,6 +786,7 @@ fn test_session_manager_with_clock(
             questions: Vec::new(),
             review_request: None,
             size: SessionSize::Xs,
+            speed_mode: crate::domain::agent::SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::Review,
             summary: None,
@@ -953,6 +955,26 @@ fn test_apply_session_reasoning_level_updated_updates_only_matching_session() {
     assert_eq!(
         session_manager.state.sessions[0].reasoning_level_override,
         Some(ReasoningLevel::Medium)
+    );
+}
+
+#[test]
+/// Ensures speed reducer updates only the matching in-memory session
+/// snapshot and leaves unrelated sessions untouched.
+fn test_apply_session_speed_mode_updated_updates_only_matching_session() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+
+    // Act
+    session_manager.apply_session_speed_mode_updated("other-session", SpeedMode::Fast);
+    let speed_mode_after_non_matching_update = session_manager.state.sessions[0].speed_mode;
+    session_manager.apply_session_speed_mode_updated("session-id", SpeedMode::Fast);
+
+    // Assert
+    assert_eq!(speed_mode_after_non_matching_update, SpeedMode::Normal);
+    assert_eq!(
+        session_manager.state.sessions[0].speed_mode,
+        SpeedMode::Fast
     );
 }
 

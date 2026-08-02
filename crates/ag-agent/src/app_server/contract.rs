@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use crate::app_server::AppServerError;
 use crate::channel::{AgentRequestKind, LiveTranscript, PersonalityPrompt};
 use crate::model::agent::ReasoningLevel;
+use crate::model::session::SpeedMode;
 
 /// Boxed async result used by [`AppServerClient`] trait methods.
 pub type AppServerFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -81,6 +82,8 @@ pub struct AppServerTurnRequest {
     pub reasoning_level: ReasoningLevel,
     /// Stable agentty session id.
     pub session_id: String,
+    /// Response-speed preference for this turn.
+    pub speed_mode: SpeedMode,
 }
 
 /// Normalized result for one app-server turn.

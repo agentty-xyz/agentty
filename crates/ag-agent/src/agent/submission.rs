@@ -176,6 +176,7 @@ async fn submit_one_shot_with_app_server_client(
         persisted_instruction_conversation_id: None,
         reasoning_level: request.reasoning_level,
         session_id: session_id.clone(),
+        speed_mode: crate::model::session::SpeedMode::default(),
     };
 
     let turn_result = app_server_client.run_turn(turn_request, stream_tx).await;
@@ -326,6 +327,7 @@ async fn attempt_one_shot_app_server_repair(
         persisted_instruction_conversation_id: None,
         reasoning_level: request.reasoning_level,
         session_id: session_id.to_string(),
+        speed_mode: crate::model::session::SpeedMode::default(),
     };
     let repair_result = app_server_client
         .run_turn(repair_turn_request, repair_stream_tx)
@@ -371,6 +373,7 @@ async fn execute_one_shot_command(
         prompt,
         reasoning_level: request.reasoning_level,
         request_kind: &request.request_kind,
+        speed_mode: crate::model::session::SpeedMode::default(),
     };
     let observer = OneShotCliObserver {
         child_pid: request.child_pid,

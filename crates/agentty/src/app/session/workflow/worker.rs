@@ -265,6 +265,7 @@ impl SessionWorkerRebaseAssistClient {
     async fn run_assist_turn(&self, prompt: String) -> Result<(), SessionError> {
         let turn_cancel_token = self.fresh_turn_cancel_token()?;
         let reasoning_level = turn::load_session_reasoning_level(&self.db, &self.session_id).await;
+        let speed_mode = turn::load_session_speed_mode(&self.db, &self.session_id).await;
         let provider_conversation_id = self
             .db
             .sessions()
@@ -293,6 +294,7 @@ impl SessionWorkerRebaseAssistClient {
             prompt: TurnPrompt::from_agent_data(prompt),
             reasoning_level,
             request_kind: AgentRequestKind::UtilityPrompt,
+            speed_mode,
         };
         let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
         let consumer = tokio::spawn(turn::consume_turn_events(
@@ -2446,6 +2448,7 @@ mod tests {
             prompt: "test".into(),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            speed_mode: crate::domain::agent::SpeedMode::default(),
         };
 
         // Act — pass the pre-cancelled token directly.
@@ -2520,6 +2523,7 @@ mod tests {
             prompt: "test".into(),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            speed_mode: crate::domain::agent::SpeedMode::default(),
         };
 
         // Spawn a task that cancels the token after a small delay so the

@@ -11,6 +11,7 @@ use crate::app_server::{
     BorrowedAppServerFuture,
 };
 use crate::model::agent::{AgentKind, ReasoningLevel};
+use crate::model::session::SpeedMode;
 use crate::{agent, app_server_transport};
 
 /// Production [`AppServerClient`] backed by `codex app-server` process
@@ -53,6 +54,7 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
         runtime: &'scope mut Self::Runtime,
         prompt: &'scope TurnPrompt,
         reasoning_level: ReasoningLevel,
+        speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
         Box::pin(async move {
@@ -61,6 +63,7 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
                 &mut runtime.state,
                 prompt,
                 reasoning_level,
+                speed_mode,
                 stream_tx,
             )
             .await
@@ -143,6 +146,49 @@ mod tests {
         if let Ok(mut guard) = id_store.lock() {
             *guard = id;
         }
+    }
+
+    /// Builds one Codex session runtime whose stdin is already closed so turn
+    /// writes fail deterministically without a live app-server process.
+    fn build_stopped_session_runtime(thread_id: &str) -> CodexSessionRuntime {
+        let (child, stdin, stdout) =
+            app_server_transport::spawn_runtime_command(std::process::Command::new("cat"), "cat")
+                .expect("`cat` should spawn as a runtime stand-in");
+        let mut transport = AppServerStdioTransport::new(
+            stdin,
+            stdout,
+            "Codex app-server stdin is unavailable",
+            "Failed reading Codex app-server stdout",
+        );
+        transport.close_stdin();
+
+        CodexSessionRuntime {
+            child,
+            state: build_runtime_state(thread_id, 0),
+            transport,
+        }
+    }
+
+    #[tokio::test]
+    async fn run_turn_forwards_speed_mode_and_surfaces_transport_failures() {
+        // Arrange
+        let mut runtime = build_stopped_session_runtime("thread-run-turn");
+        let prompt = TurnPrompt::from("Implement the task");
+        let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = CodexRuntimeProvider::run_turn(
+            &mut runtime,
+            &prompt,
+            ReasoningLevel::default(),
+            SpeedMode::Fast,
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("a closed runtime stdin should fail the turn");
+        assert!(matches!(error, AppServerError::Transport(_)));
     }
 
     #[test]
@@ -271,6 +317,7 @@ mod tests {
             folder.path(),
             AgentModel::Gpt56Sol.as_str(),
             ReasoningLevel::default(),
+            SpeedMode::default(),
         )
         .await;
 
@@ -361,6 +408,7 @@ mod tests {
             AgentModel::Gpt56Sol.as_str(),
             Some("thread-existing"),
             ReasoningLevel::default(),
+            SpeedMode::default(),
         )
         .await;
 
@@ -450,12 +498,16 @@ mod tests {
         // Act
         let result = lifecycle::execute_turn_event_loop(
             &mut transport,
-            folder.path(),
-            AgentModel::Gpt56Sol.as_str(),
-            "thread-1",
-            "Implement the task",
-            ReasoningLevel::default(),
-            stream_tx,
+            lifecycle::CodexTurnEventLoopInput {
+                folder: folder.path(),
+                model: AgentModel::Gpt56Sol.as_str(),
+                prompt: "Implement the task".into(),
+                reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::default(),
+                stream_tx,
+                thread_id: "thread-1",
+                turn_timeout: app_server_transport::TURN_TIMEOUT,
+            },
         )
         .await;
 
@@ -581,6 +633,7 @@ mod tests {
             &mut state,
             "Implement the task",
             ReasoningLevel::default(),
+            SpeedMode::default(),
             stream_tx,
         )
         .await;
@@ -711,6 +764,218 @@ mod tests {
             });
     }
 
+    #[tokio::test]
+    async fn run_turn_with_runtime_compacts_and_retries_after_context_overflow() {
+        // Arrange
+        let mut state = build_runtime_state("thread-2", 0);
+        let failing_turn_id = Arc::new(Mutex::new(None));
+        let compact_id = Arc::new(Mutex::new(None));
+        let retried_turn_id = Arc::new(Mutex::new(None));
+        let mut transport = MockCodexRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+
+        expect_context_overflow_turn(&mut transport, &mut sequence, failing_turn_id);
+        expect_reactive_compaction(&mut transport, &mut sequence, compact_id);
+        expect_retried_turn_after_compaction(&mut transport, &mut sequence, retried_turn_id);
+
+        // Act
+        let result = lifecycle::run_turn_with_runtime(
+            &mut transport,
+            &mut state,
+            "Implement the task",
+            ReasoningLevel::default(),
+            SpeedMode::Fast,
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        let (message, input_tokens, output_tokens) =
+            result.expect("turn should complete after reactive compaction");
+        assert_eq!(message, String::new());
+        assert_eq!(input_tokens, 21);
+        assert_eq!(output_tokens, 5);
+        assert_eq!(state.latest_input_tokens, 21);
+        assert_eq!(
+            stream_rx.try_recv().ok(),
+            Some(AppServerStreamEvent::ProgressUpdate(
+                "Compacting context".to_string()
+            ))
+        );
+    }
+
+    /// Expects one `turn/start` request that fails with a context-overflow
+    /// error response.
+    fn expect_context_overflow_turn(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        turn_id: Arc<Mutex<Option<String>>>,
+    ) {
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| payload.get("method").and_then(Value::as_str) == Some("turn/start"))
+            .returning({
+                let turn_id = Arc::clone(&turn_id);
+
+                move |payload| {
+                    remember_request_id(&turn_id, &payload);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(move || {
+                let response_id = turn_id
+                    .lock()
+                    .expect("turn/start mutex should lock")
+                    .clone()
+                    .expect("turn/start id should be recorded");
+
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "id": response_id,
+                            "error": {
+                                "message": "[contextWindowExceeded] Codex ran out of room."
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+    }
+
+    /// Expects the compaction request that follows a context overflow.
+    fn expect_reactive_compaction(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        compact_id: Arc<Mutex<Option<String>>>,
+    ) {
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| {
+                payload.get("method").and_then(Value::as_str) == Some("thread/compact/start")
+            })
+            .returning({
+                let compact_id = Arc::clone(&compact_id);
+
+                move |payload| {
+                    remember_request_id(&compact_id, &payload);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        transport
+            .expect_wait_for_response_line()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(move |_| {
+                let response_id = compact_id
+                    .lock()
+                    .expect("compact mutex should lock")
+                    .clone()
+                    .expect("compact id should be recorded");
+
+                Box::pin(async move {
+                    Ok(serde_json::json!({"id": response_id, "result": {}}).to_string())
+                })
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(|| {
+                Box::pin(async {
+                    Ok(Some(
+                        serde_json::json!({
+                            "method": "turn/completed",
+                            "params": {"turn": {"status": "completed"}}
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+    }
+
+    /// Expects the retried turn that follows compaction and completes with
+    /// usage.
+    fn expect_retried_turn_after_compaction(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        turn_id: Arc<Mutex<Option<String>>>,
+    ) {
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| {
+                payload.get("method").and_then(Value::as_str) == Some("turn/start")
+                    && payload
+                        .pointer("/params/serviceTier")
+                        .and_then(Value::as_str)
+                        == Some("fast")
+            })
+            .returning({
+                let turn_id = Arc::clone(&turn_id);
+
+                move |payload| {
+                    remember_request_id(&turn_id, &payload);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(move || {
+                let response_id = turn_id
+                    .lock()
+                    .expect("retried turn mutex should lock")
+                    .clone()
+                    .expect("retried turn id should be recorded");
+
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "id": response_id,
+                            "result": {"turn": {"id": "turn-456"}}
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(|| {
+                Box::pin(async {
+                    Ok(Some(
+                        serde_json::json!({
+                            "method": "turn/completed",
+                            "params": {
+                                "turn": {
+                                    "id": "turn-456",
+                                    "status": "completed",
+                                    "usage": {"inputTokens": 21, "outputTokens": 5}
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+    }
+
     #[test]
     fn resolve_turn_usage_prefers_completed_usage_over_stream_usage() {
         // Arrange
@@ -764,6 +1029,7 @@ mod tests {
             folder.path(),
             AgentModel::Gpt56Sol.as_str(),
             ReasoningLevel::default(),
+            SpeedMode::default(),
             "thread-start-1",
         );
 
@@ -924,6 +1190,7 @@ mod tests {
             folder.path(),
             AgentModel::Gpt56Sol.as_str(),
             ReasoningLevel::default(),
+            SpeedMode::default(),
             "thread-123",
             "Implement the task",
             "turn-start-1",

@@ -137,6 +137,7 @@ mod tests {
             request_kind: AgentRequestKind::SessionStart,
             replay_transcript: None,
             session_id: "test-session".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
 
         // Act
@@ -162,6 +163,7 @@ mod tests {
             request_kind: AgentRequestKind::SessionStart,
             replay_transcript: Some("queued transcript".to_string()),
             session_id: "test-session".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
 
         // Act
@@ -187,6 +189,7 @@ mod tests {
             request_kind: AgentRequestKind::SessionStart,
             replay_transcript: None,
             session_id: "test-session".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
 
         // Act
@@ -338,6 +341,7 @@ mod tests {
             request_kind: AgentRequestKind::SessionResume,
             replay_transcript: None,
             session_id: "test-session".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
 
         // Act

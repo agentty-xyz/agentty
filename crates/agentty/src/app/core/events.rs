@@ -129,6 +129,11 @@ pub(crate) enum AppEvent {
         reasoning_level: crate::domain::agent::ReasoningLevel,
         session_id: SessionId,
     },
+    /// Indicates a session response-speed selection has been persisted.
+    SessionSpeedModeUpdated {
+        session_id: SessionId,
+        speed_mode: crate::domain::agent::SpeedMode,
+    },
     /// Requests a DB-backed session list refresh.
     RefreshSessions,
     /// Requests a DB-backed project list refresh, including aggregate session
@@ -271,6 +276,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_personality_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_reasoning_level_updates:
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
+    pub(super) session_speed_mode_updates: HashMap<SessionId, crate::domain::agent::SpeedMode>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_review_comment_snapshots:
         HashMap<SessionId, Result<ag_forge::ReviewCommentSnapshot, String>>,
@@ -414,6 +420,10 @@ impl AppEventBatch {
                 reasoning_level,
                 session_id,
             } => self.collect_session_reasoning_level_updated(session_id, reasoning_level),
+            AppEvent::SessionSpeedModeUpdated {
+                session_id,
+                speed_mode,
+            } => self.collect_session_speed_mode_updated(session_id, speed_mode),
             AppEvent::RefreshSessions => self.collect_refresh_sessions(),
             AppEvent::RefreshProjects => self.collect_refresh_projects(),
             AppEvent::RefreshGitStatus => self.collect_refresh_git_status(),
@@ -611,6 +621,16 @@ impl AppEventBatch {
     ) {
         self.session_reasoning_level_updates
             .insert(session_id, reasoning_level);
+    }
+
+    /// Stores a session speed-mode update for reducer application.
+    fn collect_session_speed_mode_updated(
+        &mut self,
+        session_id: SessionId,
+        speed_mode: crate::domain::agent::SpeedMode,
+    ) {
+        self.session_speed_mode_updates
+            .insert(session_id, speed_mode);
     }
 
     /// Stores a workflow notice update and marks its session as touched.
@@ -1480,6 +1500,7 @@ impl App {
             || !event_batch.session_progress_updates.is_empty()
             || !event_batch.session_review_comment_snapshots.is_empty()
             || !event_batch.session_reasoning_level_updates.is_empty()
+            || !event_batch.session_speed_mode_updates.is_empty()
             || !event_batch.session_diff_stats_updates.is_empty()
             || !event_batch.session_title_generation_finished.is_empty()
             || !event_batch.session_workflow_notice_updates.is_empty()
@@ -1549,6 +1570,12 @@ impl App {
         {
             self.sessions
                 .apply_session_reasoning_level_updated(&session_id, reasoning_level);
+        }
+
+        for (session_id, speed_mode) in std::mem::take(&mut event_batch.session_speed_mode_updates)
+        {
+            self.sessions
+                .apply_session_speed_mode_updated(&session_id, speed_mode);
         }
 
         for (session_id, diff_stats) in std::mem::take(&mut event_batch.session_diff_stats_updates)

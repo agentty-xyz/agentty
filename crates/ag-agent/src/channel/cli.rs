@@ -95,6 +95,7 @@ fn build_command_request<'a>(
         prompt: prompt_text,
         reasoning_level: request.reasoning_level,
         request_kind: &request.request_kind,
+        speed_mode: request.speed_mode,
     }
 }
 
@@ -210,21 +211,13 @@ async fn parse_or_repair_cli_response(
 
     let repair_prompt = build_protocol_repair_prompt(&parse_error, content);
 
-    let repair_content = execute_cli_repair_turn(
-        backend.as_ref(),
-        kind,
-        &req.folder,
-        &req.model,
-        &req.request_kind,
-        req.reasoning_level,
-        &repair_prompt,
-    )
-    .await
-    .map_err(|error| {
-        AgentError::Backend(format!(
-            "{parse_error}\nprotocol repair transport failed: {error}"
-        ))
-    })?;
+    let repair_content = execute_cli_repair_turn(backend.as_ref(), kind, req, &repair_prompt)
+        .await
+        .map_err(|error| {
+            AgentError::Backend(format!(
+                "{parse_error}\nprotocol repair transport failed: {error}"
+            ))
+        })?;
 
     agent::parse_turn_response(kind, &repair_content, protocol_profile).map_err(|repair_error| {
         AgentError::Backend(format!(
@@ -253,23 +246,21 @@ const REPAIR_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(
 async fn execute_cli_repair_turn(
     backend: &dyn AgentBackend,
     kind: AgentKind,
-    folder: &std::path::Path,
-    model: &str,
-    request_kind: &crate::channel::AgentRequestKind,
-    reasoning_level: crate::model::agent::ReasoningLevel,
+    request: &TurnRequest,
     repair_prompt: &str,
 ) -> Result<String, String> {
     let prompt_payload = TurnPrompt::from_agent_data(repair_prompt.to_string());
     let build_request = BuildCommandRequest {
         attachments: &prompt_payload.attachments,
-        folder,
+        folder: &request.folder,
         main_checkout_root: None,
         replay_transcript: None,
-        model,
+        model: &request.model,
         personality_prompt: None,
         prompt: repair_prompt,
-        reasoning_level,
-        request_kind,
+        reasoning_level: request.reasoning_level,
+        request_kind: &request.request_kind,
+        speed_mode: request.speed_mode,
     };
     execute_cli_repair_command(backend, kind, build_request, REPAIR_TURN_TIMEOUT).await
 }
@@ -366,6 +357,7 @@ mod tests {
             prompt: "Write a test".into(),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            speed_mode: crate::model::session::SpeedMode::default(),
         }
     }
 
@@ -426,10 +418,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_parse_or_repair_cli_response_reports_repair_transport_failure() {
+        // Arrange
+        let folder = tempdir().expect("failed to create temp dir");
+        let request = make_turn_request(folder.path().to_path_buf());
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().returning(|_| {
+            let mut command = std::process::Command::new("sh");
+            command.arg("-c").arg("exit 7");
+
+            Ok(command)
+        });
+        let backend: Arc<dyn AgentBackend> = Arc::new(backend);
+        let (events, mut event_receiver) = mpsc::unbounded_channel();
+
+        // Act
+        let error = parse_or_repair_cli_response(
+            AgentKind::Codex,
+            "not a protocol response",
+            &request,
+            &backend,
+            &events,
+        )
+        .await
+        .expect_err("a failing repair transport should fail the turn");
+
+        // Assert
+        assert!(
+            error
+                .to_string()
+                .contains("protocol repair transport failed: repair process exited with code 7"),
+            "unexpected repair error: {error}"
+        );
+        assert!(matches!(
+            event_receiver.try_recv(),
+            Ok(TurnEvent::ThoughtDelta(_))
+        ));
+    }
+
+    #[tokio::test]
     async fn test_execute_cli_repair_turn_reports_non_zero_exit() {
         // Arrange
         let folder = tempdir().expect("failed to create temp dir");
-        let request_kind = AgentRequestKind::SessionStart;
+        let request = make_turn_request(folder.path().to_path_buf());
         let mut backend = MockAgentBackend::new();
         backend.expect_build_command().returning(|_| {
             let mut command = std::process::Command::new("sh");
@@ -439,17 +470,9 @@ mod tests {
         });
 
         // Act
-        let error = execute_cli_repair_turn(
-            &backend,
-            AgentKind::Codex,
-            folder.path(),
-            "test-model",
-            &request_kind,
-            ReasoningLevel::default(),
-            "repair",
-        )
-        .await
-        .expect_err("repair command should fail");
+        let error = execute_cli_repair_turn(&backend, AgentKind::Codex, &request, "repair")
+            .await
+            .expect_err("repair command should fail");
 
         // Assert
         assert_eq!(error, "repair process exited with code 7");
@@ -459,7 +482,7 @@ mod tests {
     async fn test_execute_cli_repair_turn_reports_signal() {
         // Arrange
         let folder = tempdir().expect("failed to create temp dir");
-        let request_kind = AgentRequestKind::SessionStart;
+        let request = make_turn_request(folder.path().to_path_buf());
         let mut backend = MockAgentBackend::new();
         backend.expect_build_command().returning(|_| {
             let mut command = std::process::Command::new("sh");
@@ -469,17 +492,9 @@ mod tests {
         });
 
         // Act
-        let error = execute_cli_repair_turn(
-            &backend,
-            AgentKind::Codex,
-            folder.path(),
-            "test-model",
-            &request_kind,
-            ReasoningLevel::default(),
-            "repair",
-        )
-        .await
-        .expect_err("repair command should be interrupted");
+        let error = execute_cli_repair_turn(&backend, AgentKind::Codex, &request, "repair")
+            .await
+            .expect_err("repair command should be interrupted");
 
         // Assert
         assert_eq!(error, "repair process was interrupted by signal 9");
@@ -502,6 +517,7 @@ mod tests {
             prompt: &repair_prompt,
             reasoning_level: ReasoningLevel::default(),
             request_kind: &request_kind,
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
         let mut backend = MockAgentBackend::new();
         backend.expect_build_command().returning(|request| {
@@ -538,6 +554,7 @@ mod tests {
             prompt: TurnPrompt::from("Review @src/main.rs"),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
         let prompt_text = request.prompt.agent_text();
 

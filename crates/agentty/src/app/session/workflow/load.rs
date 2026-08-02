@@ -8,7 +8,7 @@ use ag_git::GitClient;
 use super::{draft, session_folder};
 use crate::app::SessionManager;
 use crate::domain::agent::{
-    AgentModel, AgentSelection, ReasoningLevel, parse_persisted_session_agent_model,
+    AgentModel, AgentSelection, ReasoningLevel, SpeedMode, parse_persisted_session_agent_model,
 };
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
@@ -76,6 +76,7 @@ struct LoadedSessionInput {
     session_status: Status,
     session_transcript: Option<SessionTranscript>,
     size: SessionSize,
+    speed_mode: SpeedMode,
 }
 
 /// Migrates every non-terminal session across all saved projects away from
@@ -301,6 +302,7 @@ impl SessionManager {
             .reasoning_level_override
             .as_deref()
             .and_then(|value| value.parse::<ReasoningLevel>().ok());
+        let speed_mode = row.speed_mode.parse::<SpeedMode>().unwrap_or_default();
         let session_queued_messages = handles
             .get(&session_id)
             .map(SessionHandles::queued_message_transcripts)
@@ -326,6 +328,7 @@ impl SessionManager {
             session_status,
             session_transcript,
             size: persisted_size,
+            speed_mode,
         }));
     }
 
@@ -401,6 +404,7 @@ impl SessionManager {
             questions: input.session_questions,
             review_request: input.review_request,
             size: input.size,
+            speed_mode: input.speed_mode,
             stats: SessionStats {
                 added_lines: input.row.added_lines.cast_unsigned(),
                 deleted_lines: input.row.deleted_lines.cast_unsigned(),
@@ -1830,6 +1834,7 @@ WHERE id = ?
                 web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
             }),
             size: "XS".to_string(),
+            speed_mode: "normal".to_string(),
             status: "Review".to_string(),
             title: None,
             updated_at: 0,

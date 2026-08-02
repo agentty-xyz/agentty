@@ -226,6 +226,7 @@ impl SessionFixtureBuilder {
                 questions: Vec::new(),
                 review_request: None,
                 size: SessionSize::Xs,
+                speed_mode: crate::domain::agent::SpeedMode::default(),
                 stats: SessionStats::default(),
                 status: Status::Review,
                 summary: None,
@@ -486,39 +487,46 @@ pub(crate) async fn new_test_app_without_retained_base_dir() -> App {
 }
 
 /// Initializes a minimal git repository for retained-tempdir app fixtures.
+///
+/// Every git invocation is checked for success because a silently failing
+/// setup command leaves a commit-less repository behind. Host git settings
+/// such as `commit.gpgsign`, `core.hooksPath`, or `init.templateDir` can break
+/// the initial commit, and an unchecked failure only resurfaces much later as
+/// an opaque session-creation panic inside an unrelated test.
 #[cfg(test)]
 pub(crate) fn setup_test_git_repo(path: &Path) {
-    Command::new("git")
-        .args(["init"])
-        .current_dir(path)
-        .output()
-        .expect("git init failed");
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(path)
-        .output()
-        .expect("git config failed");
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(path)
-        .output()
-        .expect("git config failed");
+    run_fixture_git_command(path, &["init"]);
+    run_fixture_git_command(path, &["config", "user.name", "Test"]);
+    run_fixture_git_command(path, &["config", "user.email", "test@test.com"]);
+
     std::fs::write(path.join("README.md"), "test").expect("write failed");
-    Command::new("git")
-        .args(["add", "."])
+
+    run_fixture_git_command(path, &["add", "."]);
+    run_fixture_git_command(path, &["commit", "-m", "Initial commit"]);
+    run_fixture_git_command(path, &["branch", "-M", "main"]);
+}
+
+/// Runs one git command inside a fixture repository and panics with the
+/// captured stderr when the command cannot spawn or exits non-zero.
+///
+/// Both panic messages are formatted before they are needed so the success
+/// path executes every line in this helper.
+#[cfg(test)]
+fn run_fixture_git_command(path: &Path, args: &[&str]) {
+    let command_label = format!("git {}", args.join(" "));
+    let spawn_failure = format!("failed to run `{command_label}`");
+    let output = Command::new("git")
+        .args(args)
         .current_dir(path)
         .output()
-        .expect("git add failed");
-    Command::new("git")
-        .args(["commit", "-m", "Initial commit"])
-        .current_dir(path)
-        .output()
-        .expect("git commit failed");
-    Command::new("git")
-        .args(["branch", "-M", "main"])
-        .current_dir(path)
-        .output()
-        .expect("git branch failed");
+        .expect(&spawn_failure);
+    let exit_failure = format!(
+        "`{command_label}` failed with {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(output.status.success(), "{exit_failure}");
 }
 
 /// Builds one git-backed app rooted at a retained temporary directory using

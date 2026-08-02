@@ -4,7 +4,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ag_agent::{ReasoningLevel, parse_persisted_session_agent_model};
+use ag_agent::{ReasoningLevel, SpeedMode, parse_persisted_session_agent_model};
 use ag_protocol::QuestionItem;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, QuestionAnswer, ReviewRequest,
@@ -470,6 +470,7 @@ impl App {
                 agent: source.settings.agent,
                 personality_id: source.settings.personality_id,
                 reasoning_level: source.settings.reasoning_level,
+                speed_mode: source.settings.speed_mode,
             },
         }))
     }
@@ -645,6 +646,7 @@ fn build_api_session(
         .as_deref()
         .and_then(|value| value.parse::<ReasoningLevel>().ok())
         .unwrap_or_default();
+    let speed_mode = row.speed_mode.parse::<SpeedMode>().unwrap_or_default();
     let messages = message_rows
         .into_iter()
         .map(api_message_from_row)
@@ -673,6 +675,7 @@ fn build_api_session(
             personality_id: row.personality_id,
             project_id,
             reasoning_level,
+            speed_mode,
         },
         status,
         summary: row.summary,
@@ -959,6 +962,7 @@ mod tests {
                 web_url: "https://example.test/pull/42".to_string(),
             }),
             size: "S".to_string(),
+            speed_mode: "normal".to_string(),
             status: "Draft".to_string(),
             summary: Some("Summary".to_string()),
             title: Some("Build feature".to_string()),
@@ -1102,6 +1106,7 @@ mod tests {
             ag_agent::AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
         );
         assert_eq!(session.settings.reasoning_level, ReasoningLevel::XHigh);
+        assert_eq!(session.settings.speed_mode, SpeedMode::Normal);
         assert_eq!(
             session
                 .review_request
@@ -1422,6 +1427,7 @@ mod tests {
             inherited_session.settings.reasoning_level,
             ReasoningLevel::High
         );
+        assert_eq!(inherited_session.settings.speed_mode, SpeedMode::Fast);
         assert_eq!(
             inherited_session.settings.personality_id.as_deref(),
             Some("inherited-personality")
@@ -1435,6 +1441,10 @@ mod tests {
             inherited_session.settings.reasoning_level
         );
         assert_eq!(
+            inherited_regular_session.settings.speed_mode,
+            inherited_session.settings.speed_mode
+        );
+        assert_eq!(
             inherited_regular_session.settings.personality_id.as_deref(),
             Some("inherited-personality")
         );
@@ -1442,6 +1452,7 @@ mod tests {
             ordinary_session.settings.agent.model(),
             default_session_model
         );
+        assert_eq!(ordinary_session.settings.speed_mode, SpeedMode::Normal);
         assert_eq!(app.sessions.default_session_model(), default_session_model);
     }
 
@@ -1556,6 +1567,12 @@ mod tests {
             .update_session_reasoning_level(session_id, ReasoningLevel::High)
             .await
             .expect("source reasoning should update");
+        app.services
+            .db()
+            .sessions()
+            .update_session_speed_mode(session_id, SpeedMode::Fast)
+            .await
+            .expect("source speed mode should update");
         app.services
             .db()
             .sessions()

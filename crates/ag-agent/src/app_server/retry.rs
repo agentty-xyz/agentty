@@ -515,6 +515,7 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
 
         // Act
@@ -540,6 +541,7 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
 
         // Act
@@ -565,6 +567,7 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
 
         // Act
@@ -590,6 +593,7 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
 
         // Act
@@ -616,6 +620,7 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
         let captured_retry_prompt = Arc::new(Mutex::new(String::new()));
 
@@ -696,6 +701,7 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
         let shutdown_count = Arc::new(AtomicUsize::new(0));
 
@@ -761,6 +767,7 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
         let start_count = Arc::new(AtomicUsize::new(0));
         let run_count = Arc::new(AtomicUsize::new(0));
@@ -847,6 +854,7 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
         let run_count = Arc::new(AtomicUsize::new(0));
         let shutdown_count = Arc::new(AtomicUsize::new(0));
@@ -922,6 +930,7 @@ mod tests {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
+            speed_mode: crate::model::session::SpeedMode::default(),
         };
         let captured_prompt = Arc::new(Mutex::new(String::new()));
 

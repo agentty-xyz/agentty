@@ -5988,6 +5988,83 @@ fn model_slash_command_contains_match_is_visible() -> E2eResult {
     Ok(())
 }
 
+/// Verify `/speed` exposes normal and fast modes, reflects the selection, and
+/// drops both fast mode and its speed display when `/model` switches to a
+/// provider without a speed control.
+#[test]
+fn session_speed_mode_selection() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_speed_mode_selection")
+        .with_git()
+        .with_terminal_size(180, 24)
+        .setup(seed_review_ready_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("/")
+                    .write_text("speed")
+                    .wait_for_text("/speed", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("/speed Mode", 3000)
+                    .capture_labeled(
+                        "speed_mode_picker",
+                        "Speed picker offers normal and fast modes",
+                    )
+                    .press_key("Down")
+                    .press_key("Enter")
+                    .wait_for_text("· Fast", 5000)
+                    .wait_for_text("Reasoning: high  Speed: Fast", 5000)
+                    .capture_labeled(
+                        "fast_mode_selected",
+                        "Session header and composer reflect fast mode",
+                    )
+                    .press_key("/")
+                    .write_text("model")
+                    .wait_for_text("/model", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("/model Agent", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("gemini-3.1-pro", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Model: gemini-3.1-pro  Reasoning: high  Tokens:", 5000)
+                    .capture_labeled(
+                        "incompatible_model_normalizes_speed",
+                        "Switching to Gemini drops fast mode and its speed display",
+                    )
+            },
+            |frame, report| {
+                let picker_frame = common::frame_from_capture(&report.captures[0]);
+                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+                assertion::assert_text_in_region(&picker_frame, "Normal", &picker_full);
+                assertion::assert_text_in_region(&picker_frame, "Fast", &picker_full);
+
+                let fast_frame = common::frame_from_capture(&report.captures[1]);
+                let fast_full = Region::full(fast_frame.cols(), fast_frame.rows());
+                assertion::assert_text_in_region(&fast_frame, "· Fast", &fast_full);
+                assertion::assert_text_in_region(
+                    &fast_frame,
+                    "Reasoning: high  Speed: Fast",
+                    &fast_full,
+                );
+
+                // Gemini has no speed control, so the header runs straight from
+                // reasoning to tokens and the composer drops its speed status.
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "Model: gemini-3.1-pro  Reasoning: high  Tokens:",
+                    &full,
+                );
+                assertion::assert_not_visible(frame, "· Fast");
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify `/personality` lists worktree-local agent definitions and persists
 /// the selected profile with visible transcript feedback.
 #[test]

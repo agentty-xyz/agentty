@@ -58,8 +58,8 @@ pub fn session_header_lines(
     lines
 }
 
-/// Formats the size, timer, token usage, model, and reasoning row shown in
-/// single-line metadata contexts without any chat-header-only URL suffix.
+/// Formats the size, timer, model, reasoning, speed, and token-usage row shown
+/// in single-line metadata contexts without any chat-header-only URL suffix.
 pub fn session_metadata_text(
     session: &Session,
     header_width: u16,
@@ -149,14 +149,31 @@ fn session_metadata_base_text(
     let reasoning_level = session.effective_reasoning_level();
     let input_tokens = text_util::format_token_count(session.stats.input_tokens);
     let output_tokens = text_util::format_token_count(session.stats.output_tokens);
+    let speed = session_speed_display(session)
+        .map(|speed_mode| format!("  Speed: {speed_mode}"))
+        .unwrap_or_default();
     format!(
         "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Agent: {}  Model: \
-         {}  Reasoning: {}  Tokens: {input_tokens}/{output_tokens}",
+         {}  Reasoning: {}{speed}  Tokens: {input_tokens}/{output_tokens}",
         session.size,
         session.agent.kind(),
         session.agent.model().as_str(),
         reasoning_level.as_str(),
     )
+}
+
+/// Returns the display name of a session's response speed, or `None` when its
+/// provider has no speed control to report.
+///
+/// Gemini and Antigravity expose no speed selection, so `/speed` is hidden for
+/// them; surfacing a `Speed:` field anyway would advertise a setting those
+/// sessions cannot change.
+pub(crate) fn session_speed_display(session: &Session) -> Option<&'static str> {
+    if !session.agent.kind().supports_speed_mode() {
+        return None;
+    }
+
+    Some(session.speed_mode.name())
 }
 
 /// Builds the session-view footer and exposes linked forge comments on `c`
@@ -463,6 +480,64 @@ mod tests {
 
         // Assert
         assert!(metadata_text.contains("Agent: codex  Model: gpt-5.6-sol"));
+    }
+
+    #[test]
+    fn test_session_metadata_text_prints_speed_after_reasoning() {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt56Sol,
+        );
+        session.speed_mode = crate::domain::agent::SpeedMode::Fast;
+
+        // Act
+        let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
+
+        // Assert
+        assert!(metadata_text.contains("Reasoning: high  Speed: Fast  Tokens:"));
+    }
+
+    #[test]
+    fn test_session_metadata_text_omits_speed_for_provider_without_speed_control() {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Gemini,
+            AgentModel::Gemini31Pro,
+        );
+        session.speed_mode = crate::domain::agent::SpeedMode::Fast;
+
+        // Act
+        let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
+
+        // Assert
+        assert!(metadata_text.contains("Reasoning: high  Tokens:"));
+        assert!(!metadata_text.contains("Speed:"));
+    }
+
+    #[test]
+    fn test_session_speed_display_reports_speed_only_for_supported_provider() {
+        // Arrange
+        let mut codex_session = SessionFixtureBuilder::new().build();
+        codex_session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt56Sol,
+        );
+        let mut antigravity_session = SessionFixtureBuilder::new().build();
+        antigravity_session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Antigravity,
+            AgentModel::Gemini31Pro,
+        );
+
+        // Act
+        let codex_speed = session_speed_display(&codex_session);
+        let antigravity_speed = session_speed_display(&antigravity_session);
+
+        // Assert
+        assert_eq!(codex_speed, Some("Normal"));
+        assert_eq!(antigravity_speed, None);
     }
 
     #[test]

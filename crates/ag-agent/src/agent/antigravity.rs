@@ -182,6 +182,7 @@ mod tests {
                 prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("command should build");
@@ -245,6 +246,7 @@ mod tests {
                     prompt: "Write tests",
                     reasoning_level,
                     request_kind: &session_start_request_kind(),
+                    speed_mode: crate::model::session::SpeedMode::default(),
                 },
             )
             .expect("command should build");
@@ -290,6 +292,7 @@ mod tests {
                 prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("command should build");
@@ -364,6 +367,7 @@ mod tests {
                 prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect_err("unsupported Antigravity should fail the turn");
@@ -398,6 +402,7 @@ mod tests {
                 prompt: "Continue work",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &request_kind,
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect_err("oversized Antigravity prompt should fail before spawning");
@@ -435,6 +440,7 @@ mod tests {
                 prompt: "Review [Image #1]",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect_err("non-UTF-8 attachment path should fail command construction");
@@ -475,6 +481,7 @@ mod tests {
                 prompt: "Review [Image #1]",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
         .expect("command should build");
@@ -546,6 +553,7 @@ mod tests {
                 prompt: "continue work",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &request_kind,
+                speed_mode: crate::model::session::SpeedMode::default(),
             },
             ProtocolSchemaInstructionMode::TransportSchema,
             "Antigravity",
