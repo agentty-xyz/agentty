@@ -6,65 +6,17 @@ use ratatui::widgets::TableState;
 
 use crate::app::{AssignedIssueState, RequestedReviewState, Tab};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
-use crate::domain::input::InputState;
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
-use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
+use crate::presentation::app_mode::{AppMode, ConfirmationIntent, DiffPreview, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::settings::SettingsScreenSnapshot;
-use crate::ui::overlay::{
-    HelpOverlayRenderContext, SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext,
-};
 use crate::ui::{
     Component, Page, RenderContext, SessionReviewSnapshot, component, markdown, overlay, page,
 };
 
-/// Borrowed list-background view into shared route state.
-pub(crate) struct ListBackgroundRenderContext<'a, 'state> {
-    /// Shared route data borrowed while a list-backed page or overlay renders.
-    shared: &'a mut RouteSharedContext<'state>,
-}
-
-impl<'state> ListBackgroundRenderContext<'_, 'state> {
-    /// Returns the active project identifier for list-backed overlays.
-    pub(crate) fn active_project_id(&self) -> i64 {
-        self.shared.active_project_id
-    }
-
-    /// Returns the project rows in most-recently-opened order.
-    ///
-    /// The order itself is cached by the app layer, so this only maps the
-    /// cached indices onto the shared rows.
-    pub(crate) fn mru_projects(&self) -> Vec<&'state ProjectListItem> {
-        ordered_project_items(self.shared.projects, self.shared.mru_project_order)
-    }
-
-    /// Returns whether the session-creation overlay can offer a stacked
-    /// session option for the currently selected session row.
-    pub(crate) fn can_create_stacked_session(&self) -> bool {
-        self.shared.current_tab == Tab::Sessions
-            && self
-                .shared
-                .table_state
-                .selected()
-                .and_then(|selected_index| self.shared.sessions.get(selected_index))
-                .is_some_and(Session::allows_stacked_child_creation)
-    }
-
-    /// Returns the active project-scoped reasoning level for list-restored
-    /// session backgrounds.
-    pub(crate) fn default_reasoning_level(&self) -> ReasoningLevel {
-        self.shared.default_reasoning_level
-    }
-
-    /// Returns the shared session rows available to list-backed overlays.
-    pub(crate) fn sessions(&self) -> &[Session] {
-        self.shared.sessions
-    }
-}
-
 /// Shared mutable routing data reused across app modes in `route_frame`.
-pub(crate) struct RouteSharedContext<'a> {
+struct RouteSharedContext<'a> {
     /// Identifier for the active project shared across list-mode renders.
     active_project_id: i64,
     assigned_issue_selected_index: Option<usize>,
@@ -87,12 +39,44 @@ pub(crate) struct RouteSharedContext<'a> {
     table_state: &'a mut TableState,
 }
 
-impl<'state> RouteSharedContext<'state> {
-    /// Creates a list-background context for overlays/pages that render on top
-    /// of the tabbed list content without repacking shared route fields.
-    fn list_background(&mut self) -> ListBackgroundRenderContext<'_, 'state> {
-        ListBackgroundRenderContext { shared: self }
+impl RouteSharedContext<'_> {
+    /// Returns whether the selected session can be used as a stacked parent.
+    fn can_create_stacked_session(&self) -> bool {
+        self.current_tab == Tab::Sessions
+            && self
+                .table_state
+                .selected()
+                .and_then(|selected_index| self.sessions.get(selected_index))
+                .is_some_and(Session::allows_stacked_child_creation)
     }
+}
+
+/// UI-private base page selected for the active mode.
+#[derive(Clone, Copy)]
+enum Surface<'a> {
+    Diff {
+        diff: &'a str,
+        file_explorer_selected_index: usize,
+        preview: &'a DiffPreview,
+        scroll_offset: u16,
+        session_id: &'a str,
+    },
+    IssueDetail(&'a AppMode),
+    List,
+    ReviewComments(&'a AppMode),
+    ReviewDetail(&'a AppMode),
+    Session {
+        mode: SessionSurfaceMode<'a>,
+        scroll_offset: Option<u16>,
+        session_id: &'a str,
+    },
+}
+
+/// Session mode used while rendering a chat surface.
+#[derive(Clone, Copy)]
+enum SessionSurfaceMode<'a> {
+    Interactive(&'a AppMode),
+    View,
 }
 
 /// Borrowed inputs for rendering a session chat page.
@@ -113,28 +97,12 @@ struct SessionChatRenderContext<'a> {
     frame_time: FrameTime,
 }
 
-/// Borrowed inputs for rendering the publish-branch overlay and its
-/// background session view.
+/// UI-owned immutable resources shared by every surface in one frame.
+///
+/// Cache handles and session-derived display snapshots stay bundled until the
+/// selected surface projects the narrower page input it needs.
 #[derive(Clone, Copy)]
-struct PublishBranchOverlayContext<'a> {
-    default_branch_name: &'a str,
-    active_prompt_outputs: &'a HashMap<SessionId, String>,
-    default_reasoning_level: ReasoningLevel,
-    markdown_render_cache: &'a markdown::MarkdownRenderCache,
-    output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
-    input: &'a InputState,
-    locked_upstream_ref: Option<&'a str>,
-    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
-    restore_view: &'a ConfirmationViewMode,
-    session_progress_messages: &'a HashMap<SessionId, String>,
-    session_update_versions: &'a HashMap<SessionId, u64>,
-    session_worktree_availability: &'a HashMap<SessionId, bool>,
-    sessions: &'a [Session],
-}
-
-/// Shared immutable routing inputs that are not part of list-background state.
-#[derive(Clone, Copy)]
-struct RouteAuxContext<'a> {
+struct FrameResources<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
     diff_layout_cache: &'a page::diff::DiffLayoutCache,
@@ -147,7 +115,7 @@ struct RouteAuxContext<'a> {
     frame_time: FrameTime,
 }
 
-impl<'a> RouteAuxContext<'a> {
+impl<'a> FrameResources<'a> {
     /// Creates a session chat render context from shared route inputs and the
     /// mode-specific session selection.
     fn session_chat<'b>(
@@ -176,58 +144,6 @@ impl<'a> RouteAuxContext<'a> {
             frame_time: self.frame_time,
         }
     }
-
-    /// Creates a session-overlay render context from shared route inputs and
-    /// the view restored behind the overlay.
-    fn session_overlay<'b>(
-        self,
-        sessions: &'b [Session],
-        restore_view: &'b ConfirmationViewMode,
-    ) -> SessionOverlayRenderContext<'b>
-    where
-        'a: 'b,
-    {
-        SessionOverlayRenderContext {
-            active_prompt_outputs: self.active_prompt_outputs,
-            default_reasoning_level: self.default_reasoning_level,
-            markdown_render_cache: self.markdown_render_cache,
-            output_layout_cache: self.output_layout_cache,
-            review_snapshot: self.review_snapshot,
-            restore_view,
-            session_progress_messages: self.session_progress_messages,
-            session_update_versions: self.session_update_versions,
-            session_worktree_availability: self.session_worktree_availability,
-            sessions,
-            frame_time: self.frame_time,
-        }
-    }
-
-    /// Creates the publish-branch overlay context by combining shared route
-    /// inputs with publish-mode values.
-    fn publish_branch_overlay<'b>(
-        self,
-        sessions: &'b [Session],
-        mode_context: PublishBranchModeContext<'b>,
-    ) -> PublishBranchOverlayContext<'b>
-    where
-        'a: 'b,
-    {
-        PublishBranchOverlayContext {
-            default_branch_name: mode_context.default_branch_name,
-            active_prompt_outputs: self.active_prompt_outputs,
-            default_reasoning_level: self.default_reasoning_level,
-            markdown_render_cache: self.markdown_render_cache,
-            output_layout_cache: self.output_layout_cache,
-            input: mode_context.input,
-            locked_upstream_ref: mode_context.locked_upstream_ref,
-            review_snapshot: self.review_snapshot,
-            restore_view: mode_context.restore_view,
-            session_progress_messages: self.session_progress_messages,
-            session_update_versions: self.session_update_versions,
-            session_worktree_availability: self.session_worktree_availability,
-            sessions,
-        }
-    }
 }
 
 /// Routes the content-area render path by active `AppMode`.
@@ -241,11 +157,9 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         available_agent_clis,
         current_tab,
         default_reasoning_level,
-        diff_layout_cache,
-        markdown_render_cache,
         mode,
         mru_project_order,
-        output_layout_cache,
+        render_cache_store,
         project_table_state,
         projects,
         requested_review_selected_index,
@@ -283,12 +197,12 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         table_state,
     };
 
-    let aux = RouteAuxContext {
+    let resources = FrameResources {
         active_prompt_outputs,
         default_reasoning_level,
-        diff_layout_cache,
-        markdown_render_cache,
-        output_layout_cache,
+        diff_layout_cache: render_cache_store.diff_layout_cache(),
+        markdown_render_cache: render_cache_store.markdown_render_cache(),
+        output_layout_cache: render_cache_store.session_output_layout_cache(),
         review_snapshot: session_review_snapshot,
         session_progress_messages,
         session_update_versions,
@@ -296,106 +210,260 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         frame_time,
     };
 
-    if render_list_or_overlay_mode(f, area, mode, &mut shared, aux) {
-        return;
-    }
-
-    render_session_or_diff_mode(f, area, mode, shared.sessions, aux);
+    render_surface(f, area, surface_for_mode(mode), &mut shared, resources);
+    render_mode_overlay(f, area, mode, &shared, resources);
 }
 
-/// Renders all list/overlay-driven modes and returns whether it handled `mode`.
-fn render_list_or_overlay_mode(
+/// Resolves the base page painted for every mode before any overlay.
+fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
+    match mode {
+        AppMode::Confirmation {
+            confirmation_intent:
+                ConfirmationIntent::ContinueSession
+                | ConfirmationIntent::ForkSession
+                | ConfirmationIntent::MergeSession
+                | ConfirmationIntent::RegenerateReview,
+            restore_view: Some(restore_view),
+            ..
+        }
+        | AppMode::ViewInfoPopup { restore_view, .. }
+        | AppMode::LaunchConfigurationSelector { restore_view, .. }
+        | AppMode::PublishBranchInput { restore_view, .. } => Surface::Session {
+            mode: SessionSurfaceMode::View,
+            scroll_offset: restore_view.scroll_offset,
+            session_id: &restore_view.session_id,
+        },
+        AppMode::List
+        | AppMode::SessionCreation { .. }
+        | AppMode::PreCommitHookWarning { .. }
+        | AppMode::ProjectSwitcher { .. }
+        | AppMode::SyncBlockedPopup { .. }
+        | AppMode::Confirmation { .. } => Surface::List,
+        AppMode::IssueDetail { .. } => Surface::IssueDetail(mode),
+        AppMode::ReviewDetail { .. } => Surface::ReviewDetail(mode),
+        AppMode::Help { context, .. } => surface_for_help_context(context),
+        AppMode::View {
+            session_id,
+            scroll_offset,
+        } => Surface::Session {
+            mode: SessionSurfaceMode::View,
+            scroll_offset: *scroll_offset,
+            session_id,
+        },
+        AppMode::Prompt {
+            session_id,
+            scroll_offset,
+            ..
+        }
+        | AppMode::Question {
+            session_id,
+            scroll_offset,
+            ..
+        } => Surface::Session {
+            mode: SessionSurfaceMode::Interactive(mode),
+            scroll_offset: *scroll_offset,
+            session_id,
+        },
+        AppMode::Diff {
+            diff,
+            file_explorer_selected_index,
+            preview,
+            scroll_offset,
+            session_id,
+            ..
+        } => Surface::Diff {
+            diff,
+            file_explorer_selected_index: *file_explorer_selected_index,
+            preview,
+            scroll_offset: *scroll_offset,
+            session_id,
+        },
+        AppMode::ReviewComments { .. } => Surface::ReviewComments(mode),
+    }
+}
+
+/// Resolves the page restored behind a context-aware help overlay.
+fn surface_for_help_context(context: &HelpContext) -> Surface<'_> {
+    match context {
+        HelpContext::List { .. } => Surface::List,
+        HelpContext::View {
+            session_id,
+            scroll_offset,
+            ..
+        } => Surface::Session {
+            mode: SessionSurfaceMode::View,
+            scroll_offset: *scroll_offset,
+            session_id,
+        },
+        HelpContext::Diff {
+            diff,
+            file_explorer_selected_index,
+            preview,
+            scroll_offset,
+            session_id,
+            ..
+        } => Surface::Diff {
+            diff,
+            file_explorer_selected_index: *file_explorer_selected_index,
+            preview,
+            scroll_offset: *scroll_offset,
+            session_id,
+        },
+    }
+}
+
+/// Paints one base surface through the only page-construction boundary.
+fn render_surface(
+    f: &mut Frame,
+    area: Rect,
+    surface: Surface<'_>,
+    shared: &mut RouteSharedContext<'_>,
+    resources: FrameResources<'_>,
+) {
+    match surface {
+        Surface::List => render_list_background(f, area, shared, resources.frame_time),
+        Surface::Session {
+            mode,
+            scroll_offset,
+            session_id,
+        } => render_session_surface(
+            f,
+            area,
+            mode,
+            scroll_offset,
+            session_id,
+            shared.sessions,
+            resources,
+        ),
+        Surface::Diff {
+            diff,
+            file_explorer_selected_index,
+            preview,
+            scroll_offset,
+            session_id,
+        } => render_diff_surface(
+            f,
+            area,
+            DiffSurfaceInput {
+                diff,
+                file_explorer_selected_index,
+                preview,
+                scroll_offset,
+                session_id,
+            },
+            shared.sessions,
+            resources,
+        ),
+        Surface::IssueDetail(mode) | Surface::ReviewDetail(mode) => {
+            render_detail_mode(f, area, mode, resources.markdown_render_cache);
+        }
+        Surface::ReviewComments(mode) => {
+            render_review_comments_surface(f, area, mode, shared.sessions, resources);
+        }
+    }
+}
+
+/// Paints the overlay portion of modes after their base surface.
+fn render_mode_overlay(
     f: &mut Frame,
     area: Rect,
     mode: &AppMode,
-    shared: &mut RouteSharedContext<'_>,
-    aux: RouteAuxContext<'_>,
-) -> bool {
+    shared: &RouteSharedContext<'_>,
+    resources: FrameResources<'_>,
+) {
     match mode {
-        AppMode::List => render_list_background(f, area, shared.list_background(), aux.frame_time),
+        AppMode::List
+        | AppMode::IssueDetail { .. }
+        | AppMode::ReviewDetail { .. }
+        | AppMode::View { .. }
+        | AppMode::Prompt { .. }
+        | AppMode::Question { .. }
+        | AppMode::Diff { .. }
+        | AppMode::ReviewComments { .. } => {}
         AppMode::SessionCreation {
             selected_option_index,
-        } => overlay::render_session_creation_overlay(
-            f,
-            area,
-            shared.list_background(),
+        } => component::session_creation_overlay::SessionCreationOverlay::new(
             *selected_option_index,
-            aux.frame_time,
-        ),
-        AppMode::PreCommitHookWarning { message } => overlay::render_pre_commit_hook_warning(
-            f,
-            area,
-            shared.list_background(),
-            message,
-            aux.frame_time,
-        ),
+            shared.can_create_stacked_session(),
+        )
+        .render(f, area),
+        AppMode::PreCommitHookWarning { message } => {
+            component::info_overlay::InfoOverlay::new("Pre-commit hook warning", message)
+                .render(f, area);
+        }
         AppMode::ProjectSwitcher {
             selected_option_index,
-        } => overlay::render_project_switcher_overlay(
-            f,
-            area,
-            shared.list_background(),
-            *selected_option_index,
-            aux.frame_time,
-        ),
-        AppMode::Confirmation { .. } => render_confirmation_mode(f, area, mode, shared, aux),
-
+        } => {
+            let mru_project_items =
+                ordered_project_items(shared.projects, shared.mru_project_order);
+            component::project_switcher_overlay::ProjectSwitcherOverlay::new(
+                &mru_project_items,
+                shared.active_project_id,
+                *selected_option_index,
+            )
+            .render(f, area);
+        }
+        AppMode::Confirmation { .. } => render_confirmation_overlay(f, area, mode),
         AppMode::SyncBlockedPopup {
             default_branch,
             is_loading,
             message,
             project_name,
             title,
-        } => overlay::render_sync_blocked_popup(
-            f,
-            area,
-            shared.list_background(),
-            aux.frame_time,
-            SyncBlockedPopupRenderContext {
-                default_branch: default_branch.as_deref(),
-                is_loading: *is_loading,
+        } => {
+            let popup_message = overlay::sync_popup_message(
+                default_branch.as_deref(),
                 message,
-                project_name: project_name.as_deref(),
-                title,
-            },
-        ),
-        AppMode::ViewInfoPopup { .. } => {
-            render_view_info_popup_mode(f, area, mode, shared.sessions, aux);
+                project_name.as_deref(),
+            );
+            component::info_overlay::InfoOverlay::new(title, &popup_message)
+                .is_loading(*is_loading)
+                .loading_label("Sync in progress...")
+                .spinner_frame(crate::ui::icon::Icon::spinner_frame_from_millis(
+                    resources.frame_time.unix_millis(),
+                ))
+                .render(f, area);
         }
-        AppMode::IssueDetail { .. } | AppMode::ReviewDetail { .. } => {
-            render_detail_mode(f, area, mode, aux.markdown_render_cache);
+        AppMode::ViewInfoPopup {
+            is_loading,
+            loading_label,
+            message,
+            title,
+            ..
+        } => {
+            component::info_overlay::InfoOverlay::new(title, message)
+                .is_loading(*is_loading)
+                .loading_label(loading_label)
+                .spinner_frame(crate::ui::icon::Icon::spinner_frame_from_millis(
+                    resources.frame_time.unix_millis(),
+                ))
+                .render(f, area);
         }
         AppMode::Help {
             context: help_context,
             scroll_offset,
-        } => overlay::render_help(
-            f,
-            area,
-            HelpOverlayRenderContext {
-                diff_layout_cache: aux.diff_layout_cache,
-                help_context,
-                list_background: shared.list_background(),
-                markdown_render_cache: aux.markdown_render_cache,
-                output_layout_cache: aux.output_layout_cache,
-                review_snapshot: aux.review_snapshot,
-                scroll_offset: *scroll_offset,
-                session_progress_messages: aux.session_progress_messages,
-                session_update_versions: aux.session_update_versions,
-                frame_time: aux.frame_time,
-            },
-        ),
-        AppMode::View { .. }
-        | AppMode::Prompt { .. }
-        | AppMode::Question { .. }
-        | AppMode::PublishBranchInput { .. }
-        | AppMode::LaunchConfigurationSelector { .. }
-        | AppMode::Diff { .. }
-        | AppMode::ReviewComments { .. } => {
-            return false;
-        }
+        } => component::help_overlay::HelpOverlay::new(help_context)
+            .scroll_offset(*scroll_offset)
+            .render(f, area),
+        AppMode::LaunchConfigurationSelector {
+            commands,
+            selected_command_index,
+            ..
+        } => component::launch_configuration_overlay::LaunchConfigurationOverlay::new(commands)
+            .selected_command_index(*selected_command_index)
+            .render(f, area),
+        AppMode::PublishBranchInput {
+            default_branch_name,
+            input,
+            locked_upstream_ref,
+            ..
+        } => component::publish_branch_overlay::PublishBranchOverlay::new(
+            input,
+            default_branch_name,
+            locked_upstream_ref.as_deref(),
+        )
+        .render(f, area),
     }
-
-    true
 }
 
 /// Routes issue and requested-review snapshots to their detail page renderers.
@@ -437,20 +505,11 @@ fn render_detail_mode(
     }
 }
 
-/// Renders confirmation modes, including session-scoped confirmations that
-/// preserve the originating chat background.
-fn render_confirmation_mode(
-    f: &mut Frame,
-    area: Rect,
-    mode: &AppMode,
-    shared: &mut RouteSharedContext<'_>,
-    aux: RouteAuxContext<'_>,
-) {
+/// Renders the confirmation overlay after its classified base surface.
+fn render_confirmation_overlay(f: &mut Frame, area: Rect, mode: &AppMode) {
     let AppMode::Confirmation {
-        confirmation_intent,
         confirmation_message,
         confirmation_title,
-        restore_view,
         selected_confirmation_index,
         ..
     } = mode
@@ -458,358 +517,117 @@ fn render_confirmation_mode(
         return;
     };
 
-    if matches!(
-        confirmation_intent,
-        ConfirmationIntent::ContinueSession
-            | ConfirmationIntent::ForkSession
-            | ConfirmationIntent::MergeSession
-            | ConfirmationIntent::RegenerateReview
-    ) && let Some(view_mode) = restore_view
-    {
-        render_session_confirmation_overlay(
-            f,
-            area,
-            aux.session_overlay(shared.sessions, view_mode),
-            &SessionConfirmationContext {
-                confirmation_message,
-                confirmation_title,
-                selected_confirmation_index: *selected_confirmation_index,
-            },
-        );
-
-        return;
-    }
-
-    overlay::render_confirmation_overlay(f, area, mode, shared.list_background(), aux.frame_time);
+    component::confirmation_overlay::ConfirmationOverlay::new(
+        confirmation_title,
+        confirmation_message,
+    )
+    .selected_yes(*selected_confirmation_index == 0)
+    .render(f, area);
 }
 
-/// Renders an informational popup above a restored session-view background.
-fn render_view_info_popup_mode(
+/// Renders a session surface in either interactive or restored-view mode.
+fn render_session_surface(
     f: &mut Frame,
     area: Rect,
-    mode: &AppMode,
+    mode: SessionSurfaceMode<'_>,
+    scroll_offset: Option<u16>,
+    session_id: &str,
     sessions: &[Session],
-    aux: RouteAuxContext<'_>,
+    resources: FrameResources<'_>,
 ) {
-    let AppMode::ViewInfoPopup {
-        is_loading,
-        loading_label,
-        message,
-        restore_view,
-        title,
-    } = mode
+    match mode {
+        SessionSurfaceMode::Interactive(mode) => render_session_chat(
+            f,
+            area,
+            resources.session_chat(sessions, mode, session_id, scroll_offset),
+        ),
+        SessionSurfaceMode::View => {
+            let view_mode = AppMode::View {
+                scroll_offset,
+                session_id: session_id.into(),
+            };
+            render_session_chat(
+                f,
+                area,
+                resources.session_chat(sessions, &view_mode, session_id, scroll_offset),
+            );
+        }
+    }
+}
+
+/// Borrowed inputs for one diff surface.
+#[derive(Clone, Copy)]
+struct DiffSurfaceInput<'a> {
+    diff: &'a str,
+    file_explorer_selected_index: usize,
+    preview: &'a DiffPreview,
+    scroll_offset: u16,
+    session_id: &'a str,
+}
+
+/// Renders a diff page for a resolved session.
+fn render_diff_surface(
+    f: &mut Frame,
+    area: Rect,
+    input: DiffSurfaceInput<'_>,
+    sessions: &[Session],
+    resources: FrameResources<'_>,
+) {
+    let Some(session) = sessions
+        .iter()
+        .find(|session| session.id == input.session_id)
     else {
         return;
     };
 
-    overlay::render_view_info_popup(
-        f,
-        area,
-        ViewInfoPopupRenderContext {
-            can_open_worktree: *aux
-                .session_worktree_availability
-                .get(&restore_view.session_id)
-                .unwrap_or(&false),
-            default_reasoning_level: aux.default_reasoning_level,
-            markdown_render_cache: aux.markdown_render_cache,
-            output_layout_cache: aux.output_layout_cache,
-            is_loading: *is_loading,
-            loading_label,
-            message,
-            review_snapshot: aux.review_snapshot,
-            restore_view,
-            session_progress_messages: aux.session_progress_messages,
-            session_update_versions: aux.session_update_versions,
-            sessions,
-            title,
-            frame_time: aux.frame_time,
-        },
-    );
-}
-
-/// Borrowed context for the confirmation overlay portion of a session-scoped
-/// confirmation render (merge, regenerate focused review).
-struct SessionConfirmationContext<'a> {
-    /// The body text displayed inside the confirmation dialog.
-    confirmation_message: &'a str,
-    /// The header title of the confirmation dialog.
-    confirmation_title: &'a str,
-    /// Index of the currently highlighted confirmation option.
-    selected_confirmation_index: usize,
-}
-
-/// Borrowed data shared by session-scoped overlays that render above the
-/// session chat page.
-#[derive(Clone, Copy)]
-struct SessionOverlayRenderContext<'a> {
-    /// Exact prompt transcript blocks keyed by session id for active turns.
-    active_prompt_outputs: &'a HashMap<SessionId, String>,
-    /// Active project-scoped default reasoning level.
-    default_reasoning_level: ReasoningLevel,
-    /// Shared render cache for session transcript markdown.
-    markdown_render_cache: &'a markdown::MarkdownRenderCache,
-    /// Shared output-layout cache for the restored session transcript.
-    output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
-    /// Focused-review state for the restored session background.
-    review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
-    /// Session view restored after the overlay closes.
-    restore_view: &'a ConfirmationViewMode,
-    /// Active progress messages keyed by session id.
-    session_progress_messages: &'a HashMap<SessionId, String>,
-    /// Latest observable update versions keyed by session id.
-    session_update_versions: &'a HashMap<SessionId, u64>,
-    /// Whether each background session currently has a materialized
-    /// worktree, keyed by session id.
-    session_worktree_availability: &'a HashMap<SessionId, bool>,
-    /// Session rows available for background rendering.
-    sessions: &'a [Session],
-    /// Render-time clock used for deterministic timers.
-    frame_time: FrameTime,
-}
-
-impl SessionOverlayRenderContext<'_> {
-    /// Creates the session-chat context used to render the restored background
-    /// page behind a session-scoped overlay.
-    fn session_chat<'a>(&'a self, background_mode: &'a AppMode) -> SessionChatRenderContext<'a> {
-        SessionChatRenderContext {
-            active_prompt_outputs: self.active_prompt_outputs,
-            default_reasoning_level: self.default_reasoning_level,
-            markdown_render_cache: self.markdown_render_cache,
-            mode: background_mode,
-            output_layout_cache: self.output_layout_cache,
-            review_snapshot: self.review_snapshot,
-            session_id: &self.restore_view.session_id,
-            session_progress_messages: self.session_progress_messages,
-            session_update_versions: self.session_update_versions,
-            session_worktree_availability: self.session_worktree_availability,
-            sessions: self.sessions,
-            scroll_offset: self.restore_view.scroll_offset,
-            frame_time: self.frame_time,
-        }
-    }
-}
-
-impl<'context> PublishBranchOverlayContext<'context> {
-    /// Creates the session-overlay context that restores the chat page behind
-    /// the publish-branch prompt.
-    fn session_overlay(self, frame_time: FrameTime) -> SessionOverlayRenderContext<'context> {
-        SessionOverlayRenderContext {
-            active_prompt_outputs: self.active_prompt_outputs,
-            default_reasoning_level: self.default_reasoning_level,
-            markdown_render_cache: self.markdown_render_cache,
-            output_layout_cache: self.output_layout_cache,
-            review_snapshot: self.review_snapshot,
-            restore_view: self.restore_view,
-            session_progress_messages: self.session_progress_messages,
-            session_update_versions: self.session_update_versions,
-            session_worktree_availability: self.session_worktree_availability,
-            sessions: self.sessions,
-            frame_time,
-        }
-    }
-}
-
-/// Renders the shared session-chat background for session-scoped overlays and
-/// dims it with the generic overlay backdrop.
-fn render_session_overlay_background(
-    f: &mut Frame,
-    area: Rect,
-    context: SessionOverlayRenderContext<'_>,
-) {
-    let background_mode = context.restore_view.clone().into_view_mode();
-
-    render_session_chat(f, area, context.session_chat(&background_mode));
-}
-
-/// Renders a session-scoped confirmation above the originating session chat
-/// page.
-fn render_session_confirmation_overlay(
-    f: &mut Frame,
-    area: Rect,
-    overlay_context: SessionOverlayRenderContext<'_>,
-    confirmation_context: &SessionConfirmationContext<'_>,
-) {
-    render_session_overlay_background(f, area, overlay_context);
-
-    component::confirmation_overlay::ConfirmationOverlay::new(
-        confirmation_context.confirmation_title,
-        confirmation_context.confirmation_message,
-    )
-    .selected_yes(confirmation_context.selected_confirmation_index == 0)
+    page::diff::DiffPage::new(page::diff::DiffPageInput {
+        diff: input.diff,
+        diff_layout_cache: resources.diff_layout_cache,
+        file_explorer_selected_index: input.file_explorer_selected_index,
+        markdown_render_cache: resources.markdown_render_cache,
+        preview: input.preview,
+        scroll_offset: input.scroll_offset,
+        session,
+    })
     .render(f, area);
 }
 
-/// Renders session-scoped modes tied to one selected session.
-fn render_session_or_diff_mode(
+/// Renders the forge review-comment page for a resolved session.
+fn render_review_comments_surface(
     f: &mut Frame,
     area: Rect,
     mode: &AppMode,
     sessions: &[Session],
-    aux: RouteAuxContext<'_>,
+    resources: FrameResources<'_>,
 ) {
-    match mode {
-        AppMode::View {
-            session_id,
-            scroll_offset,
-            ..
-        }
-        | AppMode::Prompt {
-            session_id,
-            scroll_offset,
-            ..
-        }
-        | AppMode::Question {
-            session_id,
-            scroll_offset,
-            ..
-        } => render_session_chat(
-            f,
-            area,
-            aux.session_chat(sessions, mode, session_id, *scroll_offset),
-        ),
-        AppMode::LaunchConfigurationSelector {
-            commands,
-            restore_view,
-            selected_command_index,
-        } => render_launch_configuration_selector_overlay(
-            f,
-            area,
-            aux.session_overlay(sessions, restore_view),
-            commands,
-            *selected_command_index,
-        ),
-        AppMode::PublishBranchInput {
-            default_branch_name,
-            input,
-            locked_upstream_ref,
-            restore_view,
-            ..
-        } => render_publish_branch_input_mode(
-            f,
-            area,
-            PublishBranchModeContext {
-                default_branch_name,
-                input,
-                locked_upstream_ref: locked_upstream_ref.as_deref(),
-                restore_view,
-            },
-            sessions,
-            aux,
-        ),
-        AppMode::Diff {
-            diff,
-            file_explorer_selected_index,
-            preview,
-            restore: _,
-            scroll_cache: _,
-            scroll_offset,
-            session_id,
-        } => {
-            if let Some(session) = sessions.iter().find(|session| &session.id == session_id) {
-                page::diff::DiffPage::new(page::diff::DiffPageInput {
-                    diff,
-                    diff_layout_cache: aux.diff_layout_cache,
-                    file_explorer_selected_index: *file_explorer_selected_index,
-                    markdown_render_cache: aux.markdown_render_cache,
-                    preview,
-                    scroll_offset: *scroll_offset,
-                    session,
-                })
-                .render(f, area);
-            }
-        }
-        AppMode::ReviewComments {
-            comment_actions,
-            comment_error,
-            comment_snapshot,
-            diff,
-            is_loading_comments,
-            selected_comment_index,
-            session_id,
-            scroll_offset,
-        } => {
-            if let Some(session) = sessions.iter().find(|session| &session.id == session_id) {
-                page::review_comment::ReviewCommentPage::new(
-                    page::review_comment::ReviewCommentPageInput {
-                        comment_actions,
-                        comment_error: comment_error.as_deref(),
-                        comment_snapshot: comment_snapshot.as_ref(),
-                        diff,
-                        is_loading_comments: *is_loading_comments,
-                        markdown_render_cache: aux.markdown_render_cache,
-                        scroll_offset: *scroll_offset,
-                        selected_comment_index: *selected_comment_index,
-                        session,
-                    },
-                )
-                .render(f, area);
-            }
-        }
-        _ => {}
-    }
-}
+    let AppMode::ReviewComments {
+        comment_actions,
+        comment_error,
+        comment_snapshot,
+        diff,
+        is_loading_comments,
+        selected_comment_index,
+        session_id,
+        scroll_offset,
+    } = mode
+    else {
+        return;
+    };
+    let Some(session) = sessions.iter().find(|session| &session.id == session_id) else {
+        return;
+    };
 
-/// Renders publish-branch input mode by combining mode-specific values with
-/// shared session-render routing data.
-fn render_publish_branch_input_mode(
-    f: &mut Frame,
-    area: Rect,
-    mode_context: PublishBranchModeContext<'_>,
-    sessions: &[Session],
-    aux: RouteAuxContext<'_>,
-) {
-    render_publish_branch_overlay(
-        f,
-        area,
-        aux.publish_branch_overlay(sessions, mode_context),
-        aux.frame_time,
-    );
-}
-
-/// Mode-specific publish-branch values extracted from `AppMode`.
-#[derive(Clone, Copy)]
-struct PublishBranchModeContext<'a> {
-    /// Default branch name shown in the publish prompt.
-    default_branch_name: &'a str,
-    /// Publish target input state.
-    input: &'a InputState,
-    /// Existing upstream ref that constrains the publish target, when present.
-    locked_upstream_ref: Option<&'a str>,
-    /// Session view restored behind the publish prompt.
-    restore_view: &'a ConfirmationViewMode,
-}
-
-/// Renders launch-configuration selection overlay above the originating session
-/// chat.
-fn render_launch_configuration_selector_overlay(
-    f: &mut Frame,
-    area: Rect,
-    overlay_context: SessionOverlayRenderContext<'_>,
-    commands: &[String],
-    selected_command_index: usize,
-) {
-    render_session_overlay_background(f, area, overlay_context);
-
-    component::launch_configuration_overlay::LaunchConfigurationOverlay::new(commands)
-        .selected_command_index(selected_command_index)
-        .render(f, area);
-}
-
-/// Renders the publish-branch input overlay above the originating session
-/// chat.
-fn render_publish_branch_overlay(
-    f: &mut Frame,
-    area: Rect,
-    context: PublishBranchOverlayContext<'_>,
-    frame_time: FrameTime,
-) {
-    render_session_overlay_background(f, area, context.session_overlay(frame_time));
-
-    component::publish_branch_overlay::PublishBranchOverlay::new(
-        context.input,
-        context.default_branch_name,
-        context.locked_upstream_ref,
-    )
+    page::review_comment::ReviewCommentPage::new(page::review_comment::ReviewCommentPageInput {
+        comment_actions,
+        comment_error: comment_error.as_deref(),
+        comment_snapshot: comment_snapshot.as_ref(),
+        diff,
+        is_loading_comments: *is_loading_comments,
+        markdown_render_cache: resources.markdown_render_cache,
+        scroll_offset: *scroll_offset,
+        selected_comment_index: *selected_comment_index,
+        session,
+    })
     .render(f, area);
 }
 
@@ -871,14 +689,12 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
 }
 
 /// Renders base list tabs and the currently selected list tab content.
-pub(crate) fn render_list_background(
+fn render_list_background(
     f: &mut Frame,
     content_area: Rect,
-    context: ListBackgroundRenderContext<'_, '_>,
+    shared: &mut RouteSharedContext<'_>,
     frame_time: FrameTime,
 ) {
-    let shared = context.shared;
-
     let chunks = Layout::default()
         .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(content_area);
@@ -953,12 +769,19 @@ fn active_project_name(active_project_id: i64, projects: &[ProjectListItem]) -> 
 mod tests {
     use std::path::PathBuf;
 
+    use ag_forge::{ForgeKind, RequestedReview, RequestedReviewAudience};
     use ratatui::widgets::Paragraph;
 
     use super::*;
     use crate::domain::agent::ReasoningLevel;
+    use crate::domain::input::InputState;
+    use crate::domain::question::QuestionItem;
     use crate::domain::session::Status;
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+    use crate::presentation::app_mode::{ChatFocus, ConfirmationViewMode};
+    use crate::presentation::prompt::{
+        PromptAttachmentState, PromptHistoryState, PromptSlashState,
+    };
     use crate::presentation::settings::{
         LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
         SettingsSelectorDropdown, SettingsSelectorDropdownOption,
@@ -983,6 +806,23 @@ mod tests {
         session.transcript = Some(transcript);
 
         session
+    }
+
+    /// Builds one deterministic requested-review fixture for router tests.
+    fn requested_review_fixture() -> RequestedReview {
+        RequestedReview {
+            audience: RequestedReviewAudience::Personal,
+            author: "octocat".to_string(),
+            body: Some("Review body".to_string()),
+            comment_snapshot: None,
+            display_id: "#42".to_string(),
+            forge_kind: ForgeKind::GitHub,
+            repository: "agentty-xyz/agentty".to_string(),
+            status_summary: Some("Review requested".to_string()),
+            title: "Review router surfaces".to_string(),
+            updated_at: Some("2026-04-27T21:30:00Z".to_string()),
+            web_url: "https://example.com/42".to_string(),
+        }
     }
 
     /// Flattens a rendered test buffer into a plain string for text assertions.
@@ -1052,16 +892,11 @@ mod tests {
             stats_activity: &stats_activity,
             table_state: &mut table_state,
         };
-        let default_reasoning_level = shared.list_background().default_reasoning_level();
+        let default_reasoning_level = shared.default_reasoning_level;
 
         terminal
             .draw(|frame| {
-                render_list_background(
-                    frame,
-                    frame.area(),
-                    shared.list_background(),
-                    FrameTime::new(0, 0, 0),
-                );
+                render_list_background(frame, frame.area(), &mut shared, FrameTime::new(0, 0, 0));
             })
             .expect("failed to draw list tab");
 
@@ -1112,12 +947,12 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                handled = render_list_or_overlay_mode(
+                render_surface(
                     frame,
                     frame.area(),
-                    mode,
+                    surface_for_mode(mode),
                     &mut shared,
-                    RouteAuxContext {
+                    FrameResources {
                         active_prompt_outputs: &active_prompt_outputs,
                         default_reasoning_level: ReasoningLevel::High,
                         diff_layout_cache: &diff_layout_cache,
@@ -1130,10 +965,202 @@ mod tests {
                         frame_time: FrameTime::new(90, 90_000, -28_800),
                     },
                 );
+                render_mode_overlay(
+                    frame,
+                    frame.area(),
+                    mode,
+                    &shared,
+                    FrameResources {
+                        active_prompt_outputs: &active_prompt_outputs,
+                        default_reasoning_level: ReasoningLevel::High,
+                        diff_layout_cache: &diff_layout_cache,
+                        markdown_render_cache: &markdown_render_cache,
+                        output_layout_cache: &output_layout_cache,
+                        review_snapshot: None,
+                        session_progress_messages: &session_progress_messages,
+                        session_update_versions: &session_update_versions,
+                        session_worktree_availability: &session_worktree_availability,
+                        frame_time: FrameTime::new(90, 90_000, -28_800),
+                    },
+                );
+                handled = true;
             })
             .expect("failed to draw list-backed mode");
 
         (handled, buffer_text(terminal.backend().buffer()))
+    }
+
+    #[test]
+    fn surface_for_help_context_classifies_each_restored_page() {
+        // Arrange
+        let list_context = HelpContext::List {
+            keybindings: vec![],
+        };
+        let view_context = HelpContext::View {
+            can_fork_session: true,
+            can_merge_session_branch: true,
+            can_mutate_session_branch: true,
+            can_open_worktree: true,
+            can_rebase_session_branch: true,
+            can_reply_to_session: true,
+            can_start_staged_session: false,
+            can_view_review_comments: false,
+            publish_pull_request_action: None,
+            scroll_offset: Some(3),
+            session_id: "session-help".into(),
+            session_state: crate::presentation::help_action::ViewSessionState::Review,
+        };
+        let diff_context = HelpContext::Diff {
+            diff: "diff --git a/file b/file".to_string(),
+            file_explorer_selected_index: 0,
+            preview: DiffPreview::default(),
+            restore: None,
+            scroll_offset: 2,
+            session_id: "session-help".into(),
+        };
+
+        // Act
+        let list_surface = surface_for_help_context(&list_context);
+        let view_surface = surface_for_help_context(&view_context);
+        let diff_surface = surface_for_help_context(&diff_context);
+
+        // Assert
+        assert!(matches!(list_surface, Surface::List));
+        assert!(matches!(view_surface, Surface::Session { .. }));
+        assert!(matches!(diff_surface, Surface::Diff { .. }));
+    }
+
+    #[test]
+    fn surface_for_mode_uses_confirmation_restore_only_for_session_intents() {
+        // Arrange
+        let session_confirmation = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::MergeSession,
+            confirmation_message: "Merge?".to_string(),
+            confirmation_title: "Confirm".to_string(),
+            restore_view: Some(ConfirmationViewMode {
+                scroll_offset: Some(4),
+                session_id: "session-confirm".into(),
+            }),
+            selected_confirmation_index: 0,
+            session_id: Some("session-confirm".into()),
+        };
+        let list_confirmation = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::Quit,
+            confirmation_message: "Quit?".to_string(),
+            confirmation_title: "Confirm".to_string(),
+            restore_view: None,
+            selected_confirmation_index: 1,
+            session_id: None,
+        };
+
+        // Act
+        let session_surface = surface_for_mode(&session_confirmation);
+        let list_surface = surface_for_mode(&list_confirmation);
+
+        // Assert
+        assert!(matches!(session_surface, Surface::Session { .. }));
+        assert!(matches!(list_surface, Surface::List));
+    }
+
+    #[test]
+    fn surface_for_mode_classifies_primary_page_modes() {
+        // Arrange
+        let issue_mode = AppMode::IssueDetail {
+            action_error: None,
+            detail: None,
+            error: None,
+            issue: crate::test_support::assigned_issue_fixture(),
+            scroll_offset: 0,
+        };
+        let review_mode = AppMode::ReviewDetail {
+            comment_error: None,
+            is_loading_comments: false,
+            review: requested_review_fixture(),
+            scroll_offset: 0,
+        };
+        let help_mode = AppMode::Help {
+            context: HelpContext::List {
+                keybindings: vec![],
+            },
+            scroll_offset: 0,
+        };
+        let view_mode = AppMode::View {
+            scroll_offset: Some(1),
+            session_id: "session-overlay".into(),
+        };
+        let prompt_mode = AppMode::Prompt {
+            at_mention_state: None,
+            attachment_state: PromptAttachmentState::default(),
+            focus: ChatFocus::Input,
+            history_state: PromptHistoryState::new(Vec::new()),
+            input: InputState::default(),
+            scroll_offset: Some(2),
+            session_id: "session-overlay".into(),
+            slash_state: PromptSlashState::default(),
+        };
+        let question_mode = AppMode::Question {
+            at_mention_state: None,
+            current_index: 0,
+            focus: ChatFocus::Input,
+            input: InputState::default(),
+            questions: vec![QuestionItem {
+                options: vec![],
+                text: "Which path?".to_string(),
+            }],
+            responses: vec![],
+            scroll_offset: Some(3),
+            selected_option_index: None,
+            session_id: "session-overlay".into(),
+        };
+        let diff_mode = AppMode::Diff {
+            diff: String::new(),
+            file_explorer_selected_index: 0,
+            preview: DiffPreview::default(),
+            restore: None,
+            scroll_cache: None,
+            scroll_offset: 4,
+            session_id: "session-overlay".into(),
+        };
+        let review_comments_mode = AppMode::ReviewComments {
+            comment_actions: vec![],
+            comment_error: None,
+            comment_snapshot: None,
+            diff: String::new(),
+            is_loading_comments: true,
+            scroll_offset: 5,
+            selected_comment_index: 0,
+            session_id: "session-overlay".into(),
+        };
+
+        // Act
+        let issue_is_detail = matches!(surface_for_mode(&issue_mode), Surface::IssueDetail(_));
+        let review_is_detail = matches!(surface_for_mode(&review_mode), Surface::ReviewDetail(_));
+        let help_is_list = matches!(surface_for_mode(&help_mode), Surface::List);
+        let view_is_session = matches!(surface_for_mode(&view_mode), Surface::Session { .. });
+        let prompt_is_session = matches!(surface_for_mode(&prompt_mode), Surface::Session { .. });
+        let question_is_session =
+            matches!(surface_for_mode(&question_mode), Surface::Session { .. });
+        let diff_is_diff = matches!(surface_for_mode(&diff_mode), Surface::Diff { .. });
+        let comments_are_review = matches!(
+            surface_for_mode(&review_comments_mode),
+            Surface::ReviewComments(_)
+        );
+        let (_, issue_text) = render_list_backed_mode(&issue_mode);
+        let (_, review_text) = render_list_backed_mode(&review_mode);
+        let (_, comments_text) = render_list_backed_mode(&review_comments_mode);
+
+        // Assert
+        assert!(issue_is_detail);
+        assert!(review_is_detail);
+        assert!(help_is_list);
+        assert!(view_is_session);
+        assert!(prompt_is_session);
+        assert!(question_is_session);
+        assert!(diff_is_diff);
+        assert!(comments_are_review);
+        assert!(issue_text.contains("Issue #124"));
+        assert!(review_text.contains("Review router surfaces"));
+        assert!(comments_text.contains("Comment — Router Session"));
     }
 
     #[test]
@@ -1215,12 +1242,12 @@ mod tests {
         let mut handled = false;
         terminal
             .draw(|frame| {
-                handled = render_list_or_overlay_mode(
+                render_surface(
                     frame,
                     frame.area(),
-                    &mode,
+                    surface_for_mode(&mode),
                     &mut shared,
-                    RouteAuxContext {
+                    FrameResources {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
@@ -1233,6 +1260,25 @@ mod tests {
                         frame_time: FrameTime::new(0, 0, 0),
                     },
                 );
+                render_mode_overlay(
+                    frame,
+                    frame.area(),
+                    &mode,
+                    &shared,
+                    FrameResources {
+                        active_prompt_outputs: &HashMap::new(),
+                        default_reasoning_level: ReasoningLevel::default(),
+                        diff_layout_cache: &diff_layout_cache,
+                        markdown_render_cache: &markdown_render_cache,
+                        output_layout_cache: &output_layout_cache,
+                        review_snapshot: None,
+                        session_progress_messages: &HashMap::new(),
+                        session_update_versions: &HashMap::new(),
+                        session_worktree_availability: &HashMap::new(),
+                        frame_time: FrameTime::new(0, 0, 0),
+                    },
+                );
+                handled = true;
             })
             .expect("failed to draw diff help mode");
 
@@ -1308,6 +1354,17 @@ mod tests {
                     title: "Publishing".to_string(),
                 },
                 "Publishing",
+            ),
+            (
+                AppMode::LaunchConfigurationSelector {
+                    commands: vec!["cargo test".to_string()],
+                    restore_view: ConfirmationViewMode {
+                        scroll_offset: None,
+                        session_id: "session-overlay".into(),
+                    },
+                    selected_command_index: 0,
+                },
+                "Launch Configuration",
             ),
         ];
 
@@ -1387,7 +1444,7 @@ mod tests {
     }
 
     #[test]
-    fn render_session_or_diff_mode_renders_view_session_content() {
+    fn render_session_surface_renders_view_session_content() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -1406,12 +1463,14 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                render_session_or_diff_mode(
+                render_session_surface(
                     frame,
                     frame.area(),
-                    &mode,
+                    SessionSurfaceMode::Interactive(&mode),
+                    None,
+                    session_id,
                     &sessions,
-                    RouteAuxContext {
+                    FrameResources {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
@@ -1434,7 +1493,7 @@ mod tests {
     }
 
     #[test]
-    fn render_session_or_diff_mode_keeps_background_when_session_is_missing() {
+    fn render_session_surface_keeps_background_when_session_is_missing() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(80, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -1454,12 +1513,14 @@ mod tests {
             .draw(|frame| {
                 let area = frame.area();
                 frame.render_widget(Paragraph::new("sentinel"), area);
-                render_session_or_diff_mode(
+                render_session_surface(
                     frame,
                     area,
-                    &mode,
+                    SessionSurfaceMode::Interactive(&mode),
+                    None,
+                    "missing-session",
                     &sessions,
-                    RouteAuxContext {
+                    FrameResources {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
@@ -1509,7 +1570,7 @@ mod tests {
     }
 
     #[test]
-    fn render_session_or_diff_mode_renders_diff_page_for_matching_session() {
+    fn render_diff_surface_renders_page_for_matching_session() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -1517,15 +1578,6 @@ mod tests {
         let mut session = session_fixture(session_id);
         session.title = Some("Diff Session".to_string());
         let sessions = vec![session];
-        let mode = AppMode::Diff {
-            diff: String::new(),
-            file_explorer_selected_index: 0,
-            preview: crate::presentation::app_mode::DiffPreview::default(),
-            restore: None,
-            scroll_cache: None,
-            session_id: session_id.into(),
-            scroll_offset: 0,
-        };
         let progress_messages = HashMap::new();
         let cache = markdown::MarkdownRenderCache::default();
         let diff_layout_cache = page::diff::DiffLayoutCache::default();
@@ -1535,12 +1587,18 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                render_session_or_diff_mode(
+                render_diff_surface(
                     frame,
                     frame.area(),
-                    &mode,
+                    DiffSurfaceInput {
+                        diff: "",
+                        file_explorer_selected_index: 0,
+                        preview: &DiffPreview::default(),
+                        scroll_offset: 0,
+                        session_id,
+                    },
                     &sessions,
-                    RouteAuxContext {
+                    FrameResources {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
@@ -1563,7 +1621,51 @@ mod tests {
     }
 
     #[test]
-    fn render_session_or_diff_mode_renders_review_comments_for_matching_session() {
+    fn render_diff_surface_preserves_frame_for_missing_session() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(80, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+
+        // Act
+        terminal
+            .draw(|frame| {
+                frame.render_widget(Paragraph::new("sentinel"), frame.area());
+                render_diff_surface(
+                    frame,
+                    frame.area(),
+                    DiffSurfaceInput {
+                        diff: "",
+                        file_explorer_selected_index: 0,
+                        preview: &DiffPreview::default(),
+                        scroll_offset: 0,
+                        session_id: "missing-session",
+                    },
+                    &[],
+                    FrameResources {
+                        active_prompt_outputs: &HashMap::new(),
+                        default_reasoning_level: ReasoningLevel::default(),
+                        diff_layout_cache: &diff_layout_cache,
+                        markdown_render_cache: &markdown_render_cache,
+                        output_layout_cache: &output_layout_cache,
+                        review_snapshot: None,
+                        session_progress_messages: &HashMap::new(),
+                        session_update_versions: &HashMap::new(),
+                        session_worktree_availability: &HashMap::new(),
+                        frame_time: FrameTime::new(0, 0, 0),
+                    },
+                );
+            })
+            .expect("failed to draw");
+
+        // Assert
+        assert!(buffer_text(terminal.backend().buffer()).contains("sentinel"));
+    }
+
+    #[test]
+    fn render_review_comments_surface_renders_matching_session() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -1588,12 +1690,12 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                render_session_or_diff_mode(
+                render_review_comments_surface(
                     frame,
                     frame.area(),
                     &mode,
                     &sessions,
-                    RouteAuxContext {
+                    FrameResources {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
@@ -1616,47 +1718,80 @@ mod tests {
     }
 
     #[test]
-    fn render_session_confirmation_overlay_renders_confirmation_text() {
+    fn render_review_comments_surface_preserves_frame_for_unresolved_input() {
         // Arrange
-        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let backend = ratatui::backend::TestBackend::new(80, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let session_id = "session-merge";
-        let sessions = vec![session_fixture(session_id)];
-        let progress_messages = HashMap::new();
-        let confirmation_context = SessionConfirmationContext {
-            confirmation_message: "Queue merge now?",
-            confirmation_title: "Confirm Merge",
-            selected_confirmation_index: 0,
+        let missing_session_mode = AppMode::ReviewComments {
+            comment_actions: vec![],
+            comment_error: None,
+            comment_snapshot: None,
+            diff: String::new(),
+            is_loading_comments: false,
+            scroll_offset: 0,
+            selected_comment_index: 0,
+            session_id: "missing-session".into(),
         };
-        let view_mode = ConfirmationViewMode {
-            scroll_offset: None,
-            session_id: session_id.into(),
-        };
-        let cache = markdown::MarkdownRenderCache::default();
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+        let active_prompt_outputs = HashMap::new();
+        let session_progress_messages = HashMap::new();
         let session_update_versions = HashMap::new();
+        let session_worktree_availability = HashMap::new();
+        let resources = FrameResources {
+            active_prompt_outputs: &active_prompt_outputs,
+            default_reasoning_level: ReasoningLevel::default(),
+            diff_layout_cache: &diff_layout_cache,
+            markdown_render_cache: &markdown_render_cache,
+            output_layout_cache: &output_layout_cache,
+            review_snapshot: None,
+            session_progress_messages: &session_progress_messages,
+            session_update_versions: &session_update_versions,
+            session_worktree_availability: &session_worktree_availability,
+            frame_time: FrameTime::new(0, 0, 0),
+        };
 
         // Act
         terminal
             .draw(|frame| {
-                render_session_confirmation_overlay(
+                frame.render_widget(Paragraph::new("sentinel"), frame.area());
+                render_review_comments_surface(frame, frame.area(), &AppMode::List, &[], resources);
+                render_review_comments_surface(
                     frame,
                     frame.area(),
-                    SessionOverlayRenderContext {
-                        active_prompt_outputs: &HashMap::new(),
-                        default_reasoning_level: ReasoningLevel::High,
-                        markdown_render_cache: &cache,
-                        output_layout_cache: &output_layout_cache,
-                        review_snapshot: None,
-                        restore_view: &view_mode,
-                        session_progress_messages: &progress_messages,
-                        session_update_versions: &session_update_versions,
-                        session_worktree_availability: &HashMap::new(),
-                        sessions: &sessions,
-                        frame_time: FrameTime::new(0, 0, 0),
-                    },
-                    &confirmation_context,
+                    &missing_session_mode,
+                    &[],
+                    resources,
                 );
+            })
+            .expect("failed to draw");
+
+        // Assert
+        assert!(buffer_text(terminal.backend().buffer()).contains("sentinel"));
+    }
+
+    #[test]
+    fn render_confirmation_overlay_renders_confirmation_text() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::MergeSession,
+            confirmation_message: "Queue merge now?".to_string(),
+            confirmation_title: "Confirm Merge".to_string(),
+            restore_view: Some(ConfirmationViewMode {
+                scroll_offset: None,
+                session_id: "session-merge".into(),
+            }),
+            selected_confirmation_index: 0,
+            session_id: Some("session-merge".into()),
+        };
+
+        // Act
+        terminal
+            .draw(|frame| {
+                render_confirmation_overlay(frame, frame.area(), &mode);
             })
             .expect("failed to draw");
 
@@ -1667,12 +1802,9 @@ mod tests {
     }
 
     #[test]
-    fn render_session_or_diff_mode_forwards_frame_time_to_publish_overlay() {
+    fn render_mode_overlay_renders_publish_input() {
         // Arrange
-        let backend = ratatui::backend::TestBackend::new(120, 40);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let session_id = "session-publish";
-        let sessions = vec![session_fixture(session_id)];
         let mode = AppMode::PublishBranchInput {
             default_branch_name: "wt/session-publish".to_string(),
             input: InputState::default(),
@@ -1683,40 +1815,11 @@ mod tests {
                 session_id: session_id.into(),
             },
         };
-        let diff_layout_cache = page::diff::DiffLayoutCache::default();
-        let markdown_render_cache = markdown::MarkdownRenderCache::default();
-        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
-        let active_prompt_outputs = HashMap::new();
-        let session_progress_messages = HashMap::new();
-        let session_update_versions = HashMap::new();
-        let session_worktree_availability = HashMap::new();
 
         // Act
-        terminal
-            .draw(|frame| {
-                render_session_or_diff_mode(
-                    frame,
-                    frame.area(),
-                    &mode,
-                    &sessions,
-                    RouteAuxContext {
-                        active_prompt_outputs: &active_prompt_outputs,
-                        default_reasoning_level: ReasoningLevel::High,
-                        diff_layout_cache: &diff_layout_cache,
-                        markdown_render_cache: &markdown_render_cache,
-                        output_layout_cache: &output_layout_cache,
-                        review_snapshot: None,
-                        session_progress_messages: &session_progress_messages,
-                        session_update_versions: &session_update_versions,
-                        session_worktree_availability: &session_worktree_availability,
-                        frame_time: FrameTime::new(90, 90_000, -28_800),
-                    },
-                );
-            })
-            .expect("failed to draw publish overlay");
+        let (_, text) = render_list_backed_mode(&mode);
 
         // Assert
-        let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Publish Review Request"));
         assert!(text.contains("wt/session-publish"));
     }
