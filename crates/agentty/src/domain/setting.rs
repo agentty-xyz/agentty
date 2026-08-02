@@ -14,20 +14,24 @@ pub(crate) enum SettingName {
     ActiveProjectId,
     /// Persists the active list tab selection.
     ActiveTab,
-    /// Persists the selected reasoning-effort level.
-    ReasoningLevel,
     /// Persists the provider that owns the fast-model default.
     DefaultFastAgent,
     /// Persists the project or global fast-model selection.
     DefaultFastModel,
+    /// Persists the reasoning level paired with the fast-model default.
+    DefaultFastReasoningLevel,
     /// Persists the provider that owns the review-model default.
     DefaultReviewAgent,
     /// Persists the project or global review-model selection.
     DefaultReviewModel,
+    /// Persists the reasoning level paired with the review-model default.
+    DefaultReviewReasoningLevel,
     /// Persists the provider that owns the smart-model default.
     DefaultSmartAgent,
     /// Persists the project or global smart-model selection.
     DefaultSmartModel,
+    /// Persists the reasoning level paired with the smart-model default.
+    DefaultSmartReasoningLevel,
     /// Persists whether generated session commits append the Agentty coauthor
     /// trailer.
     IncludeCoauthoredByAgentty,
@@ -47,13 +51,15 @@ impl SettingName {
         match self {
             Self::ActiveProjectId => "ActiveProjectId",
             Self::ActiveTab => "ActiveTab",
-            Self::ReasoningLevel => "ReasoningLevel",
             Self::DefaultFastAgent => "DefaultFastAgent",
             Self::DefaultFastModel => "DefaultFastModel",
+            Self::DefaultFastReasoningLevel => "DefaultFastReasoningLevel",
             Self::DefaultReviewAgent => "DefaultReviewAgent",
             Self::DefaultReviewModel => "DefaultReviewModel",
+            Self::DefaultReviewReasoningLevel => "DefaultReviewReasoningLevel",
             Self::DefaultSmartAgent => "DefaultSmartAgent",
             Self::DefaultSmartModel => "DefaultSmartModel",
+            Self::DefaultSmartReasoningLevel => "DefaultSmartReasoningLevel",
             Self::IncludeCoauthoredByAgentty => "IncludeCoauthoredByAgentty",
             Self::LaunchConfiguration => "LaunchConfiguration",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
@@ -80,13 +86,24 @@ mod tests {
         let settings = [
             (SettingName::ActiveProjectId, "ActiveProjectId"),
             (SettingName::ActiveTab, "ActiveTab"),
-            (SettingName::ReasoningLevel, "ReasoningLevel"),
             (SettingName::DefaultFastAgent, "DefaultFastAgent"),
             (SettingName::DefaultFastModel, "DefaultFastModel"),
+            (
+                SettingName::DefaultFastReasoningLevel,
+                "DefaultFastReasoningLevel",
+            ),
             (SettingName::DefaultReviewAgent, "DefaultReviewAgent"),
             (SettingName::DefaultReviewModel, "DefaultReviewModel"),
+            (
+                SettingName::DefaultReviewReasoningLevel,
+                "DefaultReviewReasoningLevel",
+            ),
             (SettingName::DefaultSmartAgent, "DefaultSmartAgent"),
             (SettingName::DefaultSmartModel, "DefaultSmartModel"),
+            (
+                SettingName::DefaultSmartReasoningLevel,
+                "DefaultSmartReasoningLevel",
+            ),
             (
                 SettingName::IncludeCoauthoredByAgentty,
                 "IncludeCoauthoredByAgentty",
@@ -116,13 +133,15 @@ mod tests {
         let settings = [
             SettingName::ActiveProjectId,
             SettingName::ActiveTab,
-            SettingName::ReasoningLevel,
             SettingName::DefaultFastAgent,
             SettingName::DefaultFastModel,
+            SettingName::DefaultFastReasoningLevel,
             SettingName::DefaultReviewAgent,
             SettingName::DefaultReviewModel,
+            SettingName::DefaultReviewReasoningLevel,
             SettingName::DefaultSmartAgent,
             SettingName::DefaultSmartModel,
+            SettingName::DefaultSmartReasoningLevel,
             SettingName::IncludeCoauthoredByAgentty,
             SettingName::LaunchConfiguration,
             SettingName::LastUsedModelAsDefault,

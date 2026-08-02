@@ -1012,6 +1012,7 @@ mod tests {
                 }],
                 row_index: 0,
                 selected_index: 0,
+                title: "Select setting value",
             }),
         }
     }

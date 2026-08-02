@@ -28,25 +28,11 @@ pub(crate) trait SettingRepository: Send + Sync {
     async fn load_project_reasoning_level(
         &self,
         project_id: i64,
+        name: SettingName,
     ) -> Result<ReasoningLevel, DbError>;
-
-    #[cfg(test)]
-    /// Loads the persisted reasoning-effort setting.
-    async fn load_reasoning_level(&self) -> Result<ReasoningLevel, DbError>;
 
     /// Persists the active project identifier in application settings.
     async fn set_active_project_id(&self, project_id: i64) -> Result<(), DbError>;
-
-    /// Persists one project-scoped reasoning-effort setting.
-    async fn set_project_reasoning_level(
-        &self,
-        project_id: i64,
-        reasoning_level: ReasoningLevel,
-    ) -> Result<(), DbError>;
-
-    #[cfg(test)]
-    /// Persists the global reasoning-effort setting.
-    async fn set_reasoning_level(&self, reasoning_level: ReasoningLevel) -> Result<(), DbError>;
 
     /// Inserts or updates one project-scoped setting by project and name.
     async fn upsert_project_setting(
@@ -134,22 +120,9 @@ WHERE name = ?
     async fn load_project_reasoning_level(
         &self,
         project_id: i64,
+        name: SettingName,
     ) -> Result<ReasoningLevel, DbError> {
-        let setting_value = self
-            .get_project_setting(project_id, SettingName::ReasoningLevel)
-            .await?;
-
-        let reasoning_level = setting_value
-            .as_deref()
-            .and_then(|value| value.parse::<ReasoningLevel>().ok())
-            .unwrap_or_default();
-
-        Ok(reasoning_level)
-    }
-
-    #[cfg(test)]
-    async fn load_reasoning_level(&self) -> Result<ReasoningLevel, DbError> {
-        let setting_value = self.get_setting(SettingName::ReasoningLevel).await?;
+        let setting_value = self.get_project_setting(project_id, name).await?;
 
         let reasoning_level = setting_value
             .as_deref()
@@ -161,25 +134,6 @@ WHERE name = ?
 
     async fn set_active_project_id(&self, project_id: i64) -> Result<(), DbError> {
         self.upsert_setting(SettingName::ActiveProjectId, &project_id.to_string())
-            .await
-    }
-
-    async fn set_project_reasoning_level(
-        &self,
-        project_id: i64,
-        reasoning_level: ReasoningLevel,
-    ) -> Result<(), DbError> {
-        self.upsert_project_setting(
-            project_id,
-            SettingName::ReasoningLevel,
-            reasoning_level.codex(),
-        )
-        .await
-    }
-
-    #[cfg(test)]
-    async fn set_reasoning_level(&self, reasoning_level: ReasoningLevel) -> Result<(), DbError> {
-        self.upsert_setting(SettingName::ReasoningLevel, reasoning_level.codex())
             .await
     }
 

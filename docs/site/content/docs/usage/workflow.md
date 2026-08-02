@@ -41,10 +41,10 @@ tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
   opens the recoverable session with the error in its transcript. Comments are not
   loaded in this iteration. Install the GitHub CLI and run `gh auth login` to enable
   this tab.
-- **Settings**: Configure the color theme, orchestrator parallelism, default reasoning
-  level, smart/fast/review model defaults, the optional `Last used model as default`
-  mode, the session commit coauthor trailer, and `Launch Configurations` for the active
-  project.
+- **Settings**: Configure the color theme, orchestrator parallelism, per-role
+  smart/fast/review model and reasoning defaults, the optional
+  `Last used model as default` mode, the session commit coauthor trailer, and
+  `Launch Configurations` for the active project.
 
 On startup, Agentty restores the last active list tab. If no tab has been saved yet but
 an active project is already persisted, Agentty opens on **Sessions** so you can resume
@@ -63,8 +63,9 @@ send every actionable inline thread. Standalone comments are read-only because t
 not have forge thread IDs. The timer ticks only while the session is actively working.
 `Done` sessions use `c` to start a continuation draft and no longer expose review
 comments. File-level comments show an explicit no-line-context message instead of a
-synthetic code anchor. Each session stores the project reasoning default when it is
-created, so later default changes affect new sessions without relabeling existing ones.
+synthetic code anchor. Each session stores the project's Smart reasoning default when it
+is created, so later default changes affect new sessions without relabeling existing
+ones.
 
 The top status bar shows the current version and update status, and rotates short
 page-scoped `FYI:` messages once per minute in the **Sessions** list and session chat
@@ -642,7 +643,11 @@ launch configurations are stored per active project. `Theme` and
 `Orchestrator Parallelism` are global. Parallelism defaults to three workers and accepts
 values from one through eight. The Settings tab renders these scopes as
 `Global settings` and `'<project>' settings`. Rows with fixed choices open dropdowns;
-use `j` / `k` to move through options and `Enter` to save the highlighted value.
+use `j` / `k` to move through options. Smart, Fast, and Review use two dropdowns: choose
+the model and press `Enter` to continue, then choose the reasoning level and press
+`Enter` to save. Each role persists its independent `agent/model [reasoning]` pair.
+Smart supplies defaults for new sessions, Fast supplies title and commit-message utility
+prompts, and Review supplies focused review assists.
 
 The `Launch Configurations` row opens a command-list editor instead of a multiline text
 field. Use `a` to add an entry, `e` or `Enter` to edit the selected entry, `d` to delete

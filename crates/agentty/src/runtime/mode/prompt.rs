@@ -819,7 +819,7 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         Some(PromptSuggestionSelection::Command("/reasoning")) => {
             let selected_reasoning_level = app
                 .session_at(prompt_context.session_index)
-                .map_or(app.settings.reasoning_level, |session| {
+                .map_or(app.settings.default_smart_reasoning_level, |session| {
                     session.effective_reasoning_level()
                 });
             let selected_index = ReasoningLevel::ALL
@@ -2822,7 +2822,7 @@ mod tests {
     async fn test_handle_prompt_slash_submit_prefills_reasoning_selection_from_session_value() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
-        app.settings.reasoning_level = ReasoningLevel::Medium;
+        app.settings.default_smart_reasoning_level = ReasoningLevel::Medium;
         app.sessions.sessions_mut()[0].reasoning_level_override = Some(ReasoningLevel::Low);
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 

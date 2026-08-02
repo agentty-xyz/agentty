@@ -138,21 +138,22 @@ pub(crate) async fn load_default_smart_agent_selection_from_repositories(
 
 /// Manages user-configurable application settings.
 pub struct SettingsManager {
+    /// Default reasoning level used by fast-path workflows.
+    pub default_fast_reasoning_level: ReasoningLevel,
     /// Default agent/model selection used by fast-path workflows.
     pub default_fast_selection: AgentSelection,
+    /// Default reasoning level used by review workflows.
+    pub default_review_reasoning_level: ReasoningLevel,
     /// Default agent/model selection used by review workflows.
     pub default_review_selection: AgentSelection,
+    /// Default reasoning level used when creating new sessions.
+    pub default_smart_reasoning_level: ReasoningLevel,
     /// Default agent/model selection used when creating new sessions.
     pub default_smart_selection: AgentSelection,
     /// Optional command run in tmux when opening a session worktree.
     pub launch_configuration: String,
     /// Maximum number of orchestration child sessions run concurrently.
     pub orchestration_parallelism: u8,
-    /// Default reasoning effort preference for models that support this
-    /// setting.
-    ///
-    /// Currently applied to Codex and Claude turns.
-    pub reasoning_level: ReasoningLevel,
     /// Active terminal color theme for the whole application.
     pub theme: ColorTheme,
     available_agent_kinds: Vec<AgentKind>,
@@ -206,9 +207,19 @@ impl SettingsManager {
         )
         .await
         .unwrap_or(default_smart_agent);
-        let reasoning_level = repositories
+        let default_smart_reasoning_level = repositories
             .settings()
-            .load_project_reasoning_level(project_id)
+            .load_project_reasoning_level(project_id, SettingName::DefaultSmartReasoningLevel)
+            .await
+            .unwrap_or_default();
+        let default_fast_reasoning_level = repositories
+            .settings()
+            .load_project_reasoning_level(project_id, SettingName::DefaultFastReasoningLevel)
+            .await
+            .unwrap_or_default();
+        let default_review_reasoning_level = repositories
+            .settings()
+            .load_project_reasoning_level(project_id, SettingName::DefaultReviewReasoningLevel)
             .await
             .unwrap_or_default();
 
@@ -238,11 +249,13 @@ impl SettingsManager {
             load_orchestration_parallelism_setting_from_repositories(&repositories).await;
 
         Self {
+            default_fast_reasoning_level,
             default_fast_selection: default_fast_agent,
+            default_review_reasoning_level,
             default_review_selection: default_review_agent,
+            default_smart_reasoning_level,
             default_smart_selection: default_smart_agent,
             launch_configuration,
-            reasoning_level,
             theme,
             available_agent_kinds,
             include_coauthored_by_agentty,
@@ -268,13 +281,15 @@ impl SettingsManager {
                 .into_iter()
                 .map(ModelSelectorOption::selection)
                 .collect(),
+            default_fast_reasoning_level: self.default_fast_reasoning_level,
             default_fast_selection: self.default_fast_selection,
+            default_review_reasoning_level: self.default_review_reasoning_level,
             default_review_selection: self.default_review_selection,
+            default_smart_reasoning_level: self.default_smart_reasoning_level,
             default_smart_selection: self.default_smart_selection,
             include_coauthored_by_agentty: self.include_coauthored_by_agentty,
             launch_configuration: self.launch_configuration.clone(),
             orchestration_parallelism: self.orchestration_parallelism,
-            reasoning_level: self.reasoning_level,
             theme: self.theme,
             use_last_used_model_as_default: self.use_last_used_model_as_default,
         }
@@ -283,18 +298,28 @@ impl SettingsManager {
     /// Applies and persists one value change requested by the settings screen.
     pub(crate) async fn apply_operation(&mut self, operation: SettingsOperation) {
         match operation {
-            SettingsOperation::DefaultFastSelection(selection) => {
+            SettingsOperation::DefaultFastSelection {
+                reasoning_level,
+                selection,
+            } => {
+                self.default_fast_reasoning_level = reasoning_level;
                 self.default_fast_selection = selection;
                 self.persist_default_fast_model_setting().await;
             }
-            SettingsOperation::DefaultReviewSelection(selection) => {
+            SettingsOperation::DefaultReviewSelection {
+                reasoning_level,
+                selection,
+            } => {
+                self.default_review_reasoning_level = reasoning_level;
                 self.default_review_selection = selection;
                 self.persist_default_review_model_setting().await;
             }
             SettingsOperation::DefaultSmartSelection {
+                reasoning_level,
                 selection,
                 use_last_used_model_as_default,
             } => {
+                self.default_smart_reasoning_level = reasoning_level;
                 self.default_smart_selection = selection;
                 self.use_last_used_model_as_default = use_last_used_model_as_default;
                 self.persist_default_smart_model_settings().await;
@@ -310,10 +335,6 @@ impl SettingsManager {
             SettingsOperation::OrchestrationParallelism(value) => {
                 self.orchestration_parallelism = value.clamp(1, MAX_ORCHESTRATION_PARALLELISM);
                 self.persist_orchestration_parallelism_setting().await;
-            }
-            SettingsOperation::ReasoningLevel(value) => {
-                self.reasoning_level = value;
-                self.persist_reasoning_level_setting().await;
             }
             SettingsOperation::Theme(value) => {
                 self.theme = value;
@@ -348,7 +369,8 @@ impl SettingsManager {
     }
 
     /// Atomically persists smart-model selector values (`DefaultSmartAgent`,
-    /// `DefaultSmartModel`, and `LastUsedModelAsDefault`).
+    /// `DefaultSmartModel`, `DefaultSmartReasoningLevel`, and
+    /// `LastUsedModelAsDefault`).
     async fn persist_default_smart_model_settings(&self) {
         let last_used_model_as_default_value = self.use_last_used_model_as_default.to_string();
 
@@ -367,6 +389,10 @@ impl SettingsManager {
                         self.default_smart_selection.kind().name().to_string(),
                     ),
                     (
+                        SettingName::DefaultSmartReasoningLevel,
+                        self.default_smart_reasoning_level.as_str().to_string(),
+                    ),
+                    (
                         SettingName::LastUsedModelAsDefault,
                         last_used_model_as_default_value,
                     ),
@@ -382,18 +408,8 @@ impl SettingsManager {
         }
     }
 
-    /// Persists the reasoning-level selector value (`ReasoningLevel`).
-    async fn persist_reasoning_level_setting(&self) {
-        // Best-effort: settings persistence failure is non-critical.
-        let _ = self
-            .repositories
-            .settings()
-            .set_project_reasoning_level(self.project_id, self.reasoning_level)
-            .await;
-    }
-
-    /// Atomically persists the fast-model selector values (`DefaultFastAgent`
-    /// and `DefaultFastModel`).
+    /// Atomically persists the fast-model selector values (`DefaultFastAgent`,
+    /// `DefaultFastModel`, and `DefaultFastReasoningLevel`).
     async fn persist_default_fast_model_setting(&self) {
         if let Err(error) = self
             .repositories
@@ -409,6 +425,10 @@ impl SettingsManager {
                         SettingName::DefaultFastAgent,
                         self.default_fast_selection.kind().name().to_string(),
                     ),
+                    (
+                        SettingName::DefaultFastReasoningLevel,
+                        self.default_fast_reasoning_level.as_str().to_string(),
+                    ),
                 ],
             )
             .await
@@ -422,7 +442,8 @@ impl SettingsManager {
     }
 
     /// Atomically persists the review-model selector values
-    /// (`DefaultReviewAgent` and `DefaultReviewModel`).
+    /// (`DefaultReviewAgent`, `DefaultReviewModel`, and
+    /// `DefaultReviewReasoningLevel`).
     async fn persist_default_review_model_setting(&self) {
         if let Err(error) = self
             .repositories
@@ -437,6 +458,10 @@ impl SettingsManager {
                     (
                         SettingName::DefaultReviewAgent,
                         self.default_review_selection.kind().name().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultReviewReasoningLevel,
+                        self.default_review_reasoning_level.as_str().to_string(),
                     ),
                 ],
             )
@@ -781,13 +806,15 @@ mod tests {
                         .into_iter()
                         .map(ModelSelectorOption::selection)
                         .collect(),
+                    default_fast_reasoning_level: ReasoningLevel::Low,
                     default_fast_selection: default_selection,
+                    default_review_reasoning_level: ReasoningLevel::XHigh,
                     default_review_selection: default_selection,
+                    default_smart_reasoning_level: ReasoningLevel::High,
                     default_smart_selection: default_selection,
                     include_coauthored_by_agentty: false,
                     launch_configuration: String::new(),
                     orchestration_parallelism: DEFAULT_ORCHESTRATION_PARALLELISM,
-                    reasoning_level: ReasoningLevel::High,
                     theme: ColorTheme::Current,
                     use_last_used_model_as_default: false,
                 },
@@ -1012,14 +1039,25 @@ mod tests {
     }
 
     #[test]
-    fn setting_name_as_str_returns_reasoning_level() {
+    fn setting_name_as_str_returns_default_role_reasoning_levels() {
         // Arrange
 
         // Act
-        let setting_name = SettingName::ReasoningLevel.as_str();
+        let setting_names = [
+            SettingName::DefaultSmartReasoningLevel.as_str(),
+            SettingName::DefaultFastReasoningLevel.as_str(),
+            SettingName::DefaultReviewReasoningLevel.as_str(),
+        ];
 
         // Assert
-        assert_eq!(setting_name, "ReasoningLevel");
+        assert_eq!(
+            setting_names,
+            [
+                "DefaultSmartReasoningLevel",
+                "DefaultFastReasoningLevel",
+                "DefaultReviewReasoningLevel",
+            ]
+        );
     }
 
     #[test]
@@ -1263,57 +1301,40 @@ mod tests {
         services
             .db()
             .settings()
-            .upsert_project_setting(
+            .upsert_project_settings(
                 project_id,
-                SettingName::DefaultSmartModel,
-                AgentModel::Gpt56Sol.as_str(),
+                vec![
+                    (
+                        SettingName::DefaultSmartModel,
+                        AgentModel::Gpt56Sol.as_str().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultFastModel,
+                        AgentModel::Gpt53CodexSpark.as_str().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultReviewModel,
+                        AgentModel::ClaudeOpus5.as_str().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultSmartReasoningLevel,
+                        ReasoningLevel::High.as_str().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultFastReasoningLevel,
+                        ReasoningLevel::Low.as_str().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultReviewReasoningLevel,
+                        ReasoningLevel::XHigh.as_str().to_string(),
+                    ),
+                    (SettingName::IncludeCoauthoredByAgentty, "false".to_string()),
+                    (SettingName::LaunchConfiguration, "nvim .".to_string()),
+                    (SettingName::LastUsedModelAsDefault, "true".to_string()),
+                ],
             )
             .await
-            .expect("failed to persist project smart model");
-        services
-            .db()
-            .settings()
-            .upsert_project_setting(
-                project_id,
-                SettingName::DefaultFastModel,
-                AgentModel::Gpt53CodexSpark.as_str(),
-            )
-            .await
-            .expect("failed to persist project fast model");
-        services
-            .db()
-            .settings()
-            .upsert_project_setting(
-                project_id,
-                SettingName::DefaultReviewModel,
-                AgentModel::ClaudeOpus5.as_str(),
-            )
-            .await
-            .expect("failed to persist review model");
-        services
-            .db()
-            .settings()
-            .upsert_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty, "false")
-            .await
-            .expect("failed to persist coauthor setting");
-        services
-            .db()
-            .settings()
-            .upsert_project_setting(project_id, SettingName::LaunchConfiguration, "nvim .")
-            .await
-            .expect("failed to persist launch configuration");
-        services
-            .db()
-            .settings()
-            .set_project_reasoning_level(project_id, ReasoningLevel::Low)
-            .await
-            .expect("failed to persist reasoning level");
-        services
-            .db()
-            .settings()
-            .upsert_project_setting(project_id, SettingName::LastUsedModelAsDefault, "true")
-            .await
-            .expect("failed to persist last-used-model flag");
+            .expect("failed to persist project settings");
         services
             .db()
             .settings()
@@ -1345,7 +1366,12 @@ mod tests {
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5)
         );
         assert_eq!(settings.launch_configuration, "nvim .");
-        assert_eq!(settings.reasoning_level, ReasoningLevel::Low);
+        assert_eq!(settings.default_smart_reasoning_level, ReasoningLevel::High);
+        assert_eq!(settings.default_fast_reasoning_level, ReasoningLevel::Low);
+        assert_eq!(
+            settings.default_review_reasoning_level,
+            ReasoningLevel::XHigh
+        );
         assert_eq!(settings.orchestration_parallelism, 5);
         assert_eq!(settings.theme, ColorTheme::Green);
         assert!(!settings.include_coauthored_by_agentty);
@@ -1568,7 +1594,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_operation_persists_fast_review_and_reasoning_settings() {
+    async fn apply_operation_persists_role_model_and_reasoning_settings() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = settings_manager(&services, project_id).await;
@@ -1577,13 +1603,16 @@ mod tests {
 
         // Act
         manager
-            .persist_operation(SettingsOperation::DefaultFastSelection(fast_selection))
+            .persist_operation(SettingsOperation::DefaultFastSelection {
+                reasoning_level: ReasoningLevel::Low,
+                selection: fast_selection,
+            })
             .await;
         manager
-            .persist_operation(SettingsOperation::DefaultReviewSelection(review_selection))
-            .await;
-        manager
-            .persist_operation(SettingsOperation::ReasoningLevel(ReasoningLevel::Max))
+            .persist_operation(SettingsOperation::DefaultReviewSelection {
+                reasoning_level: ReasoningLevel::XHigh,
+                selection: review_selection,
+            })
             .await;
 
         // Assert
@@ -1592,7 +1621,14 @@ mod tests {
             manager.settings().default_review_selection,
             review_selection
         );
-        assert_eq!(manager.settings().reasoning_level, ReasoningLevel::Max);
+        assert_eq!(
+            manager.settings().default_fast_reasoning_level,
+            ReasoningLevel::Low
+        );
+        assert_eq!(
+            manager.settings().default_review_reasoning_level,
+            ReasoningLevel::XHigh
+        );
         assert_eq!(
             services
                 .db()
@@ -1633,10 +1669,19 @@ mod tests {
             services
                 .db()
                 .settings()
-                .load_project_reasoning_level(project_id)
+                .load_project_reasoning_level(project_id, SettingName::DefaultFastReasoningLevel,)
                 .await
-                .expect("failed to load reasoning level"),
-            ReasoningLevel::Max
+                .expect("failed to load fast reasoning level"),
+            ReasoningLevel::Low
+        );
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .load_project_reasoning_level(project_id, SettingName::DefaultReviewReasoningLevel,)
+                .await
+                .expect("failed to load review reasoning level"),
+            ReasoningLevel::XHigh
         );
     }
 
@@ -1672,7 +1717,7 @@ mod tests {
                 .presentation
                 .snapshot(&manager.view)
                 .selected_row_index,
-            Some(7)
+            Some(6)
         );
     }
 
@@ -1689,7 +1734,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_rows_include_reasoning_model_coauthor_and_launch_configuration_options() {
+    fn settings_rows_include_role_model_coauthor_and_launch_configuration_options() {
         // Arrange
         let manager = new_settings_manager();
 
@@ -1697,15 +1742,14 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows.len(), 8);
+        assert_eq!(rows.len(), 7);
         assert_eq!(rows[0].0, "Theme");
         assert_eq!(rows[1].0, "Orchestrator Parallelism");
-        assert_eq!(rows[2].0, "Default Reasoning Level");
-        assert_eq!(rows[3].0, "Default Smart Model");
-        assert_eq!(rows[4].0, "Default Fast Model");
-        assert_eq!(rows[5].0, "Default Review Model");
-        assert_eq!(rows[6].0, "Coauthored by Agentty");
-        assert_eq!(rows[7].0, "Launch Configurations");
+        assert_eq!(rows[2].0, "Default Smart Model");
+        assert_eq!(rows[3].0, "Default Fast Model");
+        assert_eq!(rows[4].0, "Default Review Model");
+        assert_eq!(rows[5].0, "Coauthored by Agentty");
+        assert_eq!(rows[6].0, "Launch Configurations");
     }
 
     #[test]
@@ -1721,20 +1765,19 @@ mod tests {
         assert_eq!(global_rows.len(), 2);
         assert_eq!(global_rows[0].0, "Theme");
         assert_eq!(global_rows[1].0, "Orchestrator Parallelism");
-        assert_eq!(project_rows.len(), 6);
-        assert_eq!(project_rows[0].0, "Default Reasoning Level");
-        assert_eq!(project_rows[1].0, "Default Smart Model");
-        assert_eq!(project_rows[2].0, "Default Fast Model");
-        assert_eq!(project_rows[3].0, "Default Review Model");
-        assert_eq!(project_rows[4].0, "Coauthored by Agentty");
-        assert_eq!(project_rows[5].0, "Launch Configurations");
+        assert_eq!(project_rows.len(), 5);
+        assert_eq!(project_rows[0].0, "Default Smart Model");
+        assert_eq!(project_rows[1].0, "Default Fast Model");
+        assert_eq!(project_rows[2].0, "Default Review Model");
+        assert_eq!(project_rows[3].0, "Coauthored by Agentty");
+        assert_eq!(project_rows[4].0, "Launch Configurations");
     }
 
     #[test]
     fn footer_hint_returns_launch_configuration_input_hint_when_input_is_active() {
         // Arrange
         let mut manager = new_settings_manager();
-        select_row(&mut manager, 7);
+        select_row(&mut manager, 6);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
 
@@ -1819,7 +1862,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[7].1, "(none)");
+        assert_eq!(rows[6].1, "(none)");
     }
 
     #[test]
@@ -1832,7 +1875,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[7].1, "http://localhost:5173");
+        assert_eq!(rows[6].1, "http://localhost:5173");
     }
 
     #[test]
@@ -1846,7 +1889,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[7].1, "cargo test (+2 more)");
+        assert_eq!(rows[6].1, "cargo test (+2 more)");
     }
 
     #[test]
@@ -1859,7 +1902,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[3].1, "Last used model as default");
+        assert_eq!(rows[2].1, "Last used model as default [high]");
     }
 
     #[test]
@@ -1873,7 +1916,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[3].1, "antigravity/gemini-3.1-pro");
+        assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro [high]");
     }
 
     #[test]
@@ -1892,7 +1935,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[3].1, "gemini/gemini-3.1-pro");
+        assert_eq!(rows[2].1, "gemini/gemini-3.1-pro [high]");
     }
 
     #[test]
@@ -1906,7 +1949,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[4].1, "codex/gpt-5.6-sol");
+        assert_eq!(rows[3].1, "codex/gpt-5.6-sol [low]");
     }
 
     #[test]
@@ -1920,7 +1963,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[5].1, "claude/claude-opus-5");
+        assert_eq!(rows[4].1, "claude/claude-opus-5 [xhigh]");
     }
 
     #[test]
@@ -1933,20 +1976,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "Disabled");
-    }
-
-    #[test]
-    fn settings_rows_show_reasoning_level_value() {
-        // Arrange
-        let mut manager = new_settings_manager();
-        manager.fixture_view_mut().reasoning_level = ReasoningLevel::Max;
-
-        // Act
-        let rows = manager.settings_rows();
-
-        // Assert
-        assert_eq!(rows[2].1, "max");
+        assert_eq!(rows[5].1, "Disabled");
     }
 
     #[test]
@@ -1967,7 +1997,7 @@ mod tests {
         // Arrange
         let mut manager = new_settings_manager();
         manager.fixture_view_mut().launch_configuration = "nvim .".to_string();
-        select_row(&mut manager, 7);
+        select_row(&mut manager, 6);
 
         // Act
         manager.handle_enter();
@@ -1984,7 +2014,7 @@ mod tests {
     fn next_and_previous_do_not_move_selection_while_launch_configuration_editor_is_open() {
         // Arrange
         let mut manager = new_settings_manager();
-        select_row(&mut manager, 7);
+        select_row(&mut manager, 6);
         manager.handle_enter();
 
         // Act
@@ -1997,7 +2027,7 @@ mod tests {
                 .presentation
                 .snapshot(&manager.view)
                 .selected_row_index,
-            Some(7)
+            Some(6)
         );
         assert!(manager.is_launch_configuration_list_editor_open());
     }
@@ -2006,7 +2036,7 @@ mod tests {
     fn navigation_actions_do_not_request_launch_configuration_persistence() {
         // Arrange
         let mut manager = new_settings_manager();
-        select_row(&mut manager, 7);
+        select_row(&mut manager, 6);
         manager.handle_enter();
 
         // Act
@@ -2045,7 +2075,7 @@ mod tests {
         // Arrange
         let mut manager = new_settings_manager();
         manager.fixture_view_mut().launch_configuration = "old command".to_string();
-        select_row(&mut manager, 7);
+        select_row(&mut manager, 6);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
         manager.apply_launch_configuration_input_command(InputCommand::Insert('n'));
@@ -2067,7 +2097,7 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = settings_manager(&services, project_id).await;
-        select_row(&mut manager, 7);
+        select_row(&mut manager, 6);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
 
@@ -2100,7 +2130,7 @@ mod tests {
             "cargo test\nnpm run dev",
         )
         .await;
-        select_row(&mut manager, 7);
+        select_row(&mut manager, 6);
         manager.handle_enter();
         manager.next_launch_configuration_list_editor_item();
         manager.start_editing_selected_launch_configuration();
@@ -2141,7 +2171,7 @@ mod tests {
             "cargo test\nnpm run dev",
         )
         .await;
-        select_row(&mut manager, 7);
+        select_row(&mut manager, 6);
         manager.handle_enter();
         manager.start_editing_selected_launch_configuration();
 
@@ -2175,7 +2205,7 @@ mod tests {
             "cargo test\nnpm run dev\nlazygit",
         )
         .await;
-        select_row(&mut manager, 7);
+        select_row(&mut manager, 6);
         manager.handle_enter();
         manager.next_launch_configuration_list_editor_item();
 
@@ -2208,7 +2238,7 @@ mod tests {
             "cargo test\nnpm run dev\nlazygit",
         )
         .await;
-        select_row(&mut manager, 7);
+        select_row(&mut manager, 6);
         manager.handle_enter();
 
         // Act
@@ -2239,7 +2269,7 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = settings_manager(&services, project_id).await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 5);
 
         // Act
         manager.handle_enter();
@@ -2369,38 +2399,38 @@ mod tests {
         services
             .db()
             .settings()
-            .upsert_project_setting(
+            .upsert_project_settings(
                 project_id,
-                SettingName::DefaultSmartAgent,
-                last_option.agent_kind.name(),
+                vec![
+                    (
+                        SettingName::DefaultSmartAgent,
+                        last_option.agent_kind.name().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultSmartModel,
+                        last_option.model.as_str().to_string(),
+                    ),
+                    (SettingName::LastUsedModelAsDefault, "false".to_string()),
+                    (
+                        SettingName::DefaultSmartReasoningLevel,
+                        ReasoningLevel::Max.as_str().to_string(),
+                    ),
+                ],
             )
             .await
-            .expect("failed to persist smart agent fixture");
-        services
-            .db()
-            .settings()
-            .upsert_project_setting(
-                project_id,
-                SettingName::DefaultSmartModel,
-                last_option.model.as_str(),
-            )
-            .await
-            .expect("failed to persist smart model fixture");
-        services
-            .db()
-            .settings()
-            .upsert_project_setting(project_id, SettingName::LastUsedModelAsDefault, "false")
-            .await
-            .expect("failed to persist last-used fixture");
+            .expect("failed to persist smart selector fixture");
         let mut manager = settings_manager(&services, project_id).await;
-        select_row(&mut manager, 3);
+        select_row(&mut manager, 2);
 
         // Act
         manager.handle_enter();
         let dropdown = manager
             .selector_dropdown()
             .expect("expected smart model selector dropdown");
+        assert_eq!(dropdown.title, "Select model");
         assert_eq!(dropdown.selected_index, options.len() - 1);
+        manager.next_selector_dropdown_option();
+        manager.select_selector_dropdown_option().await;
         manager.next_selector_dropdown_option();
         manager.select_selector_dropdown_option().await;
 
@@ -2415,10 +2445,20 @@ mod tests {
                 .expect("failed to load last-used flag"),
             Some("true".to_string())
         );
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .load_project_reasoning_level(project_id, SettingName::DefaultSmartReasoningLevel,)
+                .await
+                .expect("failed to load smart reasoning level"),
+            ReasoningLevel::Low
+        );
 
         // Act
         manager.handle_enter();
         manager.next_selector_dropdown_option();
+        manager.select_selector_dropdown_option().await;
         manager.select_selector_dropdown_option().await;
 
         // Assert
@@ -2426,6 +2466,10 @@ mod tests {
         assert_eq!(
             manager.settings().default_smart_selection,
             options[0].selection()
+        );
+        assert_eq!(
+            manager.settings().default_smart_reasoning_level,
+            ReasoningLevel::Low
         );
         assert_eq!(
             services

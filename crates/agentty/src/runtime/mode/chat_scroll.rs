@@ -63,7 +63,7 @@ impl ChatScrollMetrics {
             |session| {
                 session_chat::transcript_view_height(SessionChatLayoutInput {
                     area: page_area,
-                    default_reasoning_level: app.settings.reasoning_level,
+                    default_reasoning_level: app.settings.default_smart_reasoning_level,
                     mode: &app.mode,
                     review_text,
                     session,

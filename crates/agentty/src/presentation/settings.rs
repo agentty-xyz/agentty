@@ -11,13 +11,15 @@ use crate::domain::theme::ColorTheme;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SettingsView {
     pub(crate) available_model_selections: Vec<AgentSelection>,
+    pub(crate) default_fast_reasoning_level: ReasoningLevel,
     pub(crate) default_fast_selection: AgentSelection,
+    pub(crate) default_review_reasoning_level: ReasoningLevel,
     pub(crate) default_review_selection: AgentSelection,
+    pub(crate) default_smart_reasoning_level: ReasoningLevel,
     pub(crate) default_smart_selection: AgentSelection,
     pub(crate) include_coauthored_by_agentty: bool,
     pub(crate) launch_configuration: String,
     pub(crate) orchestration_parallelism: u8,
-    pub(crate) reasoning_level: ReasoningLevel,
     pub(crate) theme: ColorTheme,
     pub(crate) use_last_used_model_as_default: bool,
 }
@@ -25,16 +27,22 @@ pub(crate) struct SettingsView {
 /// One persistence operation requested by the settings screen.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SettingsOperation {
-    DefaultFastSelection(AgentSelection),
-    DefaultReviewSelection(AgentSelection),
+    DefaultFastSelection {
+        reasoning_level: ReasoningLevel,
+        selection: AgentSelection,
+    },
+    DefaultReviewSelection {
+        reasoning_level: ReasoningLevel,
+        selection: AgentSelection,
+    },
     DefaultSmartSelection {
+        reasoning_level: ReasoningLevel,
         selection: AgentSelection,
         use_last_used_model_as_default: bool,
     },
     IncludeCoauthoredByAgentty(bool),
     LaunchConfiguration(String),
     OrchestrationParallelism(u8),
-    ReasoningLevel(ReasoningLevel),
     Theme(ColorTheme),
 }
 
@@ -66,6 +74,7 @@ pub(crate) struct SettingsSelectorDropdown {
     pub options: Vec<SettingsSelectorDropdownOption>,
     pub row_index: usize,
     pub selected_index: usize,
+    pub title: &'static str,
 }
 
 /// Active interaction mode for the `Launch Configurations` list editor.
@@ -357,19 +366,21 @@ impl SettingsPresentationState {
     }
 
     fn open_selector_dropdown(&mut self, view: &SettingsView, row: SettingRow) {
+        let mut selector_dropdown = SelectorDropdownState {
+            row,
+            selected_index: 0,
+            stage: SelectorDropdownStage::Primary,
+        };
         let options = selector_options_for_row(view, row);
         if options.is_empty() {
             return;
         }
 
-        let selected_index = options
+        selector_dropdown.selected_index = options
             .iter()
             .position(|option| option.is_current_for(view, row))
             .unwrap_or_default();
-        self.selector_dropdown = Some(SelectorDropdownState {
-            row,
-            selected_index,
-        });
+        self.selector_dropdown = Some(selector_dropdown);
     }
 
     fn move_selector_dropdown_option(
@@ -378,7 +389,7 @@ impl SettingsPresentationState {
         selector_dropdown: SelectorDropdownState,
         is_next: bool,
     ) {
-        let option_count = selector_options_for_row(view, selector_dropdown.row).len();
+        let option_count = selector_dropdown.option_count(view);
         if option_count == 0 {
             self.selector_dropdown = None;
 
@@ -394,8 +405,8 @@ impl SettingsPresentationState {
                 .unwrap_or(option_count - 1)
         };
         self.selector_dropdown = Some(SelectorDropdownState {
-            row: selector_dropdown.row,
             selected_index,
+            ..selector_dropdown
         });
     }
 
@@ -404,17 +415,84 @@ impl SettingsPresentationState {
         view: &SettingsView,
     ) -> Option<SettingsOperation> {
         let selector_dropdown = self.selector_dropdown?;
-        let options = selector_options_for_row(view, selector_dropdown.row);
-        let value = options
-            .get(
-                selector_dropdown
-                    .selected_index
-                    .min(options.len().saturating_sub(1)),
-            )?
-            .value;
-        self.selector_dropdown = None;
+        match selector_dropdown.stage {
+            SelectorDropdownStage::Primary => {
+                let options = selector_options_for_row(view, selector_dropdown.row);
+                let value = options
+                    .get(
+                        selector_dropdown
+                            .selected_index
+                            .min(options.len().saturating_sub(1)),
+                    )?
+                    .value;
 
-        settings_operation_for_selector(view, selector_dropdown.row, value)
+                match value {
+                    SettingSelectorValue::ModelSelection(selection) => {
+                        self.open_reasoning_selector(selector_dropdown.row, selection, false, view);
+
+                        None
+                    }
+                    SettingSelectorValue::LastUsedModel => {
+                        self.open_reasoning_selector(
+                            selector_dropdown.row,
+                            view.default_smart_selection,
+                            true,
+                            view,
+                        );
+
+                        None
+                    }
+                    value => {
+                        self.selector_dropdown = None;
+
+                        settings_operation_for_primary_selector(selector_dropdown.row, value)
+                    }
+                }
+            }
+            SelectorDropdownStage::Reasoning {
+                selection,
+                use_last_used_model_as_default,
+            } => {
+                let reasoning_level = ReasoningLevel::ALL
+                    .get(
+                        selector_dropdown
+                            .selected_index
+                            .min(ReasoningLevel::ALL.len().saturating_sub(1)),
+                    )
+                    .copied()?;
+                self.selector_dropdown = None;
+
+                settings_operation_for_model_selector(
+                    selector_dropdown.row,
+                    selection,
+                    reasoning_level,
+                    use_last_used_model_as_default,
+                )
+            }
+        }
+    }
+
+    fn open_reasoning_selector(
+        &mut self,
+        row: SettingRow,
+        selection: AgentSelection,
+        use_last_used_model_as_default: bool,
+        view: &SettingsView,
+    ) {
+        let reasoning_level = row.reasoning_level(view).unwrap_or_default();
+        let selected_index = ReasoningLevel::ALL
+            .iter()
+            .position(|level| *level == reasoning_level)
+            .unwrap_or_default();
+
+        self.selector_dropdown = Some(SelectorDropdownState {
+            row,
+            selected_index,
+            stage: SelectorDropdownStage::Reasoning {
+                selection,
+                use_last_used_model_as_default,
+            },
+        });
     }
 
     fn selected_row_index(&self) -> usize {
@@ -430,7 +508,7 @@ impl SettingsPresentationState {
 
     fn selector_dropdown(&self, view: &SettingsView) -> Option<SettingsSelectorDropdown> {
         let selector_dropdown = self.selector_dropdown?;
-        let options = selector_options_for_row(view, selector_dropdown.row);
+        let options = selector_dropdown.option_labels(view);
         let selected_index = selector_dropdown
             .selected_index
             .min(options.len().saturating_sub(1));
@@ -438,12 +516,11 @@ impl SettingsPresentationState {
         Some(SettingsSelectorDropdown {
             options: options
                 .into_iter()
-                .map(|option| SettingsSelectorDropdownOption {
-                    label: option.label,
-                })
+                .map(|label| SettingsSelectorDropdownOption { label })
                 .collect(),
             row_index: selector_dropdown.row.table_index(),
             selected_index,
+            title: selector_dropdown.title(),
         })
     }
 
@@ -462,41 +539,43 @@ impl SettingsPresentationState {
         } else if self.is_launch_configuration_list_editor_open() {
             "Launch Configurations: j/k move, a add, e/Enter edit, d delete, J/K reorder, Esc/q \
              close"
-        } else if self.is_selector_dropdown_open() {
-            "Selecting setting value: j/k move, Enter select, Esc/q close"
+        } else if let Some(selector_dropdown) = self.selector_dropdown {
+            selector_dropdown.footer_hint()
         } else {
             "Settings: Enter opens selectors or command editor"
         }
     }
 }
 
-fn settings_operation_for_selector(
-    view: &SettingsView,
+fn settings_operation_for_model_selector(
+    row: SettingRow,
+    selection: AgentSelection,
+    reasoning_level: ReasoningLevel,
+    use_last_used_model_as_default: bool,
+) -> Option<SettingsOperation> {
+    match row {
+        SettingRow::DefaultSmartModel => Some(SettingsOperation::DefaultSmartSelection {
+            reasoning_level,
+            selection,
+            use_last_used_model_as_default,
+        }),
+        SettingRow::DefaultFastModel => Some(SettingsOperation::DefaultFastSelection {
+            reasoning_level,
+            selection,
+        }),
+        SettingRow::DefaultReviewModel => Some(SettingsOperation::DefaultReviewSelection {
+            reasoning_level,
+            selection,
+        }),
+        _ => None,
+    }
+}
+
+fn settings_operation_for_primary_selector(
     row: SettingRow,
     value: SettingSelectorValue,
 ) -> Option<SettingsOperation> {
     match (row, value) {
-        (SettingRow::ReasoningLevel, SettingSelectorValue::ReasoningLevel(value)) => {
-            Some(SettingsOperation::ReasoningLevel(value))
-        }
-        (SettingRow::DefaultSmartModel, SettingSelectorValue::LastUsedModel) => {
-            Some(SettingsOperation::DefaultSmartSelection {
-                selection: view.default_smart_selection,
-                use_last_used_model_as_default: true,
-            })
-        }
-        (SettingRow::DefaultSmartModel, SettingSelectorValue::ModelSelection(selection)) => {
-            Some(SettingsOperation::DefaultSmartSelection {
-                selection,
-                use_last_used_model_as_default: false,
-            })
-        }
-        (SettingRow::DefaultFastModel, SettingSelectorValue::ModelSelection(selection)) => {
-            Some(SettingsOperation::DefaultFastSelection(selection))
-        }
-        (SettingRow::DefaultReviewModel, SettingSelectorValue::ModelSelection(selection)) => {
-            Some(SettingsOperation::DefaultReviewSelection(selection))
-        }
         (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
             Some(SettingsOperation::IncludeCoauthoredByAgentty(value))
         }
@@ -518,7 +597,6 @@ enum SettingControl {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingRow {
-    ReasoningLevel,
     DefaultSmartModel,
     DefaultFastModel,
     DefaultReviewModel,
@@ -529,10 +607,9 @@ enum SettingRow {
 }
 
 impl SettingRow {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 7] = [
         Self::Theme,
         Self::OrchestrationParallelism,
-        Self::ReasoningLevel,
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
@@ -540,8 +617,7 @@ impl SettingRow {
         Self::LaunchConfiguration,
     ];
     const GLOBAL: [Self; 2] = [Self::Theme, Self::OrchestrationParallelism];
-    const PROJECT: [Self; 6] = [
-        Self::ReasoningLevel,
+    const PROJECT: [Self; 5] = [
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
@@ -554,7 +630,7 @@ impl SettingRow {
         Self::ALL
             .get(index)
             .copied()
-            .unwrap_or(Self::ReasoningLevel)
+            .unwrap_or(Self::DefaultSmartModel)
     }
 
     fn control(self) -> SettingControl {
@@ -566,7 +642,6 @@ impl SettingRow {
 
     fn label(self) -> &'static str {
         match self {
-            Self::ReasoningLevel => "Default Reasoning Level",
             Self::DefaultSmartModel => "Default Smart Model",
             Self::DefaultFastModel => "Default Fast Model",
             Self::DefaultReviewModel => "Default Review Model",
@@ -574,6 +649,22 @@ impl SettingRow {
             Self::LaunchConfiguration => "Launch Configurations",
             Self::OrchestrationParallelism => "Orchestrator Parallelism",
             Self::Theme => "Theme",
+        }
+    }
+
+    fn is_model_selector(self) -> bool {
+        matches!(
+            self,
+            Self::DefaultSmartModel | Self::DefaultFastModel | Self::DefaultReviewModel
+        )
+    }
+
+    fn reasoning_level(self, view: &SettingsView) -> Option<ReasoningLevel> {
+        match self {
+            Self::DefaultSmartModel => Some(view.default_smart_reasoning_level),
+            Self::DefaultFastModel => Some(view.default_fast_reasoning_level),
+            Self::DefaultReviewModel => Some(view.default_review_reasoning_level),
+            _ => None,
         }
     }
 
@@ -589,6 +680,57 @@ impl SettingRow {
 struct SelectorDropdownState {
     row: SettingRow,
     selected_index: usize,
+    stage: SelectorDropdownStage,
+}
+
+impl SelectorDropdownState {
+    fn option_count(self, view: &SettingsView) -> usize {
+        match self.stage {
+            SelectorDropdownStage::Primary => selector_options_for_row(view, self.row).len(),
+            SelectorDropdownStage::Reasoning { .. } => ReasoningLevel::ALL.len(),
+        }
+    }
+
+    fn option_labels(self, view: &SettingsView) -> Vec<String> {
+        match self.stage {
+            SelectorDropdownStage::Primary => selector_options_for_row(view, self.row)
+                .into_iter()
+                .map(|option| option.label)
+                .collect(),
+            SelectorDropdownStage::Reasoning { .. } => reasoning_selector_option_labels(),
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self.stage {
+            SelectorDropdownStage::Primary if self.row.is_model_selector() => "Select model",
+            SelectorDropdownStage::Primary => "Select setting value",
+            SelectorDropdownStage::Reasoning { .. } => "Select reasoning level",
+        }
+    }
+
+    fn footer_hint(self) -> &'static str {
+        match self.stage {
+            SelectorDropdownStage::Primary if self.row.is_model_selector() => {
+                "Selecting model: j/k move, Enter continue, Esc/q close"
+            }
+            SelectorDropdownStage::Primary => {
+                "Selecting setting value: j/k move, Enter select, Esc/q close"
+            }
+            SelectorDropdownStage::Reasoning { .. } => {
+                "Selecting reasoning: j/k move, Enter save, Esc/q close"
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectorDropdownStage {
+    Primary,
+    Reasoning {
+        selection: AgentSelection,
+        use_last_used_model_as_default: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -641,20 +783,17 @@ struct SettingSelectorOption {
 impl SettingSelectorOption {
     fn is_current_for(&self, view: &SettingsView, row: SettingRow) -> bool {
         match (row, self.value) {
-            (SettingRow::ReasoningLevel, SettingSelectorValue::ReasoningLevel(value)) => {
-                view.reasoning_level == value
-            }
             (SettingRow::DefaultSmartModel, SettingSelectorValue::LastUsedModel) => {
                 view.use_last_used_model_as_default
             }
-            (SettingRow::DefaultSmartModel, SettingSelectorValue::ModelSelection(value)) => {
-                !view.use_last_used_model_as_default && view.default_smart_selection == value
+            (SettingRow::DefaultSmartModel, SettingSelectorValue::ModelSelection(selection)) => {
+                !view.use_last_used_model_as_default && view.default_smart_selection == selection
             }
-            (SettingRow::DefaultFastModel, SettingSelectorValue::ModelSelection(value)) => {
-                view.default_fast_selection == value
+            (SettingRow::DefaultFastModel, SettingSelectorValue::ModelSelection(selection)) => {
+                view.default_fast_selection == selection
             }
-            (SettingRow::DefaultReviewModel, SettingSelectorValue::ModelSelection(value)) => {
-                view.default_review_selection == value
+            (SettingRow::DefaultReviewModel, SettingSelectorValue::ModelSelection(selection)) => {
+                view.default_review_selection == selection
             }
             (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
                 view.include_coauthored_by_agentty == value
@@ -674,7 +813,6 @@ enum SettingSelectorValue {
     LastUsedModel,
     ModelSelection(AgentSelection),
     Parallelism(u8),
-    ReasoningLevel(ReasoningLevel),
     Theme(ColorTheme),
 }
 
@@ -730,20 +868,13 @@ fn move_launch_configuration_list_editor_selection(
 
 fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<SettingSelectorOption> {
     match row {
-        SettingRow::ReasoningLevel => ReasoningLevel::ALL
-            .iter()
-            .copied()
-            .map(|value| SettingSelectorOption {
-                label: value.codex().to_string(),
-                value: SettingSelectorValue::ReasoningLevel(value),
-            })
-            .collect(),
         SettingRow::DefaultSmartModel => {
             let mut options = model_selector_options(view);
             options.push(SettingSelectorOption {
                 label: "Last used model as default".to_string(),
                 value: SettingSelectorValue::LastUsedModel,
             });
+
             options
         }
         SettingRow::DefaultFastModel | SettingRow::DefaultReviewModel => {
@@ -788,17 +919,33 @@ fn model_selector_options(view: &SettingsView) -> Vec<SettingSelectorOption> {
         .collect()
 }
 
+fn reasoning_selector_option_labels() -> Vec<String> {
+    ReasoningLevel::ALL
+        .iter()
+        .map(|reasoning_level| reasoning_level.as_str().to_string())
+        .collect()
+}
+
 fn display_value_for_row(view: &SettingsView, row: SettingRow) -> String {
     match row {
-        SettingRow::ReasoningLevel => view.reasoning_level.codex().to_string(),
         SettingRow::DefaultSmartModel if view.use_last_used_model_as_default => {
-            "Last used model as default".to_string()
+            format!(
+                "Last used model as default [{}]",
+                view.default_smart_reasoning_level.as_str()
+            )
         }
-        SettingRow::DefaultSmartModel => display_model_selector_value(view.default_smart_selection),
-        SettingRow::DefaultFastModel => display_model_selector_value(view.default_fast_selection),
-        SettingRow::DefaultReviewModel => {
-            display_model_selector_value(view.default_review_selection)
-        }
+        SettingRow::DefaultSmartModel => display_model_selector_value_with_reasoning(
+            view.default_smart_selection,
+            view.default_smart_reasoning_level,
+        ),
+        SettingRow::DefaultFastModel => display_model_selector_value_with_reasoning(
+            view.default_fast_selection,
+            view.default_fast_reasoning_level,
+        ),
+        SettingRow::DefaultReviewModel => display_model_selector_value_with_reasoning(
+            view.default_review_selection,
+            view.default_review_reasoning_level,
+        ),
         SettingRow::IncludeCoauthoredByAgentty => {
             bool_setting_display(view.include_coauthored_by_agentty)
         }
@@ -832,6 +979,17 @@ fn display_launch_configuration_summary(value: &str) -> String {
 
 fn display_model_selector_value(selection: AgentSelection) -> String {
     format!("{}/{}", selection.kind(), selection.model().as_str())
+}
+
+fn display_model_selector_value_with_reasoning(
+    selection: AgentSelection,
+    reasoning_level: ReasoningLevel,
+) -> String {
+    format!(
+        "{} [{}]",
+        display_model_selector_value(selection),
+        reasoning_level.as_str()
+    )
 }
 
 fn join_launch_configurations(commands: &[String]) -> String {
@@ -869,16 +1027,18 @@ mod tests {
                 AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
                 AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
             ],
+            default_fast_reasoning_level: ReasoningLevel::Low,
             default_fast_selection: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            default_review_reasoning_level: ReasoningLevel::XHigh,
             default_review_selection: AgentSelection::new(
                 AgentKind::Claude,
                 AgentModel::ClaudeOpus5,
             ),
+            default_smart_reasoning_level: ReasoningLevel::High,
             default_smart_selection: smart_selection,
             include_coauthored_by_agentty: false,
             launch_configuration: launch_configuration.to_string(),
             orchestration_parallelism: 3,
-            reasoning_level: ReasoningLevel::High,
             theme: ColorTheme::Current,
             use_last_used_model_as_default: false,
         }
@@ -897,7 +1057,7 @@ mod tests {
         let empty_view = test_settings_view("");
         let mut selector_state = SettingsPresentationState::default();
         let mut editor_state = SettingsPresentationState::default();
-        select_row(&mut editor_state, &empty_view, 7);
+        select_row(&mut editor_state, &empty_view, 6);
 
         // Act
         let opened_selector = selector_state.apply(&empty_view, SettingsAction::Activate);
@@ -921,7 +1081,7 @@ mod tests {
         // Arrange
         let view = test_settings_view("cargo test");
         let mut state = SettingsPresentationState::default();
-        select_row(&mut state, &view, 7);
+        select_row(&mut state, &view, 6);
         let _ = state.apply(&view, SettingsAction::Activate);
 
         // Act
@@ -943,11 +1103,11 @@ mod tests {
         // Arrange
         let one_command_view = test_settings_view("cargo test");
         let mut one_command_state = SettingsPresentationState::default();
-        select_row(&mut one_command_state, &one_command_view, 7);
+        select_row(&mut one_command_state, &one_command_view, 6);
         let _ = one_command_state.apply(&one_command_view, SettingsAction::Activate);
         let two_command_view = test_settings_view("cargo test\nnpm run dev");
         let mut two_command_state = SettingsPresentationState::default();
-        select_row(&mut two_command_state, &two_command_view, 7);
+        select_row(&mut two_command_state, &two_command_view, 6);
         let _ = two_command_state.apply(&two_command_view, SettingsAction::Activate);
         let _ = two_command_state.apply(&two_command_view, SettingsAction::Next);
 
@@ -990,6 +1150,7 @@ mod tests {
             selector_dropdown: Some(SelectorDropdownState {
                 row: SettingRow::LaunchConfiguration,
                 selected_index: 0,
+                stage: SelectorDropdownStage::Primary,
             }),
             ..SettingsPresentationState::default()
         };
@@ -1005,20 +1166,33 @@ mod tests {
     }
 
     #[test]
-    fn selectors_cover_reasoning_fast_review_and_invalid_pairs() {
+    fn selectors_cover_role_reasoning_and_invalid_pairs() {
         // Arrange
         let view = test_settings_view("");
 
         // Act
         let operations = [
-            (2, SettingsOperation::ReasoningLevel(ReasoningLevel::High)),
             (
-                4,
-                SettingsOperation::DefaultFastSelection(view.default_fast_selection),
+                2,
+                SettingsOperation::DefaultSmartSelection {
+                    reasoning_level: view.default_smart_reasoning_level,
+                    selection: view.default_smart_selection,
+                    use_last_used_model_as_default: false,
+                },
             ),
             (
-                5,
-                SettingsOperation::DefaultReviewSelection(view.default_review_selection),
+                3,
+                SettingsOperation::DefaultFastSelection {
+                    reasoning_level: view.default_fast_reasoning_level,
+                    selection: view.default_fast_selection,
+                },
+            ),
+            (
+                4,
+                SettingsOperation::DefaultReviewSelection {
+                    reasoning_level: view.default_review_reasoning_level,
+                    selection: view.default_review_selection,
+                },
             ),
         ]
         .map(|(row_index, expected_operation)| {
@@ -1026,28 +1200,37 @@ mod tests {
             select_row(&mut state, &view, row_index);
             let _ = state.apply(&view, SettingsAction::Activate);
 
-            (
-                state.apply(&view, SettingsAction::Confirm),
-                expected_operation,
-            )
+            let model_operation = state.apply(&view, SettingsAction::Confirm);
+            let reasoning_operation = state.apply(&view, SettingsAction::Confirm);
+
+            (model_operation, reasoning_operation, expected_operation)
         });
         let mismatched_option = SettingSelectorOption {
             label: "Enabled".to_string(),
             value: SettingSelectorValue::Bool(true),
         };
         let is_mismatched_current = mismatched_option.is_current_for(&view, SettingRow::Theme);
-        let invalid_operation = settings_operation_for_selector(
-            &view,
+        let invalid_model_operation = settings_operation_for_model_selector(
+            SettingRow::Theme,
+            view.default_smart_selection,
+            ReasoningLevel::High,
+            false,
+        );
+        let invalid_operation = settings_operation_for_primary_selector(
             SettingRow::Theme,
             SettingSelectorValue::Bool(true),
         );
+        let nonmodel_reasoning_level = SettingRow::Theme.reasoning_level(&view);
 
         // Assert
-        for (operation, expected_operation) in operations {
-            assert_eq!(operation, Some(expected_operation));
+        for (model_operation, reasoning_operation, expected_operation) in operations {
+            assert_eq!(model_operation, None);
+            assert_eq!(reasoning_operation, Some(expected_operation));
         }
         assert!(!is_mismatched_current);
+        assert_eq!(invalid_model_operation, None);
         assert_eq!(invalid_operation, None);
+        assert_eq!(nonmodel_reasoning_level, None);
     }
 
     #[test]
@@ -1094,7 +1277,6 @@ mod tests {
 
         // Act
         move_launch_configuration_list_editor_selection(&mut editor, false);
-        let reasoning_options = selector_options_for_row(&view, SettingRow::ReasoningLevel);
         let fast_options = selector_options_for_row(&view, SettingRow::DefaultFastModel);
         let launch_options = selector_options_for_row(&view, SettingRow::LaunchConfiguration);
         let parallelism_options =
@@ -1102,8 +1284,11 @@ mod tests {
 
         // Assert
         assert_eq!(editor.selected_index, 1);
-        assert_eq!(reasoning_options.len(), ReasoningLevel::ALL.len());
         assert_eq!(fast_options.len(), view.available_model_selections.len());
+        assert_eq!(
+            reasoning_selector_option_labels().len(),
+            ReasoningLevel::ALL.len()
+        );
         assert!(launch_options.is_empty());
         assert_eq!(
             parallelism_options.len(),
@@ -1111,12 +1296,76 @@ mod tests {
         );
         assert!(parallelism_options[2].is_current_for(&view, SettingRow::OrchestrationParallelism));
         assert_eq!(
-            settings_operation_for_selector(
-                &view,
+            settings_operation_for_primary_selector(
                 SettingRow::OrchestrationParallelism,
                 SettingSelectorValue::Parallelism(4),
             ),
             Some(SettingsOperation::OrchestrationParallelism(4))
         );
+    }
+
+    #[test]
+    fn selector_snapshot_separates_models_and_reasoning() {
+        // Arrange
+        let view = test_settings_view("");
+        let mut model_state = SettingsPresentationState::default();
+        select_row(&mut model_state, &view, 2);
+        let _ = model_state.apply(&view, SettingsAction::Activate);
+        let model_footer_hint = model_state.footer_hint();
+        let mut theme_state = SettingsPresentationState::default();
+        let _ = theme_state.apply(&view, SettingsAction::Activate);
+
+        // Act
+        let model_dropdown = model_state
+            .snapshot(&view)
+            .selector_dropdown
+            .expect("smart model selector should be open");
+        let model_operation = model_state.apply(&view, SettingsAction::Confirm);
+        let reasoning_dropdown = model_state
+            .snapshot(&view)
+            .selector_dropdown
+            .expect("reasoning selector should be open");
+        let reasoning_footer_hint = model_state.footer_hint();
+        let theme_snapshot = theme_state.snapshot(&view);
+        let theme_dropdown = theme_snapshot
+            .selector_dropdown
+            .expect("theme selector should be open");
+
+        // Assert
+        assert_eq!(model_operation, None);
+        assert_eq!(model_dropdown.title, "Select model");
+        assert_eq!(
+            model_footer_hint,
+            "Selecting model: j/k move, Enter continue, Esc/q close"
+        );
+        assert_eq!(
+            model_dropdown.options[model_dropdown.selected_index].label,
+            display_model_selector_value(view.default_smart_selection)
+        );
+        assert_eq!(
+            model_dropdown.options.len(),
+            view.available_model_selections.len() + 1
+        );
+        assert_eq!(reasoning_dropdown.title, "Select reasoning level");
+        assert_eq!(
+            reasoning_footer_hint,
+            "Selecting reasoning: j/k move, Enter save, Esc/q close"
+        );
+        assert_eq!(
+            reasoning_dropdown.options[reasoning_dropdown.selected_index].label,
+            ReasoningLevel::High.as_str()
+        );
+        assert_eq!(
+            reasoning_dropdown
+                .options
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>(),
+            ReasoningLevel::ALL
+                .iter()
+                .map(|reasoning_level| reasoning_level.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(theme_dropdown.title, "Select setting value");
     }
 }

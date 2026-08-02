@@ -1116,7 +1116,7 @@ mod tests {
             app.settings_presentation
                 .snapshot(&app.settings.view())
                 .selected_row_index,
-            Some(7)
+            Some(6)
         );
     }
 

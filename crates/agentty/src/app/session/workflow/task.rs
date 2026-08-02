@@ -20,7 +20,7 @@ use crate::app::assist::{
 use crate::app::service::{AppServices, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, SessionManager, setting};
-use crate::domain::agent::{AgentKind, AgentSelection};
+use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel};
 #[cfg(test)]
 use crate::domain::agent::{AgentModel, AgentSelectionMetadata};
 use crate::domain::session::{
@@ -557,6 +557,28 @@ impl SessionTaskService {
         .await
     }
 
+    /// Loads the fast-role reasoning effort used by auto-commit utility
+    /// prompts for one session.
+    pub(crate) async fn load_auto_commit_reasoning_level(
+        db: &AppRepositories,
+        session_id: &str,
+    ) -> ReasoningLevel {
+        let Some(project_id) = db
+            .sessions()
+            .load_session_project_id(session_id)
+            .await
+            .ok()
+            .flatten()
+        else {
+            return ReasoningLevel::default();
+        };
+
+        db.settings()
+            .load_project_reasoning_level(project_id, SettingName::DefaultFastReasoningLevel)
+            .await
+            .unwrap_or_default()
+    }
+
     /// Reconciles current remote review-request metadata with the latest
     /// cumulative session state while retaining intentional user additions.
     pub(crate) async fn review_request_metadata(
@@ -686,12 +708,14 @@ impl SessionTaskService {
         let auto_commit_agent =
             Self::load_auto_commit_agent_setting(&context.db, &context.id, context.session_agent)
                 .await;
+        let auto_commit_reasoning_level =
+            Self::load_auto_commit_reasoning_level(&context.db, &context.id).await;
 
         Self::commit_session_changes(
             context.git_client.as_ref(),
             &context.folder,
             &base_branch,
-            auto_commit_agent,
+            (auto_commit_agent, auto_commit_reasoning_level),
             context.one_shot_client.as_ref(),
             no_verify,
             Self::load_include_coauthored_by_agentty_setting(&context.db, &context.id).await,
@@ -876,11 +900,12 @@ impl SessionTaskService {
         git_client: &dyn GitClient,
         folder: &Path,
         base_branch: &str,
-        session_agent: AgentSelection,
+        agent_settings: (AgentSelection, ReasoningLevel),
         one_shot_client: &dyn OneShotClient,
         no_verify: bool,
         include_coauthored_by_agentty: bool,
     ) -> Result<SessionCommitOutcome, SessionError> {
+        let (session_agent, reasoning_level) = agent_settings;
         let folder = folder.to_path_buf();
         if git_client.is_worktree_clean(folder.clone()).await? {
             return Err(SessionError::Workflow(
@@ -902,6 +927,7 @@ impl SessionTaskService {
         let generated_commit_message = Self::generate_session_commit_message_with_client(
             folder.as_path(),
             session_agent,
+            reasoning_level,
             diff.as_str(),
             current_commit_message.as_deref(),
             one_shot_client,
@@ -938,6 +964,7 @@ impl SessionTaskService {
     async fn generate_session_commit_message_with_client(
         folder: &Path,
         session_agent: AgentSelection,
+        reasoning_level: ReasoningLevel,
         diff: &str,
         current_commit_message: Option<&str>,
         one_shot_client: &dyn OneShotClient,
@@ -952,7 +979,7 @@ impl SessionTaskService {
                 model: session_agent.model(),
                 prompt,
                 request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
-                reasoning_level: crate::domain::agent::ReasoningLevel::default(),
+                reasoning_level,
             })
             .await
             .map_err(SessionError::from)
@@ -973,7 +1000,7 @@ impl SessionTaskService {
                         model: session_agent.model(),
                         prompt: truncated_prompt,
                         request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
-                        reasoning_level: crate::domain::agent::ReasoningLevel::default(),
+                        reasoning_level,
                     })
                     .await?
             }
@@ -2288,6 +2315,7 @@ mod tests {
         let error = SessionTaskService::generate_session_commit_message_with_client(
             temp_directory.path(),
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            ReasoningLevel::Low,
             "diff --git a/a.rs b/a.rs",
             None,
             &one_shot_client,
@@ -2316,14 +2344,17 @@ mod tests {
         // Arrange
         let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
         let mut one_shot_client = MockOneShotClient::new();
-        one_shot_client
-            .expect_submit()
-            .returning(|_| Ok(one_shot_submission("", 0, 0)));
+        one_shot_client.expect_submit().returning(|request| {
+            assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
+
+            Ok(one_shot_submission("", 0, 0))
+        });
 
         // Act
         let generated_message = SessionTaskService::generate_session_commit_message_with_client(
             temp_directory.path(),
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            ReasoningLevel::XHigh,
             "diff --git a/a.rs b/a.rs",
             Some("Keep session commit accurate\n\n- Preserve existing behavior"),
             &one_shot_client,
@@ -2351,6 +2382,7 @@ mod tests {
             .times(2)
             .returning(move |request| {
                 let request_index = call_count_for_submit.fetch_add(1, Ordering::SeqCst) + 1;
+                assert_eq!(request.reasoning_level, ReasoningLevel::Medium);
 
                 if request_index == 1 {
                     assert!(request.prompt.contains("diff line"));
@@ -2372,6 +2404,7 @@ mod tests {
         let generated_message = SessionTaskService::generate_session_commit_message_with_client(
             temp_directory.path(),
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            ReasoningLevel::Medium,
             diff.as_str(),
             None,
             &one_shot_client,
@@ -3002,6 +3035,41 @@ mod tests {
             auto_commit_agent,
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro)
         );
+    }
+
+    #[tokio::test]
+    /// Verifies auto-commit loads the reasoning effort paired with the project
+    /// fast model and defaults when the session has no project.
+    async fn test_load_auto_commit_reasoning_level_uses_project_fast_setting() {
+        // Arrange
+        let database = AppRepositories::in_memory().await;
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+        let project_id = database
+            .sessions()
+            .load_session_project_id("session-id")
+            .await
+            .expect("failed to load session project id")
+            .expect("session should have project id");
+        database
+            .settings()
+            .upsert_project_setting(
+                project_id,
+                SettingName::DefaultFastReasoningLevel,
+                ReasoningLevel::Low.as_str(),
+            )
+            .await
+            .expect("failed to persist default fast reasoning level");
+
+        // Act
+        let persisted_reasoning_level =
+            SessionTaskService::load_auto_commit_reasoning_level(&database, "session-id").await;
+        let missing_reasoning_level =
+            SessionTaskService::load_auto_commit_reasoning_level(&database, "missing-session")
+                .await;
+
+        // Assert
+        assert_eq!(persisted_reasoning_level, ReasoningLevel::Low);
+        assert_eq!(missing_reasoning_level, ReasoningLevel::High);
     }
 
     #[tokio::test]

@@ -5,6 +5,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
 use agentty::db::{DB_DIR, DB_FILE, Database};
+use agentty::domain::agent::ReasoningLevel;
+use agentty::test_support::persist_project_reasoning_levels_for_test;
 use testty::assertion;
 use testty::region::Region;
 
@@ -70,12 +72,43 @@ SET value = excluded.value
     Ok(())
 }
 
+/// Seeds distinct persisted role reasoning levels for model-selector coverage.
+fn seed_settings_model_reasoning_levels(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let canonical_workdir = env.workdir.canonicalize()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        let project_id = database
+            .projects()
+            .upsert_project(&canonical_workdir.to_string_lossy(), None)
+            .await?;
+
+        persist_project_reasoning_levels_for_test(
+            &database,
+            project_id,
+            ReasoningLevel::High,
+            ReasoningLevel::Low,
+            ReasoningLevel::XHigh,
+        )
+        .await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    Ok(())
+}
+
 /// Verify that the Settings tab renders all setting rows with labels.
 ///
 /// Navigates to the Settings tab and asserts that the settings table
-/// appears with expected row labels including "Reasoning Level" and
-/// "Launch Configurations". It also verifies the Agentty coauthor trailer
-/// starts disabled for new projects.
+/// appears with expected role model rows and `Launch Configurations`. It also
+/// verifies the Agentty coauthor trailer starts disabled for new projects.
 #[test]
 fn settings_tab_shows_content() {
     // Arrange, Act, Assert
@@ -103,9 +136,11 @@ fn settings_tab_shows_content() {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Settings", &full);
                 assertion::assert_text_in_region(frame, "Global settings", &full);
-                assertion::assert_text_in_region(frame, "Default Reasoning Level", &full);
                 assertion::assert_text_in_region(frame, "Default Smart Model", &full);
+                assertion::assert_text_in_region(frame, "Default Fast Model", &full);
+                assertion::assert_text_in_region(frame, "Default Review Model", &full);
                 assertion::assert_text_in_region(frame, "gemini/gemini-3.1-pro", &full);
+                assertion::assert_text_in_region(frame, "[high]", &full);
                 assertion::assert_text_in_region(frame, "Disabled", &full);
                 assertion::assert_text_in_region(frame, "Launch Configurations", &full);
                 assertion::assert_text_in_region(frame, "Theme", &full);
@@ -121,8 +156,8 @@ fn settings_tab_shows_content() {
 /// Opens the Settings tab and presses `j` multiple times to move the
 /// selection down, then `k` to move back up. The test confirms the selected
 /// row by seeding deterministic retired Opus model values, observing startup
-/// migration to `claude-opus-5`, and then checking which selector advances
-/// through the current Claude model list after each dropdown selection.
+/// migration to `claude-opus-5`, and then checking which role reasoning
+/// value advances after each dropdown selection.
 #[test]
 fn settings_jk_navigation() {
     // Arrange, Act, Assert
@@ -157,6 +192,8 @@ fn settings_jk_navigation() {
                     .viewing_pause_ms(1500)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
@@ -167,6 +204,8 @@ fn settings_jk_navigation() {
                     .press_key("k")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("j")
@@ -193,13 +232,15 @@ fn settings_jk_navigation() {
 
                 let moved_down_frame = common::frame_from_capture(&report.captures[1]);
                 assertion::assert_match_count(&moved_down_frame, "claude-opus-4-6", 0);
-                assertion::assert_match_count(&moved_down_frame, "claude/claude-opus-5", 2);
-                assertion::assert_match_count(&moved_down_frame, "claude/claude-sonnet-5", 1);
+                assertion::assert_match_count(&moved_down_frame, "claude/claude-opus-5", 3);
+                assertion::assert_match_count(&moved_down_frame, "[high]", 2);
+                assertion::assert_match_count(&moved_down_frame, "[xhigh]", 1);
 
                 let moved_up_frame = common::frame_from_capture(&report.captures[2]);
                 assertion::assert_match_count(&moved_up_frame, "claude-opus-4-6", 0);
-                assertion::assert_match_count(&moved_up_frame, "claude/claude-opus-5", 1);
-                assertion::assert_match_count(&moved_up_frame, "claude/claude-sonnet-5", 2);
+                assertion::assert_match_count(&moved_up_frame, "claude/claude-opus-5", 3);
+                assertion::assert_match_count(&moved_up_frame, "[high]", 1);
+                assertion::assert_match_count(&moved_up_frame, "[xhigh]", 2);
             },
         )
         .expect("feature test failed");
@@ -207,9 +248,9 @@ fn settings_jk_navigation() {
 
 /// Verify that selector settings are edited through dropdowns.
 ///
-/// Opens the Settings tab, moves to the project reasoning row, opens the
-/// dropdown, and selects the maximum value. Captures before, during, and after
-/// to show the dropdown workflow in the GIF.
+/// Opens the Settings tab, moves to the Smart role selector, opens the
+/// model dropdown, advances to the reasoning dropdown, and saves maximum
+/// reasoning for the current model. Captures each stage for the GIF.
 #[test]
 fn settings_dropdown_selects_value() {
     // Arrange, Act, Assert
@@ -231,46 +272,114 @@ fn settings_dropdown_selects_value() {
                     .press_key("j")
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
-                    .capture_labeled("before_edit", "Reasoning Level before selection")
+                    .capture_labeled("before_edit", "Smart model and reasoning before selection")
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
-                    .capture_labeled("dropdown", "Reasoning Level dropdown")
+                    .capture_labeled("model_dropdown", "Choose the Smart model")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("reasoning_dropdown", "Choose Smart model reasoning")
                     .press_key("j")
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)
-                    .capture_labeled("after_edit", "Reasoning Level after dropdown selection")
+                    .capture_labeled("after_edit", "Smart model with maximum reasoning")
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Default Reasoning Level", &full);
+                assertion::assert_text_in_region(frame, "Default Smart Model", &full);
 
                 assert_eq!(
                     report.captures.len(),
-                    3,
-                    "Expected 3 captures (before, dropdown, and after selection)"
+                    4,
+                    "Expected captures before, at both selector stages, and after selection"
                 );
 
                 let before_frame = common::frame_from_capture(&report.captures[0]);
                 let before_full = Region::full(before_frame.cols(), before_frame.rows());
-                assertion::assert_text_in_region(&before_frame, "high", &before_full);
+                assertion::assert_text_in_region(&before_frame, "[high]", &before_full);
 
-                let dropdown_frame = common::frame_from_capture(&report.captures[1]);
-                let dropdown_full = Region::full(dropdown_frame.cols(), dropdown_frame.rows());
+                let model_frame = common::frame_from_capture(&report.captures[1]);
+                let model_full = Region::full(model_frame.cols(), model_frame.rows());
+                assertion::assert_text_in_region(&model_frame, "Select model", &model_full);
+                assertion::assert_text_in_region(&model_frame, "codex/", &model_full);
+
+                let reasoning_frame = common::frame_from_capture(&report.captures[2]);
+                let reasoning_full = Region::full(reasoning_frame.cols(), reasoning_frame.rows());
                 assertion::assert_text_in_region(
-                    &dropdown_frame,
-                    "Select setting value",
-                    &dropdown_full,
+                    &reasoning_frame,
+                    "Select reasoning level",
+                    &reasoning_full,
                 );
-                assertion::assert_text_in_region(&dropdown_frame, "xhigh", &dropdown_full);
-                assertion::assert_text_in_region(&dropdown_frame, "max", &dropdown_full);
+                assertion::assert_text_in_region(&reasoning_frame, "xhigh", &reasoning_full);
+                assertion::assert_text_in_region(&reasoning_frame, "max", &reasoning_full);
 
-                let after_frame = common::frame_from_capture(&report.captures[2]);
+                let after_frame = common::frame_from_capture(&report.captures[3]);
                 let after_full = Region::full(after_frame.cols(), after_frame.rows());
-                assertion::assert_text_in_region(&after_frame, "max", &after_full);
+                assertion::assert_text_in_region(&after_frame, "[max]", &after_full);
+            },
+        )
+        .expect("feature test failed");
+}
+
+/// Verify that each role persists and shows its own default reasoning level.
+///
+/// Opens the smart-model selector, confirms models appear once without a
+/// model-reasoning cross product, then advances to the reasoning selector.
+#[test]
+fn settings_model_selector_uses_two_steps() {
+    // Arrange, Act, Assert
+    FeatureTest::new("settings_model_reasoning")
+        .setup(seed_settings_model_reasoning_levels)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Inbox"))
+                    .compose(&common::switch_to_tab("Issues"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled(
+                        "model_rows",
+                        "Model setting rows with persisted reasoning levels",
+                    )
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled(
+                        "model_selector",
+                        "Choose a model without repeated reasoning combinations",
+                    )
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("reasoning_selector", "Choose the default reasoning level")
+            },
+            |frame, report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Select reasoning level", &full);
+                for reasoning_level in ["low", "medium", "high", "xhigh", "max"] {
+                    assertion::assert_text_in_region(frame, reasoning_level, &full);
+                }
+                assert_eq!(
+                    report.captures.len(),
+                    3,
+                    "Expected model rows, model selector, and reasoning selector captures"
+                );
+
+                let rows_frame = common::frame_from_capture(&report.captures[0]);
+                assertion::assert_match_count(&rows_frame, "[high]", 1);
+                assertion::assert_match_count(&rows_frame, "[low]", 1);
+                assertion::assert_match_count(&rows_frame, "[xhigh]", 1);
+
+                let model_frame = common::frame_from_capture(&report.captures[1]);
+                let model_full = Region::full(model_frame.cols(), model_frame.rows());
+                assertion::assert_text_in_region(&model_frame, "Select model", &model_full);
+                assertion::assert_match_count(&model_frame, "gemini/gemini-3.1-pro [max]", 0);
             },
         )
         .expect("feature test failed");
@@ -294,7 +403,6 @@ fn settings_launch_configurations_list_editor() {
                     .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(1500)
-                    .press_key("j")
                     .press_key("j")
                     .press_key("j")
                     .press_key("j")
@@ -402,7 +510,6 @@ fn test_input_undo_redo() {
                     .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
-                    .press_key("j")
                     .press_key("j")
                     .press_key("j")
                     .press_key("j")

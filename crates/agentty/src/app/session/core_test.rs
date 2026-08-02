@@ -1592,7 +1592,11 @@ async fn test_create_session() {
     app.services
         .db()
         .settings()
-        .set_project_reasoning_level(app.projects.active_project_id(), ReasoningLevel::Low)
+        .upsert_project_setting(
+            app.projects.active_project_id(),
+            SettingName::DefaultSmartReasoningLevel,
+            ReasoningLevel::Low.as_str(),
+        )
         .await
         .expect("failed to set project reasoning level");
 
@@ -4443,7 +4447,10 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
         &mock_git_client,
         &session_folder,
         "main",
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+        (
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            ReasoningLevel::Low,
+        ),
         &one_shot_client,
         false,
         false,

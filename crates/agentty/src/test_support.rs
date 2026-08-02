@@ -28,8 +28,9 @@ use crate::app;
 #[cfg(test)]
 use crate::app::{App, SessionManager, SessionState};
 use crate::db::{Database, DbError};
+use crate::domain::agent::ReasoningLevel;
 #[cfg(test)]
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 #[cfg(test)]
 use crate::domain::question::QuestionItem;
 #[cfg(test)]
@@ -145,6 +146,37 @@ SET value = excluded.value
     .await?;
 
     Ok(())
+}
+
+/// Persists the three project role reasoning defaults for integration-test
+/// database setup using canonical `SettingName` keys.
+pub async fn persist_project_reasoning_levels_for_test(
+    database: &Database,
+    project_id: i64,
+    smart_reasoning_level: ReasoningLevel,
+    fast_reasoning_level: ReasoningLevel,
+    review_reasoning_level: ReasoningLevel,
+) -> Result<(), DbError> {
+    database
+        .settings()
+        .upsert_project_settings(
+            project_id,
+            vec![
+                (
+                    SettingName::DefaultSmartReasoningLevel,
+                    smart_reasoning_level.as_str().to_string(),
+                ),
+                (
+                    SettingName::DefaultFastReasoningLevel,
+                    fast_reasoning_level.as_str().to_string(),
+                ),
+                (
+                    SettingName::DefaultReviewReasoningLevel,
+                    review_reasoning_level.as_str().to_string(),
+                ),
+            ],
+        )
+        .await
 }
 
 /// Deterministic [`crate::infra::clock::Clock`] implementation for unit-test
@@ -749,7 +781,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persist_active_settings_for_test_upserts_values() {
+    async fn persist_settings_for_test_upserts_values() {
         // Arrange
         let database = Database::open_in_memory()
             .await
@@ -768,6 +800,20 @@ mod tests {
         persist_active_tab_for_test(&database, app::Tab::Sessions)
             .await
             .expect("failed to update active tab");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/reasoning-defaults", Some("main".to_string()))
+            .await
+            .expect("failed to create project");
+        persist_project_reasoning_levels_for_test(
+            &database,
+            project_id,
+            ReasoningLevel::Medium,
+            ReasoningLevel::Low,
+            ReasoningLevel::XHigh,
+        )
+        .await
+        .expect("failed to persist role reasoning levels");
 
         // Assert
         assert_eq!(
@@ -787,6 +833,26 @@ mod tests {
                 .as_deref(),
             Some("Sessions")
         );
+        for (setting_name, expected_level) in [
+            (
+                SettingName::DefaultSmartReasoningLevel,
+                ReasoningLevel::Medium,
+            ),
+            (SettingName::DefaultFastReasoningLevel, ReasoningLevel::Low),
+            (
+                SettingName::DefaultReviewReasoningLevel,
+                ReasoningLevel::XHigh,
+            ),
+        ] {
+            assert_eq!(
+                database
+                    .settings()
+                    .load_project_reasoning_level(project_id, setting_name)
+                    .await
+                    .expect("failed to load role reasoning level"),
+                expected_level
+            );
+        }
     }
 
     #[test]

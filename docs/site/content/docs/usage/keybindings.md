@@ -94,7 +94,7 @@ highlighted in the table with a `* ` prefix and accented row text.
 <tr><td><code>q</code></td><td>Quit; closes an open selector dropdown or <code>Launch Configurations</code> browser first</td></tr>
 <tr><td><code>s</code></td><td>Sync active project branch</td></tr>
 <tr><td><code>j</code> / <code>k</code></td><td>Navigate settings; move inside an open selector dropdown or <code>Launch Configurations</code> browser</td></tr>
-<tr><td><code>Enter</code></td><td>Open selector dropdown or <code>Launch Configurations</code> browser; select highlighted option; edit or save a launch configuration</td></tr>
+<tr><td><code>Enter</code></td><td>Open selector dropdown or <code>Launch Configurations</code> browser; continue from model to reasoning; save the highlighted value; edit or save a launch configuration</td></tr>
 <tr><td><code>Esc</code></td><td>Close selector dropdown or <code>Launch Configurations</code> browser; cancel launch-configuration add/edit input</td></tr>
 <tr><td><code>a</code></td><td>Add an entry in the <code>Launch Configurations</code> browser</td></tr>
 <tr><td><code>e</code></td><td>Edit the selected entry in the <code>Launch Configurations</code> browser</td></tr>
@@ -108,11 +108,13 @@ highlighted in the table with a `* ` prefix and accented row text.
 
 <a id="usage-settings-options"></a> The page is split into `Global settings` for the
 app-wide `Theme` row (`Agentty Default`, `Agentty Green`, or `Dark Horizon`) and
-`'<project>' settings` for the reasoning level, model defaults, commit coauthor toggle,
-and `Launch Configurations` rows described in [Workflow](@/docs/usage/workflow.md).
-Selector rows open dropdowns; use `j` / `k` to move through the dropdown and `Enter` to
-save the highlighted value. The `Launch Configurations` row opens a list browser where
-each command is added, edited, deleted, or reordered as its own entry.
+`'<project>' settings` for Smart, Fast, and Review `agent/model [reasoning]` defaults,
+the commit coauthor toggle, and `Launch Configurations` rows described in
+[Workflow](@/docs/usage/workflow.md). Selector rows open dropdowns; use `j` / `k` to
+move through the dropdown. For a role default, press `Enter` after choosing the model,
+then choose and save its reasoning level with `Enter`. Other selectors save directly.
+The `Launch Configurations` row opens a list browser where each command is added,
+edited, deleted, or reordered as its own entry.
 
 ## Inbox
 

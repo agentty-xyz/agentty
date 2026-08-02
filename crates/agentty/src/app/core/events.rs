@@ -1022,6 +1022,7 @@ impl App {
             self.sessions.state_mut(),
             self.services.git_client(),
             self.services.event_sender(),
+            self.settings.default_review_reasoning_level,
             self.settings.default_review_selection,
         )
         .await;
@@ -1911,6 +1912,7 @@ impl App {
             self.sessions.state_mut(),
             self.services.git_client(),
             self.services.event_sender(),
+            self.settings.default_review_reasoning_level,
             self.settings.default_review_selection,
         )
         .await;
