@@ -4,14 +4,14 @@ use ag_tui_text::text_util::inline_text;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{App, Tab};
-use crate::domain::input::InputState;
+use crate::domain::input::{InputCommand, InputState};
 use crate::domain::session::{Session, Status};
 use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationIntent, HelpContext};
 use crate::presentation::help_action::{
     HelpAction, project_list_actions, session_list_actions, settings_actions,
 };
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
-use crate::presentation::settings::SettingsAction;
+use crate::presentation::settings::{SettingsAction, SettingsInput};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key;
@@ -26,16 +26,18 @@ use crate::runtime::mode::input_key;
 /// `Shift+Tab` cycles backward.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
     if app.tabs.current() == Tab::Settings
-        && app
+        && (app
             .settings_presentation
             .is_launch_configuration_list_editor_open()
+            || app.settings_presentation.is_selector_dropdown_open())
     {
-        return handle_settings_launch_configuration_list_editor(app, key).await;
-    }
+        if let Some(input) = settings_input_for_key(key)
+            && let Some(action) = app.settings_presentation.action_for_input(input)
+        {
+            apply_settings_action(app, action).await;
+        }
 
-    if app.tabs.current() == Tab::Settings && app.settings_presentation.is_selector_dropdown_open()
-    {
-        return handle_settings_selector_dropdown(app, key).await;
+        return Ok(EventResult::Continue);
     }
 
     match key.code {
@@ -116,6 +118,23 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
     Ok(EventResult::Continue)
 }
 
+/// Translates terminal-specific keys into frontend-neutral settings input.
+fn settings_input_for_key(key: KeyEvent) -> Option<SettingsInput> {
+    let input_command = input_key::command_for_key(key, input_key::InputCapabilities::SINGLE_LINE);
+
+    match (key.code, input_command) {
+        (KeyCode::Esc, _) => Some(SettingsInput::Cancel),
+        (KeyCode::Enter, _) => Some(SettingsInput::Confirm),
+        (KeyCode::Down, _) => Some(SettingsInput::MoveDown),
+        (KeyCode::Up, _) => Some(SettingsInput::MoveUp),
+        (KeyCode::Char(character), Some(InputCommand::Insert(_))) => {
+            Some(SettingsInput::Character(character))
+        }
+        (_, Some(command)) => Some(SettingsInput::Edit(command)),
+        (_, None) => None,
+    }
+}
+
 fn cancel_confirmation_message(session_title: &str, running_child_count: usize) -> String {
     if running_child_count > 0 {
         return format!("Cancel orchestration and its {running_child_count} running children?");
@@ -191,103 +210,6 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         }
         Tab::Issues => {
             app.open_selected_assigned_issue();
-        }
-    }
-
-    Ok(EventResult::Continue)
-}
-
-/// Handles key input while a settings selector dropdown is open.
-async fn handle_settings_selector_dropdown(
-    app: &mut App,
-    key: KeyEvent,
-) -> io::Result<EventResult> {
-    match key.code {
-        KeyCode::Esc => {
-            apply_settings_action(app, SettingsAction::Cancel).await;
-        }
-        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
-            apply_settings_action(app, SettingsAction::Cancel).await;
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            apply_settings_action(app, SettingsAction::Next).await;
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            apply_settings_action(app, SettingsAction::Previous).await;
-        }
-        KeyCode::Enter => {
-            apply_settings_action(app, SettingsAction::Confirm).await;
-        }
-        _ => {}
-    }
-
-    Ok(EventResult::Continue)
-}
-
-/// Handles key input while the `Launch Configurations` list editor is open.
-async fn handle_settings_launch_configuration_list_editor(
-    app: &mut App,
-    key: KeyEvent,
-) -> io::Result<EventResult> {
-    if app
-        .settings_presentation
-        .is_launch_configuration_list_editor_input_active()
-    {
-        return handle_settings_launch_configuration_input(app, key).await;
-    }
-
-    match key.code {
-        KeyCode::Esc => {
-            apply_settings_action(app, SettingsAction::Cancel).await;
-        }
-        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
-            apply_settings_action(app, SettingsAction::Cancel).await;
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            apply_settings_action(app, SettingsAction::Next).await;
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            apply_settings_action(app, SettingsAction::Previous).await;
-        }
-        KeyCode::Char('J') => {
-            apply_settings_action(app, SettingsAction::MoveLaunchConfigurationDown).await;
-        }
-        KeyCode::Char('K') => {
-            apply_settings_action(app, SettingsAction::MoveLaunchConfigurationUp).await;
-        }
-        KeyCode::Char('a') => {
-            apply_settings_action(app, SettingsAction::StartAddingLaunchConfiguration).await;
-        }
-        KeyCode::Char('e') | KeyCode::Enter => {
-            apply_settings_action(app, SettingsAction::EditLaunchConfiguration).await;
-        }
-        KeyCode::Char('d') => {
-            apply_settings_action(app, SettingsAction::DeleteLaunchConfiguration).await;
-        }
-        _ => {}
-    }
-
-    Ok(EventResult::Continue)
-}
-
-/// Handles key input while adding or editing one launch configuration.
-async fn handle_settings_launch_configuration_input(
-    app: &mut App,
-    key: KeyEvent,
-) -> io::Result<EventResult> {
-    match key.code {
-        KeyCode::Enter => {
-            apply_settings_action(app, SettingsAction::Confirm).await;
-        }
-        KeyCode::Esc => {
-            apply_settings_action(app, SettingsAction::Cancel).await;
-        }
-        _ => {
-            if let Some(command) =
-                input_key::command_for_key(key, input_key::InputCapabilities::SINGLE_LINE)
-            {
-                apply_settings_action(app, SettingsAction::Input(command)).await;
-            }
         }
     }
 
@@ -454,6 +376,43 @@ mod tests {
             scroll_offset: Some(3),
             session_id: session_id.into(),
             slash_state: PromptSlashState::default(),
+        }
+    }
+
+    #[test]
+    fn settings_input_for_key_maps_terminal_keys() {
+        // Arrange
+        let mappings = [
+            (
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                Some(SettingsInput::Cancel),
+            ),
+            (
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                Some(SettingsInput::Confirm),
+            ),
+            (
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                Some(SettingsInput::MoveDown),
+            ),
+            (
+                KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+                Some(SettingsInput::MoveUp),
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+                Some(SettingsInput::Character('x')),
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+                Some(SettingsInput::Edit(InputCommand::DeleteWordBackward)),
+            ),
+            (KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE), None),
+        ];
+
+        // Act / Assert
+        for (key, expected_input) in mappings {
+            assert_eq!(settings_input_for_key(key), expected_input);
         }
     }
 
@@ -1141,6 +1100,30 @@ mod tests {
         assert_eq!(selector_dropdown.row_index, 0);
         assert_eq!(selector_dropdown.selected_index, 0);
         assert_eq!(selector_dropdown.options[0].label, "Agentty Default");
+    }
+
+    #[tokio::test]
+    async fn test_settings_selector_dropdown_ignores_unmapped_key() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.tabs.set(Tab::Settings);
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to open settings selector dropdown");
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE))
+            .await
+            .expect("failed to ignore unmapped settings key");
+        let selector_dropdown = app
+            .settings_presentation
+            .snapshot(&app.settings.view())
+            .selector_dropdown
+            .expect("settings selector dropdown should remain open");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(selector_dropdown.selected_index, 0);
     }
 
     #[tokio::test]
