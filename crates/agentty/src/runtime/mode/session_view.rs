@@ -7,7 +7,9 @@ use ratatui::layout::Rect;
 use tracing::warn;
 
 use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
-use crate::app::{self, App, AppEvent, ReviewCacheEntry, diff_content_hash};
+use crate::app::{
+    self, App, AppEvent, OrchestrationApprovalOutcome, ReviewCacheEntry, diff_content_hash,
+};
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -81,6 +83,9 @@ struct ViewSessionSnapshot {
     continue_terminal_session: ViewActionState,
     fork_session: ViewActionState,
     follow_up_task_action: Option<FollowUpTaskAction>,
+    inspect_diff: ViewActionState,
+    is_managed: bool,
+    is_orchestrator: bool,
     merge_session_branch: ViewActionState,
     mutate_session_branch: ViewActionState,
     open_worktree: ViewActionState,
@@ -299,6 +304,15 @@ async fn handle_primary_view_key(
     view_session_snapshot: &ViewSessionSnapshot,
     pending_update: &ViewPendingUpdate,
 ) -> Option<bool> {
+    if view_session_snapshot.is_orchestrator
+        && handle_orchestration_view_key(app, key, view_context).await
+    {
+        return Some(true);
+    }
+    if view_session_snapshot.is_managed && handle_managed_view_key(app, key, view_context) {
+        return Some(false);
+    }
+
     match key.code {
         KeyCode::Char('q') => {
             app.mode = AppMode::List;
@@ -396,6 +410,56 @@ async fn handle_primary_view_key(
     Some(true)
 }
 
+/// Applies campaign-board controls owned by an orchestrator session.
+async fn handle_orchestration_view_key(
+    app: &mut App,
+    key: KeyEvent,
+    view_context: &ViewContext,
+) -> bool {
+    match key.code {
+        KeyCode::Char('a') => {
+            let outcome = app
+                .approve_orchestration(&view_context.session_id, None)
+                .await;
+            if outcome == OrchestrationApprovalOutcome::IntegrationApproachRequired {
+                app.mode = AppMode::Confirmation {
+                    confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
+                    confirmation_message: "Choose how to integrate verified task branches."
+                        .to_string(),
+                    confirmation_title: "Integration Approach".to_string(),
+                    restore_view: Some(confirmation_view_mode(view_context)),
+                    session_id: Some(view_context.session_id.clone()),
+                    selected_confirmation_index: 0,
+                };
+            }
+        }
+        _ => return false,
+    }
+
+    true
+}
+
+/// Opens the one-way ownership-transfer confirmation for a managed worker.
+fn handle_managed_view_key(app: &mut App, key: KeyEvent, view_context: &ViewContext) -> bool {
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
+        return true;
+    }
+    if key.code != KeyCode::Char('D') {
+        return false;
+    }
+    app.mode = AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::DetachManagedSession,
+        confirmation_message: "Detach this worker from its campaign and take permanent ownership?"
+            .to_string(),
+        confirmation_title: "Confirm Detach".to_string(),
+        restore_view: Some(confirmation_view_mode(view_context)),
+        session_id: Some(view_context.session_id.clone()),
+        selected_confirmation_index: DEFAULT_OPTION_INDEX,
+    };
+
+    true
+}
+
 /// Handles workflow actions in session view such as diff, publish, review,
 /// merge, session sync, cancellation, and help.
 async fn handle_workflow_view_key(
@@ -408,8 +472,7 @@ async fn handle_workflow_view_key(
     match key.code {
         KeyCode::Char('d')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && view_session_snapshot.branch_actions.is_enabled()
-                && view_session_snapshot.session_status.allows_diff_view() =>
+                && view_session_snapshot.inspect_diff.is_enabled() =>
         {
             show_diff_for_view_session(app, view_context).await;
         }
@@ -592,12 +655,20 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
             .unwrap_or(&false);
 
     Some(ViewSessionSnapshot {
-        branch_actions: ViewActionState::from_bool(session.owns_branch_changes()),
+        branch_actions: ViewActionState::from_bool(
+            session.owns_branch_changes() && session.accepts_user_turns(),
+        ),
         continue_terminal_session: ViewActionState::from_bool(
             session.allows_terminal_continuation(),
         ),
         fork_session: ViewActionState::from_bool(session.allows_fork_action()),
         follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
+        inspect_diff: ViewActionState::from_bool(
+            session.is_managed()
+                || (session.owns_branch_changes() && session.status.allows_diff_view()),
+        ),
+        is_managed: session.is_managed(),
+        is_orchestrator: session.role == crate::domain::session::SessionRole::Orchestrator,
         merge_session_branch: ViewActionState::from_bool(
             session.owns_branch_changes()
                 && app
@@ -610,11 +681,10 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
                     .sessions
                     .can_mutate_session_branch_in_stack(view_context.session_id.as_str()),
         ),
-        open_worktree: ViewActionState::from_bool(can_open_worktree),
-        publish_pull_request_action: session
-            .owns_branch_changes()
-            .then(|| session.publish_pull_request_action())
-            .flatten(),
+        open_worktree: ViewActionState::from_bool(
+            can_open_worktree && session.accepts_user_turns(),
+        ),
+        publish_pull_request_action: session.publish_pull_request_action(),
         rebase_session_branch: ViewActionState::from_bool(
             session.owns_branch_changes()
                 && app
@@ -622,11 +692,13 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
                     .can_rebase_session_branch_in_stack(view_context.session_id.as_str()),
         ),
         reply_to_session: ViewActionState::from_bool(
-            app.sessions
-                .can_reply_to_session_in_stack(view_context.session_id.as_str()),
+            session.accepts_user_turns()
+                && app
+                    .sessions
+                    .can_reply_to_session_in_stack(view_context.session_id.as_str()),
         ),
         review_comments: ViewActionState::from_bool(
-            session.has_review_request() && !session.allows_terminal_continuation(),
+            session.has_review_request() && session.allows_review_comment_reply(),
         ),
         session_state: help_action::session_view_state(session),
         session_status,
@@ -1096,6 +1168,28 @@ async fn load_view_session_diff(app: &App, view_context: &ViewContext) -> String
         return String::new();
     };
 
+    if session.is_managed() && session.status == Status::Done {
+        return match app
+            .services
+            .db()
+            .sessions()
+            .load_session_archived_diff(&view_context.session_id)
+            .await
+        {
+            Ok(Some(diff)) => diff,
+            Ok(None) => String::new(),
+            Err(error) => {
+                warn!(
+                    session_id = %view_context.session_id,
+                    error = %error,
+                    "failed to load archived managed-session diff"
+                );
+
+                format!("Failed to load archived diff: {error}")
+            }
+        };
+    }
+
     let session_folder = session.folder.clone();
     let base_branch = session.base_branch.clone();
 
@@ -1132,17 +1226,20 @@ async fn rebase_view_session(app: &mut App, session_id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use crossterm::event::KeyModifiers;
     use mockall::predicate::eq;
     use tempfile::tempdir;
+    use tracing::instrument::WithSubscriber;
 
     use super::*;
     use crate::app::review_loading_message;
     use crate::domain::agent::AgentModel;
+    use crate::domain::orchestration::OrchestrationStatus;
     use crate::domain::session::{
-        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionRole,
     };
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
@@ -1204,6 +1301,9 @@ mod tests {
             branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Enabled,
+            inspect_diff: ViewActionState::Enabled,
+            is_managed: false,
+            is_orchestrator: false,
             merge_session_branch: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
@@ -1379,6 +1479,55 @@ mod tests {
         assert!(!snapshot.can_open_worktree());
         assert_eq!(snapshot.session_state, ViewSessionState::Canceled);
         assert_eq!(snapshot.session_status, Status::Canceled);
+    }
+
+    #[tokio::test]
+    async fn managed_session_snapshot_hides_review_comment_entry() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let session = &mut app.sessions.sessions_mut()[0];
+        attach_open_review_request(session);
+        session.role = SessionRole::OrchestrationWorker;
+        session.status = Status::Review;
+        app.mode = AppMode::View {
+            session_id: session_id.into(),
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert!(!snapshot.can_open_review_comments());
+    }
+
+    #[tokio::test]
+    async fn diff_snapshot_keeps_managed_worker_inspection_without_controller_action() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let session = &mut app.sessions.sessions_mut()[0];
+        session.role = SessionRole::Orchestrator;
+        session.status = Status::Review;
+        app.mode = AppMode::View {
+            session_id: session_id.into(),
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let controller_snapshot =
+            view_session_snapshot(&app, &context).expect("expected controller snapshot");
+        app.sessions.sessions_mut()[0].role = SessionRole::OrchestrationWorker;
+        let managed_worker_snapshot =
+            view_session_snapshot(&app, &context).expect("expected managed worker snapshot");
+
+        // Assert
+        assert_eq!(controller_snapshot.inspect_diff, ViewActionState::Disabled);
+        assert_eq!(
+            managed_worker_snapshot.inspect_diff,
+            ViewActionState::Enabled
+        );
     }
 
     #[tokio::test]
@@ -2040,6 +2189,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn managed_done_session_loads_archived_diff_without_worktree() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let archived_diff = "diff --git a/worker.txt b/worker.txt\n+new work\n";
+        app.services
+            .db()
+            .sessions()
+            .update_session_archived_diff(&session_id, Some(archived_diff.to_string()))
+            .await
+            .expect("failed to persist archived diff");
+        let session = &mut app.sessions.sessions_mut()[0];
+        session.folder = PathBuf::from("missing-managed-worktree");
+        session.role = SessionRole::OrchestrationWorker;
+        session.status = Status::Done;
+        let context = ViewContext {
+            scroll_offset: Some(0),
+            session_id: session_id.into(),
+            session_index: 0,
+        };
+
+        // Act
+        let diff = load_view_session_diff(&app, &context).await;
+        app.services
+            .db()
+            .sessions()
+            .update_session_archived_diff(&context.session_id, None)
+            .await
+            .expect("failed to clear archived diff");
+        let missing_diff = load_view_session_diff(&app, &context).await;
+
+        // Assert
+        assert_eq!(diff, archived_diff);
+        assert!(missing_diff.is_empty());
+    }
+
+    #[tokio::test]
+    async fn managed_done_session_surfaces_archived_diff_load_failure() {
+        // Arrange
+        let (mut app, _base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let session = &mut app.sessions.sessions_mut()[0];
+        session.role = SessionRole::OrchestrationWorker;
+        session.status = Status::Done;
+        let context = ViewContext {
+            scroll_offset: Some(0),
+            session_id: session_id.into(),
+            session_index: 0,
+        };
+        pool.close().await;
+
+        // Act
+        let diff = load_view_session_diff(&app, &context)
+            .with_subscriber(crate::test_support::TestSubscriber)
+            .await;
+
+        // Assert
+        assert!(diff.starts_with("Failed to load archived diff:"));
+    }
+
+    #[tokio::test]
     async fn test_append_output_for_session_appends_text() {
         // Arrange
         let (app, _base_dir, session_id) = new_test_app_with_session().await;
@@ -2180,6 +2392,9 @@ mod tests {
             branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Enabled,
+            inspect_diff: ViewActionState::Enabled,
+            is_managed: false,
+            is_orchestrator: false,
             merge_session_branch: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
@@ -2505,6 +2720,9 @@ mod tests {
             branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Disabled,
+            inspect_diff: ViewActionState::Disabled,
+            is_managed: false,
+            is_orchestrator: false,
             merge_session_branch: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
@@ -2563,6 +2781,9 @@ mod tests {
             branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Disabled,
+            inspect_diff: ViewActionState::Enabled,
+            is_managed: false,
+            is_orchestrator: false,
             merge_session_branch: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
@@ -2758,6 +2979,134 @@ mod tests {
                 confirmation_intent: ConfirmationIntent::ContinueSession,
                 ..
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn campaign_and_managed_worker_keys_route_through_primary_view_actions() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_test_app().await;
+        let view_context = ViewContext {
+            scroll_offset: Some(2),
+            session_id: SessionId::from("campaign"),
+            session_index: 0,
+        };
+        let pending_update = ViewPendingUpdate::from_context(&view_context);
+        let mut snapshot = reply_enabled_review_snapshot();
+        snapshot.is_orchestrator = true;
+        let campaign_keys = ['a'];
+
+        // Act
+        let mut results = Vec::new();
+        for key in campaign_keys {
+            results.push(
+                handle_primary_view_key(
+                    &mut app,
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    &view_context,
+                    &snapshot,
+                    &pending_update,
+                )
+                .await,
+            );
+        }
+        let unknown_campaign_key = handle_primary_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            &view_context,
+            &snapshot,
+            &pending_update,
+        )
+        .await;
+        snapshot.is_orchestrator = false;
+        snapshot.is_managed = true;
+        let unrelated = handle_primary_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            &view_context,
+            &snapshot,
+            &pending_update,
+        )
+        .await;
+        let direct_cancel = handle_primary_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &view_context,
+            &snapshot,
+            &pending_update,
+        )
+        .await;
+        let detach = handle_primary_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
+            &view_context,
+            &snapshot,
+            &pending_update,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(results, vec![Some(true); campaign_keys.len()]);
+        assert_eq!(unknown_campaign_key, None);
+        assert_eq!(unrelated, None);
+        assert_eq!(direct_cancel, Some(false));
+        assert_eq!(detach, Some(false));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::DetachManagedSession,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn integration_approval_opens_approach_choice() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.services
+            .db()
+            .orchestrations()
+            .insert_orchestration(
+                &session_id,
+                &OrchestrationStatus::AwaitingIntegration.to_string(),
+                2,
+            )
+            .await
+            .expect("failed to insert orchestration");
+        let view_context = ViewContext {
+            scroll_offset: Some(2),
+            session_id: session_id.clone().into(),
+            session_index: 0,
+        };
+        let pending_update = ViewPendingUpdate::from_context(&view_context);
+        let mut snapshot = reply_enabled_review_snapshot();
+        snapshot.is_orchestrator = true;
+
+        // Act
+        let result = handle_primary_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            &view_context,
+            &snapshot,
+            &pending_update,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, Some(true));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
+                ref confirmation_title,
+                restore_view: Some(ConfirmationViewMode {
+                    scroll_offset: Some(2),
+                    ref session_id,
+                }),
+                selected_confirmation_index: 0,
+                ..
+            } if confirmation_title == "Integration Approach" && session_id == &view_context.session_id
         ));
     }
 
@@ -3107,6 +3456,9 @@ mod tests {
             branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Enabled,
+            inspect_diff: ViewActionState::Enabled,
+            is_managed: false,
+            is_orchestrator: false,
             merge_session_branch: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
@@ -3163,6 +3515,9 @@ mod tests {
             branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Enabled,
+            inspect_diff: ViewActionState::Enabled,
+            is_managed: false,
+            is_orchestrator: false,
             merge_session_branch: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,
@@ -3237,6 +3592,9 @@ mod tests {
                 branch_actions: ViewActionState::Enabled,
                 continue_terminal_session: ViewActionState::Disabled,
                 fork_session: ViewActionState::Disabled,
+                inspect_diff: ViewActionState::Disabled,
+                is_managed: false,
+                is_orchestrator: false,
                 merge_session_branch: ViewActionState::Enabled,
                 mutate_session_branch: ViewActionState::Enabled,
                 rebase_session_branch: ViewActionState::Enabled,

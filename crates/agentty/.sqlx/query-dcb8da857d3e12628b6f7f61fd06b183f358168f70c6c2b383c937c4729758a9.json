@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT child.base_branch,\n       task.id AS \"id!: i64\",\n       task.touched_areas\nFROM session_orchestration_task AS task\nINNER JOIN session AS child\nON child.id = task.child_session_id\nWHERE child.id = ?\n  AND child.role = 'OrchestrationWorker'\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "base_branch",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "base_branch"
+          }
+        }
+      },
+      {
+        "name": "id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "touched_areas",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "touched_areas"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "dcb8da857d3e12628b6f7f61fd06b183f358168f70c6c2b383c937c4729758a9"
+}

@@ -9,6 +9,8 @@ pub mod inbox;
 pub mod issue_detail;
 /// Assigned forge-issue list page.
 pub mod issue_list;
+/// Board-first orchestration campaign and controller conversation page.
+pub mod orchestration;
 /// Project selection and activity list page.
 pub mod project_list;
 /// Session-linked forge-review comment page.

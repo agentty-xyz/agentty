@@ -7,6 +7,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- agentty: add standalone orchestration campaign boards with acceptance-criteria
+  planning, read-only managed workers, question relay, verification-gated integration,
+  follow-up continuations, detach ownership transfer, and approval-gated merges.
+
+### Fixed
+
+- agentty: provide selectable answers for orchestrator clarifications and routing
+  questions.
+- agentty: bind orchestration question relays to their exact managed task, preserve
+  controller-authored questions, prevent managed-worker `Ctrl+c` interruption, and use
+  the global orchestration parallelism setting while choosing local merges or review
+  requests only when verified work is ready to integrate.
+- agentty: persist controller verification verdicts before integration, re-verify
+  unintegrated siblings after follow-up work, and surface touched-area violations from
+  managed-child diffs.
+- agentty: block managed workers from review-comment turns and preserve their final
+  review diff before merged worktree cleanup.
+- agentty: key repeated campaign verification by generation, include the campaign goal
+  in its evidence, and complete campaigns without a redundant final controller turn.
+- agentty: keep session titles and group labels visible while a running orchestrator
+  carries a multiline campaign-board snapshot.
+- agentty: hide the unavailable `p: PR` action from orchestrator sessions.
+- agentty: remove the misleading child-diff action from orchestrator campaign boards.
+
 ## [v0.14.0] - 2026-08-03
 
 ### Added

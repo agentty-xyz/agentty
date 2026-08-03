@@ -2,7 +2,7 @@
 
 /// Prompt text input and suggestion-dropdown component.
 pub mod chat_input;
-/// Generic `Yes` or `No` confirmation popup.
+/// Generic binary-choice confirmation popup.
 pub mod confirmation_overlay;
 /// Hierarchical changed-file explorer.
 pub mod file_explorer;

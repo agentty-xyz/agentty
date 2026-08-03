@@ -7,10 +7,10 @@ use std::sync::Arc;
 use ag_agent::{ReasoningLevel, SpeedMode, parse_persisted_session_agent_model};
 use ag_protocol::QuestionItem;
 use ag_session::{
-    AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionMode, CreateSessionRequest,
-    QuestionAnswer, ReviewRequest, ReviewRequestState, SessionBackend,
-    SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind, SessionRole,
-    SessionService, SessionSettings, SessionStatus,
+    AnswerQuestionsRequest, CoordinatorMessageRequest, CoordinatorMessageVisibility,
+    CreateSessionMode, CreateSessionRequest, QuestionAnswer, ReviewRequest, ReviewRequestState,
+    SessionBackend, SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind,
+    SessionRole, SessionService, SessionSettings, SessionStatus,
 };
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
@@ -19,15 +19,18 @@ use crate::app::branch_publish::{
     BranchPublishTaskFailure, BranchPublishTaskResult, BranchPublishTaskSuccess,
     branch_publish_loading_label, run_branch_publish_action,
 };
-use crate::app::orchestration::child_session_is_stopped;
+use crate::app::orchestration::{OrchestrationApprovalOutcome, child_session_is_stopped};
 use crate::app::session::{
     SessionCreationKind, SessionCreationSettings, migrate_session_off_retired_model,
 };
 use crate::app::{
-    App, AppError, AppEvent, SessionError, SessionRuntimeCommand, SessionRuntimeHandle,
+    App, AppError, AppEvent, SessionError, SessionRuntimeAccess, SessionRuntimeCommand,
+    SessionRuntimeHandle,
 };
-use crate::domain::orchestration::{OrchestrationStatus, OrchestrationTaskStatus};
-use crate::domain::session::PublishBranchAction;
+use crate::domain::orchestration::{
+    IntegrationApproach, OrchestrationStatus, OrchestrationTaskStatus,
+};
+use crate::domain::session::{PublishBranchAction, Session};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
@@ -93,6 +96,45 @@ impl App {
         SessionService::new(Arc::new(self.sessions.handle()))
     }
 
+    /// Returns the capability reserved for orchestration coordinators.
+    pub(crate) fn coordinator_session_service(&self) -> SessionService {
+        SessionService::new(Arc::new(self.sessions.coordinator_handle()))
+    }
+
+    /// Approves the current plan or advances integration with a selected
+    /// destination.
+    pub(crate) async fn approve_orchestration(
+        &self,
+        controller_session_id: &str,
+        integration_approach: Option<IntegrationApproach>,
+    ) -> OrchestrationApprovalOutcome {
+        let outcome = crate::app::orchestration::approve_orchestration(
+            self.services.db(),
+            controller_session_id,
+            integration_approach,
+        )
+        .await
+        .unwrap_or(OrchestrationApprovalOutcome::Unavailable);
+        if outcome == OrchestrationApprovalOutcome::Approved {
+            self.services.emit_app_event(AppEvent::RefreshSessions);
+        }
+
+        outcome
+    }
+
+    /// Detaches one managed child and schedules a session-list refresh.
+    pub(crate) async fn detach_managed_child(&self, child_session_id: &str) -> bool {
+        let detached =
+            crate::app::orchestration::detach_managed_child(self.services.db(), child_session_id)
+                .await
+                .unwrap_or(false);
+        if detached {
+            self.services.emit_app_event(AppEvent::RefreshSessions);
+        }
+
+        detached
+    }
+
     /// Drives one local API request while processing the actor commands ahead
     /// of it.
     ///
@@ -136,11 +178,12 @@ impl App {
                 let _ = response_tx.send(self.get_api_session(&session_id).await);
             }
             SessionRuntimeCommand::SendMessage {
+                access,
                 message,
                 response_tx,
                 session_id,
             } => {
-                let _ = response_tx.send(self.send_api_message(&session_id, message).await);
+                let _ = response_tx.send(self.send_api_message(&session_id, message, access).await);
             }
             SessionRuntimeCommand::SubmitCoordinatorMessage {
                 request,
@@ -153,34 +196,38 @@ impl App {
                 );
             }
             SessionRuntimeCommand::AnswerQuestions {
+                access,
                 request,
                 response_tx,
                 session_id,
             } => {
-                let _ = response_tx.send(self.answer_api_questions(&session_id, request).await);
+                let _ = response_tx.send(
+                    self.answer_api_questions(&session_id, request, access)
+                        .await,
+                );
             }
             SessionRuntimeCommand::Cancel {
+                access,
                 response_tx,
                 session_id,
             } => {
-                let result = self.cancel_api_session(&session_id).await;
+                let result = self.cancel_api_session(&session_id, access).await;
                 let _ = response_tx.send(result);
             }
             SessionRuntimeCommand::Merge {
+                access,
                 response_tx,
                 session_id,
             } => {
-                let result = self
-                    .merge_session(&session_id)
-                    .await
-                    .map_err(api_error_from_app);
+                let result = self.merge_api_session(&session_id, access).await;
                 let _ = response_tx.send(result);
             }
             SessionRuntimeCommand::CreateReviewRequest {
+                access,
                 response_tx,
                 session_id,
             } => {
-                self.start_api_review_request_publish(session_id, response_tx);
+                self.start_api_review_request_publish(session_id, access, response_tx);
             }
         }
     }
@@ -190,13 +237,20 @@ impl App {
     fn start_api_review_request_publish(
         &mut self,
         session_id: SessionId,
+        access: SessionRuntimeAccess,
         response_tx: oneshot::Sender<Result<ReviewRequest, ApiSessionError>>,
     ) {
-        if self
-            .sessions
-            .session_for_id(&session_id)
-            .is_some_and(|session| !session.owns_branch_changes())
-        {
+        let Some(session) = self.sessions.session_for_id(&session_id) else {
+            let _ = response_tx.send(Err(ApiSessionError::NotFound));
+
+            return;
+        };
+        if session.is_managed() && access != SessionRuntimeAccess::Coordinator {
+            let _ = response_tx.send(Err(managed_session_error(&session_id, "publish")));
+
+            return;
+        }
+        if !session.owns_branch_changes() {
             let _ = response_tx.send(Err(ApiSessionError::Operation(
                 "Orchestrator sessions cannot publish review requests".to_string(),
             )));
@@ -208,7 +262,6 @@ impl App {
 
             return;
         };
-
         let clock = self.services.clock();
         let db = self.services.db().clone();
         let event_sender = self.services.event_sender();
@@ -409,6 +462,7 @@ impl App {
         &mut self,
         session_id: &SessionId,
         message: String,
+        access: SessionRuntimeAccess,
     ) -> Result<(), ApiSessionError> {
         if message.trim().is_empty() {
             return Err(ApiSessionError::Operation(
@@ -420,6 +474,9 @@ impl App {
             .sessions
             .session_for_id(session_id)
             .ok_or(ApiSessionError::NotFound)?;
+        if session.is_managed() && access != SessionRuntimeAccess::Coordinator {
+            return Err(managed_session_error(session_id, "send messages"));
+        }
         let is_draft = session.is_draft_session();
         let status = session.status;
         let prompt = TurnPrompt::from_text(message);
@@ -494,6 +551,7 @@ impl App {
                 &self.services,
                 session_id,
                 request.operation_id,
+                request.visibility == CoordinatorMessageVisibility::Visible,
                 TurnPrompt::from_agent_data(request.message),
             )
             .await
@@ -512,7 +570,19 @@ impl App {
     /// A child cancellation failure aborts the cascade and leaves the
     /// orchestration active so the controller never reports a false terminal
     /// cancellation while a worker may still be running.
-    async fn cancel_api_session(&mut self, session_id: &SessionId) -> Result<(), ApiSessionError> {
+    async fn cancel_api_session(
+        &mut self,
+        session_id: &SessionId,
+        access: SessionRuntimeAccess,
+    ) -> Result<(), ApiSessionError> {
+        if self
+            .sessions
+            .session_for_id(session_id)
+            .is_some_and(Session::is_managed)
+            && access != SessionRuntimeAccess::Coordinator
+        {
+            return Err(managed_session_error(session_id, "cancel"));
+        }
         let is_orchestrator = self
             .sessions
             .session_for_id(session_id)
@@ -558,9 +628,10 @@ impl App {
                 if let Some(child_session_id) = child_session_id.as_deref()
                     && !child_session_is_stopped(task.child_status.as_deref())
                 {
-                    self.cancel_session(child_session_id)
+                    self.sessions
+                        .cancel_managed_session(&self.services, child_session_id)
                         .await
-                        .map_err(api_error_from_app)?;
+                        .map_err(api_error_from_session)?;
                 }
                 self.services
                     .db()
@@ -586,6 +657,19 @@ impl App {
                 .update_orchestration_progress(session_id, None);
         }
 
+        if access == SessionRuntimeAccess::Coordinator
+            && self
+                .sessions
+                .session_for_id(session_id)
+                .is_some_and(Session::is_managed)
+        {
+            return self
+                .sessions
+                .cancel_managed_session(&self.services, session_id)
+                .await
+                .map_err(api_error_from_session);
+        }
+
         self.cancel_session(session_id)
             .await
             .map_err(api_error_from_app)
@@ -603,63 +687,155 @@ impl App {
         &mut self,
         session_id: &SessionId,
         request: AnswerQuestionsRequest,
+        access: SessionRuntimeAccess,
     ) -> Result<(), ApiSessionError> {
+        if self
+            .sessions
+            .session_for_id(session_id)
+            .is_some_and(Session::is_managed)
+            && access != SessionRuntimeAccess::Coordinator
+        {
+            return Err(managed_session_error(session_id, "answer questions"));
+        }
+        let session_role = self
+            .sessions
+            .session_for_id(session_id)
+            .ok_or(ApiSessionError::NotFound)?
+            .role;
+        let question_relay = if session_role == SessionRole::Orchestrator {
+            self.orchestration_question_target(session_id).await?
+        } else {
+            None
+        };
+        let target_session_id = question_relay
+            .as_ref()
+            .map_or(session_id, |(_, target_session_id)| target_session_id);
         let row = self
             .services
             .db()
             .sessions()
-            .load_session(session_id)
+            .load_session(target_session_id)
             .await
             .map_err(|error| ApiSessionError::Operation(error.to_string()))?
             .ok_or(ApiSessionError::NotFound)?;
         let persisted_questions = row.questions.unwrap_or_default();
-        let questions = api_questions_from_json(Some(&persisted_questions), session_id)?;
+        let questions = api_questions_from_json(Some(&persisted_questions), target_session_id)?;
         validate_question_answers(&questions, &request.answers)?;
         let message = question_answer_message(&request.answers);
         let status = self
             .sessions
-            .session_for_id(session_id)
+            .session_for_id(target_session_id)
             .ok_or(ApiSessionError::NotFound)?
             .status;
 
         self.services
             .db()
             .sessions()
-            .update_session_questions(session_id, "")
+            .update_session_questions(target_session_id, "")
             .await
             .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
         let send_result = if self
             .sessions
-            .reply_to_question_answers(&self.services, session_id, message)
+            .reply_to_question_answers(&self.services, target_session_id, message)
             .await
         {
             Ok(())
         } else {
             Err(ApiSessionError::Operation(format!(
-                "Session `{session_id}` cannot accept question answers in status `{status}`"
+                "Session `{target_session_id}` cannot accept question answers in status `{status}`"
             )))
         };
         if let Err(send_error) = send_result {
             self.services
                 .db()
                 .sessions()
-                .update_session_questions(session_id, &persisted_questions)
+                .update_session_questions(target_session_id, &persisted_questions)
                 .await
                 .map_err(|restore_error| question_restore_error(&send_error, &restore_error))?;
 
             return Err(send_error);
         }
-        crate::app::orchestration::apply_plan_answer(
-            self.services.db(),
-            session_id,
-            &request.answers,
-        )
-        .await
-        .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-
+        if let Some((session_orchestration_id, _)) = question_relay {
+            self.services
+                .db()
+                .orchestrations()
+                .clear_orchestration_questions(session_orchestration_id)
+                .await
+                .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+        }
         self.services.emit_app_event(AppEvent::RefreshSessions);
 
         Ok(())
+    }
+
+    /// Resolves the exact managed task claimed by the controller's question
+    /// inbox.
+    async fn orchestration_question_target(
+        &self,
+        controller_session_id: &SessionId,
+    ) -> Result<Option<(i64, SessionId)>, ApiSessionError> {
+        let Some(orchestration) = self
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_for_controller(controller_session_id)
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        let Some(relayed_question_task_id) = orchestration.relayed_question_task_id else {
+            return Ok(None);
+        };
+        let tasks = self
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_tasks(orchestration.id)
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+
+        let target_session_id = tasks
+            .into_iter()
+            .find(|task| task.id == relayed_question_task_id)
+            .and_then(|task| task.child_session_id)
+            .map(SessionId::from)
+            .ok_or_else(|| {
+                ApiSessionError::Operation(format!(
+                    "Orchestration question relay references unavailable task \
+                     `{relayed_question_task_id}`"
+                ))
+            })?;
+
+        Ok(Some((orchestration.id, target_session_id)))
+    }
+
+    /// Returns whether the controller's visible questions are a child relay.
+    pub(crate) async fn has_orchestration_question_proxy(
+        &self,
+        controller_session_id: &str,
+    ) -> bool {
+        self.orchestration_question_target(&SessionId::from(controller_session_id))
+            .await
+            .is_ok_and(|relay| relay.is_some())
+    }
+
+    async fn merge_api_session(
+        &mut self,
+        session_id: &SessionId,
+        access: SessionRuntimeAccess,
+    ) -> Result<(), ApiSessionError> {
+        let session = self
+            .sessions
+            .session_for_id(session_id)
+            .ok_or(ApiSessionError::NotFound)?;
+        if session.is_managed() && access != SessionRuntimeAccess::Coordinator {
+            return Err(managed_session_error(session_id, "merge"));
+        }
+
+        self.merge_session(session_id)
+            .await
+            .map_err(api_error_from_app)
     }
 
     /// Loads inherited launch settings and verifies that the source belongs
@@ -990,6 +1166,15 @@ fn api_error_from_session(error: SessionError) -> ApiSessionError {
     }
 }
 
+/// Builds the stable capability error returned for direct managed-worker
+/// mutations.
+fn managed_session_error(session_id: &SessionId, action: &str) -> ApiSessionError {
+    ApiSessionError::Operation(format!(
+        "Session `{session_id}` is managed by an orchestration campaign and cannot {action} \
+         directly"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use ag_agent::{
@@ -1093,6 +1278,26 @@ mod tests {
         child: SessionId,
         controller: SessionId,
         orchestration: i64,
+        task: i64,
+    }
+
+    async fn set_orchestration_fixture_review_statuses(
+        app: &mut App,
+        session_ids: [&SessionId; 2],
+    ) {
+        for session_id in session_ids {
+            crate::test_support::set_session_status_for_test(
+                app,
+                session_id,
+                SessionStatus::Review,
+            );
+            app.services
+                .db()
+                .sessions()
+                .update_session_status_with_timing_at(session_id, "Review", 0)
+                .await
+                .expect("orchestration fixture status should persist");
+        }
     }
 
     async fn seed_active_orchestration_child(
@@ -1126,6 +1331,8 @@ mod tests {
             .db()
             .orchestrations()
             .upsert_orchestration_task(PersistedOrchestrationTask {
+                acceptance_criteria: r#"["Worker task is implemented"]"#.to_string(),
+                merge_position: 0,
                 prompt: "Implement the worker task".to_string(),
                 session_orchestration_id: orchestration_id,
                 task_key: "worker-task".to_string(),
@@ -1138,6 +1345,8 @@ mod tests {
             .db()
             .orchestrations()
             .upsert_orchestration_task(PersistedOrchestrationTask {
+                acceptance_criteria: r#"["Unlinked task is implemented"]"#.to_string(),
+                merge_position: 1,
                 prompt: "Implement the unlinked task".to_string(),
                 session_orchestration_id: orchestration_id,
                 task_key: "unlinked-task".to_string(),
@@ -1174,21 +1383,14 @@ mod tests {
                 .expect("orchestration child should link");
             assert!(linked);
         }
-        crate::test_support::set_session_status_for_test(
-            app,
-            &controller_session_id,
-            SessionStatus::Review,
-        );
-        crate::test_support::set_session_status_for_test(
-            app,
-            &child_session_id,
-            SessionStatus::Review,
-        );
+        set_orchestration_fixture_review_statuses(app, [&controller_session_id, &child_session_id])
+            .await;
 
         ActiveOrchestrationFixture {
             child: child_session_id,
             controller: controller_session_id,
             orchestration: orchestration_id,
+            task: task_id,
         }
     }
 
@@ -1656,6 +1858,7 @@ mod tests {
             CoordinatorMessageRequest {
                 message: "Summarize the worker results".to_string(),
                 operation_id: "orchestration-rollup-42".to_string(),
+                visibility: CoordinatorMessageVisibility::Hidden,
             },
         )
         .await
@@ -1675,10 +1878,221 @@ mod tests {
                 "Orchestrator sessions cannot publish review requests".to_string()
             )
         );
+        assert!(messages.iter().all(|message| {
+            message.kind != SessionMessageKind::UserPrompt.to_string()
+                || message.content != "Summarize the worker results"
+        }));
+    }
+
+    #[tokio::test]
+    async fn visible_coordinator_turn_persists_continuation_prompt() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let project_id = app.active_project_id();
+        let session_id = request_session_creation(
+            &mut app,
+            CreateSessionRequest {
+                inherit_from_session_id: None,
+                mode: CreateSessionMode::Orchestrator,
+                project_id,
+            },
+        )
+        .await
+        .expect("orchestrator should be created");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &session_id,
+            SessionStatus::Review,
+        );
+
+        // Act
+        request_coordinator_message(
+            &mut app,
+            session_id.clone(),
+            CoordinatorMessageRequest {
+                message: "Apply the requested correction".to_string(),
+                operation_id: "orchestration-continuation-1-1".to_string(),
+                visibility: CoordinatorMessageVisibility::Visible,
+            },
+        )
+        .await
+        .expect("visible coordinator turn should be accepted");
+        let messages = app
+            .services
+            .db()
+            .sessions()
+            .load_session_messages(&session_id)
+            .await
+            .expect("continuation transcript should load");
+
+        // Assert
         assert!(messages.iter().any(|message| {
             message.kind == SessionMessageKind::UserPrompt.to_string()
-                && message.content == "Summarize the worker results"
+                && message.content == "Apply the requested correction"
         }));
+    }
+
+    #[tokio::test]
+    async fn user_capability_rejects_every_managed_child_mutation() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let session_id = SessionId::from("session-id");
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .role(SessionRole::OrchestrationWorker)
+                .status(Status::Review)
+                .build(),
+        );
+        let (publish_tx, publish_rx) = oneshot::channel();
+
+        // Act
+        let send_error = app
+            .send_api_message(
+                &session_id,
+                "Direct edit".to_string(),
+                SessionRuntimeAccess::User,
+            )
+            .await
+            .expect_err("managed child message should fail");
+        let answer_error = app
+            .answer_api_questions(
+                &session_id,
+                AnswerQuestionsRequest {
+                    answers: Vec::new(),
+                },
+                SessionRuntimeAccess::User,
+            )
+            .await
+            .expect_err("managed child answers should fail");
+        let cancel_error = app
+            .cancel_api_session(&session_id, SessionRuntimeAccess::User)
+            .await
+            .expect_err("managed child cancellation should fail");
+        let merge_error = app
+            .merge_api_session(&session_id, SessionRuntimeAccess::User)
+            .await
+            .expect_err("managed child merge should fail");
+        app.start_api_review_request_publish(
+            session_id.clone(),
+            SessionRuntimeAccess::User,
+            publish_tx,
+        );
+        let publish_error = publish_rx
+            .await
+            .expect("publish result should be returned")
+            .expect_err("managed child publish should fail");
+
+        // Assert
+        for error in [
+            send_error,
+            answer_error,
+            cancel_error,
+            merge_error,
+            publish_error,
+        ] {
+            assert!(matches!(
+                error,
+                ApiSessionError::Operation(message)
+                    if message.contains("managed by an orchestration campaign")
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn coordinator_capability_cancels_managed_workers_and_regular_sessions_still_cancel() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let fixture = seed_active_orchestration_child(&mut app, true).await;
+        let coordinator_service = app.coordinator_session_service();
+        let managed_child = fixture.child.clone();
+        let project_id = app.active_project_id();
+        let regular_session = request_session_creation(
+            &mut app,
+            CreateSessionRequest {
+                inherit_from_session_id: None,
+                mode: CreateSessionMode::Regular,
+                project_id,
+            },
+        )
+        .await
+        .expect("regular session should be created");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &regular_session,
+            SessionStatus::Review,
+        );
+
+        // Act
+        let managed_result = app
+            .drive_session_request(async move {
+                coordinator_service.cancel_session(&managed_child).await
+            })
+            .await;
+        let regular_result = request_cancellation(&mut app, regular_session.clone()).await;
+        let managed = request_session(&mut app, fixture.child)
+            .await
+            .expect("managed worker should load")
+            .expect("managed worker should exist");
+        let regular = request_session(&mut app, regular_session)
+            .await
+            .expect("regular session should load")
+            .expect("regular session should exist");
+
+        // Assert
+        assert_eq!(managed_result, Ok(()));
+        assert_eq!(regular_result, Ok(()));
+        assert_eq!(managed.status, SessionStatus::Canceled);
+        assert_eq!(regular.status, SessionStatus::Canceled);
+    }
+
+    #[tokio::test]
+    async fn orchestration_approvals_and_detach_update_campaign() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let fixture = seed_active_orchestration_child(&mut app, true).await;
+        app.services
+            .db()
+            .orchestrations()
+            .update_orchestration_status(
+                fixture.orchestration,
+                &OrchestrationStatus::AwaitingApproval.to_string(),
+            )
+            .await
+            .expect("failed to park campaign");
+
+        // Act / Assert
+        assert_eq!(
+            app.approve_orchestration(&fixture.controller, None).await,
+            OrchestrationApprovalOutcome::Approved
+        );
+        assert_eq!(
+            app.approve_orchestration(&fixture.controller, None).await,
+            OrchestrationApprovalOutcome::Unavailable
+        );
+        app.services
+            .db()
+            .orchestrations()
+            .update_orchestration_status(
+                fixture.orchestration,
+                &OrchestrationStatus::AwaitingIntegration.to_string(),
+            )
+            .await
+            .expect("failed to park integration");
+        assert_eq!(
+            app.approve_orchestration(&fixture.controller, None).await,
+            OrchestrationApprovalOutcome::IntegrationApproachRequired
+        );
+        assert_eq!(
+            app.approve_orchestration(&fixture.controller, Some(IntegrationApproach::LocalMerge),)
+                .await,
+            OrchestrationApprovalOutcome::Approved
+        );
+        assert!(app.detach_managed_child(&fixture.child).await);
+        assert!(!app.detach_managed_child(&fixture.child).await);
+        assert_eq!(
+            app.approve_orchestration("missing", None).await,
+            OrchestrationApprovalOutcome::Unavailable
+        );
     }
 
     #[tokio::test]
@@ -2509,6 +2923,154 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn controller_question_answers_proxy_to_the_managed_worker() {
+        // Arrange
+        let (turn_started_tx, mut turn_started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let first_turn_release = Arc::new(tokio::sync::Notify::new());
+        let app_server =
+            question_transition_app_server(Arc::clone(&first_turn_release), turn_started_tx);
+        let clients = crate::test_support::test_app_clients()
+            .with_app_server_client_override(Arc::new(app_server));
+        let (mut app, _temp_dir) =
+            crate::test_support::new_git_test_app_with_clients(clients).await;
+        let fixture = seed_active_orchestration_child(&mut app, true).await;
+        app.set_session_model(
+            &fixture.child,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        )
+        .await
+        .expect("managed worker model should update");
+        let coordinator_service = app.coordinator_session_service();
+        let child_session_id = fixture.child.clone();
+        app.drive_session_request(async move {
+            coordinator_service
+                .send_message(&child_session_id, "initial prompt".to_string())
+                .await
+        })
+        .await
+        .expect("coordinator should start the managed worker");
+        tokio::time::timeout(std::time::Duration::from_secs(1), turn_started_rx.recv())
+            .await
+            .expect("managed worker turn should start")
+            .expect("managed worker turn signal should be available");
+        let questions_json = r#"[{"text":"Current question?","options":[]}]"#;
+        app.services
+            .db()
+            .sessions()
+            .update_session_questions(&fixture.child, questions_json)
+            .await
+            .expect("managed worker questions should persist");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &fixture.child,
+            SessionStatus::InProgress,
+        );
+        let tasks = app
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_tasks(fixture.orchestration)
+            .await
+            .expect("campaign tasks should load");
+        app.services
+            .db()
+            .orchestrations()
+            .update_orchestration_task_status(
+                tasks[0].id,
+                &OrchestrationTaskStatus::WaitingForInput.to_string(),
+                None,
+            )
+            .await
+            .expect("managed worker task should wait for input");
+        app.services
+            .db()
+            .orchestrations()
+            .surface_orchestration_questions(fixture.orchestration, tasks[0].id, questions_json)
+            .await
+            .expect("managed worker questions should surface");
+
+        // Act
+        let answer_result = request_question_answers(
+            &mut app,
+            fixture.controller.clone(),
+            current_question_answer("Current answer"),
+        )
+        .await;
+        assert_eq!(answer_result, Ok(()));
+        first_turn_release.notify_one();
+        let resumed_turn_kind =
+            tokio::time::timeout(std::time::Duration::from_secs(1), turn_started_rx.recv())
+                .await
+                .expect("proxied answer should resume the worker")
+                .expect("resumed worker turn should be available");
+        let controller = request_session(&mut app, fixture.controller)
+            .await
+            .expect("controller should load")
+            .expect("controller should exist");
+
+        // Assert
+        assert_eq!(resumed_turn_kind, AgentRequestKind::SessionResume);
+        assert!(controller.questions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn orchestration_question_target_requires_an_available_relayed_child() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let fixture = seed_active_orchestration_child(&mut app, true).await;
+
+        // Act
+        let missing_relay = app
+            .orchestration_question_target(&fixture.controller)
+            .await
+            .expect("an orchestration without a relay should remain available");
+        app.services
+            .db()
+            .orchestrations()
+            .update_orchestration_task_status(
+                fixture.task,
+                &OrchestrationTaskStatus::WaitingForInput.to_string(),
+                None,
+            )
+            .await
+            .expect("managed worker task should wait for input");
+        let surfaced = app
+            .services
+            .db()
+            .orchestrations()
+            .surface_orchestration_questions(
+                fixture.orchestration,
+                fixture.task,
+                r#"[{"text":"Current question?","options":[]}]"#,
+            )
+            .await
+            .expect("managed worker questions should surface");
+        let detached = app
+            .services
+            .db()
+            .orchestrations()
+            .detach_orchestration_child(&fixture.child)
+            .await
+            .expect("managed worker should detach");
+        let unavailable_relay_error = app
+            .orchestration_question_target(&fixture.controller)
+            .await
+            .expect_err("a relay without its child should fail explicitly");
+
+        // Assert
+        assert_eq!(missing_relay, None);
+        assert!(surfaced);
+        assert!(detached);
+        assert_eq!(
+            unavailable_relay_error,
+            ApiSessionError::Operation(format!(
+                "Orchestration question relay references unavailable task `{}`",
+                fixture.task
+            ))
+        );
+    }
+
+    #[tokio::test]
     async fn runtime_backend_does_not_persist_question_answer_when_worker_enqueue_fails() {
         // Arrange
         let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
@@ -2801,6 +3363,7 @@ mod tests {
                 CoordinatorMessageRequest {
                     message: " ".to_string(),
                     operation_id: "rollup-1".to_string(),
+                    visibility: CoordinatorMessageVisibility::Hidden,
                 },
             )
             .await
@@ -2811,6 +3374,7 @@ mod tests {
                 CoordinatorMessageRequest {
                     message: "Roll up".to_string(),
                     operation_id: " ".to_string(),
+                    visibility: CoordinatorMessageVisibility::Hidden,
                 },
             )
             .await
@@ -2821,6 +3385,7 @@ mod tests {
                 CoordinatorMessageRequest {
                     message: "Roll up".to_string(),
                     operation_id: "rollup-busy".to_string(),
+                    visibility: CoordinatorMessageVisibility::Hidden,
                 },
             )
             .await
@@ -2831,6 +3396,7 @@ mod tests {
                 CoordinatorMessageRequest {
                     message: "Roll up".to_string(),
                     operation_id: "rollup-unbound".to_string(),
+                    visibility: CoordinatorMessageVisibility::Hidden,
                 },
             )
             .await

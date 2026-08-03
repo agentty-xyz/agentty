@@ -2013,7 +2013,7 @@ impl App {
         let Some(session) = self.sessions.session_at(session_index) else {
             return;
         };
-        if session.status == Status::Question {
+        if session.status == Status::Question && session.accepts_user_turns() {
             let questions = session.questions.clone();
             self.enter_question_mode(target_session_id, questions);
 
@@ -2051,10 +2051,12 @@ impl App {
         };
 
         let session_id = session_id.clone();
-        let is_pending_question = self
-            .sessions
-            .session_for_id(&session_id)
-            .is_some_and(|session| session.status == Status::Question);
+        let is_pending_question =
+            self.sessions
+                .session_for_id(&session_id)
+                .is_some_and(|session| {
+                    session.status == Status::Question && session.accepts_user_turns()
+                });
         if !is_pending_question {
             self.question_reconcile_reload_attempted = None;
 

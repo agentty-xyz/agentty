@@ -160,6 +160,7 @@ struct MergeStartRestoreContext<'a> {
 
 struct MergeTaskInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    archive_diff: bool,
     base_branch: String,
     child_pid: Arc<Mutex<Option<u32>>>,
     clock: Arc<dyn Clock>,
@@ -660,7 +661,8 @@ impl SessionMergeService {
             ));
         }
 
-        let (db, folder, id, session_agent) = (
+        let (archive_diff, db, folder, id, session_agent) = (
+            session.is_managed(),
             services.db().clone(),
             session.folder.clone(),
             session.id.clone(),
@@ -716,6 +718,7 @@ impl SessionMergeService {
 
         let merge_task_input = MergeTaskInput {
             app_event_tx,
+            archive_diff,
             base_branch,
             child_pid,
             clock,
@@ -1174,6 +1177,7 @@ impl SessionManager {
         let rebase_input = Self::merge_rebase_input(&input);
         let MergeTaskInput {
             app_event_tx,
+            archive_diff,
             base_branch,
             clock,
             db,
@@ -1205,6 +1209,11 @@ impl SessionManager {
             base_branch.clone(),
         )
         .await?;
+        if archive_diff {
+            db.sessions()
+                .update_session_archived_diff(&id, Some(squash_diff.clone()))
+                .await?;
+        }
         let authoritative_commit_message = if squash_diff.trim().is_empty() {
             None
         } else {
@@ -1231,7 +1240,6 @@ impl SessionManager {
         let merged_commit_hash =
             Self::load_merged_commit_hash(git_client.as_ref(), repo_root.clone(), merge_outcome)
                 .await?;
-
         Self::cleanup_merged_session_worktree(
             folder.clone(),
             Arc::clone(&fs_client),
@@ -3333,6 +3341,7 @@ mod tests {
             temp_dir,
             MergeTaskInput {
                 app_event_tx,
+                archive_diff: false,
                 base_branch: "main".to_string(),
                 child_pid: Arc::new(Mutex::new(None)),
                 clock: Arc::new(crate::infra::clock::RealClock),
@@ -3353,6 +3362,28 @@ mod tests {
                 status: Arc::new(Mutex::new(Status::Merging)),
             },
         )
+    }
+
+    async fn assert_managed_merge_metadata(
+        db: &AppRepositories,
+        expected_merged_commit_hash: &str,
+    ) {
+        let merged_commit_hash = db
+            .sessions()
+            .load_session_merged_commit_hash("session-123")
+            .await
+            .expect("failed to load merged commit hash");
+        let archived_diff = db
+            .sessions()
+            .load_session_archived_diff("session-123")
+            .await
+            .expect("failed to load archived diff");
+
+        assert_eq!(
+            merged_commit_hash.as_deref(),
+            Some(expected_merged_commit_hash)
+        );
+        assert_eq!(archived_diff.as_deref(), Some("diff --git a/file b/file"));
     }
 
     /// Builds sync rebase assistance input with injected git and assistance
@@ -3818,7 +3849,9 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Box::pin(async { Ok(()) }));
-        let (_temp_dir, input) = build_merge_task_input_for_test(Arc::new(mock_git_client)).await;
+        let (_temp_dir, mut input) =
+            build_merge_task_input_for_test(Arc::new(mock_git_client)).await;
+        input.archive_diff = true;
         let project_id = input
             .db
             .projects()
@@ -3839,15 +3872,7 @@ mod tests {
         // Assert
         let message = result.expect("merge workflow should succeed");
         assert_eq!(message, "Successfully merged wt/session-123 into main");
-        let merged_commit_hash = db
-            .sessions()
-            .load_session_merged_commit_hash("session-123")
-            .await
-            .expect("failed to load merged commit hash");
-        assert_eq!(
-            merged_commit_hash.as_deref(),
-            Some(expected_merged_commit_hash)
-        );
+        assert_managed_merge_metadata(&db, expected_merged_commit_hash).await;
     }
 
     #[tokio::test]
@@ -3922,6 +3947,12 @@ mod tests {
             .await
             .expect("failed to load merged commit hash");
         assert_eq!(merged_commit_hash, None);
+        let archived_diff = db
+            .sessions()
+            .load_session_archived_diff("session-123")
+            .await
+            .expect("failed to load archived diff");
+        assert_eq!(archived_diff, None);
     }
 
     #[tokio::test]

@@ -24,6 +24,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Executor};
 use testty::assertion;
 use testty::frame::TerminalFrame;
+use testty::proof::report::ProofReport;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
@@ -1690,14 +1691,14 @@ case "$input" in
   *"Generate a concise, commit-style title"*)
     result='{\"answer\":\"Coordinate parallel work\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":null}'
     ;;
-  *"Orchestration roll-up"*)
-    result='{\"answer\":\"All workers finished. Review and merge protocol before UI.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Orchestration finished.\",\"turn\":\"Rolled up both worker results.\"}}'
+  *"Orchestration verification gate"*)
+    result='{\"answer\":\"All workers finished. Review and merge protocol before UI.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Orchestration finished.\",\"turn\":\"Rolled up both worker results.\"},\"verification_verdicts\":[{\"reason\":\"Protocol criteria pass\",\"task_key\":\"protocol\",\"verdict\":\"pass\"},{\"reason\":\"UI criteria pass\",\"task_key\":\"ui\",\"verdict\":\"pass\"}]}'
     ;;
-  *"Clarifications:"*"Approve"*)
-    result='{\"answer\":\"Approval received. Monitoring both workers.\",\"questions\":[{\"text\":\"Approve this orchestration plan?\",\"options\":[\"Approve\",\"Revise\"]}],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol slice.\",\"touched_areas\":[\"crates/ag-protocol/\"]},{\"task_key\":\"ui\",\"title\":\"UI worker\",\"prompt\":\"Implement the UI slice.\",\"touched_areas\":[\"crates/agentty/src/ui/\"]}],\"summary\":null}'
+  *"Continue protocol outside its declared scope"*)
+    result='{\"answer\":\"I will route that feedback.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Continue protocol outside its declared scope.\",\"touched_areas\":[\"docs/\"],\"acceptance_criteria\":[\"Apply the requested feedback\"]}],\"summary\":null}'
     ;;
   *"You are the controller for an Agentty orchestration"*)
-    result='{\"answer\":\"I propose independent protocol and UI workers, merged in that order.\",\"questions\":[{\"text\":\"Approve this orchestration plan?\",\"options\":[\"Approve\",\"Revise\"]}],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol slice.\",\"touched_areas\":[\"crates/ag-protocol/\"]},{\"task_key\":\"ui\",\"title\":\"UI worker\",\"prompt\":\"Implement the UI slice.\",\"touched_areas\":[\"crates/agentty/src/ui/\"]}],\"summary\":null}'
+    result='{\"answer\":\"I propose independent protocol and UI workers, merged in that order.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol slice.\",\"touched_areas\":[\"crates/ag-protocol/\"],\"acceptance_criteria\":[\"Protocol worker completes\"]},{\"task_key\":\"ui\",\"title\":\"UI worker\",\"prompt\":\"Implement the UI slice.\",\"touched_areas\":[\"crates/agentty/src/ui/\"],\"acceptance_criteria\":[\"UI worker completes\"]}],\"summary\":null}'
     ;;
   *"Task key: protocol"*)
     sleep 4
@@ -4113,7 +4114,7 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
 /// children, reports live status, and submits a final roll-up.
 #[test]
 fn session_orchestration_runs_approved_parallel_wave() -> E2eResult {
-    // Arrange
+    // Arrange, Act, Assert
     FeatureTest::new("session_orchestration")
         .with_git()
         .setup(install_orchestration_claude_stub)
@@ -4122,103 +4123,145 @@ fn session_orchestration_runs_approved_parallel_wave() -> E2eResult {
             "Approve a file-disjoint plan, watch workers run, and review the roll-up.",
             35,
         )
-        .run(
-            |scenario| {
-                // Act
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .press_key("a")
-                    .wait_for_text("Orchestrator", 5000)
-                    .capture_labeled("orchestrator_picker", "Choose an orchestrator session")
-                    .press_key("Down")
-                    .press_key("Down")
-                    .press_key("Enter")
-                    .wait_for_text("Tab: focus | Enter: send", 5000)
-                    .write_text("Build protocol and UI in parallel")
-                    .press_key("Enter")
-                    .wait_for_text("Question 1/1", 30000)
-                    .capture_labeled(
-                        "plan_approval",
-                        "Review the file-disjoint plan before fan-out",
-                    )
-                    .press_key("Enter")
-                    .wait_for_text("Orchestrating...", 10000)
-                    .capture_labeled("live_status", "Monitor child sessions in one live loader")
-                    .press_key("q")
-                    .wait_for_text("2 running, 0 waiting on you", 10000)
-                    .capture_labeled(
-                        "orchestration_sessions",
-                        "Workers stay grouped with their controller",
-                    )
-                    .sleep_ms(6000)
-                    .press_key("j")
-                    .wait_for_stable_frame(300, 5000)
-                    .press_key("Enter")
-                    .wait_for_text("All workers finished", 30000)
-                    .capture_labeled(
-                        "orchestration_rollup",
-                        "Review worker summaries and merge order",
-                    )
-            },
-            |frame, report| {
-                // Assert
-                let picker_frame = common::frame_from_capture(&report.captures[0]);
-                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
-                assertion::assert_text_in_region(&picker_frame, "Orchestrator", &picker_full);
-                assertion::assert_text_in_region(
-                    &picker_frame,
-                    "[Preview] Plan workers",
-                    &picker_full,
-                );
+        .run(build_orchestration_scenario, |frame, report| {
+            // Assert
+            let picker_frame = common::frame_from_capture(&report.captures[0]);
+            let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+            assertion::assert_text_in_region(&picker_frame, "Orchestrator", &picker_full);
+            assertion::assert_text_in_region(&picker_frame, "[Preview] Plan workers", &picker_full);
 
-                let approval_frame = common::frame_from_capture(&report.captures[1]);
-                let approval_full = Region::full(approval_frame.cols(), approval_frame.rows());
-                assertion::assert_text_in_region(
-                    &approval_frame,
-                    "Approve this orchestration plan?",
-                    &approval_full,
-                );
-                assertion::assert_text_in_region(&approval_frame, "Approve", &approval_full);
-                assertion::assert_text_in_region(&approval_frame, "Revise", &approval_full);
+            let approval_frame = common::frame_from_capture(&report.captures[1]);
+            let approval_full = Region::full(approval_frame.cols(), approval_frame.rows());
+            assertion::assert_text_in_region(
+                &approval_frame,
+                "Phase: AwaitingApproval",
+                &approval_full,
+            );
+            assertion::assert_text_in_region(
+                &approval_frame,
+                "a approve  Enter discuss/revise",
+                &approval_full,
+            );
 
-                let status_frame = common::frame_from_capture(&report.captures[2]);
-                let status_full = Region::full(status_frame.cols(), status_frame.rows());
-                assertion::assert_text_in_region(&status_frame, "Orchestrating...", &status_full);
-                assertion::assert_text_in_region(
-                    &status_frame,
-                    "- Protocol worker: running",
-                    &status_full,
-                );
-                assertion::assert_text_in_region(
-                    &status_frame,
-                    "- UI worker: running",
-                    &status_full,
-                );
-                assertion::assert_match_count(&status_frame, "Orchestrating...", 1);
-                assertion::assert_match_count(&status_frame, "Approve this orchestration plan?", 1);
-                let protocol_status = status_frame.find_text("Protocol worker: running");
-                let ui_status = status_frame.find_text("UI worker: running");
-                assert_ne!(protocol_status[0].rect.row, ui_status[0].rect.row);
+            let status_frame = common::frame_from_capture(&report.captures[2]);
+            let status_full = Region::full(status_frame.cols(), status_frame.rows());
+            assertion::assert_text_in_region(&status_frame, "Phase: Running", &status_full);
+            assertion::assert_text_in_region(
+                &status_frame,
+                "Protocol worker [protocol]: running",
+                &status_full,
+            );
+            assertion::assert_text_in_region(
+                &status_frame,
+                "UI worker [ui]: running",
+                &status_full,
+            );
+            assertion::assert_match_count(&status_frame, "Phase: Running", 1);
+            let protocol_status = status_frame.find_text("Protocol worker [protocol]: running");
+            let ui_status = status_frame.find_text("UI worker [ui]: running");
+            assert_ne!(protocol_status[0].rect.row, ui_status[0].rect.row);
 
-                let list_frame = common::frame_from_capture(&report.captures[3]);
-                let list_full = Region::full(list_frame.cols(), list_frame.rows());
-                assertion::assert_text_in_region(
-                    &list_frame,
-                    "2 running, 0 waiting on you",
-                    &list_full,
-                );
-                assertion::assert_match_count(&list_frame, "├ ", 1);
-                assertion::assert_match_count(&list_frame, "└ ", 1);
-
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "All workers finished", &full);
-                assertion::assert_text_in_region(frame, "merge protocol before UI", &full);
-                assertion::assert_not_visible(frame, "d: diff");
-            },
-        )?;
+            let list_frame = common::frame_from_capture(&report.captures[3]);
+            assert_running_orchestration_session_list(&list_frame);
+            assert_orchestration_rollup_and_questions(frame, report);
+        })?;
 
     Ok(())
+}
+
+fn build_orchestration_scenario(scenario: Scenario) -> Scenario {
+    scenario
+        .compose(&common::wait_for_agentty_startup())
+        .compose(&common::switch_to_tab("Sessions"))
+        .press_key("a")
+        .wait_for_text("Orchestrator", 5000)
+        .capture_labeled("orchestrator_picker", "Choose an orchestrator session")
+        .press_key("Down")
+        .press_key("Down")
+        .press_key("Enter")
+        .wait_for_text("Tab: focus | Enter: send", 5000)
+        .write_text("Build protocol and UI in parallel")
+        .press_key("Enter")
+        .wait_for_text("Phase: AwaitingApproval", 30000)
+        .capture_labeled(
+            "plan_approval",
+            "Review the file-disjoint plan before fan-out",
+        )
+        .press_key("a")
+        .wait_for_stable_frame(500, 5000)
+        .capture_labeled("live_status", "Monitor workers on the campaign board")
+        .press_key("q")
+        .wait_for_text("Phase: Running", 10000)
+        .capture_labeled(
+            "orchestration_sessions",
+            "Workers stay grouped with their controller",
+        )
+        .sleep_ms(6000)
+        .press_key("j")
+        .wait_for_stable_frame(300, 5000)
+        .press_key("Enter")
+        .wait_for_stable_frame(500, 5000)
+        .capture_labeled(
+            "orchestration_rollup",
+            "Review worker summaries and merge order",
+        )
+        .press_key("a")
+        .wait_for_text("Integration Approach", 5000)
+        .capture_labeled(
+            "integration_approach",
+            "Choose local merges or review requests",
+        )
+        .press_key("Escape")
+        .wait_for_stable_frame(300, 5000)
+        .press_key("Enter")
+        .wait_for_text("Tab: focus | Enter: send", 5000)
+        .write_text("Continue protocol outside its declared scope")
+        .press_key("Enter")
+        .wait_for_text("Wait, then continue this task", 30000)
+        .capture_labeled(
+            "orchestration_question_options",
+            "Choose an actionable response to routing feedback",
+        )
+}
+
+fn assert_orchestration_rollup_and_questions(frame: &TerminalFrame, report: &ProofReport) {
+    let rollup_frame = common::frame_from_capture(&report.captures[4]);
+    let rollup_full = Region::full(rollup_frame.cols(), rollup_frame.rows());
+    assertion::assert_text_in_region(&rollup_frame, "Phase: AwaitingIntegration", &rollup_full);
+    assertion::assert_text_in_region(
+        &rollup_frame,
+        "Rolled up both worker results.",
+        &rollup_full,
+    );
+    assertion::assert_text_in_region(
+        &rollup_frame,
+        "Protocol worker [protocol]: awaiting integration",
+        &rollup_full,
+    );
+    assertion::assert_text_in_region(&rollup_frame, "areas compliant; verified", &rollup_full);
+    assertion::assert_not_visible(&rollup_frame, "d: diff");
+
+    let approach_frame = common::frame_from_capture(&report.captures[5]);
+    let approach_full = Region::full(approach_frame.cols(), approach_frame.rows());
+    assertion::assert_text_in_region(&approach_frame, "Integration Approach", &approach_full);
+    assertion::assert_text_in_region(&approach_frame, "Local merges", &approach_full);
+    assertion::assert_text_in_region(&approach_frame, "Review requests", &approach_full);
+
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(frame, "Question 1/1", &full);
+    assertion::assert_text_in_region(frame, "Wait, then continue this task", &full);
+    assertion::assert_text_in_region(frame, "Create a separate follow-up task", &full);
+    assertion::assert_text_in_region(frame, "Drop this feedback", &full);
+}
+
+/// Verifies that multiline campaign progress preserves the title column in
+/// the grouped Sessions table.
+fn assert_running_orchestration_session_list(frame: &TerminalFrame) {
+    let full = Region::full(frame.cols(), frame.rows());
+
+    assertion::assert_text_in_region(frame, "Phase: Running", &full);
+    assertion::assert_text_in_region(frame, "Active sessions", &full);
+    assertion::assert_match_count(frame, "[XS]", 3);
 }
 
 /// Verify that prompt image paste reports unavailable clipboard backends

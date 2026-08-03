@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration_task\nSET area_violations = ?,\n    areas_compliant = ?,\n    updated_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "9da837e2a2a554b5a30304c6d7157ef0ad76299eb40799e57b9345800b5f6d42"
+}

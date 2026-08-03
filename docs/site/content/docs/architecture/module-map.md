@@ -59,14 +59,15 @@ For file-level detail, read the module docstrings directly.
 - `main.rs` / `lib.rs`: Composition root — database bootstrap, `App` construction,
   runtime launch, and public module exports.
 - `app/`: Orchestration layer. Owns the `App` state, the `AppEvent` reducer, project and
-  settings persistence manager, the merge queue, the project sync orchestrator, the
-  multi-session orchestration coordinator, branch publish, review, typed prompt workflow
-  requests and outcomes, the `session_api.rs` adapter for `ag-session`, the bounded
-  `session_runtime.rs` command actor, and the session module (`app/session/`) with its
-  per-session worker queues and workflow steps (`lifecycle`, `turn`, `post_turn`,
-  `merge`, `task`, `worker`). Prompt composers, slash-menu state, and mode navigation
-  remain presentation-owned. No direct process, filesystem, or clock calls — everything
-  external goes through `infra/` traits.
+  settings persistence manager, the merge queue, the project sync orchestrator, durable
+  campaign planning, managed-worker capability routing, the multi-session orchestration
+  coordinator, branch publish, review, typed prompt workflow requests and outcomes, the
+  `session_api.rs` adapter for `ag-session`, the bounded `session_runtime.rs` command
+  actor, and the session module (`app/session/`) with its per-session worker queues and
+  workflow steps (`lifecycle`, `turn`, `post_turn`, `merge`, `task`, `worker`). Prompt
+  composers, slash-menu state, and mode navigation remain presentation-owned. No direct
+  process, filesystem, or clock calls — everything external goes through `infra/`
+  traits.
 - `domain/`: Pure Agentty-specific business entities and logic — render/runtime session
   snapshots, projects, settings keys, themes, structured questions, explicit
   transient-message slots and lifecycles, prompt-composer logic, the shared `InputState`

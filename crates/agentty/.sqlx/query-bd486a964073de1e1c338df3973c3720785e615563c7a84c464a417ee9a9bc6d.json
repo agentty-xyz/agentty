@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration\nSET status = 'Done',\n    updated_at = ?\nWHERE id = ?\n  AND status IN ('AwaitingIntegration', 'Integrating')\nRETURNING controller_session_id AS \"controller_session_id!: String\"\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "controller_session_id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "controller_session_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bd486a964073de1e1c338df3973c3720785e615563c7a84c464a417ee9a9bc6d"
+}

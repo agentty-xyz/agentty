@@ -10,6 +10,7 @@ use tracing::warn;
 #[cfg(test)]
 use crate::app::ReviewCacheEntry;
 use crate::app::{App, diff_content_hash};
+use crate::domain::orchestration::IntegrationApproach;
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
@@ -616,6 +617,7 @@ async fn handle_confirmation_decision(
 ) -> io::Result<EventResult> {
     match decision {
         ConfirmationDecision::Confirm => handle_confirmation_confirm(app).await,
+        ConfirmationDecision::Reject => handle_confirmation_reject(app).await,
         ConfirmationDecision::Cancel => {
             app.mode = confirmation_cancel_mode(&app.mode);
 
@@ -632,7 +634,9 @@ fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
             ConfirmationIntent::ContinueSession
             | ConfirmationIntent::ForkSession
             | ConfirmationIntent::MergeSession
-            | ConfirmationIntent::RegenerateReview,
+            | ConfirmationIntent::RegenerateReview
+            | ConfirmationIntent::DetachManagedSession
+            | ConfirmationIntent::ChooseIntegrationApproach,
         restore_view: Some(restore_view),
         ..
     } = mode
@@ -681,7 +685,82 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
         ConfirmationIntent::RegenerateReview => {
             handle_regenerate_review_confirmation(app, confirmation_session_id, restore_view).await
         }
+        ConfirmationIntent::DetachManagedSession => {
+            handle_detach_managed_session_confirmation(app, confirmation_session_id, restore_view)
+                .await
+        }
+        ConfirmationIntent::ChooseIntegrationApproach => {
+            handle_integration_approach_confirmation(
+                app,
+                confirmation_session_id,
+                restore_view,
+                IntegrationApproach::LocalMerge,
+            )
+            .await
+        }
     }
+}
+
+/// Resolves the second binary choice, which only has distinct semantics for
+/// orchestration integration; ordinary confirmations treat it as dismissal.
+async fn handle_confirmation_reject(app: &mut App) -> io::Result<EventResult> {
+    let AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
+        restore_view,
+        session_id,
+        ..
+    } = &app.mode
+    else {
+        app.mode = confirmation_cancel_mode(&app.mode);
+
+        return Ok(EventResult::Continue);
+    };
+    let confirmation_session_id = session_id.clone();
+    let restore_view = restore_view.clone();
+
+    handle_integration_approach_confirmation(
+        app,
+        confirmation_session_id,
+        restore_view,
+        IntegrationApproach::ReviewRequest,
+    )
+    .await
+}
+
+/// Advances one verified campaign using the selected integration destination.
+async fn handle_integration_approach_confirmation(
+    app: &mut App,
+    confirmation_session_id: Option<SessionId>,
+    restore_view: Option<ConfirmationViewMode>,
+    integration_approach: IntegrationApproach,
+) -> io::Result<EventResult> {
+    let Some(session_id) = confirmation_session_id else {
+        app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+
+        return Ok(EventResult::Continue);
+    };
+    app.approve_orchestration(&session_id, Some(integration_approach))
+        .await;
+    app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+
+    Ok(EventResult::Continue)
+}
+
+/// Transfers one confirmed managed worker to ordinary user ownership.
+async fn handle_detach_managed_session_confirmation(
+    app: &mut App,
+    confirmation_session_id: Option<SessionId>,
+    restore_view: Option<ConfirmationViewMode>,
+) -> io::Result<EventResult> {
+    let Some(session_id) = confirmation_session_id else {
+        app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+
+        return Ok(EventResult::Continue);
+    };
+    app.detach_managed_child(&session_id).await;
+    app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+
+    Ok(EventResult::Continue)
 }
 
 /// Cancels the confirmed cancelable session, when still present, and returns
@@ -853,6 +932,7 @@ mod tests {
     use mockall::predicate::eq;
 
     use super::*;
+    use crate::domain::orchestration::OrchestrationStatus;
     use crate::domain::session_message::SessionTranscript;
     use crate::infra::tmux::MockTmuxClient;
     use crate::presentation::app_mode::ConfirmationViewMode;
@@ -1291,13 +1371,113 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_confirmation_decision_cancel_returns_to_list() {
+    async fn test_handle_confirmation_decision_reject_and_cancel_return_to_list() {
+        for decision in [ConfirmationDecision::Reject, ConfirmationDecision::Cancel] {
+            // Arrange
+            let (mut app, _base_dir) =
+                crate::test_support::new_test_app_with_mock_tmux_client().await;
+            app.mode = AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::Quit,
+                confirmation_message: "Quit agentty?".to_string(),
+                confirmation_title: "Confirm Quit".to_string(),
+                restore_view: None,
+                session_id: None,
+                selected_confirmation_index: 0,
+            };
+
+            // Act
+            let event_result = handle_confirmation_decision(&mut app, decision).await;
+
+            // Assert
+            assert!(matches!(event_result, Ok(EventResult::Continue)));
+            assert!(matches!(app.mode, AppMode::List));
+        }
+    }
+
+    #[tokio::test]
+    async fn integration_choice_persists_local_merge_or_review_request() {
+        for (decision, expected_approach) in [
+            (
+                ConfirmationDecision::Confirm,
+                IntegrationApproach::LocalMerge,
+            ),
+            (
+                ConfirmationDecision::Reject,
+                IntegrationApproach::ReviewRequest,
+            ),
+        ] {
+            // Arrange
+            let (mut app, _base_dir) =
+                crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+            let session_id = app
+                .create_session()
+                .await
+                .expect("failed to create controller fixture");
+            app.services
+                .db()
+                .orchestrations()
+                .insert_orchestration(
+                    &session_id,
+                    &OrchestrationStatus::AwaitingIntegration.to_string(),
+                    2,
+                )
+                .await
+                .expect("failed to insert orchestration");
+            app.mode = AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
+                confirmation_message: "Choose integration".to_string(),
+                confirmation_title: "Integration Approach".to_string(),
+                restore_view: Some(ConfirmationViewMode {
+                    scroll_offset: Some(3),
+                    session_id: session_id.clone().into(),
+                }),
+                session_id: Some(session_id.clone().into()),
+                selected_confirmation_index: 0,
+            };
+
+            // Act
+            let event_result = handle_confirmation_decision(&mut app, decision).await;
+            let orchestration = app
+                .services
+                .db()
+                .orchestrations()
+                .load_orchestration_for_controller(&session_id)
+                .await
+                .expect("failed to load orchestration")
+                .expect("orchestration should exist");
+            let approach = app
+                .services
+                .db()
+                .orchestrations()
+                .load_orchestration_integration_approach(orchestration.id)
+                .await
+                .expect("failed to load integration approach");
+
+            // Assert
+            assert!(matches!(event_result, Ok(EventResult::Continue)));
+            assert_eq!(approach, expected_approach.to_string());
+            assert_eq!(
+                orchestration.status,
+                OrchestrationStatus::Integrating.to_string()
+            );
+            assert!(matches!(
+                app.mode,
+                AppMode::View {
+                    scroll_offset: Some(3),
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn integration_choice_without_session_returns_to_restore_target() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
         app.mode = AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::Quit,
-            confirmation_message: "Quit agentty?".to_string(),
-            confirmation_title: "Confirm Quit".to_string(),
+            confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
+            confirmation_message: "Choose integration".to_string(),
+            confirmation_title: "Integration Approach".to_string(),
             restore_view: None,
             session_id: None,
             selected_confirmation_index: 0,
@@ -1305,7 +1485,7 @@ mod tests {
 
         // Act
         let event_result =
-            handle_confirmation_decision(&mut app, ConfirmationDecision::Cancel).await;
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
 
         // Assert
         assert!(matches!(event_result, Ok(EventResult::Continue)));
@@ -1568,6 +1748,53 @@ mod tests {
                 scroll_offset: Some(6),
             } if session_id_in_mode == &session_id
         ));
+    }
+
+    #[tokio::test]
+    async fn detach_confirmation_restores_view_with_or_without_a_session_target() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::DetachManagedSession,
+            confirmation_message: "Detach?".to_string(),
+            confirmation_title: "Confirm Detach".to_string(),
+            restore_view: Some(ConfirmationViewMode {
+                scroll_offset: Some(3),
+                session_id: SessionId::from("worker"),
+            }),
+            session_id: None,
+            selected_confirmation_index: 0,
+        };
+
+        // Act
+        let without_target =
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+        // Assert
+        assert!(matches!(without_target, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                scroll_offset: Some(3),
+                ref session_id,
+            } if session_id == "worker"
+        ));
+
+        // Arrange
+        app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::DetachManagedSession,
+            confirmation_message: "Detach?".to_string(),
+            confirmation_title: "Confirm Detach".to_string(),
+            restore_view: None,
+            session_id: Some(SessionId::from("missing-worker")),
+            selected_confirmation_index: 0,
+        };
+        let with_target =
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+        // Assert
+        assert!(matches!(with_target, Ok(EventResult::Continue)));
+        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]

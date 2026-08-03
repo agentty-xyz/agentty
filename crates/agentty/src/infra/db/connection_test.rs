@@ -2373,6 +2373,50 @@ async fn test_session_merged_commit_hash_round_trip_and_clear() {
 }
 
 #[tokio::test]
+async fn session_archived_diff_round_trips_empty_and_nonempty_values() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", None)
+        .await
+        .expect("failed to upsert project");
+    database
+        .sessions()
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
+        .await
+        .expect("failed to insert session");
+
+    // Act
+    database
+        .sessions()
+        .update_session_archived_diff("session-a", Some("diff --git a/a b/a".to_string()))
+        .await
+        .expect("failed to store archived diff");
+    let stored_diff = database
+        .sessions()
+        .load_session_archived_diff("session-a")
+        .await
+        .expect("failed to load archived diff");
+    database
+        .sessions()
+        .update_session_archived_diff("session-a", Some(String::new()))
+        .await
+        .expect("failed to store empty archived diff");
+    let empty_diff = database
+        .sessions()
+        .load_session_archived_diff("session-a")
+        .await
+        .expect("failed to load empty archived diff");
+
+    // Assert
+    assert_eq!(stored_diff.as_deref(), Some("diff --git a/a b/a"));
+    assert_eq!(empty_diff.as_deref(), Some(""));
+}
+
+#[tokio::test]
 async fn test_session_review_request_round_trip_and_clear() {
     // Arrange
     let database = Database::open_in_memory()

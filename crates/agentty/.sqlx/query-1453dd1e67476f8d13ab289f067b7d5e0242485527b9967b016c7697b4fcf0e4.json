@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT orchestration.id AS \"id!: i64\",\n       session.project_id AS \"controller_project_id!: i64\",\n       orchestration.controller_session_id,\n       orchestration.goal_statement,\n       orchestration.relayed_question_task_id,\n       orchestration.status,\n       orchestration.max_parallelism,\n       orchestration.verification_generation\nFROM session_orchestration AS orchestration\nINNER JOIN session\nON session.id = orchestration.controller_session_id\nWHERE orchestration.status IN (\n    'AwaitingApproval',\n    'Running',\n    'Verifying',\n    'AwaitingIntegration',\n    'Integrating',\n    'Canceling'\n)\nORDER BY orchestration.id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "controller_project_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "project_id"
+          }
+        }
+      },
+      {
+        "name": "controller_session_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "controller_session_id"
+          }
+        }
+      },
+      {
+        "name": "goal_statement",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "goal_statement"
+          }
+        }
+      },
+      {
+        "name": "relayed_question_task_id",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "relayed_question_task_id"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "max_parallelism",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "max_parallelism"
+          }
+        }
+      },
+      {
+        "name": "verification_generation",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "verification_generation"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1453dd1e67476f8d13ab289f067b7d5e0242485527b9967b016c7697b4fcf0e4"
+}

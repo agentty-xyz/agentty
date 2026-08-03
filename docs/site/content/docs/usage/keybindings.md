@@ -189,9 +189,16 @@ State-specific differences:
   `Alt+V` open the composer with an image paste; stacked drafts also hide `m` and show
   `s` only when the parent is review-ready and the stack is idle.
 - **Question** sessions hide `r` until they return to review-ready state.
-- **Orchestrator** sessions keep chat and question-answer actions but hide branch
-  actions: `d`, `o`, `p`, `F`, `m`, and `r`. Review and merge changes from each worker
-  session instead.
+- **Orchestrator** sessions use a campaign board above chat. On a parked plan, `a`
+  approves the plan; after verification, `a` opens a choice between local merges and
+  review requests. Worker parallelism comes from the global **Orchestrator Parallelism**
+  setting. Controllers hide branch actions: `d`, `o`, `p`, `F`, `m`, and `r`.
+- Managed orchestration workers are read-only. `d` opens their diff and `D` confirms a
+  one-way detach into a regular user-owned session. Reply, slash-command, worktree,
+  publish, fork, merge, sync, cancel, linked review-comment, and direct question-answer
+  actions stay hidden; `Ctrl+c` is ignored while the worker remains managed. After a
+  managed merge removes the worktree, `d` reads the immutable diff archived during
+  integration.
 - Review-ready stacked parents with a materialized child keep `Enter`, `/`, `m`, and `r`
   while the stack is idle.
 - Sessions with a linked pull request or merge request use `c` to open its comments page

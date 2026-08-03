@@ -13,14 +13,15 @@ use super::sync::{
 use super::{
     abort_rebase, branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
     commit_all_preserving_single_commit, create_worktree, current_upstream_reference,
-    delete_branch, detect_git_info, diff, fetch_remote, find_git_repo_root, get_ahead_behind,
-    get_ref_ahead_behind, has_commits_since, has_unmerged_paths, head_commit_message, head_hash,
-    head_short_hash, in_progress_operation, is_rebase_in_progress, is_worktree_clean,
-    list_conflicted_files, list_local_commit_titles, list_staged_conflict_marker_files,
-    list_upstream_commit_titles, main_checkout_working_tree, main_repo_root, pull_rebase,
-    push_current_branch, push_current_branch_to_remote_branch, rebase, rebase_continue,
-    rebase_onto_start, rebase_start, ref_hash, remote_branch_exists, remove_worktree, repo_url,
-    squash_merge, squash_merge_diff, stage_all, sync, tracked_worktree_status, worktree_status,
+    delete_branch, detect_git_info, diff, diff_changed_files, fetch_remote, find_git_repo_root,
+    get_ahead_behind, get_ref_ahead_behind, has_commits_since, has_unmerged_paths,
+    head_commit_message, head_hash, head_short_hash, in_progress_operation, is_rebase_in_progress,
+    is_worktree_clean, list_conflicted_files, list_local_commit_titles,
+    list_staged_conflict_marker_files, list_upstream_commit_titles, main_checkout_working_tree,
+    main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_remote_branch, rebase,
+    rebase_continue, rebase_onto_start, rebase_start, ref_hash, remote_branch_exists,
+    remove_worktree, repo_url, squash_merge, squash_merge_diff, stage_all, sync,
+    tracked_worktree_status, worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -260,6 +261,18 @@ pub trait GitClient: Send + Sync {
     /// # Errors
     /// Returns an error when refs are invalid or diff generation fails.
     fn diff(&self, repo_path: PathBuf, base_branch: String) -> GitFuture<Result<String, GitError>>;
+
+    /// Returns repository-relative paths changed from `base_branch` to the
+    /// current worktree, including untracked files.
+    ///
+    /// # Errors
+    /// Returns an error when refs are invalid or name-only diff generation
+    /// fails.
+    fn diff_changed_files(
+        &self,
+        repo_path: PathBuf,
+        base_branch: String,
+    ) -> GitFuture<Result<Vec<String>, GitError>>;
 
     /// Reads one repository-relative worktree file for a bounded text preview.
     ///
@@ -609,6 +622,14 @@ impl GitClient for RealGitClient {
         Box::pin(async move { diff(repo_path, base_branch).await })
     }
 
+    fn diff_changed_files(
+        &self,
+        repo_path: PathBuf,
+        base_branch: String,
+    ) -> GitFuture<Result<Vec<String>, GitError>> {
+        Box::pin(async move { diff_changed_files(repo_path, base_branch).await })
+    }
+
     fn read_worktree_file(
         &self,
         repo_path: PathBuf,
@@ -799,6 +820,24 @@ mod tests {
 
         // Assert
         assert_eq!(result, WorktreeFileContent::Text("# Preview".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_real_git_client_lists_changed_files() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        fs::write(dir.path().join("new.txt"), "new content").expect("failed to write changed file");
+        let client = RealGitClient;
+
+        // Act
+        let changed_files = client
+            .diff_changed_files(dir.path().to_path_buf(), "main".to_string())
+            .await
+            .expect("failed to list changed files");
+
+        // Assert
+        assert_eq!(changed_files, vec!["new.txt".to_string()]);
     }
 
     #[tokio::test]

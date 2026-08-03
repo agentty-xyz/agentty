@@ -102,6 +102,7 @@ struct ReplyOptions {
     defer_prompt_until_enqueued: bool,
     eligibility: ReplyEligibility,
     operation_id: Option<String>,
+    persist_prompt: bool,
     requires_existing_worker: bool,
     review_comment_thread_ids: Vec<String>,
 }
@@ -113,6 +114,7 @@ impl ReplyOptions {
             defer_prompt_until_enqueued: false,
             eligibility: ReplyEligibility::Standard,
             operation_id: None,
+            persist_prompt: true,
             requires_existing_worker: false,
             review_comment_thread_ids,
         }
@@ -125,17 +127,19 @@ impl ReplyOptions {
             defer_prompt_until_enqueued: true,
             eligibility: ReplyEligibility::QuestionAnswer,
             operation_id: None,
+            persist_prompt: true,
             requires_existing_worker,
             review_comment_thread_ids: Vec::new(),
         }
     }
 
     /// Builds idempotent coordinator-turn behavior for one durable operation.
-    fn coordinator(operation_id: String) -> Self {
+    fn coordinator(operation_id: String, persist_prompt: bool) -> Self {
         Self {
             defer_prompt_until_enqueued: true,
             eligibility: ReplyEligibility::Standard,
             operation_id: Some(operation_id),
+            persist_prompt,
             requires_existing_worker: false,
             review_comment_thread_ids: Vec::new(),
         }
@@ -1480,6 +1484,7 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
         operation_id: String,
+        persist_prompt: bool,
         prompt: impl Into<TurnPrompt>,
     ) -> bool {
         let prompt = prompt.into();
@@ -1493,7 +1498,7 @@ impl SessionManager {
             session_id,
             prompt,
             session_agent,
-            ReplyOptions::coordinator(operation_id),
+            ReplyOptions::coordinator(operation_id, persist_prompt),
         )
         .await
     }
@@ -2066,6 +2071,7 @@ impl SessionManager {
             defer_prompt_until_enqueued,
             eligibility,
             operation_id,
+            persist_prompt,
             requires_existing_worker,
             review_comment_thread_ids,
         } = options;
@@ -2115,7 +2121,7 @@ impl SessionManager {
             }
         }
 
-        if !defer_prompt_until_enqueued {
+        if persist_prompt && !defer_prompt_until_enqueued {
             self.append_reply_prompt_line(
                 services,
                 &transcript,
@@ -2154,7 +2160,10 @@ impl SessionManager {
                 },
             )
             .await;
-        if enqueued == ReplyEnqueueOutcome::Enqueued && defer_prompt_until_enqueued {
+        if enqueued == ReplyEnqueueOutcome::Enqueued
+            && defer_prompt_until_enqueued
+            && persist_prompt
+        {
             self.append_reply_prompt_line(
                 services,
                 &transcript,
@@ -2994,7 +3003,30 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
     ) -> Result<(), SessionError> {
-        let status_updated = self.cancel_single_session(services, session_id).await?;
+        let status_updated = self
+            .cancel_single_session(services, session_id, false)
+            .await?;
+        if !status_updated {
+            return Ok(());
+        }
+        self.cancel_stacked_child_sessions(services, session_id)
+            .await;
+
+        Ok(())
+    }
+
+    /// Cancels one managed worker through the coordinator-only capability.
+    ///
+    /// This keeps the ordinary user action read-only while allowing campaign
+    /// cancellation to reclaim a worker using the same lifecycle cleanup.
+    pub(crate) async fn cancel_managed_session(
+        &self,
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<(), SessionError> {
+        let status_updated = self
+            .cancel_single_session(services, session_id, true)
+            .await?;
         if status_updated {
             self.cancel_stacked_child_sessions(services, session_id)
                 .await;
@@ -3008,9 +3040,14 @@ impl SessionManager {
         &self,
         services: &AppServices,
         session_id: &str,
+        allow_managed: bool,
     ) -> Result<bool, SessionError> {
         let session = self.session_or_err(session_id)?;
-        if !session.allows_cancel_action() {
+        let managed_cancel_allowed = allow_managed
+            && session.is_managed()
+            && (matches!(session.status, Status::Draft | Status::InProgress)
+                || session.status.allows_review_actions());
+        if !session.allows_cancel_action() && !managed_cancel_allowed {
             return Err(SessionError::Workflow(
                 "Session must be running, in review, or be an unstarted draft to be canceled"
                     .to_string(),
@@ -3056,7 +3093,7 @@ impl SessionManager {
     ) {
         for child_session_id in self.stacked_child_session_ids(parent_session_id) {
             if let Err(error) = self
-                .cancel_single_session(services, child_session_id.as_str())
+                .cancel_single_session(services, child_session_id.as_str(), false)
                 .await
             {
                 warn!(
@@ -4452,6 +4489,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancel_session_accepts_an_already_applied_status_transition() {
+        // Arrange
+        let session = test_session("Initial prompt", Status::Review, Some("Title"), "");
+        let session_id = session.id.clone();
+        let database = database_with_session(&session).await;
+        let session_manager = session_manager_with_one_session(session);
+        let services = test_services(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+        let handles = session_manager
+            .session_handles()
+            .get(&session_id)
+            .expect("session handles should exist");
+        *handles
+            .status
+            .lock()
+            .expect("session status should remain available") = Status::Merged;
+
+        // Act
+        let result = session_manager.cancel_session(&services, &session_id).await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
     /// Ensures a retried coordinator delivery with an already accepted
     /// operation does not enqueue or append the roll-up prompt twice.
     async fn test_reply_to_coordinator_message_accepts_existing_operation_without_duplicate_prompt()
@@ -4482,6 +4547,7 @@ mod tests {
                 &services,
                 "missing-session",
                 "orchestration-rollup-missing".to_string(),
+                false,
                 "Missing controller",
             )
             .await;
@@ -4490,6 +4556,7 @@ mod tests {
                 &services,
                 "session-id",
                 "orchestration-rollup-1".to_string(),
+                false,
                 "Summarize the child results",
             )
             .await;

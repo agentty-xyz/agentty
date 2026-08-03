@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nINSERT INTO session_orchestration (\n    controller_session_id,\n    status,\n    max_parallelism,\n    created_at,\n    updated_at\n)\nVALUES (?, ?, ?, ?, ?)\nRETURNING id AS \"id!: i64\"\n",
+  "query": "\nINSERT INTO session_orchestration (\n    controller_session_id,\n    goal_statement,\n    status,\n    max_parallelism,\n    created_at,\n    updated_at\n)\nVALUES (?, '', ?, ?, ?, ?)\nRETURNING id AS \"id!: i64\"\n",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       null
     ]
   },
-  "hash": "9e72b107388fa2901052cd777cdfaed1a1ef87161a630e5c0578492098ae4a1e"
+  "hash": "1080125c37d537301d42fd28dc2f191177e1cc3eb35c6bf1a3318dc7ed5af24e"
 }

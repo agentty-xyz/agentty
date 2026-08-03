@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration_task\nSET status = 'Ready',\n    verification_reason = NULL,\n    verification_verdict = NULL,\n    updated_at = ?\nWHERE session_orchestration_id = ?\n  AND status = 'AwaitingIntegration'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "fd5e4fae0cd3e9d24c28ba8f6b6878c15eca94d5ba1748bb1da6313724b68d28"
+}

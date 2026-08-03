@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration\nSET goal_statement = ?,\n    max_parallelism = ?,\n    updated_at = ?\nWHERE id = ?\n  AND status = 'AwaitingApproval'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "05eb13fb25a53e9a736286db28a48bd3739925da48f0b7c7acda14c2441d70fb"
+}

@@ -872,7 +872,7 @@ fn test_append_workflow_notice_anchors_active_status_notices_after_active_turn()
 }
 
 #[test]
-fn test_update_orchestration_progress_replaces_and_clears_loader() {
+fn test_update_orchestration_progress_replaces_and_clears_board_snapshot() {
     // Arrange
     let mut session_manager = test_session_manager("controller", None);
 
@@ -887,24 +887,17 @@ fn test_update_orchestration_progress_replaces_and_clears_loader() {
     );
 
     // Assert
-    let orchestration_message = session_manager.sessions()[0]
-        .transient_messages
-        .get(TransientMessageSlot::Orchestration)
-        .expect("orchestration loader should be present");
-    assert_eq!(orchestration_message.anchor, TransientMessageAnchor::Tail);
-    assert!(matches!(
-        &orchestration_message.body,
-        TransientMessageBody::Loading(message)
-            if message == "Working... Protocol: ready"
-    ));
     assert_eq!(
         session_manager.sessions()[0]
+            .orchestration_progress
+            .as_deref(),
+        Some("Working... Protocol: ready")
+    );
+    assert!(
+        session_manager.sessions()[0]
             .transient_messages
-            .messages()
-            .iter()
-            .filter(|message| message.slot == TransientMessageSlot::Orchestration)
-            .count(),
-        1
+            .get(TransientMessageSlot::Orchestration)
+            .is_none()
     );
 
     // Act
@@ -914,8 +907,7 @@ fn test_update_orchestration_progress_replaces_and_clears_loader() {
     // Assert
     assert!(
         session_manager.sessions()[0]
-            .transient_messages
-            .get(TransientMessageSlot::Orchestration)
+            .orchestration_progress
             .is_none()
     );
 }

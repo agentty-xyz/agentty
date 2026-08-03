@@ -10,6 +10,8 @@ summary for fan-in.
 
 Task key: {{ task_key }} Title: {{ title }} Expected touched areas: {{ touched_areas }}
 
+Acceptance criteria: {{ acceptance_criteria }}
+
 Task:
 
 {{ prompt }}

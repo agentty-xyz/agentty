@@ -286,7 +286,8 @@ pub(super) async fn finalize_channel_turn(
     context: &TurnFinalizerContext,
     result: &Result<Status, SessionError>,
 ) {
-    if session_owns_branch_changes(&context.db, &context.session_id).await
+    let owns_branch_changes = session_owns_branch_changes(&context.db, &context.session_id).await;
+    if owns_branch_changes
         && let Some(diff_stats) = SessionTaskService::refresh_persisted_session_diff_stats(
             &context.db,
             context.fs_client.as_ref(),
@@ -303,6 +304,21 @@ pub(super) async fn finalize_channel_turn(
                 diff_stats,
                 session_id: context.session_id.clone(),
             });
+    }
+    if owns_branch_changes
+        && let Err(error) = orchestration::persist_managed_child_area_compliance(
+            &context.db,
+            context.git_client.as_ref(),
+            &context.session_id,
+            &context.folder,
+        )
+        .await
+    {
+        warn!(
+            session_id = %context.session_id,
+            %error,
+            "Failed to refresh managed-child touched-area evidence"
+        );
     }
 
     if let Some(target_status) = status_update_after_turn_result(result) {
@@ -789,6 +805,35 @@ mod tests {
         assert!(
             should_skip_auto_push,
             "operation-query failures must suppress post-turn auto-push"
+        );
+    }
+
+    #[tokio::test]
+    async fn finalization_tolerates_managed_child_evidence_persistence_failure() {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        pool.close().await;
+        let status = Arc::new(Mutex::new(Status::InProgress));
+        let context = TurnFinalizerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db,
+            folder: PathBuf::new(),
+            fs_client: Arc::new(crate::infra::fs::MockFsClient::new()),
+            git_client: Arc::new(MockGitClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "session-id".into(),
+            status: Arc::clone(&status),
+        };
+        let result = Err(SessionError::StoppedByUser("stopped".to_string()));
+
+        // Act
+        finalize_channel_turn(&context, &result).await;
+
+        // Assert
+        assert_eq!(
+            *status.lock().expect("status lock should remain usable"),
+            Status::InProgress
         );
     }
 

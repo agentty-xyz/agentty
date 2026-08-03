@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET status = 'Done',\n    questions = '',\n    updated_at = ?\nWHERE id = ?\n  AND role = 'Orchestrator'\n  AND status IN ('Review', 'Question')\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f655db6bafc18d1d389dcbe804f80a579dadff305edb450be6d1e478cbd00b7b"
+}

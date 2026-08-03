@@ -171,7 +171,7 @@ where
     let orchestration_coordinator = OrchestrationCoordinator::new(
         app.services.event_sender(),
         app.services.db().orchestration_repository(),
-        app.session_service(),
+        app.coordinator_session_service(),
     );
     let orchestration_task =
         tokio::spawn(orchestration_coordinator.run(RuntimeOrchestrationSchedule::new()));

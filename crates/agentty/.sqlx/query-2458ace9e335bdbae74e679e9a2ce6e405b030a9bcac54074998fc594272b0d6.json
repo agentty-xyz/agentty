@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET orchestration_task_id = NULL,\n    role = 'Worker',\n    updated_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "2458ace9e335bdbae74e679e9a2ce6e405b030a9bcac54074998fc594272b0d6"
+}

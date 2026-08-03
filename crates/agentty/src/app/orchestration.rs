@@ -6,12 +6,16 @@
 //! mailbox used by interactive commands.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use ag_protocol::{AgentResponse, QuestionItem, SubtaskItem, TurnPrompt, TurnPromptTextSource};
+use ag_git::GitClient;
+use ag_protocol::{
+    AgentResponse, QuestionItem, SubtaskItem, TurnPrompt, TurnPromptTextSource, VerificationVerdict,
+};
 use ag_session::{
-    CoordinatorMessageRequest, CreateSessionMode, CreateSessionRequest, QuestionAnswer, SessionId,
-    SessionRole, SessionService, SessionStatus,
+    CoordinatorMessageRequest, CoordinatorMessageVisibility, CreateSessionMode,
+    CreateSessionRequest, SessionId, SessionRole, SessionService, SessionStatus,
 };
 use askama::Template;
 use async_trait::async_trait;
@@ -21,8 +25,8 @@ use tracing::warn;
 use crate::app::AppEvent;
 use crate::app::session::session_branch;
 use crate::domain::orchestration::{
-    OrchestrationPlanTask, OrchestrationPolicy, OrchestrationStatus, OrchestrationTaskStatus,
-    validate_subtasks as validate_orchestration_plan,
+    IntegrationApproach, OrchestrationPlanTask, OrchestrationPolicy, OrchestrationStatus,
+    OrchestrationTaskStatus, validate_subtasks as validate_orchestration_plan,
 };
 use crate::domain::setting::{
     DEFAULT_ORCHESTRATION_PARALLELISM, MAX_ORCHESTRATION_PARALLELISM, SettingName,
@@ -32,22 +36,35 @@ use crate::infra::db::{
     SessionOrchestrationMetadataRow, SessionOrchestrationRow, SessionOrchestrationTaskRow,
 };
 
-/// Exact question text used to recognize orchestration approval answers.
-pub(crate) const APPROVAL_QUESTION: &str = "Approve this orchestration plan?";
 /// Maximum child summary length persisted into a roll-up.
 const RESULT_SUMMARY_MAX_CHARS: usize = 800;
+/// Number of identical infrastructure failures retried without user input.
+const INFRASTRUCTURE_RETRY_LIMIT: i64 = 2;
+
+/// Result of attempting to advance one parked campaign step.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OrchestrationApprovalOutcome {
+    /// The parked plan or integration step advanced.
+    Approved,
+    /// Integration cannot advance until the user selects its destination.
+    IntegrationApproachRequired,
+    /// No approvable campaign step matched the request.
+    Unavailable,
+}
 
 /// Askama view model for controller turns.
 #[derive(Template)]
 #[template(path = "orchestrator_controller_prompt.md", escape = "none")]
 struct OrchestratorControllerPromptTemplate<'a> {
     prompt: &'a str,
+    snapshot: &'a str,
 }
 
 /// Askama view model for child first turns.
 #[derive(Template)]
 #[template(path = "orchestration_child_prompt.md", escape = "none")]
 struct OrchestrationChildPromptTemplate<'a> {
+    acceptance_criteria: &'a str,
     prompt: &'a str,
     task_key: &'a str,
     title: &'a str,
@@ -81,8 +98,10 @@ pub(crate) async fn controller_prompt(
     }
 
     let agent_prompt = prompt.agent_text();
+    let snapshot = controller_snapshot(db, session_id).await;
     let rendered = OrchestratorControllerPromptTemplate {
         prompt: &agent_prompt,
+        snapshot: &snapshot,
     }
     .render()
     .unwrap_or(agent_prompt);
@@ -111,22 +130,21 @@ pub(crate) async fn persist_controller_plan(
         return Ok(());
     }
 
-    let existing = db
+    let mut existing = db
         .orchestrations()
         .load_orchestration_for_controller(controller_session_id)
         .await?;
-    if existing.as_ref().is_some_and(|orchestration| {
+    if let Some(orchestration) = existing.as_ref().filter(|orchestration| {
         orchestration
             .status
             .parse::<OrchestrationStatus>()
             .is_ok_and(OrchestrationStatus::is_active)
     }) {
-        response.subtasks.clear();
-        response
-            .questions
-            .retain(|question| question.text != APPROVAL_QUESTION);
-
-        return Ok(());
+        persist_controller_verdicts(db, orchestration, response).await?;
+        if handle_active_controller_plan(db, orchestration, response).await? {
+            return Ok(());
+        }
+        existing = None;
     }
     if response.subtasks.is_empty() {
         return Ok(());
@@ -137,9 +155,13 @@ pub(crate) async fn persist_controller_plan(
         reusable_retry_orchestration_id(db, existing.as_ref(), &subtasks).await?;
     if let Err(reason) = validate_subtasks(&subtasks, retry_orchestration_id.is_some()) {
         response.subtasks.clear();
-        response.questions = vec![QuestionItem::new(format!(
-            "The orchestration plan cannot run yet: {reason} Revise the plan?"
-        ))];
+        response.questions = vec![QuestionItem::with_options(
+            format!("The orchestration plan cannot run yet: {reason} Revise the plan?"),
+            vec![
+                "Revise the plan".to_string(),
+                "Use a regular session".to_string(),
+            ],
+        )];
 
         return Ok(());
     }
@@ -161,10 +183,22 @@ pub(crate) async fn persist_controller_plan(
             &OrchestrationStatus::AwaitingApproval.to_string(),
         )
         .await?;
+    let goal_statement = bounded_goal(&response.answer);
+    db.orchestrations()
+        .update_orchestration_plan(
+            orchestration_id,
+            &goal_statement,
+            load_max_parallelism(db).await,
+        )
+        .await?;
 
-    for subtask in subtasks {
-        db.orchestrations()
+    for (merge_position, subtask) in subtasks.into_iter().enumerate() {
+        let task_id = db
+            .orchestrations()
             .upsert_orchestration_task(PersistedOrchestrationTask {
+                acceptance_criteria: serde_json::to_string(&subtask.acceptance_criteria)
+                    .unwrap_or_else(|_| "[]".to_string()),
+                merge_position: i64::try_from(merge_position).unwrap_or(i64::MAX),
                 prompt: subtask.prompt,
                 session_orchestration_id: orchestration_id,
                 task_key: subtask.task_key,
@@ -173,48 +207,409 @@ pub(crate) async fn persist_controller_plan(
                     .unwrap_or_else(|_| "[]".to_string()),
             })
             .await?;
+        db.orchestrations()
+            .update_orchestration_task_status(
+                task_id,
+                &OrchestrationTaskStatus::Proposed.to_string(),
+                None,
+            )
+            .await?;
     }
-
-    response.questions = vec![QuestionItem::with_options(
-        APPROVAL_QUESTION,
-        vec!["Approve".to_string(), "Revise".to_string()],
-    )];
 
     Ok(())
 }
 
-/// Applies approval or revision intent to the latest parked plan.
-pub(crate) async fn apply_plan_answer(
+/// Computes and persists touched-area compliance for one settled managed
+/// child through the injected Git boundary.
+pub(crate) async fn persist_managed_child_area_compliance(
+    db: &AppRepositories,
+    git_client: &dyn GitClient,
+    child_session_id: &str,
+    worktree: &Path,
+) -> Result<(), String> {
+    let Some(scope) = db
+        .orchestrations()
+        .load_orchestration_task_scope_for_child(child_session_id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(());
+    };
+    let touched_areas = serde_json::from_str::<Vec<String>>(&scope.touched_areas)
+        .map_err(|error| format!("Invalid touched areas for managed child: {error}"))?;
+    let changed_files = git_client
+        .diff_changed_files(worktree.to_path_buf(), scope.base_branch)
+        .await
+        .map_err(|error| error.to_string())?;
+    let area_violations = area_violations(&changed_files, &touched_areas);
+    let serialized_violations =
+        serde_json::to_string(&area_violations).map_err(|error| error.to_string())?;
+    db.orchestrations()
+        .update_orchestration_task_area_compliance(
+            scope.id,
+            area_violations.is_empty(),
+            &serialized_violations,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+async fn persist_controller_verdicts(
+    db: &AppRepositories,
+    orchestration: &SessionOrchestrationRow,
+    response: &AgentResponse,
+) -> Result<(), DbError> {
+    if orchestration.status != OrchestrationStatus::Verifying.to_string() {
+        return Ok(());
+    }
+    let mut recorded_task_keys = HashSet::new();
+    for verdict in response.verification_verdict_items() {
+        let task_key = verdict.task_key.trim();
+        if task_key.is_empty() || !recorded_task_keys.insert(task_key.to_string()) {
+            continue;
+        }
+        let recorded = db
+            .orchestrations()
+            .record_orchestration_verdict(
+                orchestration.id,
+                task_key,
+                verdict.verdict == VerificationVerdict::Pass,
+                verdict.reason.trim(),
+            )
+            .await?;
+        if !recorded {
+            return Err(DbError::InvalidData {
+                entity: "orchestration verification verdict",
+                reason: format!(
+                    "task `{task_key}` did not match a ready task in orchestration {}",
+                    orchestration.id
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_active_controller_plan(
+    db: &AppRepositories,
+    orchestration: &SessionOrchestrationRow,
+    response: &mut AgentResponse,
+) -> Result<bool, DbError> {
+    let routes_follow_up = matches!(
+        orchestration.status.parse::<OrchestrationStatus>(),
+        Ok(OrchestrationStatus::Running
+            | OrchestrationStatus::Verifying
+            | OrchestrationStatus::AwaitingIntegration
+            | OrchestrationStatus::Integrating)
+    ) && !response.subtasks.is_empty();
+    if routes_follow_up {
+        route_active_subtasks(db, orchestration, response).await?;
+
+        return Ok(true);
+    }
+    if orchestration.status == OrchestrationStatus::AwaitingApproval.to_string()
+        && !response.subtasks.is_empty()
+    {
+        db.orchestrations()
+            .update_orchestration_status(
+                orchestration.id,
+                &OrchestrationStatus::Canceled.to_string(),
+            )
+            .await?;
+
+        return Ok(false);
+    }
+    response.subtasks.clear();
+
+    Ok(true)
+}
+
+/// Routes controller follow-up output without replacing live worker branches.
+async fn route_active_subtasks(
+    db: &AppRepositories,
+    orchestration: &SessionOrchestrationRow,
+    response: &mut AgentResponse,
+) -> Result<(), DbError> {
+    let subtasks = response.subtask_items();
+    let tasks = db
+        .orchestrations()
+        .load_orchestration_tasks(orchestration.id)
+        .await?;
+    if let Some(question) = active_subtask_validation_question(orchestration, &tasks, &subtasks) {
+        response.subtasks.clear();
+        response.questions = vec![question];
+
+        return Ok(());
+    }
+    let existing_by_key = tasks
+        .iter()
+        .map(|task| (task.task_key.as_str(), task))
+        .collect::<HashMap<_, _>>();
+
+    let mut has_routed_work = false;
+    let mut proposed_count = 0_i64;
+    let next_merge_position = tasks
+        .iter()
+        .map(|task| task.merge_position)
+        .max()
+        .unwrap_or(-1)
+        .saturating_add(1);
+    for subtask in subtasks {
+        let acceptance_criteria = serde_json::to_string(&subtask.acceptance_criteria)
+            .unwrap_or_else(|_| "[]".to_string());
+        if let Some(task) = existing_by_key.get(subtask.task_key.as_str()) {
+            if task_as_subtask(task).as_ref() == Some(&subtask) {
+                continue;
+            }
+            if !db
+                .orchestrations()
+                .queue_orchestration_continuation(task.id, &subtask.prompt, &acceptance_criteria)
+                .await?
+            {
+                response.subtasks.clear();
+                response.questions = vec![continuation_routing_question(&subtask.task_key)];
+
+                return Ok(());
+            }
+            has_routed_work = true;
+
+            continue;
+        }
+
+        let task_id = db
+            .orchestrations()
+            .upsert_orchestration_task(PersistedOrchestrationTask {
+                acceptance_criteria,
+                merge_position: next_merge_position.saturating_add(proposed_count),
+                prompt: subtask.prompt,
+                session_orchestration_id: orchestration.id,
+                task_key: subtask.task_key,
+                title: subtask.title,
+                touched_areas: serde_json::to_string(&subtask.touched_areas)
+                    .unwrap_or_else(|_| "[]".to_string()),
+            })
+            .await?;
+        db.orchestrations()
+            .update_orchestration_task_status(
+                task_id,
+                &OrchestrationTaskStatus::Proposed.to_string(),
+                None,
+            )
+            .await?;
+        has_routed_work = true;
+        proposed_count = proposed_count.saturating_add(1);
+    }
+
+    if !has_routed_work {
+        response.subtasks.clear();
+
+        return Ok(());
+    }
+
+    if matches!(
+        orchestration.status.parse::<OrchestrationStatus>(),
+        Ok(OrchestrationStatus::AwaitingIntegration | OrchestrationStatus::Integrating)
+    ) {
+        db.orchestrations()
+            .reset_orchestration_verification(orchestration.id)
+            .await?;
+    }
+
+    let next_status = if proposed_count == 0 {
+        OrchestrationStatus::Running
+    } else {
+        OrchestrationStatus::AwaitingApproval
+    };
+    db.orchestrations()
+        .update_orchestration_status(orchestration.id, &next_status.to_string())
+        .await?;
+    response.subtasks.clear();
+
+    Ok(())
+}
+
+fn active_subtask_validation_question(
+    orchestration: &SessionOrchestrationRow,
+    tasks: &[SessionOrchestrationTaskRow],
+    subtasks: &[SubtaskItem],
+) -> Option<QuestionItem> {
+    if let Err(reason) = validate_subtasks(subtasks, true) {
+        return Some(QuestionItem::with_options(
+            format!("The follow-up work cannot run yet: {reason} Revise it?"),
+            vec![
+                "Revise the follow-up".to_string(),
+                "Drop the follow-up".to_string(),
+            ],
+        ));
+    }
+    let mut combined = tasks
+        .iter()
+        .filter_map(task_as_subtask)
+        .map(|task| (task.task_key.clone(), task))
+        .collect::<HashMap<_, _>>();
+    for subtask in subtasks {
+        combined.insert(subtask.task_key.clone(), subtask.clone());
+    }
+    if let Err(reason) = validate_subtasks(&combined.into_values().collect::<Vec<_>>(), true) {
+        return Some(QuestionItem::with_options(
+            format!("The follow-up work conflicts with the live campaign: {reason} Revise it?"),
+            vec![
+                "Revise the follow-up".to_string(),
+                "Drop the follow-up".to_string(),
+            ],
+        ));
+    }
+    if orchestration.status == OrchestrationStatus::Integrating.to_string()
+        && tasks
+            .iter()
+            .any(|task| task_status(task) == Some(OrchestrationTaskStatus::Merging))
+    {
+        return Some(QuestionItem::with_options(
+            "Integration is currently applying a task. Wait for that action to settle before \
+             routing more work.",
+            vec![
+                "Wait for integration".to_string(),
+                "Drop the follow-up".to_string(),
+            ],
+        ));
+    }
+    let existing_by_key = tasks
+        .iter()
+        .map(|task| (task.task_key.as_str(), task))
+        .collect::<HashMap<_, _>>();
+    for subtask in subtasks {
+        let Some(task) = existing_by_key.get(subtask.task_key.as_str()) else {
+            continue;
+        };
+        if task_as_subtask(task).as_ref() == Some(subtask) {
+            continue;
+        }
+        let touched_areas =
+            serde_json::to_string(&subtask.touched_areas).unwrap_or_else(|_| "[]".to_string());
+        let can_continue = matches!(
+            task_status(task),
+            Some(
+                OrchestrationTaskStatus::Ready
+                    | OrchestrationTaskStatus::AwaitingIntegration
+                    | OrchestrationTaskStatus::IntegrationFailed
+            )
+        );
+        if task.touched_areas != touched_areas || !can_continue {
+            return Some(continuation_routing_question(&subtask.task_key));
+        }
+    }
+
+    None
+}
+
+fn continuation_routing_question(task_key: &str) -> QuestionItem {
+    QuestionItem::with_options(
+        format!(
+            "Task `{task_key}` cannot be continued in place. Keep feedback within its declared \
+             areas and wait until the live child settles, or use a new task key."
+        ),
+        vec![
+            "Wait, then continue this task".to_string(),
+            "Create a separate follow-up task".to_string(),
+            "Drop this feedback".to_string(),
+        ],
+    )
+}
+
+fn task_as_subtask(task: &SessionOrchestrationTaskRow) -> Option<SubtaskItem> {
+    Some(SubtaskItem {
+        acceptance_criteria: serde_json::from_str(&task.acceptance_criteria).ok()?,
+        prompt: task.prompt.clone(),
+        task_key: task.task_key.clone(),
+        title: task.title.clone(),
+        touched_areas: serde_json::from_str(&task.touched_areas).ok()?,
+    })
+}
+
+fn area_violations(changed_files: &[String], touched_areas: &[String]) -> Vec<String> {
+    changed_files
+        .iter()
+        .filter(|path| {
+            !touched_areas.iter().any(|area| {
+                let area = area.trim_end_matches('/');
+
+                path.as_str() == area
+                    || path
+                        .strip_prefix(area)
+                        .is_some_and(|suffix| suffix.starts_with('/'))
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// Approves the currently parked campaign step.
+pub(crate) async fn approve_orchestration(
     db: &AppRepositories,
     controller_session_id: &str,
-    answers: &[QuestionAnswer],
-) -> Result<(), DbError> {
+    integration_approach: Option<IntegrationApproach>,
+) -> Result<OrchestrationApprovalOutcome, DbError> {
     let Some(orchestration) = db
         .orchestrations()
         .load_orchestration_for_controller(controller_session_id)
         .await?
     else {
-        return Ok(());
+        return Ok(OrchestrationApprovalOutcome::Unavailable);
     };
-    if orchestration.status != OrchestrationStatus::AwaitingApproval.to_string()
-        || !answers
-            .iter()
-            .any(|answer| answer.question == APPROVAL_QUESTION)
-    {
-        return Ok(());
+    match orchestration.status.parse::<OrchestrationStatus>() {
+        Ok(OrchestrationStatus::AwaitingApproval) => {
+            let approved = db
+                .orchestrations()
+                .approve_orchestration_plan(orchestration.id)
+                .await?;
+
+            return Ok(if approved {
+                OrchestrationApprovalOutcome::Approved
+            } else {
+                OrchestrationApprovalOutcome::Unavailable
+            });
+        }
+        Ok(OrchestrationStatus::AwaitingIntegration) => {
+            let tasks = db
+                .orchestrations()
+                .load_orchestration_tasks(orchestration.id)
+                .await?;
+            if tasks
+                .iter()
+                .any(|task| task_status(task) == Some(OrchestrationTaskStatus::Ready))
+            {
+                return Ok(OrchestrationApprovalOutcome::Unavailable);
+            }
+            let Some(integration_approach) = integration_approach else {
+                return Ok(OrchestrationApprovalOutcome::IntegrationApproachRequired);
+            };
+            let approved = db
+                .orchestrations()
+                .approve_orchestration_integration(orchestration.id, integration_approach)
+                .await?;
+
+            return Ok(if approved {
+                OrchestrationApprovalOutcome::Approved
+            } else {
+                OrchestrationApprovalOutcome::Unavailable
+            });
+        }
+        _ => {}
     }
 
-    let approved = answers
-        .iter()
-        .filter(|answer| answer.question == APPROVAL_QUESTION)
-        .any(|answer| answer.answer.trim().eq_ignore_ascii_case("approve"));
-    let next = if approved {
-        OrchestrationStatus::Running
-    } else {
-        OrchestrationStatus::Canceled
-    };
+    Ok(OrchestrationApprovalOutcome::Unavailable)
+}
+
+/// Permanently transfers a managed child from its campaign to the user.
+pub(crate) async fn detach_managed_child(
+    db: &AppRepositories,
+    child_session_id: &str,
+) -> Result<bool, DbError> {
     db.orchestrations()
-        .update_orchestration_status(orchestration.id, &next.to_string())
+        .detach_orchestration_child(child_session_id)
         .await
 }
 
@@ -326,12 +721,22 @@ impl OrchestrationCoordinator {
             .await
             .map_err(|error| error.to_string())?;
         for orchestration in orchestrations {
+            if orchestration.status == OrchestrationStatus::AwaitingApproval.to_string() {
+                self.reconcile_parked_plan(&orchestration).await?;
+
+                continue;
+            }
+            if orchestration.status == OrchestrationStatus::AwaitingIntegration.to_string() {
+                self.reconcile_awaiting_integration(&orchestration).await?;
+
+                continue;
+            }
             if orchestration.status == OrchestrationStatus::Running.to_string() {
                 self.reconcile_orchestration(&orchestration).await?;
 
                 continue;
             }
-            if orchestration.status == OrchestrationStatus::Submitting.to_string() {
+            if orchestration.status == OrchestrationStatus::Verifying.to_string() {
                 let tasks = self
                     .repository
                     .load_orchestration_tasks(orchestration.id)
@@ -341,9 +746,59 @@ impl OrchestrationCoordinator {
 
                 continue;
             }
+            if orchestration.status == OrchestrationStatus::Integrating.to_string() {
+                self.reconcile_integration(&orchestration).await?;
+
+                continue;
+            }
             if orchestration.status == OrchestrationStatus::Canceling.to_string() {
                 self.reconcile_cancellation(&orchestration).await?;
             }
+        }
+
+        Ok(())
+    }
+
+    async fn reconcile_parked_plan(
+        &self,
+        orchestration: &SessionOrchestrationRow,
+    ) -> Result<(), String> {
+        let mut tasks = self
+            .repository
+            .load_orchestration_tasks(orchestration.id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let live_tasks = tasks.iter_mut().filter(|task| {
+            let status = task_status(task);
+
+            status == Some(OrchestrationTaskStatus::ContinuationPending)
+                || status == Some(OrchestrationTaskStatus::Running)
+                || status == Some(OrchestrationTaskStatus::WaitingForInput)
+        });
+        for task in live_tasks {
+            self.reconcile_task(task).await?;
+        }
+        self.surface_child_questions(orchestration, &tasks).await?;
+        self.emit_live_status(orchestration, &tasks);
+
+        Ok(())
+    }
+
+    async fn reconcile_awaiting_integration(
+        &self,
+        orchestration: &SessionOrchestrationRow,
+    ) -> Result<(), String> {
+        let tasks = self
+            .repository
+            .load_orchestration_tasks(orchestration.id)
+            .await
+            .map_err(|error| error.to_string())?;
+        if tasks.iter().all(|task| {
+            task_status(task).is_some_and(OrchestrationTaskStatus::is_integration_settled)
+        }) {
+            self.complete_campaign(orchestration).await?;
+        } else {
+            self.emit_live_status(orchestration, &tasks);
         }
 
         Ok(())
@@ -422,6 +877,7 @@ impl OrchestrationCoordinator {
         for task in &mut tasks {
             self.reconcile_task(task).await?;
         }
+        self.surface_child_questions(orchestration, &tasks).await?;
 
         let task_statuses = tasks.iter().map(task_status).collect::<Vec<_>>();
         let decision = OrchestrationPolicy::schedule(
@@ -454,10 +910,41 @@ impl OrchestrationCoordinator {
                 .await
                 .map_err(|error| error.to_string())?;
             if claimed {
-                self.submit_rollup(orchestration, &refreshed).await?;
+                self.submit_rollup(
+                    orchestration,
+                    &refreshed,
+                    orchestration.verification_generation.saturating_add(1),
+                )
+                .await?;
             }
         } else {
             self.emit_live_status(orchestration, &refreshed);
+        }
+
+        Ok(())
+    }
+
+    async fn surface_child_questions(
+        &self,
+        orchestration: &SessionOrchestrationRow,
+        tasks: &[SessionOrchestrationTaskRow],
+    ) -> Result<(), String> {
+        let Some((task_id, questions)) = tasks.iter().find_map(|task| {
+            (task_status(task) == Some(OrchestrationTaskStatus::WaitingForInput))
+                .then_some(task.child_questions.as_deref())
+                .flatten()
+                .filter(|questions| !questions.is_empty())
+                .map(|questions| (task.id, questions))
+        }) else {
+            return Ok(());
+        };
+        let surfaced = self
+            .repository
+            .surface_orchestration_questions(orchestration.id, task_id, questions)
+            .await
+            .map_err(|error| error.to_string())?;
+        if surfaced {
+            let _ = self.event_tx.send(AppEvent::RefreshSessions);
         }
 
         Ok(())
@@ -468,7 +955,8 @@ impl OrchestrationCoordinator {
         orchestration: &SessionOrchestrationRow,
         tasks: &[SessionOrchestrationTaskRow],
     ) -> Result<(), String> {
-        let operation_id = rollup_operation_id(orchestration.id);
+        let operation_id =
+            rollup_operation_id(orchestration.id, orchestration.verification_generation);
         let operation_status = self
             .repository
             .load_rollup_operation_status(&operation_id)
@@ -483,7 +971,8 @@ impl OrchestrationCoordinator {
             }
             Some("queued" | "running") => {}
             None | Some("failed" | "canceled") => {
-                self.submit_rollup(orchestration, tasks).await?;
+                self.submit_rollup(orchestration, tasks, orchestration.verification_generation)
+                    .await?;
             }
             Some(status) => {
                 return Err(format!(
@@ -496,7 +985,184 @@ impl OrchestrationCoordinator {
         Ok(())
     }
 
+    async fn reconcile_integration(
+        &self,
+        orchestration: &SessionOrchestrationRow,
+    ) -> Result<(), String> {
+        let integration_approach = self
+            .repository
+            .load_orchestration_integration_approach(orchestration.id)
+            .await
+            .map_err(|error| error.to_string())?
+            .parse::<IntegrationApproach>()?;
+        let mut tasks = self
+            .repository
+            .load_orchestration_tasks(orchestration.id)
+            .await
+            .map_err(|error| error.to_string())?;
+        for task in &mut tasks {
+            self.reconcile_merging_task(task, integration_approach)
+                .await?;
+        }
+        if tasks
+            .iter()
+            .any(|task| task_status(task) == Some(OrchestrationTaskStatus::Merging))
+        {
+            self.emit_live_status(orchestration, &tasks);
+
+            return Ok(());
+        }
+
+        if let Some(task) = tasks
+            .iter_mut()
+            .find(|task| task_status(task) == Some(OrchestrationTaskStatus::AwaitingIntegration))
+        {
+            self.integrate_task(task, integration_approach).await?;
+            self.emit_live_status(orchestration, &tasks);
+
+            return Ok(());
+        }
+
+        if tasks.iter().all(|task| {
+            task_status(task).is_some_and(OrchestrationTaskStatus::is_integration_settled)
+        }) {
+            self.complete_campaign(orchestration).await?;
+        } else {
+            self.emit_live_status(orchestration, &tasks);
+        }
+
+        Ok(())
+    }
+
+    async fn reconcile_merging_task(
+        &self,
+        task: &mut SessionOrchestrationTaskRow,
+        integration_approach: IntegrationApproach,
+    ) -> Result<(), String> {
+        if task_status(task) != Some(OrchestrationTaskStatus::Merging) {
+            return Ok(());
+        }
+
+        if integration_approach == IntegrationApproach::ReviewRequest {
+            if let Some(child_session_id) = task.child_session_id.as_deref().map(SessionId::from) {
+                self.publish_review_request(task, &child_session_id).await?;
+            } else {
+                self.update_task_status(
+                    task,
+                    OrchestrationTaskStatus::IntegrationFailed,
+                    Some("Verified task has no child session".to_string()),
+                )
+                .await?;
+            }
+
+            return Ok(());
+        }
+
+        let child_status = task
+            .child_status
+            .as_deref()
+            .and_then(|status| status.parse::<SessionStatus>().ok());
+        if matches!(
+            child_status,
+            Some(SessionStatus::Done | SessionStatus::Merged)
+        ) {
+            self.update_task_status(task, OrchestrationTaskStatus::Integrated, None)
+                .await?;
+        } else if child_status == Some(SessionStatus::Canceled) {
+            self.update_task_status(
+                task,
+                OrchestrationTaskStatus::IntegrationFailed,
+                Some("Child integration was canceled".to_string()),
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn integrate_task(
+        &self,
+        task: &mut SessionOrchestrationTaskRow,
+        integration_approach: IntegrationApproach,
+    ) -> Result<(), String> {
+        let Some(child_session_id) = task.child_session_id.as_deref().map(SessionId::from) else {
+            self.update_task_status(
+                task,
+                OrchestrationTaskStatus::IntegrationFailed,
+                Some("Verified task has no child session".to_string()),
+            )
+            .await?;
+
+            return Ok(());
+        };
+        self.update_task_status(task, OrchestrationTaskStatus::Merging, None)
+            .await?;
+        if integration_approach == IntegrationApproach::ReviewRequest {
+            return self.publish_review_request(task, &child_session_id).await;
+        }
+        let result = self.session_service.merge_session(&child_session_id).await;
+        if let Err(error) = result {
+            self.update_task_status(
+                task,
+                OrchestrationTaskStatus::IntegrationFailed,
+                Some(error.to_string()),
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn publish_review_request(
+        &self,
+        task: &mut SessionOrchestrationTaskRow,
+        child_session_id: &SessionId,
+    ) -> Result<(), String> {
+        let result = self
+            .session_service
+            .create_review_request(child_session_id)
+            .await;
+        match result {
+            Ok(_) => {
+                self.update_task_status(task, OrchestrationTaskStatus::ReviewRequested, None)
+                    .await?;
+            }
+            Err(error) => {
+                self.update_task_status(
+                    task,
+                    OrchestrationTaskStatus::IntegrationFailed,
+                    Some(error.to_string()),
+                )
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn complete_campaign(
+        &self,
+        orchestration: &SessionOrchestrationRow,
+    ) -> Result<(), String> {
+        let completed = self
+            .repository
+            .complete_orchestration_campaign(orchestration.id)
+            .await
+            .map_err(|error| error.to_string())?;
+        if completed {
+            self.clear_live_status(orchestration);
+            let _ = self.event_tx.send(AppEvent::RefreshSessions);
+        }
+
+        Ok(())
+    }
+
     async fn reconcile_task(&self, task: &mut SessionOrchestrationTaskRow) -> Result<(), String> {
+        if task_status(task) == Some(OrchestrationTaskStatus::ContinuationPending) {
+            self.reconcile_continuation(task).await?;
+
+            return Ok(());
+        }
         if task.child_session_id.is_none()
             && task_status(task) == Some(OrchestrationTaskStatus::Creating)
         {
@@ -520,12 +1186,8 @@ impl OrchestrationCoordinator {
 
                 return Ok(());
             }
-            self.update_task_status(
-                task,
-                OrchestrationTaskStatus::Failed,
-                Some("Child creation did not complete".to_string()),
-            )
-            .await?;
+            self.fail_task_spawn(task, "Child creation did not complete".to_string())
+                .await?;
 
             return Ok(());
         }
@@ -547,6 +1209,85 @@ impl OrchestrationCoordinator {
                     .await
                     .map_err(|error| error.to_string())?;
                 task.result_summary = Some(summary);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn reconcile_continuation(
+        &self,
+        task: &mut SessionOrchestrationTaskRow,
+    ) -> Result<(), String> {
+        let Some(child_session_id) = task.child_session_id.as_deref().map(SessionId::from) else {
+            self.update_task_status(
+                task,
+                OrchestrationTaskStatus::Failed,
+                Some("Continuation lost its managed child".to_string()),
+            )
+            .await?;
+
+            return Ok(());
+        };
+        let operation_id = continuation_operation_id(task);
+        let operation_status = self
+            .repository
+            .load_rollup_operation_status(&operation_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        match operation_status.as_deref() {
+            None | Some("failed" | "canceled") => {
+                let prompt = continuation_message(task);
+                self.session_service
+                    .submit_coordinator_message(
+                        &child_session_id,
+                        CoordinatorMessageRequest {
+                            message: prompt,
+                            operation_id,
+                            visibility: CoordinatorMessageVisibility::Visible,
+                        },
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            Some("queued" | "running") => {}
+            Some("done") => {
+                let observed_status = task
+                    .child_status
+                    .as_deref()
+                    .and_then(|status| status.parse::<SessionStatus>().ok());
+                let next = match observed_status {
+                    Some(SessionStatus::Question) => OrchestrationTaskStatus::WaitingForInput,
+                    Some(SessionStatus::Canceled) => OrchestrationTaskStatus::Failed,
+                    Some(
+                        SessionStatus::Review
+                        | SessionStatus::AgentReview
+                        | SessionStatus::Merged
+                        | SessionStatus::Done,
+                    ) => OrchestrationTaskStatus::Ready,
+                    _ => return Ok(()),
+                };
+                let summary = (next == OrchestrationTaskStatus::Ready)
+                    .then(|| task.child_summary.as_deref().map(bounded_summary))
+                    .flatten();
+                self.repository
+                    .update_orchestration_task_status(task.id, &next.to_string(), None)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if let Some(summary) = summary.as_deref() {
+                    self.repository
+                        .update_orchestration_task_result_summary(task.id, summary)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                task.status = next.to_string();
+                task.result_summary.clone_from(&task.child_summary);
+            }
+            Some(status) => {
+                return Err(format!(
+                    "Unknown continuation operation status `{status}` for task {}",
+                    task.id
+                ));
             }
         }
 
@@ -647,8 +1388,19 @@ impl OrchestrationCoordinator {
         task: &mut SessionOrchestrationTaskRow,
         error: String,
     ) -> Result<(), String> {
-        self.update_task_status(task, OrchestrationTaskStatus::Failed, Some(error))
+        if let Some(child_session_id) = task.child_session_id.take() {
+            self.cancel_unclaimed_child(&child_session_id).await?;
+        }
+        let next_status = self
+            .repository
+            .record_orchestration_spawn_failure(task.id, &error, INFRASTRUCTURE_RETRY_LIMIT)
             .await
+            .map_err(|failure| failure.to_string())?;
+        task.status = next_status;
+        task.infrastructure_retry_count = task.infrastructure_retry_count.saturating_add(1);
+        task.last_error = Some(error);
+
+        Ok(())
     }
 
     fn emit_live_status(
@@ -656,7 +1408,7 @@ impl OrchestrationCoordinator {
         orchestration: &SessionOrchestrationRow,
         tasks: &[SessionOrchestrationTaskRow],
     ) {
-        let message = live_status_message(tasks);
+        let message = campaign_status_message(orchestration, tasks);
         let should_emit = self.live_statuses.lock().is_ok_and(|mut live_statuses| {
             if live_statuses.get(&orchestration.id) == Some(&message) {
                 return false;
@@ -676,7 +1428,6 @@ impl OrchestrationCoordinator {
                 progress: Some(message),
                 session_id: SessionId::from(orchestration.controller_session_id.clone()),
             });
-        let _ = self.event_tx.send(AppEvent::RefreshSessions);
     }
 
     fn clear_live_status(&self, orchestration: &SessionOrchestrationRow) {
@@ -695,15 +1446,17 @@ impl OrchestrationCoordinator {
         &self,
         orchestration: &SessionOrchestrationRow,
         tasks: &[SessionOrchestrationTaskRow],
+        verification_generation: i64,
     ) -> Result<(), String> {
         let controller_session_id = SessionId::from(orchestration.controller_session_id.clone());
-        let rollup = rollup_message(tasks);
+        let rollup = rollup_message(&orchestration.goal_statement, tasks);
         self.session_service
             .submit_coordinator_message(
                 &controller_session_id,
                 CoordinatorMessageRequest {
                     message: rollup,
-                    operation_id: rollup_operation_id(orchestration.id),
+                    operation_id: rollup_operation_id(orchestration.id, verification_generation),
+                    visibility: CoordinatorMessageVisibility::Hidden,
                 },
             )
             .await
@@ -717,6 +1470,7 @@ fn validate_subtasks(subtasks: &[SubtaskItem], is_retry: bool) -> Result<(), Str
     let plan = subtasks
         .iter()
         .map(|subtask| OrchestrationPlanTask {
+            acceptance_criteria: subtask.acceptance_criteria.clone(),
             prompt: subtask.prompt.clone(),
             task_key: subtask.task_key.clone(),
             title: subtask.title.clone(),
@@ -725,6 +1479,23 @@ fn validate_subtasks(subtasks: &[SubtaskItem], is_retry: bool) -> Result<(), Str
         .collect::<Vec<_>>();
 
     validate_orchestration_plan(&plan, is_retry)
+}
+
+async fn controller_snapshot(db: &AppRepositories, controller_session_id: &str) -> String {
+    let Ok(Some(orchestration)) = db
+        .orchestrations()
+        .load_orchestration_for_controller(controller_session_id)
+        .await
+    else {
+        return "No campaign has been planned yet.".to_string();
+    };
+    let tasks = db
+        .orchestrations()
+        .load_orchestration_tasks(orchestration.id)
+        .await
+        .unwrap_or_default();
+
+    campaign_status_message(&orchestration, &tasks)
 }
 
 async fn reusable_retry_orchestration_id(
@@ -774,14 +1545,18 @@ fn session_metadata_from_row(row: SessionOrchestrationMetadataRow) -> Orchestrat
         .orchestration_status
         .as_deref()
         .and_then(|status| status.parse::<OrchestrationStatus>().ok())
-        .and_then(|status| match status {
-            OrchestrationStatus::AwaitingApproval => Some("Awaiting approval".to_string()),
-            OrchestrationStatus::Canceling => Some("Canceling orchestration".to_string()),
-            OrchestrationStatus::Running | OrchestrationStatus::Submitting => Some(format!(
+        .map(|status| match status {
+            OrchestrationStatus::AwaitingApproval => "Awaiting approval".to_string(),
+            OrchestrationStatus::Canceling => "Canceling orchestration".to_string(),
+            OrchestrationStatus::Running => format!(
                 "{} running, {} waiting on you",
                 row.running_task_count, row.waiting_task_count
-            )),
-            OrchestrationStatus::Done | OrchestrationStatus::Canceled => None,
+            ),
+            OrchestrationStatus::Verifying => "Verifying results".to_string(),
+            OrchestrationStatus::AwaitingIntegration => "Awaiting integration approval".to_string(),
+            OrchestrationStatus::Integrating => "Integrating verified work".to_string(),
+            OrchestrationStatus::Done => "Phase: Done\nCampaign complete".to_string(),
+            OrchestrationStatus::Canceled => "Phase: Canceled\nCampaign canceled".to_string(),
         });
 
     OrchestrationSessionMetadata {
@@ -808,6 +1583,7 @@ pub(crate) fn child_session_is_stopped(status: Option<&str>) -> bool {
 
 fn child_prompt(task: &SessionOrchestrationTaskRow) -> String {
     OrchestrationChildPromptTemplate {
+        acceptance_criteria: &task.acceptance_criteria,
         prompt: &task.prompt,
         task_key: &task.task_key,
         title: &task.title,
@@ -815,6 +1591,20 @@ fn child_prompt(task: &SessionOrchestrationTaskRow) -> String {
     }
     .render()
     .unwrap_or_else(|_| task.prompt.clone())
+}
+
+fn bounded_goal(answer: &str) -> String {
+    let first_paragraph = answer.split("\n\n").next().unwrap_or(answer).trim();
+    let mut characters = first_paragraph.chars();
+    let mut goal = characters.by_ref().take(240).collect::<String>();
+    if characters.next().is_some() {
+        goal.push('…');
+    }
+    if goal.is_empty() {
+        return "Complete the approved orchestration plan".to_string();
+    }
+
+    goal
 }
 
 fn bounded_summary(summary: &str) -> String {
@@ -830,34 +1620,56 @@ fn bounded_summary(summary: &str) -> String {
     bounded
 }
 
-fn live_status_message(tasks: &[SessionOrchestrationTaskRow]) -> String {
-    let mut lines = vec!["Orchestrating...".to_string()];
+fn campaign_status_message(
+    orchestration: &SessionOrchestrationRow,
+    tasks: &[SessionOrchestrationTaskRow],
+) -> String {
+    let mut lines = vec![
+        format!("Phase: {}", orchestration.status),
+        format!(
+            "Parallel workers: {} (global setting)",
+            orchestration.max_parallelism
+        ),
+    ];
     lines.extend(tasks.iter().map(|task| {
-        let status = task_status(task).map_or("unknown", orchestration_task_status_label);
+        let status = task_status(task).map_or("unknown", OrchestrationTaskStatus::campaign_label);
+        let evidence = campaign_task_evidence(task);
 
-        format!("- {}: {status}", task.title)
+        format!("- {} [{}]: {status}{evidence}", task.title, task.task_key)
     }));
 
     lines.join("\n")
 }
 
-fn orchestration_task_status_label(status: OrchestrationTaskStatus) -> &'static str {
-    match status {
-        OrchestrationTaskStatus::Planned => "waiting",
-        OrchestrationTaskStatus::Creating => "starting",
-        OrchestrationTaskStatus::Running => "running",
-        OrchestrationTaskStatus::WaitingForInput => "waiting on you",
-        OrchestrationTaskStatus::Ready => "ready",
-        OrchestrationTaskStatus::Failed => "failed",
-        OrchestrationTaskStatus::Canceled => "canceled",
-    }
+fn campaign_task_evidence(task: &SessionOrchestrationTaskRow) -> String {
+    let compliance = match task.areas_compliant {
+        Some(true) => "; areas compliant".to_string(),
+        Some(false) => format!("; out-of-scope: {}", task.area_violations),
+        None => String::new(),
+    };
+    let verification = match (
+        task.verification_verdict.as_deref(),
+        task.verification_reason.as_deref(),
+    ) {
+        (Some("Pass"), _) => "; verified".to_string(),
+        (Some("Flag"), Some(reason)) if !reason.trim().is_empty() => {
+            format!("; flagged: {}", reason.trim())
+        }
+        (Some("Flag"), _) => "; flagged".to_string(),
+        _ => String::new(),
+    };
+
+    format!("{compliance}{verification}")
 }
 
-fn rollup_message(tasks: &[SessionOrchestrationTaskRow]) -> String {
+fn rollup_message(goal_statement: &str, tasks: &[SessionOrchestrationTaskRow]) -> String {
     let mut lines = vec![
-        "Orchestration roll-up. Summarize these results for the user and preserve the recommended \
-         manual merge order."
+        "Orchestration verification gate. The user already sees the task board. Verify each \
+         result against its acceptance criteria, inspect suspicious branches with read-only Git \
+         commands, and respond only with cross-task synthesis, deviations, risks, and recommended \
+         next steps."
             .to_string(),
+        format!("Campaign goal: {goal_statement}"),
         String::new(),
     ];
     let mut input_tokens = 0_u64;
@@ -878,6 +1690,22 @@ fn rollup_message(tasks: &[SessionOrchestrationTaskRow]) -> String {
         lines.extend([
             format!("Task `{}` — {}", task.task_key, task.status),
             format!("Branch: `{branch}`"),
+            format!("Acceptance criteria: {}", task.acceptance_criteria),
+            format!("Declared areas: {}", task.touched_areas),
+            format!(
+                "Touched-area compliance: {}",
+                area_compliance_evidence(task)
+            ),
+            format!(
+                "Diffstat: +{} -{} ({})",
+                task.child_added_lines,
+                task.child_deleted_lines,
+                if task.child_has_diff == Some(true) {
+                    "changes present"
+                } else {
+                    "no known diff"
+                }
+            ),
             format!(
                 "Summary: {}",
                 task.result_summary
@@ -890,7 +1718,7 @@ fn rollup_message(tasks: &[SessionOrchestrationTaskRow]) -> String {
     lines.push(format!(
         "Total child token usage: {input_tokens} input, {output_tokens} output."
     ));
-    lines.push("Recommended manual merge order:".to_string());
+    lines.push("Integration order:".to_string());
     lines.extend(
         merge_order
             .into_iter()
@@ -901,8 +1729,35 @@ fn rollup_message(tasks: &[SessionOrchestrationTaskRow]) -> String {
     lines.join("\n")
 }
 
-fn rollup_operation_id(orchestration_id: i64) -> String {
-    format!("orchestration-rollup-{orchestration_id}")
+fn area_compliance_evidence(task: &SessionOrchestrationTaskRow) -> String {
+    match task.areas_compliant {
+        Some(true) => "compliant".to_string(),
+        Some(false) => format!("VIOLATION {}", task.area_violations),
+        None => "unavailable".to_string(),
+    }
+}
+
+fn rollup_operation_id(orchestration_id: i64, verification_generation: i64) -> String {
+    format!("orchestration-rollup-{orchestration_id}-{verification_generation}")
+}
+
+fn continuation_operation_id(task: &SessionOrchestrationTaskRow) -> String {
+    format!(
+        "orchestration-continuation-{}-{}",
+        task.id, task.continuation_generation
+    )
+}
+
+fn continuation_message(task: &SessionOrchestrationTaskRow) -> String {
+    format!(
+        "Continue task `{}` on the same branch. Address this approved feedback:\n\n{}\n\nRe-check \
+         these acceptance criteria before reporting completion: {}",
+        task.task_key,
+        task.continuation_prompt
+            .as_deref()
+            .unwrap_or("Complete the requested follow-up"),
+        task.acceptance_criteria
+    )
 }
 
 #[cfg(test)]
@@ -911,8 +1766,11 @@ mod tests {
     use std::sync::Mutex;
 
     use ag_agent::{AgentKind, ReasoningLevel};
+    use ag_git::MockGitClient;
+    use ag_protocol::VerificationVerdictItem;
     use ag_session::{
-        AnswerQuestionsRequest, ReviewRequest, Session, SessionBackend, SessionError,
+        AnswerQuestionsRequest, ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+        Session, SessionBackend, SessionError,
     };
     use async_trait::async_trait;
 
@@ -931,6 +1789,8 @@ mod tests {
         calls: Vec<String>,
         cancel_errors: VecDeque<SessionError>,
         create_results: VecDeque<SessionId>,
+        merge_errors: VecDeque<SessionError>,
+        review_errors: VecDeque<SessionError>,
         send_errors: VecDeque<SessionError>,
     }
 
@@ -964,6 +1824,22 @@ mod tests {
                 .lock()
                 .expect("test backend state should remain available")
                 .send_errors
+                .push_back(error);
+        }
+
+        fn push_merge_error(&self, error: SessionError) {
+            self.state
+                .lock()
+                .expect("test backend state should remain available")
+                .merge_errors
+                .push_back(error);
+        }
+
+        fn push_review_error(&self, error: SessionError) {
+            self.state
+                .lock()
+                .expect("test backend state should remain available")
+                .review_errors
                 .push_back(error);
         }
 
@@ -1054,17 +1930,42 @@ mod tests {
             state.cancel_errors.pop_front().map_or(Ok(()), Err)
         }
 
-        async fn merge_session(&self, _session_id: &SessionId) -> Result<(), SessionError> {
-            Ok(())
+        async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
+            let mut state = self
+                .state
+                .lock()
+                .expect("test backend state should remain available");
+            state.calls.push(format!("merge:{session_id}"));
+
+            state.merge_errors.pop_front().map_or(Ok(()), Err)
         }
 
         async fn create_review_request(
             &self,
-            _session_id: &SessionId,
+            session_id: &SessionId,
         ) -> Result<ReviewRequest, SessionError> {
-            Err(SessionError::Operation(
-                "review requests are not used by coordinator tests".to_string(),
-            ))
+            let mut state = self
+                .state
+                .lock()
+                .expect("test backend state should remain available");
+            state.calls.push(format!("review:{session_id}"));
+            if let Some(error) = state.review_errors.pop_front() {
+                return Err(error);
+            }
+
+            Ok(ReviewRequest {
+                last_refreshed_at: 0,
+                summary: ReviewRequestSummary {
+                    display_id: "#1".to_string(),
+                    forge_kind: ForgeKind::GitHub,
+                    source_branch: "child".to_string(),
+                    state: ReviewRequestState::Open,
+                    status_summary: None,
+                    target_branch: "main".to_string(),
+                    title: "Campaign task".to_string(),
+                    web_url: "https://example.test/review/1".to_string(),
+                },
+            })
         }
     }
 
@@ -1072,9 +1973,12 @@ mod tests {
         SessionOrchestrationRow {
             controller_project_id: 1,
             controller_session_id: "controller".to_string(),
+            goal_statement: "Complete the campaign".to_string(),
             id: 1,
             max_parallelism,
+            relayed_question_task_id: None,
             status: OrchestrationStatus::Running.to_string(),
+            verification_generation: 0,
         }
     }
 
@@ -1086,30 +1990,52 @@ mod tests {
     ) -> SessionOrchestrationTaskRow {
         let child_status = child_session_id.map(|_| match status {
             OrchestrationTaskStatus::WaitingForInput => SessionStatus::Question,
-            OrchestrationTaskStatus::Ready => SessionStatus::Review,
+            OrchestrationTaskStatus::Ready
+            | OrchestrationTaskStatus::ContinuationPending
+            | OrchestrationTaskStatus::AwaitingIntegration
+            | OrchestrationTaskStatus::Merging
+            | OrchestrationTaskStatus::ReviewRequested
+            | OrchestrationTaskStatus::IntegrationFailed => SessionStatus::Review,
+            OrchestrationTaskStatus::Integrated | OrchestrationTaskStatus::Detached => {
+                SessionStatus::Done
+            }
             OrchestrationTaskStatus::Failed | OrchestrationTaskStatus::Canceled => {
                 SessionStatus::Canceled
             }
-            OrchestrationTaskStatus::Planned
+            OrchestrationTaskStatus::Proposed
+            | OrchestrationTaskStatus::Planned
             | OrchestrationTaskStatus::Creating
             | OrchestrationTaskStatus::Running => SessionStatus::InProgress,
         });
 
         SessionOrchestrationTaskRow {
+            acceptance_criteria: format!(r#"["{task_key} is complete"]"#),
+            area_violations: "[]".to_string(),
+            areas_compliant: None,
             attempt_count: i64::from(child_session_id.is_some()),
+            child_added_lines: 3,
+            child_deleted_lines: 1,
+            child_has_diff: child_session_id.map(|_| true),
             child_input_tokens: i64::from(child_session_id.is_some()) * 10,
             child_output_tokens: i64::from(child_session_id.is_some()) * 5,
+            child_questions: None,
             child_session_id: child_session_id.map(str::to_string),
             child_status: child_status.map(|status| status.to_string()),
             child_summary: None,
+            continuation_generation: 0,
+            continuation_prompt: None,
             id,
+            infrastructure_retry_count: 0,
             last_error: None,
+            merge_position: id,
             prompt: format!("Implement {task_key}"),
             result_summary: None,
             status: status.to_string(),
             task_key: task_key.to_string(),
             title: task_key.to_string(),
             touched_areas: format!("[\"{task_key}/\"]"),
+            verification_reason: None,
+            verification_verdict: None,
         }
     }
 
@@ -1139,6 +2065,36 @@ mod tests {
                     .pop_front()
                     .expect("expected another task snapshot"))
             });
+    }
+
+    type TaskStatusUpdates = Arc<Mutex<Vec<(i64, String, Option<String>)>>>;
+
+    fn coordinator_with_status_recorder(
+        backend: &TestSessionBackend,
+    ) -> (OrchestrationCoordinator, TaskStatusUpdates) {
+        let updates = Arc::new(Mutex::new(Vec::new()));
+        let mut repository = MockOrchestrationRepository::new();
+        repository
+            .expect_update_orchestration_task_status()
+            .times(0..)
+            .returning({
+                let updates = Arc::clone(&updates);
+
+                move |id, status, error| {
+                    updates
+                        .lock()
+                        .expect("status updates should remain available")
+                        .push((id, status.to_string(), error));
+
+                    Ok(())
+                }
+            });
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+
+        (
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service()),
+            updates,
+        )
     }
 
     #[derive(Default)]
@@ -1212,6 +2168,7 @@ mod tests {
 
     fn subtask(task_key: &str, touched_areas: &[&str]) -> SubtaskItem {
         SubtaskItem {
+            acceptance_criteria: vec![format!("{task_key} is complete")],
             prompt: format!("Implement {task_key}"),
             task_key: task_key.to_string(),
             title: task_key.to_string(),
@@ -1249,26 +2206,9 @@ mod tests {
             .load_orchestration_tasks(orchestration.id)
             .await
             .expect("failed to load tasks");
-        apply_plan_answer(
-            database,
-            "controller",
-            &[QuestionAnswer {
-                answer: "ignored".to_string(),
-                question: "Different question".to_string(),
-            }],
-        )
-        .await
-        .expect("unrelated answer should be ignored");
-        apply_plan_answer(
-            database,
-            "controller",
-            &[QuestionAnswer {
-                answer: "Approve".to_string(),
-                question: APPROVAL_QUESTION.to_string(),
-            }],
-        )
-        .await
-        .expect("approval should start orchestration");
+        approve_orchestration(database, "controller", None)
+            .await
+            .expect("approval should start orchestration");
         let project_id = database
             .sessions()
             .load_session("controller")
@@ -1282,6 +2222,74 @@ mod tests {
             .expect("controller metadata should load");
 
         (orchestration, tasks, response, metadata)
+    }
+
+    async fn insert_managed_child(
+        database: &AppRepositories,
+        project_id: i64,
+        task_id: i64,
+        child_session_id: &str,
+    ) {
+        database
+            .sessions()
+            .insert_session_with_agent(PersistedSessionCreation {
+                agent: "codex",
+                base_branch: "main",
+                id: child_session_id,
+                is_draft: false,
+                model: AgentKind::Codex.default_model().as_str(),
+                orchestration_task_id: Some(task_id),
+                parent_session_id: None,
+                personality_id: None,
+                project_id,
+                reasoning_level: ReasoningLevel::default(),
+                role: Some("OrchestrationWorker"),
+                speed_mode: SpeedMode::Normal,
+                status: "Review",
+            })
+            .await
+            .expect("failed to insert managed child");
+        assert!(
+            database
+                .orchestrations()
+                .link_orchestration_task_child(task_id, child_session_id)
+                .await
+                .expect("failed to link managed child")
+        );
+    }
+
+    async fn seed_verifying_tasks(
+        database: &AppRepositories,
+        orchestration: &SessionOrchestrationRow,
+        tasks: &[SessionOrchestrationTaskRow],
+    ) {
+        database
+            .orchestrations()
+            .update_orchestration_status(
+                orchestration.id,
+                &OrchestrationStatus::AwaitingApproval.to_string(),
+            )
+            .await
+            .expect("failed to reopen configuration gate");
+        for task in tasks {
+            database
+                .orchestrations()
+                .update_orchestration_task_status(
+                    task.id,
+                    &OrchestrationTaskStatus::Ready.to_string(),
+                    None,
+                )
+                .await
+                .expect("failed to settle task");
+        }
+        database
+            .orchestrations()
+            .update_orchestration_status(
+                orchestration.id,
+                &OrchestrationStatus::Verifying.to_string(),
+            )
+            .await
+            .expect("failed to start verification");
     }
 
     fn assert_reconciled_rollup(
@@ -1305,7 +2313,7 @@ mod tests {
         assert!(rollup.contains("Task `protocol`"));
         assert!(rollup.contains("Task `ui`"));
         assert!(rollup.contains("20 input, 10 output"));
-        assert!(rollup.contains("Recommended manual merge order"));
+        assert!(rollup.contains("Integration order"));
     }
 
     #[test]
@@ -1324,6 +2332,147 @@ mod tests {
     }
 
     #[test]
+    fn active_follow_up_validation_covers_conflicts_and_live_task_constraints() {
+        // Arrange
+        let mut active = orchestration(2);
+        let ready = task(1, "protocol", OrchestrationTaskStatus::Ready, Some("child"));
+        let mut running = ready.clone();
+        running.status = OrchestrationTaskStatus::Running.to_string();
+        let mut changed = subtask("protocol", &["protocol/"]);
+        changed.prompt = "Apply feedback".to_string();
+        let overlapping = subtask("docs", &["protocol/"]);
+        let mut invalid = subtask("invalid", &["invalid/"]);
+        invalid.prompt.clear();
+
+        // Act
+        let incomplete = active_subtask_validation_question(&active, &[], &[invalid]);
+        let conflict = active_subtask_validation_question(
+            &active,
+            std::slice::from_ref(&ready),
+            std::slice::from_ref(&overlapping),
+        );
+        active.status = OrchestrationStatus::Integrating.to_string();
+        let merging = task(
+            1,
+            "protocol",
+            OrchestrationTaskStatus::Merging,
+            Some("child"),
+        );
+        let integration = active_subtask_validation_question(
+            &active,
+            std::slice::from_ref(&merging),
+            &[subtask("docs", &["docs/"])],
+        );
+        active.status = OrchestrationStatus::Running.to_string();
+        let unsettled = active_subtask_validation_question(
+            &active,
+            std::slice::from_ref(&running),
+            std::slice::from_ref(&changed),
+        );
+        let unchanged = active_subtask_validation_question(
+            &active,
+            std::slice::from_ref(&ready),
+            &task_as_subtask(&ready).into_iter().collect::<Vec<_>>(),
+        );
+        let mut malformed = ready;
+        malformed.acceptance_criteria = "invalid".to_string();
+
+        // Assert
+        assert!(
+            incomplete
+                .as_ref()
+                .is_some_and(|question| question.text.contains("needs a title"))
+        );
+        assert!(
+            conflict
+                .as_ref()
+                .is_some_and(|question| question.text.contains("overlap at"))
+        );
+        assert!(
+            integration
+                .as_ref()
+                .is_some_and(|question| question.text.contains("currently applying"))
+        );
+        assert!(
+            unsettled
+                .as_ref()
+                .is_some_and(|question| question.text.contains("cannot be continued"))
+        );
+        assert_eq!(
+            incomplete.map(|question| question.options),
+            Some(vec![
+                "Revise the follow-up".to_string(),
+                "Drop the follow-up".to_string(),
+            ])
+        );
+        assert_eq!(
+            integration.map(|question| question.options),
+            Some(vec![
+                "Wait for integration".to_string(),
+                "Drop the follow-up".to_string(),
+            ])
+        );
+        assert_eq!(
+            unsettled.map(|question| question.options),
+            Some(vec![
+                "Wait, then continue this task".to_string(),
+                "Create a separate follow-up task".to_string(),
+                "Drop this feedback".to_string(),
+            ])
+        );
+        assert_eq!(unchanged, None);
+        assert_eq!(task_as_subtask(&malformed), None);
+    }
+
+    #[tokio::test]
+    async fn continuation_without_linked_child_returns_actionable_question() {
+        // Arrange
+        let (database, _) = controller_database().await;
+        let (orchestration, tasks, _, _) = persist_approved_two_task_plan(&database).await;
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                tasks[0].id,
+                &OrchestrationTaskStatus::Ready.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to mark task ready");
+        let mut follow_up = subtask("protocol", &["crates/ag-protocol/"]);
+        follow_up.prompt = "Apply feedback".to_string();
+        let mut response = AgentResponse::plain("Continue the task");
+        response.subtasks = vec![follow_up];
+        let mut invalid_response = AgentResponse::plain("Invalid continuation");
+        invalid_response.subtasks = vec![subtask("new-scope", &["crates/ag-protocol/"])];
+
+        // Act
+        route_active_subtasks(&database, &orchestration, &mut invalid_response)
+            .await
+            .expect("invalid follow-up routing should complete");
+        route_active_subtasks(&database, &orchestration, &mut response)
+            .await
+            .expect("follow-up routing should complete");
+
+        // Assert
+        assert!(invalid_response.subtasks.is_empty());
+        assert!(invalid_response.questions[0].text.contains("overlap at"));
+        assert_eq!(
+            invalid_response.questions[0].options,
+            ["Revise the follow-up", "Drop the follow-up"]
+        );
+        assert!(response.subtasks.is_empty());
+        assert!(response.questions[0].text.contains("cannot be continued"));
+        assert_eq!(
+            response.questions[0].options,
+            [
+                "Wait, then continue this task",
+                "Create a separate follow-up task",
+                "Drop this feedback",
+            ]
+        );
+    }
+
+    #[test]
     fn derives_bulk_session_metadata_for_controller_and_child_rows() {
         // Arrange
         let controller_rows = [
@@ -1339,12 +2488,23 @@ mod tests {
                 OrchestrationStatus::Canceling,
                 Some("Canceling orchestration"),
             ),
+            (OrchestrationStatus::Verifying, Some("Verifying results")),
             (
-                OrchestrationStatus::Submitting,
-                Some("2 running, 1 waiting on you"),
+                OrchestrationStatus::AwaitingIntegration,
+                Some("Awaiting integration approval"),
             ),
-            (OrchestrationStatus::Done, None),
-            (OrchestrationStatus::Canceled, None),
+            (
+                OrchestrationStatus::Integrating,
+                Some("Integrating verified work"),
+            ),
+            (
+                OrchestrationStatus::Done,
+                Some("Phase: Done\nCampaign complete"),
+            ),
+            (
+                OrchestrationStatus::Canceled,
+                Some("Phase: Canceled\nCampaign canceled"),
+            ),
         ];
 
         // Act
@@ -1490,6 +2650,117 @@ mod tests {
         assert!(bounded.ends_with('…'));
     }
 
+    #[test]
+    fn touched_area_matching_accepts_exact_files_and_nested_directories() {
+        // Arrange
+        let changed_files = vec![
+            "Cargo.toml".to_string(),
+            "crates/ag-protocol/src/model.rs".to_string(),
+            "README.md".to_string(),
+        ];
+        let touched_areas = vec!["Cargo.toml".to_string(), "crates/ag-protocol/".to_string()];
+
+        // Act
+        let violations = area_violations(&changed_files, &touched_areas);
+
+        // Assert
+        assert_eq!(violations, vec!["README.md".to_string()]);
+    }
+
+    #[test]
+    fn bounds_campaign_goals_and_preserves_empty_fallback() {
+        // Arrange
+        let long_goal = "x".repeat(241);
+        let mut completed = task(
+            1,
+            "completed",
+            OrchestrationTaskStatus::Ready,
+            Some("child"),
+        );
+        completed.child_has_diff = Some(false);
+        completed.area_violations = r#"["README.md"]"#.to_string();
+        completed.areas_compliant = Some(false);
+        let mut compliant = completed.clone();
+        compliant.areas_compliant = Some(true);
+        let unavailable = task(
+            2,
+            "pending",
+            OrchestrationTaskStatus::Ready,
+            Some("child-2"),
+        );
+
+        // Act
+        let bounded = bounded_goal(&long_goal);
+        let fallback = bounded_goal("  ");
+        let rollup = rollup_message("Complete the campaign", &[completed]);
+        let compliant_evidence = area_compliance_evidence(&compliant);
+        let unavailable_evidence = area_compliance_evidence(&unavailable);
+        let first_verification = rollup_operation_id(7, 1);
+        let second_verification = rollup_operation_id(7, 2);
+
+        // Assert
+        assert_eq!(bounded.chars().count(), 241);
+        assert!(bounded.ends_with('…'));
+        assert_eq!(fallback, "Complete the approved orchestration plan");
+        assert!(rollup.contains("Campaign goal: Complete the campaign"));
+        assert!(rollup.contains("no known diff"));
+        assert!(rollup.contains(r#"Touched-area compliance: VIOLATION ["README.md"]"#));
+        assert_eq!(compliant_evidence, "compliant");
+        assert_eq!(unavailable_evidence, "unavailable");
+        assert_ne!(first_verification, second_verification);
+    }
+
+    #[tokio::test]
+    async fn parked_plan_reconciles_live_tasks_before_emitting_status() {
+        // Arrange
+        let mut repository = MockOrchestrationRepository::new();
+        repository
+            .expect_load_orchestration_tasks()
+            .once()
+            .returning(|_| {
+                Ok(vec![
+                    with_child_observation(
+                        task(
+                            1,
+                            "running",
+                            OrchestrationTaskStatus::Running,
+                            Some("child-running"),
+                        ),
+                        SessionStatus::InProgress,
+                        None,
+                    ),
+                    with_child_observation(
+                        task(
+                            2,
+                            "waiting",
+                            OrchestrationTaskStatus::WaitingForInput,
+                            Some("child-waiting"),
+                        ),
+                        SessionStatus::Question,
+                        None,
+                    ),
+                ])
+            });
+        let backend = TestSessionBackend::default();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut campaign = orchestration(2);
+        campaign.status = OrchestrationStatus::AwaitingApproval.to_string();
+
+        // Act
+        coordinator
+            .reconcile_parked_plan(&campaign)
+            .await
+            .expect("parked plan should reconcile");
+
+        // Assert
+        assert!(matches!(
+            event_rx.try_recv(),
+            Ok(AppEvent::SessionOrchestrationProgressUpdated { .. })
+        ));
+    }
+
     #[tokio::test]
     async fn coordinator_test_backend_covers_unneeded_session_ports() {
         // Arrange
@@ -1521,7 +2792,482 @@ mod tests {
             .merge_session(&session_id)
             .await
             .expect("merge should succeed");
-        assert!(backend.create_review_request(&session_id).await.is_err());
+        assert!(backend.create_review_request(&session_id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn integration_task_covers_merge_failures_and_missing_children() {
+        // Arrange
+        let backend = TestSessionBackend::default();
+        let (coordinator, updates) = coordinator_with_status_recorder(&backend);
+        let mut merged = task(
+            1,
+            "merged",
+            OrchestrationTaskStatus::AwaitingIntegration,
+            Some("child-merge"),
+        );
+        let mut merge_failed = task(
+            2,
+            "merge-failed",
+            OrchestrationTaskStatus::AwaitingIntegration,
+            Some("child-merge-failed"),
+        );
+        let mut missing = task(
+            3,
+            "missing",
+            OrchestrationTaskStatus::AwaitingIntegration,
+            None,
+        );
+        let mut review_requested = task(
+            4,
+            "review-requested",
+            OrchestrationTaskStatus::AwaitingIntegration,
+            Some("child-review"),
+        );
+        let mut review_failed = task(
+            5,
+            "review-failed",
+            OrchestrationTaskStatus::AwaitingIntegration,
+            Some("child-review-failed"),
+        );
+
+        // Act
+        coordinator
+            .integrate_task(&mut merged, IntegrationApproach::LocalMerge)
+            .await
+            .expect("merge should start");
+        backend.push_merge_error(SessionError::Operation("merge failed".to_string()));
+        coordinator
+            .integrate_task(&mut merge_failed, IntegrationApproach::LocalMerge)
+            .await
+            .expect("merge failure should settle");
+        coordinator
+            .integrate_task(&mut missing, IntegrationApproach::LocalMerge)
+            .await
+            .expect("missing child should settle");
+        coordinator
+            .integrate_task(&mut review_requested, IntegrationApproach::ReviewRequest)
+            .await
+            .expect("review request should publish");
+        backend.push_review_error(SessionError::Operation("review publish failed".to_string()));
+        coordinator
+            .integrate_task(&mut review_failed, IntegrationApproach::ReviewRequest)
+            .await
+            .expect("review request failure should settle");
+
+        // Assert
+        let updates = updates
+            .lock()
+            .expect("status updates should remain available");
+        assert!(updates.iter().any(|(_, status, _)| status == "Merging"));
+        assert!(updates.iter().any(|(_, status, error)| {
+            status == "IntegrationFailed" && error.as_deref() == Some("merge failed")
+        }));
+        assert!(updates.iter().any(|(_, status, error)| {
+            status == "IntegrationFailed"
+                && error.as_deref() == Some("Verified task has no child session")
+        }));
+        assert!(
+            updates
+                .iter()
+                .any(|(_, status, _)| status == "ReviewRequested")
+        );
+        assert!(backend.calls().contains(&"review:child-review".to_string()));
+        assert!(updates.iter().any(|(_, status, error)| {
+            status == "IntegrationFailed" && error.as_deref() == Some("review publish failed")
+        }));
+    }
+
+    #[tokio::test]
+    async fn integrating_campaign_recovers_children_and_completes_settled_work() {
+        // Arrange
+        let backend = TestSessionBackend::default();
+        let mut repository = MockOrchestrationRepository::new();
+        let done = with_child_observation(
+            task(
+                1,
+                "done",
+                OrchestrationTaskStatus::Merging,
+                Some("child-done"),
+            ),
+            SessionStatus::Done,
+            None,
+        );
+        let canceled = with_child_observation(
+            task(
+                2,
+                "canceled",
+                OrchestrationTaskStatus::Merging,
+                Some("child-canceled"),
+            ),
+            SessionStatus::Canceled,
+            None,
+        );
+        let pending = task(
+            3,
+            "pending",
+            OrchestrationTaskStatus::Merging,
+            Some("child-pending"),
+        );
+        let awaiting = task(
+            4,
+            "awaiting",
+            OrchestrationTaskStatus::AwaitingIntegration,
+            Some("child-awaiting"),
+        );
+        let failed = task(5, "failed", OrchestrationTaskStatus::Failed, None);
+        mock_task_snapshots(
+            &mut repository,
+            vec![
+                vec![done],
+                vec![canceled],
+                vec![pending],
+                vec![awaiting],
+                vec![failed],
+            ],
+        );
+        repository
+            .expect_update_orchestration_task_status()
+            .times(3)
+            .returning(|_, _, _| Ok(()));
+        repository
+            .expect_load_orchestration_integration_approach()
+            .times(5)
+            .returning(|_| Ok(IntegrationApproach::LocalMerge.to_string()));
+        repository
+            .expect_complete_orchestration_campaign()
+            .times(2)
+            .returning(|_| Ok(true));
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut campaign = orchestration(2);
+        campaign.status = OrchestrationStatus::Integrating.to_string();
+
+        // Act
+        for _ in 0..5 {
+            coordinator
+                .reconcile_integration(&campaign)
+                .await
+                .expect("integration snapshot should reconcile");
+        }
+
+        // Assert
+        let calls = backend.calls();
+        assert!(calls.iter().any(|call| call == "merge:child-awaiting"));
+        assert!(calls.iter().all(|call| !call.starts_with("rollup-attempt")));
+    }
+
+    #[tokio::test]
+    async fn review_request_integration_retries_interrupted_tasks() {
+        // Arrange
+        let backend = TestSessionBackend::default();
+        let mut repository = MockOrchestrationRepository::new();
+        let interrupted = task(
+            1,
+            "interrupted",
+            OrchestrationTaskStatus::Merging,
+            Some("child-interrupted"),
+        );
+        let missing = task(2, "missing", OrchestrationTaskStatus::Merging, None);
+        let settled = task(
+            3,
+            "settled",
+            OrchestrationTaskStatus::ReviewRequested,
+            Some("child-settled"),
+        );
+        mock_task_snapshots(
+            &mut repository,
+            vec![vec![interrupted], vec![missing], vec![settled]],
+        );
+        repository
+            .expect_update_orchestration_task_status()
+            .times(2)
+            .returning(|_, _, _| Ok(()));
+        repository
+            .expect_complete_orchestration_campaign()
+            .times(2)
+            .returning(|_| Ok(true));
+        repository
+            .expect_load_orchestration_integration_approach()
+            .times(3)
+            .returning(|_| Ok(IntegrationApproach::ReviewRequest.to_string()));
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut campaign = orchestration(2);
+        campaign.status = OrchestrationStatus::Integrating.to_string();
+
+        // Act
+        for _ in 0..3 {
+            coordinator
+                .reconcile_integration(&campaign)
+                .await
+                .expect("review-request integration should reconcile");
+        }
+
+        // Assert
+        assert!(
+            backend
+                .calls()
+                .contains(&"review:child-interrupted".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn awaiting_integration_campaign_completes_only_when_every_task_is_settled() {
+        // Arrange
+        let backend = TestSessionBackend::default();
+        let mut repository = MockOrchestrationRepository::new();
+        mock_task_snapshots(
+            &mut repository,
+            vec![
+                vec![task(
+                    1,
+                    "ready",
+                    OrchestrationTaskStatus::AwaitingIntegration,
+                    Some("child"),
+                )],
+                vec![task(
+                    2,
+                    "done",
+                    OrchestrationTaskStatus::Integrated,
+                    Some("child"),
+                )],
+            ],
+        );
+        repository
+            .expect_complete_orchestration_campaign()
+            .once()
+            .returning(|_| Ok(true));
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut campaign = orchestration(2);
+        campaign.status = OrchestrationStatus::AwaitingIntegration.to_string();
+
+        // Act
+        coordinator
+            .reconcile_awaiting_integration(&campaign)
+            .await
+            .expect("unsettled integration should remain parked");
+        coordinator
+            .reconcile_awaiting_integration(&campaign)
+            .await
+            .expect("settled integration should complete");
+
+        // Assert
+        assert!(backend.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconciliation_dispatches_every_parked_campaign_phase() {
+        // Arrange
+        let mut repository = MockOrchestrationRepository::new();
+        let phases = [
+            OrchestrationStatus::AwaitingApproval,
+            OrchestrationStatus::AwaitingIntegration,
+            OrchestrationStatus::Integrating,
+        ]
+        .into_iter()
+        .map(|status| {
+            let mut campaign = orchestration(2);
+            campaign.status = status.to_string();
+
+            campaign
+        })
+        .collect::<Vec<_>>();
+        repository
+            .expect_load_active_orchestrations()
+            .once()
+            .return_once(move || Ok(phases));
+        let parked = with_child_observation(
+            task(1, "parked", OrchestrationTaskStatus::Running, Some("child")),
+            SessionStatus::Review,
+            None,
+        );
+        mock_task_snapshots(
+            &mut repository,
+            vec![
+                vec![parked],
+                vec![task(
+                    2,
+                    "approval",
+                    OrchestrationTaskStatus::AwaitingIntegration,
+                    Some("child"),
+                )],
+                vec![task(
+                    3,
+                    "merging",
+                    OrchestrationTaskStatus::Merging,
+                    Some("child"),
+                )],
+            ],
+        );
+        repository
+            .expect_update_orchestration_task_status()
+            .once()
+            .returning(|_, _, _| Ok(()));
+        repository
+            .expect_update_orchestration_task_result_summary()
+            .once()
+            .returning(|_, _| Ok(()));
+        repository
+            .expect_load_orchestration_integration_approach()
+            .once()
+            .returning(|_| Ok(IntegrationApproach::LocalMerge.to_string()));
+        let backend = TestSessionBackend::default();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+
+        // Act
+        let result = coordinator.reconcile_once().await;
+
+        // Assert
+        assert_eq!(result, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn child_questions_surface_once_without_controller_chat_turns() {
+        // Arrange
+        let mut repository = MockOrchestrationRepository::new();
+        let surfaced = Arc::new(Mutex::new(VecDeque::from([true, false])));
+        repository
+            .expect_surface_orchestration_questions()
+            .times(2)
+            .returning({
+                let surfaced = Arc::clone(&surfaced);
+
+                move |_, _, _| {
+                    Ok(surfaced
+                        .lock()
+                        .expect("question results should remain available")
+                        .pop_front()
+                        .expect("question result should exist"))
+                }
+            });
+        let backend = TestSessionBackend::default();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut waiting = task(
+            1,
+            "waiting",
+            OrchestrationTaskStatus::WaitingForInput,
+            Some("child"),
+        );
+        waiting.child_questions = Some(r#"[{"text":"Choose one"}]"#.to_string());
+        let campaign = orchestration(2);
+
+        // Act
+        coordinator
+            .surface_child_questions(&campaign, std::slice::from_ref(&waiting))
+            .await
+            .expect("first question should surface");
+        coordinator
+            .surface_child_questions(&campaign, std::slice::from_ref(&waiting))
+            .await
+            .expect("duplicate question should be ignored");
+        coordinator
+            .surface_child_questions(&campaign, &[])
+            .await
+            .expect("empty questions should be ignored");
+
+        // Assert
+        assert!(matches!(event_rx.try_recv(), Ok(AppEvent::RefreshSessions)));
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn continuation_reconciliation_recovers_every_operation_and_child_state() {
+        // Arrange
+        let mut repository = MockOrchestrationRepository::new();
+        let operation_states = Arc::new(Mutex::new(VecDeque::from([
+            Some("queued".to_string()),
+            Some("running".to_string()),
+            Some("done".to_string()),
+            Some("done".to_string()),
+            Some("done".to_string()),
+            Some("done".to_string()),
+            Some("unexpected".to_string()),
+            Some("failed".to_string()),
+        ])));
+        repository
+            .expect_load_rollup_operation_status()
+            .times(8)
+            .returning({
+                let operation_states = Arc::clone(&operation_states);
+
+                move |_| {
+                    Ok(operation_states
+                        .lock()
+                        .expect("operation states should remain available")
+                        .pop_front()
+                        .expect("operation state should exist"))
+                }
+            });
+        repository
+            .expect_update_orchestration_task_status()
+            .times(4)
+            .returning(|_, _, _| Ok(()));
+        repository
+            .expect_update_orchestration_task_result_summary()
+            .once()
+            .returning(|_, _| Ok(()));
+        let backend = TestSessionBackend::default();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut base = task(
+            1,
+            "continue",
+            OrchestrationTaskStatus::ContinuationPending,
+            Some("child"),
+        );
+        base.continuation_generation = 1;
+        base.continuation_prompt = Some("Address feedback".to_string());
+        let mut lost = base.clone();
+        lost.child_session_id = None;
+        let observed = [
+            SessionStatus::Question,
+            SessionStatus::Canceled,
+            SessionStatus::Review,
+            SessionStatus::InProgress,
+        ];
+
+        // Act
+        coordinator
+            .reconcile_continuation(&mut lost)
+            .await
+            .expect("lost continuation should fail");
+        for _ in 0..2 {
+            coordinator
+                .reconcile_continuation(&mut base.clone())
+                .await
+                .expect("pending continuation operation should wait");
+        }
+        for status in observed {
+            let mut task = with_child_observation(base.clone(), status, Some("Follow-up complete"));
+            coordinator
+                .reconcile_continuation(&mut task)
+                .await
+                .expect("completed continuation should reconcile");
+        }
+        let unknown = coordinator.reconcile_continuation(&mut base.clone()).await;
+        coordinator
+            .reconcile_continuation(&mut base)
+            .await
+            .expect("failed operation should resubmit");
+
+        // Assert
+        assert_eq!(
+            unknown,
+            Err("Unknown continuation operation status `unexpected` for task 1".to_string())
+        );
+        assert!(backend.calls().iter().any(|call| {
+            call.starts_with("rollup:child:Continue task `continue` on the same branch")
+        }));
     }
 
     #[tokio::test]
@@ -1755,31 +3501,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_child_creation_marks_pre_link_spawn_failed() {
+    async fn failed_child_creation_queues_an_infrastructure_retry() {
         // Arrange
         let backend = TestSessionBackend::default();
         let mut repository = MockOrchestrationRepository::new();
-        let status_updates = Arc::new(Mutex::new(Vec::new()));
         repository
             .expect_claim_orchestration_task()
             .withf(|id| *id == 1)
             .once()
             .returning(|_| Ok(true));
         repository
-            .expect_update_orchestration_task_status()
+            .expect_record_orchestration_spawn_failure()
+            .withf(|id, error, retry_limit| {
+                *id == 1 && error == "missing create result" && *retry_limit == 2
+            })
             .once()
-            .returning({
-                let status_updates = Arc::clone(&status_updates);
-
-                move |_, status, error| {
-                    status_updates
-                        .lock()
-                        .expect("status updates should remain available")
-                        .push((status.to_string(), error));
-
-                    Ok(())
-                }
-            });
+            .returning(|_, _, _| Ok(OrchestrationTaskStatus::Planned.to_string()));
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let coordinator =
             OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
@@ -1794,25 +3531,17 @@ mod tests {
         // Assert
         assert_eq!(
             planned_task.status,
-            OrchestrationTaskStatus::Failed.to_string()
+            OrchestrationTaskStatus::Planned.to_string()
         );
+        assert_eq!(planned_task.infrastructure_retry_count, 1);
         assert_eq!(
             planned_task.last_error.as_deref(),
             Some("missing create result")
         );
-        assert_eq!(
-            *status_updates
-                .lock()
-                .expect("status updates should remain available"),
-            vec![(
-                OrchestrationTaskStatus::Failed.to_string(),
-                Some("missing create result".to_string())
-            )]
-        );
     }
 
     #[tokio::test]
-    async fn failed_child_prompt_marks_linked_spawn_failed() {
+    async fn failed_child_prompt_cancels_the_child_and_queues_a_retry() {
         // Arrange
         let backend = TestSessionBackend::default();
         backend.push_create_result("child-1");
@@ -1824,9 +3553,10 @@ mod tests {
             .once()
             .returning(|_| Ok(true));
         repository
-            .expect_update_orchestration_task_status()
+            .expect_record_orchestration_spawn_failure()
+            .withf(|id, error, retry_limit| *id == 1 && error == "send failed" && *retry_limit == 2)
             .once()
-            .returning(|_, _, _| Ok(()));
+            .returning(|_, _, _| Ok(OrchestrationTaskStatus::Planned.to_string()));
         repository
             .expect_link_orchestration_task_child()
             .withf(|id, child_session_id| *id == 1 && child_session_id == "child-1")
@@ -1846,9 +3576,11 @@ mod tests {
         // Assert
         assert_eq!(
             planned_task.status,
-            OrchestrationTaskStatus::Failed.to_string()
+            OrchestrationTaskStatus::Planned.to_string()
         );
+        assert_eq!(planned_task.infrastructure_retry_count, 1);
         assert_eq!(planned_task.last_error.as_deref(), Some("send failed"));
+        assert!(backend.calls().iter().any(|call| call == "cancel:child-1"));
     }
 
     #[tokio::test]
@@ -1918,7 +3650,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interrupted_creation_without_child_is_reconciled_as_failed() {
+    async fn interrupted_creation_without_child_is_retried() {
         // Arrange
         let backend = TestSessionBackend::default();
         let mut repository = MockOrchestrationRepository::new();
@@ -1928,14 +3660,12 @@ mod tests {
             .once()
             .returning(|_| Ok(None));
         repository
-            .expect_update_orchestration_task_status()
-            .withf(|id, status, error| {
-                *id == 1
-                    && status == OrchestrationTaskStatus::Failed.to_string()
-                    && error.as_deref() == Some("Child creation did not complete")
+            .expect_record_orchestration_spawn_failure()
+            .withf(|id, error, retry_limit| {
+                *id == 1 && error == "Child creation did not complete" && *retry_limit == 2
             })
             .once()
-            .returning(|_, _, _| Ok(()));
+            .returning(|_, _, _| Ok(OrchestrationTaskStatus::Planned.to_string()));
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let coordinator =
             OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
@@ -1950,12 +3680,53 @@ mod tests {
         // Assert
         assert_eq!(
             creating_task.status,
-            OrchestrationTaskStatus::Failed.to_string()
+            OrchestrationTaskStatus::Planned.to_string()
         );
+        assert_eq!(creating_task.infrastructure_retry_count, 1);
         assert_eq!(
             creating_task.last_error.as_deref(),
             Some("Child creation did not complete")
         );
+    }
+
+    #[tokio::test]
+    async fn continuation_reuses_the_existing_child_with_a_stable_operation() {
+        // Arrange
+        let backend = TestSessionBackend::default();
+        let mut repository = MockOrchestrationRepository::new();
+        repository
+            .expect_load_rollup_operation_status()
+            .withf(|operation_id| operation_id == "orchestration-continuation-1-1")
+            .once()
+            .returning(|_| Ok(None));
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut continued = task(
+            1,
+            "protocol",
+            OrchestrationTaskStatus::ContinuationPending,
+            Some("child-protocol"),
+        );
+        continued.continuation_generation = 1;
+        continued.continuation_prompt = Some("Add the missing validation".to_string());
+
+        // Act
+        coordinator
+            .reconcile_task(&mut continued)
+            .await
+            .expect("continuation should be delivered");
+
+        // Assert
+        let calls = backend.calls();
+        assert!(calls.iter().any(|call| {
+            call == "rollup-attempt:child-protocol:orchestration-continuation-1-1"
+        }));
+        assert!(calls.iter().any(|call| {
+            call.starts_with("rollup:child-protocol:")
+                && call.contains("Continue task `protocol` on the same branch")
+                && call.contains("Add the missing validation")
+        }));
     }
 
     #[tokio::test]
@@ -2080,11 +3851,14 @@ mod tests {
         assert_eq!(
             event_rx.try_recv(),
             Ok(AppEvent::SessionOrchestrationProgressUpdated {
-                progress: Some("Orchestrating...\n- protocol: running\n- ui: waiting".to_string()),
+                progress: Some(
+                    "Phase: Running\nParallel workers: 2 (global setting)\n- protocol [protocol]: \
+                     running\n- ui [ui]: waiting"
+                        .to_string()
+                ),
                 session_id: SessionId::from("controller"),
             })
         );
-        assert_eq!(event_rx.try_recv(), Ok(AppEvent::RefreshSessions));
         assert!(event_rx.try_recv().is_err());
 
         // Act
@@ -2104,11 +3878,25 @@ mod tests {
     fn live_status_loader_formats_every_task_state() {
         // Arrange
         let states = [
+            (OrchestrationTaskStatus::Proposed, "awaiting approval"),
             (OrchestrationTaskStatus::Planned, "waiting"),
             (OrchestrationTaskStatus::Creating, "starting"),
             (OrchestrationTaskStatus::Running, "running"),
             (OrchestrationTaskStatus::WaitingForInput, "waiting on you"),
             (OrchestrationTaskStatus::Ready, "ready"),
+            (OrchestrationTaskStatus::ContinuationPending, "continuing"),
+            (
+                OrchestrationTaskStatus::AwaitingIntegration,
+                "awaiting integration",
+            ),
+            (OrchestrationTaskStatus::Merging, "integrating"),
+            (OrchestrationTaskStatus::Integrated, "integrated"),
+            (OrchestrationTaskStatus::ReviewRequested, "review requested"),
+            (
+                OrchestrationTaskStatus::IntegrationFailed,
+                "integration failed",
+            ),
+            (OrchestrationTaskStatus::Detached, "detached"),
             (OrchestrationTaskStatus::Failed, "failed"),
             (OrchestrationTaskStatus::Canceled, "canceled"),
         ];
@@ -2119,16 +3907,26 @@ mod tests {
         let mut invalid_task = task(8, "invalid", OrchestrationTaskStatus::Running, None);
         invalid_task.status = "invalid".to_string();
         tasks.push(invalid_task);
+        tasks[0].areas_compliant = Some(true);
+        tasks[0].verification_verdict = Some("Pass".to_string());
+        tasks[1].areas_compliant = Some(false);
+        tasks[1].area_violations = r#"["README.md"]"#.to_string();
+        tasks[1].verification_verdict = Some("Flag".to_string());
+        tasks[1].verification_reason = Some("Wrong file".to_string());
+        tasks[2].verification_verdict = Some("Flag".to_string());
 
         // Act
-        let message = live_status_message(&tasks);
+        let message = campaign_status_message(&orchestration(2), &tasks);
 
         // Assert
-        assert!(message.starts_with("Orchestrating...\n"));
+        assert!(message.starts_with("Phase: Running\nParallel workers: 2 (global setting)\n"));
         for (status, label) in states {
-            assert!(message.contains(&format!("- {status}: {label}")));
+            assert!(message.contains(&format!("- {status} [{status}]: {label}")));
         }
-        assert!(message.contains("- invalid: unknown"));
+        assert!(message.contains("- invalid [invalid]: unknown"));
+        assert!(message.contains("areas compliant; verified"));
+        assert!(message.contains(r#"out-of-scope: ["README.md"]; flagged: Wrong file"#));
+        assert!(message.contains("Creating [Creating]: starting; flagged"));
     }
 
     #[tokio::test]
@@ -2276,7 +4074,8 @@ mod tests {
         let backend = TestSessionBackend::default();
         let mut repository = MockOrchestrationRepository::new();
         let mut submitting = orchestration(2);
-        submitting.status = OrchestrationStatus::Submitting.to_string();
+        submitting.status = OrchestrationStatus::Verifying.to_string();
+        submitting.verification_generation = 1;
         let active_snapshots = Arc::new(Mutex::new(VecDeque::from([
             vec![orchestration(2)],
             vec![submitting.clone()],
@@ -2331,7 +4130,7 @@ mod tests {
             .returning(|_| Ok(true));
         repository
             .expect_load_rollup_operation_status()
-            .withf(|operation_id| operation_id == "orchestration-rollup-1")
+            .withf(|operation_id| operation_id == "orchestration-rollup-1-1")
             .times(2)
             .returning(|_| Ok(Some("done".to_string())));
         expect_rollup_completion_failure_then_success(&mut repository);
@@ -2356,7 +4155,7 @@ mod tests {
             calls
                 .iter()
                 .filter(|call| {
-                    call.as_str() == "rollup-attempt:controller:orchestration-rollup-1"
+                    call.as_str() == "rollup-attempt:controller:orchestration-rollup-1-1"
                 })
                 .count(),
             1
@@ -2376,7 +4175,8 @@ mod tests {
         let backend = TestSessionBackend::default();
         let mut repository = MockOrchestrationRepository::new();
         let mut submitting = orchestration(2);
-        submitting.status = OrchestrationStatus::Submitting.to_string();
+        submitting.status = OrchestrationStatus::Verifying.to_string();
+        submitting.verification_generation = 1;
         repository
             .expect_load_active_orchestrations()
             .once()
@@ -2390,7 +4190,7 @@ mod tests {
         mock_task_snapshots(&mut repository, vec![vec![ready_task]]);
         repository
             .expect_load_rollup_operation_status()
-            .withf(|operation_id| operation_id == "orchestration-rollup-1")
+            .withf(|operation_id| operation_id == "orchestration-rollup-1-1")
             .once()
             .returning(|_| Ok(Some("failed".to_string())));
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
@@ -2408,7 +4208,7 @@ mod tests {
             backend
                 .calls()
                 .iter()
-                .any(|call| { call == "rollup-attempt:controller:orchestration-rollup-1" })
+                .any(|call| { call == "rollup-attempt:controller:orchestration-rollup-1-1" })
         );
     }
 
@@ -2418,7 +4218,7 @@ mod tests {
         let backend = TestSessionBackend::default();
         let mut repository = MockOrchestrationRepository::new();
         let mut submitting = orchestration(2);
-        submitting.status = OrchestrationStatus::Submitting.to_string();
+        submitting.status = OrchestrationStatus::Verifying.to_string();
         repository
             .expect_load_active_orchestrations()
             .times(3)
@@ -2517,6 +4317,7 @@ mod tests {
         // Act
         let (orchestration, tasks, response, approved_metadata) =
             persist_approved_two_task_plan(&database).await;
+        let snapshot = controller_snapshot(&database, "controller").await;
 
         // Assert
         assert!(
@@ -2528,13 +4329,21 @@ mod tests {
         assert_eq!(ordinary_turn, unchanged_prompt);
         assert!(invalid_response.subtasks.is_empty());
         assert!(invalid_response.questions[0].text.contains("at least two"));
-        assert_eq!(response.questions[0].text, APPROVAL_QUESTION);
         assert_eq!(
-            response.questions[0].options,
-            vec!["Approve".to_string(), "Revise".to_string()]
+            invalid_response.questions[0].options,
+            ["Revise the plan", "Use a regular session"]
         );
+        assert!(
+            controller_turn
+                .agent_text()
+                .contains("Always include two or three concrete answer")
+        );
+        assert!(response.questions.is_empty());
+        assert_eq!(orchestration.goal_statement, "Plan");
         assert_eq!(orchestration.max_parallelism, 4);
         assert_eq!(tasks.len(), 2);
+        assert!(snapshot.contains("Phase: Running"));
+        assert!(snapshot.contains("protocol [protocol]: waiting"));
         assert_eq!(
             approved_metadata.progress.as_deref(),
             Some("0 running, 0 waiting on you")
@@ -2542,7 +4351,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn revising_a_controller_plan_cancels_it_before_fan_out() {
+    async fn revised_controller_plan_replaces_the_parked_plan() {
         // Arrange
         let (database, _) = controller_database().await;
         let mut response = AgentResponse::plain("Plan");
@@ -2553,18 +4362,23 @@ mod tests {
         persist_controller_plan(&database, "controller", &mut response)
             .await
             .expect("plan should persist");
+        let original_id = database
+            .orchestrations()
+            .load_orchestration_for_controller("controller")
+            .await
+            .expect("orchestration should load")
+            .expect("orchestration should exist")
+            .id;
+        let mut revised_response = AgentResponse::plain("Revised plan");
+        revised_response.subtasks = vec![
+            subtask("core", &["crates/agentty/src/app/"]),
+            subtask("docs", &["docs/site/content/docs/"]),
+        ];
 
         // Act
-        apply_plan_answer(
-            &database,
-            "controller",
-            &[QuestionAnswer {
-                answer: "Revise".to_string(),
-                question: APPROVAL_QUESTION.to_string(),
-            }],
-        )
-        .await
-        .expect("revision should cancel the plan");
+        persist_controller_plan(&database, "controller", &mut revised_response)
+            .await
+            .expect("revision should replace the plan");
         let orchestration = database
             .orchestrations()
             .load_orchestration_for_controller("controller")
@@ -2573,14 +4387,16 @@ mod tests {
             .expect("orchestration should exist");
 
         // Assert
+        assert_ne!(orchestration.id, original_id);
+        assert_eq!(orchestration.goal_statement, "Revised plan");
         assert_eq!(
             orchestration.status,
-            OrchestrationStatus::Canceled.to_string()
+            OrchestrationStatus::AwaitingApproval.to_string()
         );
     }
 
     #[tokio::test]
-    async fn active_orchestration_discards_repeated_plan_approval() {
+    async fn running_orchestration_discards_repeated_plan_output() {
         // Arrange
         let (database, _) = controller_database().await;
         let mut initial_response = AgentResponse::plain("Plan");
@@ -2591,23 +4407,24 @@ mod tests {
         persist_controller_plan(&database, "controller", &mut initial_response)
             .await
             .expect("initial plan should persist");
+        approve_orchestration(&database, "controller", None)
+            .await
+            .expect("approval should start orchestration");
         let mut repeated_response = AgentResponse::plain("Approval received");
         repeated_response.subtasks = vec![
             subtask("protocol", &["crates/ag-protocol/"]),
             subtask("ui", &["crates/agentty/src/ui/"]),
         ];
-        repeated_response.questions = vec![
-            QuestionItem::with_options(
-                APPROVAL_QUESTION,
-                vec!["Approve".to_string(), "Revise".to_string()],
-            ),
-            QuestionItem::new("Which worker needs more context?"),
-        ];
+        repeated_response.questions = vec![QuestionItem::new("Which worker needs more context?")];
 
         // Act
         persist_controller_plan(&database, "controller", &mut repeated_response)
             .await
             .expect("active plan handling should succeed");
+        let mut discussion_response = AgentResponse::plain("Current status?");
+        persist_controller_plan(&database, "controller", &mut discussion_response)
+            .await
+            .expect("active discussion should not replace the plan");
         let orchestration = database
             .orchestrations()
             .load_orchestration_for_controller("controller")
@@ -2638,24 +4455,420 @@ mod tests {
             vec!["protocol", "ui"]
         );
 
-        // Act
-        apply_plan_answer(
-            &database,
-            "controller",
-            &[QuestionAnswer {
-                answer: "Approve".to_string(),
-                question: APPROVAL_QUESTION.to_string(),
-            }],
-        )
-        .await
-        .expect("approval should start orchestration");
-        repeated_response.questions = vec![QuestionItem::new(APPROVAL_QUESTION.to_string())];
-        persist_controller_plan(&database, "controller", &mut repeated_response)
+        assert_eq!(
+            orchestration.status,
+            OrchestrationStatus::Running.to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn mixed_follow_up_continues_live_child_and_gates_new_scope() {
+        // Arrange
+        let (database, project_id) = controller_database().await;
+        let (initial_orchestration, tasks, _, _) = persist_approved_two_task_plan(&database).await;
+        assert!(
+            database
+                .orchestrations()
+                .claim_orchestration_task(tasks[0].id)
+                .await
+                .expect("failed to claim existing task")
+        );
+        database
+            .sessions()
+            .insert_session_with_agent(PersistedSessionCreation {
+                agent: "codex",
+                base_branch: "main",
+                id: "child-protocol",
+                is_draft: false,
+                model: AgentKind::Codex.default_model().as_str(),
+                orchestration_task_id: Some(tasks[0].id),
+                parent_session_id: None,
+                personality_id: None,
+                project_id,
+                reasoning_level: ReasoningLevel::default(),
+                role: Some("OrchestrationWorker"),
+                speed_mode: SpeedMode::Normal,
+                status: "Review",
+            })
             .await
-            .expect("approval-only response handling should succeed");
+            .expect("failed to insert managed child");
+        assert!(
+            database
+                .orchestrations()
+                .link_orchestration_task_child(tasks[0].id, "child-protocol")
+                .await
+                .expect("failed to link existing task")
+        );
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                tasks[0].id,
+                &OrchestrationTaskStatus::Ready.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to settle existing task");
+        let mut continuation = subtask("protocol", &["crates/ag-protocol/"]);
+        continuation.prompt = "Add the missing validation".to_string();
+        continuation.acceptance_criteria = vec!["Validation is covered".to_string()];
+        let mut response = AgentResponse::plain("Routing feedback and new scope");
+        response.subtasks = vec![continuation, subtask("docs", &["docs/site/content/docs/"])];
+        // Act
+        persist_controller_plan(&database, "controller", &mut response)
+            .await
+            .expect("mixed follow-up should route");
+        let orchestration = database
+            .orchestrations()
+            .load_orchestration_for_controller("controller")
+            .await
+            .expect("failed to load campaign")
+            .expect("campaign should exist");
+        let routed_tasks = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration.id)
+            .await
+            .expect("failed to load routed tasks");
+        let continued = routed_tasks
+            .iter()
+            .find(|task| task.task_key == "protocol")
+            .expect("continued task should remain");
+        let proposed = routed_tasks
+            .iter()
+            .find(|task| task.task_key == "docs")
+            .expect("new task should be proposed");
+        let approved = database
+            .orchestrations()
+            .approve_orchestration_plan(orchestration.id)
+            .await
+            .expect("new scope approval should succeed");
 
         // Assert
-        assert!(repeated_response.questions.is_empty());
+        assert!(response.subtasks.is_empty());
+        assert_eq!(orchestration.id, initial_orchestration.id);
+        assert_eq!(
+            orchestration.status,
+            OrchestrationStatus::AwaitingApproval.to_string()
+        );
+        assert_eq!(
+            continued.status,
+            OrchestrationTaskStatus::ContinuationPending.to_string()
+        );
+        assert_eq!(
+            continued.child_session_id.as_deref(),
+            Some("child-protocol")
+        );
+        assert_eq!(continued.continuation_generation, 1);
+        assert_eq!(
+            continued.continuation_prompt.as_deref(),
+            Some("Add the missing validation")
+        );
+        assert_eq!(
+            proposed.status,
+            OrchestrationTaskStatus::Proposed.to_string()
+        );
+        assert!(approved);
+    }
+
+    #[tokio::test]
+    async fn awaiting_integration_continuation_resets_passed_siblings_for_verification() {
+        // Arrange
+        let (database, project_id) = controller_database().await;
+        let (orchestration, tasks, _, _) = persist_approved_two_task_plan(&database).await;
+        assert!(
+            database
+                .orchestrations()
+                .claim_orchestration_task(tasks[0].id)
+                .await
+                .expect("failed to claim continued task")
+        );
+        insert_managed_child(&database, project_id, tasks[0].id, "child-protocol").await;
+        seed_verifying_tasks(&database, &orchestration, &tasks).await;
+        for task in &tasks {
+            assert!(
+                database
+                    .orchestrations()
+                    .record_orchestration_verdict(
+                        orchestration.id,
+                        &task.task_key,
+                        true,
+                        "Earlier verification",
+                    )
+                    .await
+                    .expect("failed to seed earlier verdict")
+            );
+            database
+                .orchestrations()
+                .update_orchestration_task_status(
+                    task.id,
+                    &OrchestrationTaskStatus::AwaitingIntegration.to_string(),
+                    None,
+                )
+                .await
+                .expect("failed to park verified task");
+        }
+        database
+            .orchestrations()
+            .update_orchestration_status(
+                orchestration.id,
+                &OrchestrationStatus::AwaitingIntegration.to_string(),
+            )
+            .await
+            .expect("failed to park campaign");
+        let mut continuation = subtask("protocol", &["crates/ag-protocol/"]);
+        continuation.prompt = "Address verification feedback".to_string();
+        let mut response = AgentResponse::plain("Continue the protocol task");
+        response.subtasks = vec![continuation];
+
+        // Act
+        persist_controller_plan(&database, "controller", &mut response)
+            .await
+            .expect("continuation should route");
+        let campaign = database
+            .orchestrations()
+            .load_orchestration_for_controller("controller")
+            .await
+            .expect("failed to load campaign")
+            .expect("campaign should exist");
+        let mut routed = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration.id)
+            .await
+            .expect("failed to load routed tasks");
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                routed[0].id,
+                &OrchestrationTaskStatus::Ready.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to settle continuation");
+        routed = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration.id)
+            .await
+            .expect("failed to reload settled tasks");
+        let decision =
+            OrchestrationPolicy::schedule(2, &routed.iter().map(task_status).collect::<Vec<_>>());
+
+        // Assert
+        assert_eq!(campaign.status, OrchestrationStatus::Running.to_string());
+        assert!(response.subtasks.is_empty());
+        assert_eq!(routed[1].status, OrchestrationTaskStatus::Ready.to_string());
+        assert_eq!(routed[1].verification_verdict, None);
+        assert_eq!(routed[1].verification_reason, None);
+        assert!(decision.should_submit);
+    }
+
+    #[tokio::test]
+    async fn controller_verdicts_admit_only_passed_tasks_to_integration() {
+        // Arrange
+        let (database, _) = controller_database().await;
+        let (orchestration, tasks, _, _) = persist_approved_two_task_plan(&database).await;
+        seed_verifying_tasks(&database, &orchestration, &tasks).await;
+        let mut response = AgentResponse::plain("One task needs correction");
+        response.verification_verdicts = vec![
+            VerificationVerdictItem {
+                reason: "Protocol criteria pass".to_string(),
+                task_key: "  protocol  ".to_string(),
+                verdict: VerificationVerdict::Pass,
+            },
+            VerificationVerdictItem {
+                reason: "Duplicate must not override".to_string(),
+                task_key: "protocol".to_string(),
+                verdict: VerificationVerdict::Flag,
+            },
+            VerificationVerdictItem {
+                reason: "UI criterion is missing".to_string(),
+                task_key: "ui".to_string(),
+                verdict: VerificationVerdict::Flag,
+            },
+            VerificationVerdictItem {
+                reason: "Ignored blank key".to_string(),
+                task_key: String::new(),
+                verdict: VerificationVerdict::Pass,
+            },
+        ];
+
+        // Act
+        persist_controller_plan(&database, "controller", &mut response)
+            .await
+            .expect("verdicts should persist");
+        let completed = database
+            .orchestrations()
+            .complete_orchestration_rollup(orchestration.id)
+            .await
+            .expect("roll-up should complete");
+        let prompt_outcome = approve_orchestration(&database, "controller", None)
+            .await
+            .expect("prompt eligibility should be inspected");
+        let approval = approve_orchestration(
+            &database,
+            "controller",
+            Some(IntegrationApproach::LocalMerge),
+        )
+        .await
+        .expect("gate inspection should succeed");
+        let campaign = database
+            .orchestrations()
+            .load_orchestration_for_controller("controller")
+            .await
+            .expect("failed to load campaign")
+            .expect("campaign should exist");
+        let verified = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration.id)
+            .await
+            .expect("failed to load verified tasks");
+
+        // Assert
+        assert!(completed);
+        assert_eq!(prompt_outcome, OrchestrationApprovalOutcome::Unavailable);
+        assert_eq!(approval, OrchestrationApprovalOutcome::Unavailable);
+        assert_eq!(
+            campaign.status,
+            OrchestrationStatus::AwaitingIntegration.to_string()
+        );
+        assert_eq!(
+            verified[0].status,
+            OrchestrationTaskStatus::AwaitingIntegration.to_string()
+        );
+        assert_eq!(verified[0].verification_verdict.as_deref(), Some("Pass"));
+        assert_eq!(
+            verified[1].status,
+            OrchestrationTaskStatus::Ready.to_string()
+        );
+        assert_eq!(verified[1].verification_verdict.as_deref(), Some("Flag"));
+        assert_eq!(
+            verified[1].verification_reason.as_deref(),
+            Some("UI criterion is missing")
+        );
+    }
+
+    #[tokio::test]
+    async fn controller_verdicts_reject_unknown_task_keys() {
+        // Arrange
+        let (database, _) = controller_database().await;
+        let (orchestration, tasks, _, _) = persist_approved_two_task_plan(&database).await;
+        seed_verifying_tasks(&database, &orchestration, &tasks).await;
+        let mut response = AgentResponse::plain("Unknown task verdict");
+        response.verification_verdicts = vec![VerificationVerdictItem {
+            reason: "Looks complete".to_string(),
+            task_key: "unknown-task".to_string(),
+            verdict: VerificationVerdict::Pass,
+        }];
+
+        // Act
+        let error = persist_controller_plan(&database, "controller", &mut response)
+            .await
+            .expect_err("unknown verdict keys should fail explicitly");
+
+        // Assert
+        assert!(matches!(
+            error,
+            DbError::InvalidData {
+                entity: "orchestration verification verdict",
+                reason,
+            } if reason == format!(
+                "task `unknown-task` did not match a ready task in orchestration {}",
+                orchestration.id
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn managed_child_evidence_records_paths_outside_declared_areas() {
+        // Arrange
+        let (database, project_id) = controller_database().await;
+        let (orchestration, tasks, _, _) = persist_approved_two_task_plan(&database).await;
+        assert!(
+            database
+                .orchestrations()
+                .claim_orchestration_task(tasks[0].id)
+                .await
+                .expect("failed to claim task")
+        );
+        insert_managed_child(&database, project_id, tasks[0].id, "child-protocol").await;
+        let mut git_client = MockGitClient::new();
+        git_client
+            .expect_diff_changed_files()
+            .withf(|path, base| path == Path::new("/tmp/child-protocol") && base == "main")
+            .once()
+            .return_once(|_, _| {
+                Box::pin(async {
+                    Ok(vec![
+                        "crates/ag-protocol/src/model.rs".to_string(),
+                        "README.md".to_string(),
+                    ])
+                })
+            });
+
+        // Act
+        persist_managed_child_area_compliance(
+            &database,
+            &git_client,
+            "child-protocol",
+            Path::new("/tmp/child-protocol"),
+        )
+        .await
+        .expect("evidence should persist");
+        let task = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration.id)
+            .await
+            .expect("task query should succeed")
+            .remove(0);
+
+        // Assert
+        assert_eq!(task.areas_compliant, Some(false));
+        assert_eq!(task.area_violations, r#"["README.md"]"#);
+
+        // Arrange
+        git_client
+            .expect_diff_changed_files()
+            .once()
+            .return_once(|_, _| {
+                Box::pin(async { Ok(vec!["crates/ag-protocol/src/lib.rs".to_string()]) })
+            });
+
+        // Act
+        persist_managed_child_area_compliance(
+            &database,
+            &git_client,
+            "child-protocol",
+            Path::new("/tmp/child-protocol"),
+        )
+        .await
+        .expect("compliant evidence should persist");
+        let task = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration.id)
+            .await
+            .expect("task query should succeed")
+            .remove(0);
+
+        // Assert
+        assert_eq!(task.areas_compliant, Some(true));
+        assert_eq!(task.area_violations, "[]");
+    }
+
+    #[tokio::test]
+    async fn ordinary_child_has_no_orchestration_evidence_scope() {
+        // Arrange
+        let (database, _) = controller_database().await;
+        let git_client = MockGitClient::new();
+
+        // Act
+        let result = persist_managed_child_area_compliance(
+            &database,
+            &git_client,
+            "not-managed",
+            Path::new("/tmp/not-managed"),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, Ok(()));
     }
 
     #[tokio::test]
@@ -2698,16 +4911,9 @@ mod tests {
             .load_orchestration_tasks(orchestration.id)
             .await
             .expect("failed to load retried tasks");
-        apply_plan_answer(
-            &database,
-            "controller",
-            &[QuestionAnswer {
-                answer: "Approve".to_string(),
-                question: APPROVAL_QUESTION.to_string(),
-            }],
-        )
-        .await
-        .expect("retry approval should start orchestration");
+        approve_orchestration(&database, "controller", None)
+            .await
+            .expect("retry approval should start orchestration");
         let claimed = database
             .orchestrations()
             .claim_orchestration_task(tasks[0].id)
@@ -2745,7 +4951,7 @@ mod tests {
         assert_eq!(retried_tasks[0].id, tasks[0].id);
         assert_eq!(
             retried_tasks[0].status,
-            OrchestrationTaskStatus::Planned.to_string()
+            OrchestrationTaskStatus::Proposed.to_string()
         );
         assert_eq!(
             retried_tasks[1].status,
@@ -2774,6 +4980,8 @@ mod tests {
         let task_id = database
             .orchestrations()
             .upsert_orchestration_task(PersistedOrchestrationTask {
+                acceptance_criteria: r#"["Protocol is implemented"]"#.to_string(),
+                merge_position: 0,
                 prompt: "Implement protocol".to_string(),
                 session_orchestration_id: orchestration_id,
                 task_key: "protocol".to_string(),

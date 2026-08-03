@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use super::status;
+use crate::domain::orchestration::IntegrationApproach;
 use crate::infra::clock::{self, Clock};
 use crate::infra::db::{DbError, DbResultExt};
 
@@ -21,33 +22,61 @@ pub struct SessionOrchestrationRow {
     pub controller_project_id: i64,
     /// Controller session that owns this orchestration.
     pub controller_session_id: String,
+    /// Canonical single-goal statement approved for this campaign.
+    pub goal_statement: String,
     /// Stable database identifier.
     pub id: i64,
     /// Maximum number of children allowed to run at once.
     pub max_parallelism: i64,
+    /// Exact managed task whose questions are mirrored onto the controller.
+    pub relayed_question_task_id: Option<i64>,
     /// Persisted orchestration status string.
     pub status: String,
+    /// Monotonic identity for durable verification turns.
+    pub verification_generation: i64,
 }
 
 /// Row returned when loading one `session_orchestration_task`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionOrchestrationTaskRow {
+    /// Serialized acceptance criteria checked during verification.
+    pub acceptance_criteria: String,
+    /// Serialized changed paths outside the task's declared areas.
+    pub area_violations: String,
+    /// Whether the latest child diff stayed within its declared areas.
+    pub areas_compliant: Option<bool>,
     /// Number of child sessions created for this task so far.
     pub attempt_count: i64,
+    /// Persisted added-line count from the latest child diff refresh.
+    pub child_added_lines: i64,
+    /// Persisted deleted-line count from the latest child diff refresh.
+    pub child_deleted_lines: i64,
+    /// Whether the latest child diff refresh found any content.
+    pub child_has_diff: Option<bool>,
     /// Total input tokens observed on the linked child session.
     pub child_input_tokens: i64,
     /// Total output tokens observed on the linked child session.
     pub child_output_tokens: i64,
+    /// Persisted clarification questions on the linked child.
+    pub child_questions: Option<String>,
     /// Child session created for this task, when one exists.
     pub child_session_id: Option<String>,
     /// Persisted lifecycle status observed on the linked child session.
     pub child_status: Option<String>,
     /// Cumulative summary observed on the linked child session.
     pub child_summary: Option<String>,
+    /// Monotonic identity for durable feedback delivery attempts.
+    pub continuation_generation: i64,
+    /// Feedback prompt waiting to resume the existing managed child.
+    pub continuation_prompt: Option<String>,
     /// Stable database identifier.
     pub id: i64,
     /// Most recent failure detail, when the task failed.
     pub last_error: Option<String>,
+    /// Number of bounded automatic spawn retries already consumed.
+    pub infrastructure_retry_count: i64,
+    /// Stable integration order selected on the approval board.
+    pub merge_position: i64,
     /// Standalone prompt handed to the child session.
     pub prompt: String,
     /// Bounded child-reported result summary used for fan-in, when present.
@@ -60,6 +89,21 @@ pub struct SessionOrchestrationTaskRow {
     pub touched_areas: String,
     /// Short human-readable task title.
     pub title: String,
+    /// Controller explanation for the latest verification verdict.
+    pub verification_reason: Option<String>,
+    /// Latest controller verdict for this task.
+    pub verification_verdict: Option<String>,
+}
+
+/// Task scope and child base needed to compute verification evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OrchestrationTaskScopeRow {
+    /// Base branch used by the managed child worktree.
+    pub base_branch: String,
+    /// Stable orchestration-task identifier.
+    pub id: i64,
+    /// Serialized repository areas assigned to this task.
+    pub touched_areas: String,
 }
 
 /// Bulk-loaded controller progress and child adjacency for one session row.
@@ -85,6 +129,10 @@ pub struct SessionOrchestrationMetadataRow {
 /// `mockall::automock` drops in the generated mock. Owning the data is
 /// allocation-cheap on this once-per-plan path.
 pub struct PersistedOrchestrationTask {
+    /// Serialized acceptance criteria checked during verification.
+    pub acceptance_criteria: String,
+    /// Stable integration order selected on the approval board.
+    pub merge_position: i64,
     /// Standalone prompt handed to the child session.
     pub prompt: String,
     /// Owning orchestration identifier.
@@ -146,6 +194,15 @@ pub trait OrchestrationRepository: Send + Sync {
         session_orchestration_id: i64,
     ) -> Result<Vec<SessionOrchestrationTaskRow>, DbError>;
 
+    /// Loads the destination selected for verified child branches.
+    async fn load_orchestration_integration_approach(&self, id: i64) -> Result<String, DbError>;
+
+    /// Loads the declared task scope linked to one managed child.
+    async fn load_orchestration_task_scope_for_child(
+        &self,
+        child_session_id: &str,
+    ) -> Result<Option<OrchestrationTaskScopeRow>, DbError>;
+
     /// Loads a child session already persisted for one orchestration task.
     async fn load_child_session_id_for_task(&self, task_id: i64)
     -> Result<Option<String>, DbError>;
@@ -162,6 +219,18 @@ pub trait OrchestrationRepository: Send + Sync {
     /// Completes a submitted roll-up unless cancellation won the state race.
     async fn complete_orchestration_rollup(&self, id: i64) -> Result<bool, DbError>;
 
+    /// Persists one explicit controller verdict for a settled task.
+    async fn record_orchestration_verdict(
+        &self,
+        id: i64,
+        task_key: &str,
+        is_pass: bool,
+        reason: &str,
+    ) -> Result<bool, DbError>;
+
+    /// Archives a finalized campaign and makes its controller terminal.
+    async fn complete_orchestration_campaign(&self, id: i64) -> Result<bool, DbError>;
+
     /// Loads the durable worker-operation status for one roll-up delivery.
     async fn load_rollup_operation_status(
         &self,
@@ -170,6 +239,61 @@ pub trait OrchestrationRepository: Send + Sync {
 
     /// Updates one orchestration's persisted status.
     async fn update_orchestration_status(&self, id: i64, status: &str) -> Result<(), DbError>;
+
+    /// Approves parked proposed tasks and resumes campaign execution.
+    async fn approve_orchestration_plan(&self, id: i64) -> Result<bool, DbError>;
+
+    /// Persists the selected integration destination and starts integration.
+    async fn approve_orchestration_integration(
+        &self,
+        id: i64,
+        approach: IntegrationApproach,
+    ) -> Result<bool, DbError>;
+
+    /// Updates plan metadata before fan-out begins.
+    async fn update_orchestration_plan(
+        &self,
+        id: i64,
+        goal_statement: &str,
+        max_parallelism: i64,
+    ) -> Result<(), DbError>;
+
+    /// Routes feedback to a live managed child without replacing its branch.
+    async fn queue_orchestration_continuation(
+        &self,
+        id: i64,
+        prompt: &str,
+        acceptance_criteria: &str,
+    ) -> Result<bool, DbError>;
+
+    /// Returns previously verified tasks to fan-in before a follow-up wave.
+    async fn reset_orchestration_verification(&self, id: i64) -> Result<(), DbError>;
+
+    /// Records one infrastructure failure and returns the next task status.
+    async fn record_orchestration_spawn_failure(
+        &self,
+        id: i64,
+        error: &str,
+        retry_limit: i64,
+    ) -> Result<String, DbError>;
+
+    /// Permanently transfers one managed child to ordinary user ownership.
+    async fn detach_orchestration_child(&self, child_session_id: &str) -> Result<bool, DbError>;
+
+    /// Claims one managed task's questions and mirrors them onto its
+    /// controller.
+    async fn surface_orchestration_questions(
+        &self,
+        session_orchestration_id: i64,
+        task_id: i64,
+        questions: &str,
+    ) -> Result<bool, DbError>;
+
+    /// Clears the exact question proxy claimed by one orchestration.
+    async fn clear_orchestration_questions(
+        &self,
+        session_orchestration_id: i64,
+    ) -> Result<(), DbError>;
 
     /// Links one child and counts the attempt only while fan-out still owns it.
     async fn link_orchestration_task_child(
@@ -192,11 +316,28 @@ pub trait OrchestrationRepository: Send + Sync {
         id: i64,
         result_summary: &str,
     ) -> Result<(), DbError>;
+
+    /// Records mechanically computed touched-area compliance evidence.
+    async fn update_orchestration_task_area_compliance(
+        &self,
+        id: i64,
+        areas_compliant: bool,
+        area_violations: &str,
+    ) -> Result<(), DbError>;
 }
 
 /// `SQLite` implementation of [`OrchestrationRepository`].
 #[derive(Clone)]
 pub(crate) struct SqliteOrchestrationRepository(SqlitePool, Arc<dyn Clock>);
+
+struct OrchestrationTransition {
+    context: &'static str,
+    from_orchestration_status: &'static str,
+    from_task_status: &'static str,
+    require_pass_verdict: bool,
+    to_orchestration_status: &'static str,
+    to_task_status: &'static str,
+}
 
 impl SqliteOrchestrationRepository {
     /// Creates an orchestration repository backed by the provided pool.
@@ -207,6 +348,54 @@ impl SqliteOrchestrationRepository {
     /// Returns the shared persistence timestamp in Unix seconds.
     fn now(&self) -> i64 {
         clock::unix_timestamp_seconds(self.1.as_ref())
+    }
+
+    async fn transition_orchestration_and_tasks(
+        &self,
+        id: i64,
+        transition: OrchestrationTransition,
+    ) -> Result<bool, DbError> {
+        let now = self.now();
+        let mut transaction = self.0.begin().await.db_context(transition.context)?;
+        let result = sqlx::query(
+            r"
+UPDATE session_orchestration
+SET status = ?,
+    updated_at = ?
+WHERE id = ?
+  AND status = ?
+",
+        )
+        .bind(transition.to_orchestration_status)
+        .bind(now)
+        .bind(id)
+        .bind(transition.from_orchestration_status)
+        .execute(&mut *transaction)
+        .await
+        .db_context(transition.context)?;
+        if result.rows_affected() == 1 {
+            sqlx::query(
+                r"
+UPDATE session_orchestration_task
+SET status = ?,
+    updated_at = ?
+WHERE session_orchestration_id = ?
+  AND status = ?
+  AND (? = 0 OR verification_verdict = 'Pass')
+",
+            )
+            .bind(transition.to_task_status)
+            .bind(now)
+            .bind(id)
+            .bind(transition.from_task_status)
+            .bind(i64::from(transition.require_pass_verdict))
+            .execute(&mut *transaction)
+            .await
+            .db_context(transition.context)?;
+        }
+        transaction.commit().await.db_context(transition.context)?;
+
+        Ok(result.rows_affected() == 1)
     }
 }
 
@@ -225,12 +414,13 @@ impl OrchestrationRepository for SqliteOrchestrationRepository {
             r#"
 INSERT INTO session_orchestration (
     controller_session_id,
+    goal_statement,
     status,
     max_parallelism,
     created_at,
     updated_at
 )
-VALUES (?, ?, ?, ?, ?)
+VALUES (?, '', ?, ?, ?, ?)
 RETURNING id AS "id!: i64"
 "#,
             controller_session_id,
@@ -250,6 +440,8 @@ RETURNING id AS "id!: i64"
         task: PersistedOrchestrationTask,
     ) -> Result<i64, DbError> {
         let PersistedOrchestrationTask {
+            acceptance_criteria,
+            merge_position,
             prompt,
             session_orchestration_id,
             task_key,
@@ -271,15 +463,19 @@ INSERT INTO session_orchestration_task (
     title,
     prompt,
     touched_areas,
+    acceptance_criteria,
+    merge_position,
     status,
     created_at,
     updated_at
 )
-VALUES (?, ?, ?, ?, ?, 'Planned', ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, 'Planned', ?, ?)
 ON CONFLICT(session_orchestration_id, task_key) DO UPDATE
 SET title = excluded.title,
     prompt = excluded.prompt,
     touched_areas = excluded.touched_areas,
+    acceptance_criteria = excluded.acceptance_criteria,
+    merge_position = excluded.merge_position,
     status = 'Planned',
     child_session_id = NULL,
     result_summary = NULL,
@@ -292,6 +488,8 @@ RETURNING id AS "id!: i64"
             title,
             prompt,
             touched_areas,
+            acceptance_criteria,
+            merge_position,
             now,
             now
         )
@@ -331,8 +529,11 @@ WHERE orchestration_task_id = ?
 SELECT orchestration.id AS "id!: i64",
        session.project_id AS "controller_project_id!: i64",
        orchestration.controller_session_id,
+       orchestration.goal_statement,
+       orchestration.relayed_question_task_id,
        orchestration.status,
-       orchestration.max_parallelism
+       orchestration.max_parallelism,
+       orchestration.verification_generation
 FROM session_orchestration AS orchestration
 INNER JOIN session
 ON session.id = orchestration.controller_session_id
@@ -358,12 +559,22 @@ LIMIT 1
 SELECT orchestration.id AS "id!: i64",
        session.project_id AS "controller_project_id!: i64",
        orchestration.controller_session_id,
+       orchestration.goal_statement,
+       orchestration.relayed_question_task_id,
        orchestration.status,
-       orchestration.max_parallelism
+       orchestration.max_parallelism,
+       orchestration.verification_generation
 FROM session_orchestration AS orchestration
 INNER JOIN session
 ON session.id = orchestration.controller_session_id
-WHERE orchestration.status IN ('Running', 'Submitting', 'Canceling')
+WHERE orchestration.status IN (
+    'AwaitingApproval',
+    'Running',
+    'Verifying',
+    'AwaitingIntegration',
+    'Integrating',
+    'Canceling'
+)
 ORDER BY orchestration.id
 "#
         )
@@ -401,7 +612,8 @@ controller_metadata AS (
     SELECT orchestration.controller_session_id AS session_id,
            orchestration.status AS orchestration_status,
            COALESCE(SUM(
-               CASE WHEN task.status IN ('Creating', 'Running') THEN 1 ELSE 0 END
+               CASE WHEN task.status IN ('Creating', 'Running', 'ContinuationPending')
+                    THEN 1 ELSE 0 END
            ), 0) AS running_task_count,
            COALESCE(SUM(
                CASE WHEN task.status = 'WaitingForInput' THEN 1 ELSE 0 END
@@ -457,24 +669,37 @@ ORDER BY session.id
             SessionOrchestrationTaskRow,
             r#"
 SELECT task.id AS "id!: i64",
+       task.acceptance_criteria,
+       task.area_violations,
+       task.areas_compliant AS "areas_compliant?: bool",
        task.attempt_count,
+       COALESCE(child.added_lines, 0) AS "child_added_lines!: i64",
+       COALESCE(child.deleted_lines, 0) AS "child_deleted_lines!: i64",
+       child.has_diff AS "child_has_diff?: bool",
        COALESCE(child.input_tokens, 0) AS "child_input_tokens!: i64",
        COALESCE(child.output_tokens, 0) AS "child_output_tokens!: i64",
        task.child_session_id,
        child.status AS child_status,
+       child.questions AS child_questions,
        child.summary AS child_summary,
+       task.continuation_generation,
+       task.continuation_prompt,
+       task.infrastructure_retry_count,
        task.last_error,
+       task.merge_position,
        task.prompt,
        task.result_summary,
        task.status,
        task.task_key,
        task.touched_areas,
-       task.title
+       task.title,
+       task.verification_reason,
+       task.verification_verdict
 FROM session_orchestration_task AS task
 LEFT JOIN session AS child
 ON child.id = task.child_session_id
 WHERE task.session_orchestration_id = ?
-ORDER BY task.id
+ORDER BY task.merge_position, task.id
 "#,
             session_orchestration_id
         )
@@ -488,6 +713,39 @@ ORDER BY task.id
         }
 
         Ok(rows)
+    }
+
+    async fn load_orchestration_integration_approach(&self, id: i64) -> Result<String, DbError> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT integration_approach FROM session_orchestration WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&self.0)
+        .await
+        .db_context("load orchestration integration approach")
+    }
+
+    async fn load_orchestration_task_scope_for_child(
+        &self,
+        child_session_id: &str,
+    ) -> Result<Option<OrchestrationTaskScopeRow>, DbError> {
+        sqlx::query_as!(
+            OrchestrationTaskScopeRow,
+            r#"
+SELECT child.base_branch,
+       task.id AS "id!: i64",
+       task.touched_areas
+FROM session_orchestration_task AS task
+INNER JOIN session AS child
+ON child.id = task.child_session_id
+WHERE child.id = ?
+  AND child.role = 'OrchestrationWorker'
+"#,
+            child_session_id
+        )
+        .fetch_optional(&self.0)
+        .await
+        .db_context("load orchestration task scope for child")
     }
 
     async fn load_child_session_id_for_task(
@@ -517,7 +775,14 @@ UPDATE session_orchestration
 SET status = 'Canceling',
     updated_at = ?
 WHERE id = ?
-  AND status IN ('AwaitingApproval', 'Running', 'Submitting', 'Canceling')
+  AND status IN (
+      'AwaitingApproval',
+      'Running',
+      'Verifying',
+      'AwaitingIntegration',
+      'Integrating',
+      'Canceling'
+  )
 ",
             now,
             id
@@ -563,7 +828,8 @@ WHERE id = ?
         let result = sqlx::query!(
             r"
 UPDATE session_orchestration
-SET status = 'Submitting',
+SET status = 'Verifying',
+    verification_generation = verification_generation + 1,
     updated_at = ?
 WHERE id = ?
   AND status = 'Running'
@@ -579,24 +845,105 @@ WHERE id = ?
     }
 
     async fn complete_orchestration_rollup(&self, id: i64) -> Result<bool, DbError> {
-        let now = self.now();
+        self.transition_orchestration_and_tasks(
+            id,
+            OrchestrationTransition {
+                context: "complete orchestration rollup",
+                from_orchestration_status: "Verifying",
+                from_task_status: "Ready",
+                require_pass_verdict: true,
+                to_orchestration_status: "AwaitingIntegration",
+                to_task_status: "AwaitingIntegration",
+            },
+        )
+        .await
+    }
 
+    async fn record_orchestration_verdict(
+        &self,
+        id: i64,
+        task_key: &str,
+        is_pass: bool,
+        reason: &str,
+    ) -> Result<bool, DbError> {
+        let now = self.now();
+        let verdict = if is_pass { "Pass" } else { "Flag" };
         let result = sqlx::query!(
             r"
-UPDATE session_orchestration
-SET status = 'Done',
+UPDATE session_orchestration_task
+SET verification_reason = ?,
+    verification_verdict = ?,
     updated_at = ?
-WHERE id = ?
-  AND status = 'Submitting'
+WHERE session_orchestration_id = ?
+  AND task_key = ?
+  AND status = 'Ready'
+  AND EXISTS (
+      SELECT 1
+      FROM session_orchestration
+      WHERE id = ?
+        AND status = 'Verifying'
+  )
 ",
+            reason,
+            verdict,
             now,
+            id,
+            task_key,
             id
         )
         .execute(&self.0)
         .await
-        .db_context("complete orchestration rollup")?;
+        .db_context("record orchestration verdict")?;
 
         Ok(result.rows_affected() == 1)
+    }
+
+    async fn complete_orchestration_campaign(&self, id: i64) -> Result<bool, DbError> {
+        let now = self.now();
+        let mut transaction = self
+            .0
+            .begin()
+            .await
+            .db_context("complete orchestration campaign")?;
+        let orchestration = sqlx::query!(
+            r#"
+UPDATE session_orchestration
+SET status = 'Done',
+    updated_at = ?
+WHERE id = ?
+  AND status IN ('AwaitingIntegration', 'Integrating')
+RETURNING controller_session_id AS "controller_session_id!: String"
+"#,
+            now,
+            id
+        )
+        .fetch_optional(&mut *transaction)
+        .await
+        .db_context("complete orchestration campaign")?;
+        if let Some(orchestration) = &orchestration {
+            sqlx::query!(
+                r"
+UPDATE session
+SET status = 'Done',
+    questions = '',
+    updated_at = ?
+WHERE id = ?
+  AND role = 'Orchestrator'
+  AND status IN ('Review', 'Question')
+",
+                now,
+                orchestration.controller_session_id
+            )
+            .execute(&mut *transaction)
+            .await
+            .db_context("complete orchestration campaign")?;
+        }
+        transaction
+            .commit()
+            .await
+            .db_context("complete orchestration campaign")?;
+
+        Ok(orchestration.is_some())
     }
 
     async fn load_rollup_operation_status(
@@ -637,6 +984,388 @@ WHERE id = ?
         )
         .execute(&self.0)
         .await?;
+
+        Ok(())
+    }
+
+    async fn approve_orchestration_plan(&self, id: i64) -> Result<bool, DbError> {
+        self.transition_orchestration_and_tasks(
+            id,
+            OrchestrationTransition {
+                context: "approve orchestration plan",
+                from_orchestration_status: "AwaitingApproval",
+                from_task_status: "Proposed",
+                require_pass_verdict: false,
+                to_orchestration_status: "Running",
+                to_task_status: "Planned",
+            },
+        )
+        .await
+    }
+
+    async fn approve_orchestration_integration(
+        &self,
+        id: i64,
+        approach: IntegrationApproach,
+    ) -> Result<bool, DbError> {
+        let approach = approach.to_string();
+        let now = self.now();
+        let result = sqlx::query(
+            r"
+UPDATE session_orchestration
+SET integration_approach = ?,
+    status = 'Integrating',
+    updated_at = ?
+WHERE id = ?
+  AND status = 'AwaitingIntegration'
+",
+        )
+        .bind(approach)
+        .bind(now)
+        .bind(id)
+        .execute(&self.0)
+        .await
+        .db_context("approve orchestration integration")?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn update_orchestration_plan(
+        &self,
+        id: i64,
+        goal_statement: &str,
+        max_parallelism: i64,
+    ) -> Result<(), DbError> {
+        let now = self.now();
+
+        sqlx::query!(
+            r"
+UPDATE session_orchestration
+SET goal_statement = ?,
+    max_parallelism = ?,
+    updated_at = ?
+WHERE id = ?
+  AND status = 'AwaitingApproval'
+",
+            goal_statement,
+            max_parallelism,
+            now,
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn queue_orchestration_continuation(
+        &self,
+        id: i64,
+        prompt: &str,
+        acceptance_criteria: &str,
+    ) -> Result<bool, DbError> {
+        let now = self.now();
+        let result = sqlx::query!(
+            r"
+UPDATE session_orchestration_task
+SET acceptance_criteria = ?,
+    area_violations = '[]',
+    areas_compliant = NULL,
+    continuation_generation = continuation_generation + 1,
+    continuation_prompt = ?,
+    status = 'ContinuationPending',
+    result_summary = NULL,
+    verification_verdict = NULL,
+    verification_reason = NULL,
+    last_error = NULL,
+    updated_at = ?
+WHERE id = ?
+  AND child_session_id IS NOT NULL
+  AND status IN ('Ready', 'AwaitingIntegration', 'IntegrationFailed')
+",
+            acceptance_criteria,
+            prompt,
+            now,
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn reset_orchestration_verification(&self, id: i64) -> Result<(), DbError> {
+        let now = self.now();
+
+        sqlx::query!(
+            r"
+UPDATE session_orchestration_task
+SET status = 'Ready',
+    verification_reason = NULL,
+    verification_verdict = NULL,
+    updated_at = ?
+WHERE session_orchestration_id = ?
+  AND status = 'AwaitingIntegration'
+",
+            now,
+            id
+        )
+        .execute(&self.0)
+        .await
+        .db_context("reset orchestration verification")?;
+
+        Ok(())
+    }
+
+    async fn record_orchestration_spawn_failure(
+        &self,
+        id: i64,
+        error: &str,
+        retry_limit: i64,
+    ) -> Result<String, DbError> {
+        let now = self.now();
+        let mut transaction = self
+            .0
+            .begin()
+            .await
+            .db_context("record orchestration spawn failure")?;
+        sqlx::query!(
+            r"
+UPDATE session
+SET orchestration_task_id = NULL,
+    updated_at = ?
+WHERE orchestration_task_id = ?
+",
+            now,
+            id
+        )
+        .execute(&mut *transaction)
+        .await
+        .db_context("record orchestration spawn failure")?;
+        let row = sqlx::query!(
+            r#"
+UPDATE session_orchestration_task
+SET child_session_id = NULL,
+    infrastructure_retry_count = infrastructure_retry_count + 1,
+    status = CASE
+        WHEN infrastructure_retry_count < ? THEN 'Planned'
+        ELSE 'Failed'
+    END,
+    last_error = ?,
+    updated_at = ?
+WHERE id = ?
+RETURNING status AS "status!: String"
+"#,
+            retry_limit,
+            error,
+            now,
+            id
+        )
+        .fetch_one(&mut *transaction)
+        .await
+        .db_context("record orchestration spawn failure")?;
+        transaction
+            .commit()
+            .await
+            .db_context("record orchestration spawn failure")?;
+        status::validate_orchestration_task(&row.status)?;
+
+        Ok(row.status)
+    }
+
+    async fn detach_orchestration_child(&self, child_session_id: &str) -> Result<bool, DbError> {
+        let now = self.now();
+        let mut transaction = self
+            .0
+            .begin()
+            .await
+            .db_context("detach orchestration child")?;
+        let task = sqlx::query!(
+            r#"
+SELECT orchestration_task_id AS "task_id!: i64"
+FROM session
+WHERE id = ?
+  AND role = 'OrchestrationWorker'
+  AND orchestration_task_id IS NOT NULL
+"#,
+            child_session_id
+        )
+        .fetch_optional(&mut *transaction)
+        .await
+        .db_context("detach orchestration child")?;
+        let Some(task) = task else {
+            transaction
+                .commit()
+                .await
+                .db_context("detach orchestration child")?;
+
+            return Ok(false);
+        };
+
+        sqlx::query!(
+            r"
+UPDATE session_orchestration_task
+SET child_session_id = NULL,
+    status = 'Detached',
+    updated_at = ?
+WHERE id = ?
+",
+            now,
+            task.task_id
+        )
+        .execute(&mut *transaction)
+        .await
+        .db_context("detach orchestration child")?;
+        sqlx::query!(
+            r"
+UPDATE session
+SET orchestration_task_id = NULL,
+    role = 'Worker',
+    updated_at = ?
+WHERE id = ?
+",
+            now,
+            child_session_id
+        )
+        .execute(&mut *transaction)
+        .await
+        .db_context("detach orchestration child")?;
+        transaction
+            .commit()
+            .await
+            .db_context("detach orchestration child")?;
+
+        Ok(true)
+    }
+
+    async fn surface_orchestration_questions(
+        &self,
+        session_orchestration_id: i64,
+        task_id: i64,
+        questions: &str,
+    ) -> Result<bool, DbError> {
+        let now = self.now();
+        let mut transaction = self
+            .0
+            .begin()
+            .await
+            .db_context("surface orchestration questions")?;
+        let claim = sqlx::query!(
+            r"
+UPDATE session_orchestration
+SET relayed_question_task_id = ?,
+    updated_at = ?
+WHERE id = ?
+  AND relayed_question_task_id IS NULL
+  AND EXISTS (
+      SELECT 1
+      FROM session_orchestration_task AS task
+      WHERE task.id = ?
+        AND task.session_orchestration_id = session_orchestration.id
+        AND task.status = 'WaitingForInput'
+        AND task.child_session_id IS NOT NULL
+  )
+  AND EXISTS (
+      SELECT 1
+      FROM session AS controller
+      WHERE controller.id = session_orchestration.controller_session_id
+        AND controller.role = 'Orchestrator'
+        AND controller.status IN ('Review', 'Question')
+        AND COALESCE(controller.questions, '') = ''
+  )
+",
+            task_id,
+            now,
+            session_orchestration_id,
+            task_id
+        )
+        .execute(&mut *transaction)
+        .await
+        .db_context("surface orchestration questions")?;
+        if claim.rows_affected() == 0 {
+            transaction
+                .rollback()
+                .await
+                .db_context("surface orchestration questions")?;
+
+            return Ok(false);
+        }
+        sqlx::query!(
+            r"
+UPDATE session
+SET questions = ?,
+    status = 'Question',
+    updated_at = ?
+WHERE id = (
+    SELECT controller_session_id
+    FROM session_orchestration
+    WHERE id = ?
+)
+",
+            questions,
+            now,
+            session_orchestration_id
+        )
+        .execute(&mut *transaction)
+        .await
+        .db_context("surface orchestration questions")?;
+        transaction
+            .commit()
+            .await
+            .db_context("surface orchestration questions")?;
+
+        Ok(true)
+    }
+
+    async fn clear_orchestration_questions(
+        &self,
+        session_orchestration_id: i64,
+    ) -> Result<(), DbError> {
+        let now = self.now();
+        let mut transaction = self
+            .0
+            .begin()
+            .await
+            .db_context("clear orchestration questions")?;
+        sqlx::query!(
+            r"
+UPDATE session
+SET questions = '',
+    status = 'Review',
+    updated_at = ?
+WHERE id = (
+    SELECT controller_session_id
+    FROM session_orchestration
+    WHERE id = ?
+      AND relayed_question_task_id IS NOT NULL
+)
+  AND role = 'Orchestrator'
+  AND status = 'Question'
+",
+            now,
+            session_orchestration_id
+        )
+        .execute(&mut *transaction)
+        .await
+        .db_context("clear orchestration questions")?;
+        sqlx::query!(
+            r"
+UPDATE session_orchestration
+SET relayed_question_task_id = NULL,
+    updated_at = ?
+WHERE id = ?
+  AND relayed_question_task_id IS NOT NULL
+",
+            now,
+            session_orchestration_id
+        )
+        .execute(&mut *transaction)
+        .await
+        .db_context("clear orchestration questions")?;
+        transaction
+            .commit()
+            .await
+            .db_context("clear orchestration questions")?;
 
         Ok(())
     }
@@ -725,6 +1454,33 @@ WHERE id = ?
 
         Ok(())
     }
+
+    async fn update_orchestration_task_area_compliance(
+        &self,
+        id: i64,
+        areas_compliant: bool,
+        area_violations: &str,
+    ) -> Result<(), DbError> {
+        let now = self.now();
+
+        sqlx::query!(
+            r"
+UPDATE session_orchestration_task
+SET area_violations = ?,
+    areas_compliant = ?,
+    updated_at = ?
+WHERE id = ?
+",
+            area_violations,
+            areas_compliant,
+            now,
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -732,7 +1488,7 @@ mod tests {
     use super::*;
     use crate::domain::agent::{AgentKind, ReasoningLevel, SpeedMode};
     use crate::domain::orchestration::{OrchestrationStatus, OrchestrationTaskStatus};
-    use crate::infra::db::{AppRepositories, PersistedSessionCreation};
+    use crate::infra::db::{AppRepositories, PersistedSessionCreation, SessionRow};
 
     /// Inserts one project plus one controller session and returns the
     /// repository bundle ready for orchestration persistence assertions.
@@ -745,7 +1501,21 @@ mod tests {
             .expect("failed to upsert project");
         database
             .sessions()
-            .insert_session("controller", "gpt-5.6-sol", "main", "Draft", project_id)
+            .insert_session_with_agent(PersistedSessionCreation {
+                agent: "codex",
+                base_branch: "main",
+                id: "controller",
+                is_draft: false,
+                model: AgentKind::Codex.default_model().as_str(),
+                orchestration_task_id: None,
+                parent_session_id: None,
+                personality_id: None,
+                project_id,
+                reasoning_level: ReasoningLevel::default(),
+                role: Some("Orchestrator"),
+                speed_mode: SpeedMode::Normal,
+                status: "Review",
+            })
             .await
             .expect("failed to insert controller session");
 
@@ -835,6 +1605,8 @@ mod tests {
     /// Builds one planned task payload for `orchestration_id`.
     fn planned_task(session_orchestration_id: i64, task_key: &str) -> PersistedOrchestrationTask {
         PersistedOrchestrationTask {
+            acceptance_criteria: format!(r#"["Complete {task_key}"]"#),
+            merge_position: 0,
             prompt: format!("Complete {task_key}"),
             session_orchestration_id,
             task_key: task_key.to_string(),
@@ -863,12 +1635,98 @@ mod tests {
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
-                role: Some("Worker"),
+                role: Some("OrchestrationWorker"),
                 speed_mode: SpeedMode::Normal,
                 status: "Review",
             })
             .await
             .expect("failed to insert orchestration child");
+    }
+
+    async fn insert_waiting_orchestration_task(
+        database: &AppRepositories,
+        project_id: i64,
+        session_orchestration_id: i64,
+        task_key: &str,
+        child_session_id: &str,
+    ) -> i64 {
+        let task_id = database
+            .orchestrations()
+            .upsert_orchestration_task(planned_task(session_orchestration_id, task_key))
+            .await
+            .expect("failed to insert waiting task");
+        assert!(
+            database
+                .orchestrations()
+                .claim_orchestration_task(task_id)
+                .await
+                .expect("failed to claim waiting task")
+        );
+        insert_orchestration_child(database, project_id, child_session_id, task_id).await;
+        assert!(
+            database
+                .orchestrations()
+                .link_orchestration_task_child(task_id, child_session_id)
+                .await
+                .expect("failed to link waiting child")
+        );
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                task_id,
+                &OrchestrationTaskStatus::WaitingForInput.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to wait for child question");
+
+        task_id
+    }
+
+    async fn surface_and_clear_orchestration_questions(
+        database: &AppRepositories,
+        session_orchestration_id: i64,
+        task_id: i64,
+        questions: &str,
+    ) -> bool {
+        let surfaced = database
+            .orchestrations()
+            .surface_orchestration_questions(session_orchestration_id, task_id, questions)
+            .await
+            .expect("failed to surface child question");
+        database
+            .orchestrations()
+            .clear_orchestration_questions(session_orchestration_id)
+            .await
+            .expect("failed to clear child question");
+
+        surfaced
+    }
+
+    async fn load_detached_campaign_state(
+        database: &AppRepositories,
+        orchestration_id: i64,
+    ) -> (SessionOrchestrationTaskRow, SessionRow, SessionRow) {
+        let task = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration_id)
+            .await
+            .expect("failed to load detached task")
+            .remove(0);
+        let child = database
+            .sessions()
+            .load_session("child-alpha")
+            .await
+            .expect("failed to load detached child")
+            .expect("detached child should exist");
+        let controller = database
+            .sessions()
+            .load_session("controller")
+            .await
+            .expect("failed to load controller")
+            .expect("controller should exist");
+
+        (task, child, controller)
     }
 
     #[tokio::test]
@@ -1140,10 +1998,8 @@ mod tests {
             active.iter().map(|row| row.id).collect::<Vec<_>>(),
             vec![running_id, submitting_id, canceling_id]
         );
-        assert_eq!(
-            active[1].status,
-            OrchestrationStatus::Submitting.to_string()
-        );
+        assert_eq!(active[1].status, OrchestrationStatus::Verifying.to_string());
+        assert_eq!(active[1].verification_generation, 1);
         assert_eq!(active[2].status, OrchestrationStatus::Canceling.to_string());
     }
 
@@ -1212,7 +2068,6 @@ mod tests {
             .await
             .expect("failed to load orchestration")
             .expect("orchestration should exist");
-
         // Assert
         assert!(initial_claim);
         assert!(cancellation_started);
@@ -1237,12 +2092,13 @@ mod tests {
             .insert_orchestration("controller", &OrchestrationStatus::Running.to_string(), 2)
             .await
             .expect("failed to insert orchestration");
-        let operation_id = format!("orchestration-rollup-{orchestration_id}");
-        database
+        let claimed = database
             .orchestrations()
             .claim_orchestration_rollup(orchestration_id)
             .await
             .expect("failed to claim roll-up");
+        assert!(claimed);
+        let operation_id = format!("orchestration-rollup-{orchestration_id}-1");
 
         // Act
         let missing_status = database
@@ -1320,7 +2176,10 @@ mod tests {
         assert_eq!(done_status.as_deref(), Some("done"));
         assert!(completed);
         assert!(!duplicate_completion);
-        assert_eq!(orchestration.status, OrchestrationStatus::Done.to_string());
+        assert_eq!(
+            orchestration.status,
+            OrchestrationStatus::AwaitingIntegration.to_string()
+        );
     }
 
     #[tokio::test]
@@ -1419,6 +2278,457 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn approval_persists_plan_and_releases_proposed_tasks() {
+        // Arrange
+        let database = controller_fixture().await;
+        let orchestration_id = database
+            .orchestrations()
+            .insert_orchestration(
+                "controller",
+                &OrchestrationStatus::AwaitingApproval.to_string(),
+                2,
+            )
+            .await
+            .expect("failed to insert orchestration");
+        let task_id = database
+            .orchestrations()
+            .upsert_orchestration_task(planned_task(orchestration_id, "follow-up"))
+            .await
+            .expect("failed to insert proposed task");
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                task_id,
+                &OrchestrationTaskStatus::Proposed.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to propose task");
+
+        // Act
+        database
+            .orchestrations()
+            .update_orchestration_plan(orchestration_id, "Ship the campaign", 4)
+            .await
+            .expect("failed to update campaign plan");
+        let approved = database
+            .orchestrations()
+            .approve_orchestration_plan(orchestration_id)
+            .await
+            .expect("failed to approve campaign");
+        let duplicate_approval = database
+            .orchestrations()
+            .approve_orchestration_plan(orchestration_id)
+            .await
+            .expect("failed to inspect duplicate approval");
+        let orchestration = database
+            .orchestrations()
+            .load_orchestration_for_controller("controller")
+            .await
+            .expect("failed to load campaign")
+            .expect("campaign should exist");
+        let task = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration_id)
+            .await
+            .expect("failed to load campaign tasks")
+            .remove(0);
+
+        // Assert
+        assert!(approved);
+        assert!(!duplicate_approval);
+        assert_eq!(orchestration.goal_statement, "Ship the campaign");
+        assert_eq!(orchestration.max_parallelism, 4);
+        assert_eq!(
+            orchestration.status,
+            OrchestrationStatus::Running.to_string()
+        );
+        assert_eq!(task.status, OrchestrationTaskStatus::Planned.to_string());
+    }
+
+    #[tokio::test]
+    async fn integration_approval_persists_selected_approach_atomically() {
+        // Arrange
+        let database = controller_fixture().await;
+        let orchestration_id = database
+            .orchestrations()
+            .insert_orchestration(
+                "controller",
+                &OrchestrationStatus::AwaitingIntegration.to_string(),
+                2,
+            )
+            .await
+            .expect("failed to insert orchestration");
+
+        // Act
+        let approved = database
+            .orchestrations()
+            .approve_orchestration_integration(orchestration_id, IntegrationApproach::ReviewRequest)
+            .await
+            .expect("failed to approve integration");
+        let duplicate_approval = database
+            .orchestrations()
+            .approve_orchestration_integration(orchestration_id, IntegrationApproach::LocalMerge)
+            .await
+            .expect("failed to inspect duplicate approval");
+        let approach = database
+            .orchestrations()
+            .load_orchestration_integration_approach(orchestration_id)
+            .await
+            .expect("failed to load integration approach");
+        let orchestration = database
+            .orchestrations()
+            .load_orchestration_for_controller("controller")
+            .await
+            .expect("failed to load orchestration")
+            .expect("orchestration should exist");
+
+        // Assert
+        assert!(approved);
+        assert!(!duplicate_approval);
+        assert_eq!(approach, IntegrationApproach::ReviewRequest.to_string());
+        assert_eq!(
+            orchestration.status,
+            OrchestrationStatus::Integrating.to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_child_continuation_questions_and_detach_are_durable() {
+        // Arrange
+        let database = controller_fixture().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to reload project");
+        let orchestration_id = database
+            .orchestrations()
+            .insert_orchestration("controller", &OrchestrationStatus::Running.to_string(), 2)
+            .await
+            .expect("failed to insert orchestration");
+        let task_id = database
+            .orchestrations()
+            .upsert_orchestration_task(planned_task(orchestration_id, "alpha"))
+            .await
+            .expect("failed to insert task");
+        assert!(
+            database
+                .orchestrations()
+                .claim_orchestration_task(task_id)
+                .await
+                .expect("failed to claim task")
+        );
+        insert_orchestration_child(&database, project_id, "child-alpha", task_id).await;
+        assert!(
+            database
+                .orchestrations()
+                .link_orchestration_task_child(task_id, "child-alpha")
+                .await
+                .expect("failed to link child")
+        );
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                task_id,
+                &OrchestrationTaskStatus::WaitingForInput.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to wait for child question");
+
+        // Act
+        let surfaced = surface_and_clear_orchestration_questions(
+            &database,
+            orchestration_id,
+            task_id,
+            r#"[{"text":"Choose one"}]"#,
+        )
+        .await;
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                task_id,
+                &OrchestrationTaskStatus::Ready.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to settle child after its question");
+        let queued = database
+            .orchestrations()
+            .queue_orchestration_continuation(
+                task_id,
+                "Add the missing edge case",
+                r#"["The edge case is tested"]"#,
+            )
+            .await
+            .expect("failed to queue continuation");
+        let duplicate_queue = database
+            .orchestrations()
+            .queue_orchestration_continuation(task_id, "Duplicate", r#"["Duplicate"]"#)
+            .await
+            .expect("failed to inspect duplicate continuation");
+        let detached = database
+            .orchestrations()
+            .detach_orchestration_child("child-alpha")
+            .await
+            .expect("failed to detach child");
+        let duplicate_detach = database
+            .orchestrations()
+            .detach_orchestration_child("child-alpha")
+            .await
+            .expect("failed to inspect duplicate detach");
+        let (task, child, controller) =
+            load_detached_campaign_state(&database, orchestration_id).await;
+
+        // Assert
+        assert!(queued);
+        assert!(!duplicate_queue);
+        assert!(surfaced);
+        assert!(detached);
+        assert!(!duplicate_detach);
+        assert_eq!(task.status, OrchestrationTaskStatus::Detached.to_string());
+        assert_eq!(task.child_session_id, None);
+        assert_eq!(task.continuation_generation, 1);
+        assert_eq!(
+            task.continuation_prompt.as_deref(),
+            Some("Add the missing edge case")
+        );
+        assert_eq!(child.role.as_deref(), Some("Worker"));
+        assert_eq!(controller.status, "Review");
+        assert_eq!(controller.questions.as_deref(), Some(""));
+    }
+
+    #[tokio::test]
+    async fn question_relay_preserves_controller_questions() {
+        // Arrange
+        let database = controller_fixture().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to reload project");
+        let orchestration_id = database
+            .orchestrations()
+            .insert_orchestration("controller", &OrchestrationStatus::Running.to_string(), 2)
+            .await
+            .expect("failed to insert orchestration");
+        let task_id = insert_waiting_orchestration_task(
+            &database,
+            project_id,
+            orchestration_id,
+            "worker",
+            "child-worker",
+        )
+        .await;
+        let controller_question = r#"[{"text":"Controller question"}]"#;
+        database
+            .sessions()
+            .update_session_questions("controller", controller_question)
+            .await
+            .expect("failed to seed controller question");
+
+        // Act
+        let blocked_by_controller = database
+            .orchestrations()
+            .surface_orchestration_questions(
+                orchestration_id,
+                task_id,
+                r#"[{"text":"Child question"}]"#,
+            )
+            .await
+            .expect("failed to inspect controller question");
+        let orchestration = database
+            .orchestrations()
+            .load_orchestration_for_controller("controller")
+            .await
+            .expect("failed to load orchestration")
+            .expect("orchestration should exist");
+        let controller = database
+            .sessions()
+            .load_session("controller")
+            .await
+            .expect("failed to load controller")
+            .expect("controller should exist");
+
+        // Assert
+        assert!(!blocked_by_controller);
+        assert_eq!(orchestration.relayed_question_task_id, None);
+        assert_eq!(controller.questions.as_deref(), Some(controller_question));
+    }
+
+    #[tokio::test]
+    async fn question_relay_claims_one_exact_task_at_a_time() {
+        // Arrange
+        let database = controller_fixture().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to reload project");
+        let orchestration_id = database
+            .orchestrations()
+            .insert_orchestration("controller", &OrchestrationStatus::Running.to_string(), 2)
+            .await
+            .expect("failed to insert orchestration");
+        let first_task_id = insert_waiting_orchestration_task(
+            &database,
+            project_id,
+            orchestration_id,
+            "first",
+            "child-first",
+        )
+        .await;
+        let second_task_id = insert_waiting_orchestration_task(
+            &database,
+            project_id,
+            orchestration_id,
+            "second",
+            "child-second",
+        )
+        .await;
+
+        // Act
+        let first_surfaced = database
+            .orchestrations()
+            .surface_orchestration_questions(
+                orchestration_id,
+                first_task_id,
+                r#"[{"text":"First child question"}]"#,
+            )
+            .await
+            .expect("failed to surface first child question");
+        let second_blocked = database
+            .orchestrations()
+            .surface_orchestration_questions(
+                orchestration_id,
+                second_task_id,
+                r#"[{"text":"Second child question"}]"#,
+            )
+            .await
+            .expect("failed to inspect occupied relay");
+        let claimed_orchestration = database
+            .orchestrations()
+            .load_orchestration_for_controller("controller")
+            .await
+            .expect("failed to load claimed orchestration")
+            .expect("orchestration should exist");
+        database
+            .orchestrations()
+            .clear_orchestration_questions(orchestration_id)
+            .await
+            .expect("failed to release first relay");
+        let second_surfaced = database
+            .orchestrations()
+            .surface_orchestration_questions(
+                orchestration_id,
+                second_task_id,
+                r#"[{"text":"Second child question"}]"#,
+            )
+            .await
+            .expect("failed to surface second child question");
+        let second_claimed_orchestration = database
+            .orchestrations()
+            .load_orchestration_for_controller("controller")
+            .await
+            .expect("failed to load second claimed orchestration")
+            .expect("orchestration should exist");
+
+        // Assert
+        assert!(first_surfaced);
+        assert!(!second_blocked);
+        assert_eq!(
+            claimed_orchestration.relayed_question_task_id,
+            Some(first_task_id)
+        );
+        assert!(second_surfaced);
+        assert_eq!(
+            second_claimed_orchestration.relayed_question_task_id,
+            Some(second_task_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn infrastructure_retries_are_bounded_and_completion_is_idempotent() {
+        // Arrange
+        let database = controller_fixture().await;
+        let orchestration_id = database
+            .orchestrations()
+            .insert_orchestration("controller", &OrchestrationStatus::Running.to_string(), 2)
+            .await
+            .expect("failed to insert orchestration");
+        let task_id = database
+            .orchestrations()
+            .upsert_orchestration_task(planned_task(orchestration_id, "alpha"))
+            .await
+            .expect("failed to insert task");
+
+        // Act
+        let first_status = database
+            .orchestrations()
+            .record_orchestration_spawn_failure(task_id, "provider unavailable", 2)
+            .await
+            .expect("failed to record first retry");
+        let second_status = database
+            .orchestrations()
+            .record_orchestration_spawn_failure(task_id, "provider unavailable", 2)
+            .await
+            .expect("failed to record second retry");
+        let final_status = database
+            .orchestrations()
+            .record_orchestration_spawn_failure(task_id, "provider unavailable", 2)
+            .await
+            .expect("failed to exhaust retries");
+        database
+            .orchestrations()
+            .update_orchestration_status(
+                orchestration_id,
+                &OrchestrationStatus::Integrating.to_string(),
+            )
+            .await
+            .expect("failed to begin integration completion");
+        let completed = database
+            .orchestrations()
+            .complete_orchestration_campaign(orchestration_id)
+            .await
+            .expect("failed to complete campaign");
+        let duplicate_completion = database
+            .orchestrations()
+            .complete_orchestration_campaign(orchestration_id)
+            .await
+            .expect("failed to inspect duplicate completion");
+        let orchestration = database
+            .orchestrations()
+            .load_orchestration_for_controller("controller")
+            .await
+            .expect("failed to load completed campaign")
+            .expect("completed campaign should exist");
+        let task = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration_id)
+            .await
+            .expect("failed to load exhausted task")
+            .remove(0);
+        let controller = database
+            .sessions()
+            .load_session("controller")
+            .await
+            .expect("failed to load completed controller")
+            .expect("controller should exist");
+
+        // Assert
+        assert_eq!(first_status, OrchestrationTaskStatus::Planned.to_string());
+        assert_eq!(second_status, OrchestrationTaskStatus::Planned.to_string());
+        assert_eq!(final_status, OrchestrationTaskStatus::Failed.to_string());
+        assert!(completed);
+        assert!(!duplicate_completion);
+        assert_eq!(task.infrastructure_retry_count, 3);
+        assert_eq!(task.status, OrchestrationTaskStatus::Failed.to_string());
+        assert_eq!(orchestration.status, OrchestrationStatus::Done.to_string());
+        assert_eq!(controller.status, "Done");
     }
 
     #[tokio::test]

@@ -422,6 +422,10 @@ pub trait SessionRepository: Send + Sync {
         session_id: &str,
     ) -> Result<Option<String>, DbError>;
 
+    /// Loads the immutable diff archived before managed-session cleanup.
+    async fn load_session_archived_diff(&self, session_id: &str)
+    -> Result<Option<String>, DbError>;
+
     /// Clears parent links for children after their parent session merges
     /// into its base branch, returning materialized children that may need a
     /// follow-up branch restack.
@@ -517,6 +521,13 @@ pub trait SessionRepository: Send + Sync {
         &self,
         id: &str,
         merged_commit_hash: Option<String>,
+    ) -> Result<(), DbError>;
+
+    /// Persists or clears the immutable diff retained for archived sessions.
+    async fn update_session_archived_diff(
+        &self,
+        id: &str,
+        archived_diff: Option<String>,
     ) -> Result<(), DbError>;
 
     /// Persists or clears the parent/base commit hash used for deterministic
@@ -1695,6 +1706,24 @@ WHERE id = ?
         Ok(row.flatten())
     }
 
+    async fn load_session_archived_diff(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, DbError> {
+        let row = sqlx::query_scalar!(
+            r"
+SELECT archived_diff
+FROM session
+WHERE id = ?
+",
+            session_id
+        )
+        .fetch_optional(&self.0)
+        .await?;
+
+        Ok(row.flatten())
+    }
+
     async fn load_session_reasoning_level(
         &self,
         session_id: &str,
@@ -2102,6 +2131,30 @@ SET merged_commit_hash = ?,
 WHERE id = ?
 ",
             merged_commit_hash.as_deref(),
+            now,
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn update_session_archived_diff(
+        &self,
+        id: &str,
+        archived_diff: Option<String>,
+    ) -> Result<(), DbError> {
+        let now = self.now();
+
+        sqlx::query!(
+            r"
+UPDATE session
+SET archived_diff = ?,
+    updated_at = ?
+WHERE id = ?
+",
+            archived_diff.as_deref(),
             now,
             id
         )

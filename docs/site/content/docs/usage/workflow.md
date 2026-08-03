@@ -378,8 +378,8 @@ an available `Stacked` option are marked `[Preview]`:
   `Alt+V` opens the draft composer and pastes one clipboard image into the next staged
   draft.
 - `Orchestrator` turns a broad goal into a file-disjoint plan, waits for approval, runs
-  multiple worker sessions, and returns a roll-up. The controller reads the repository
-  but never owns branch changes.
+  multiple managed worker sessions, verifies their results, and integrates the approved
+  work. The controller reads the repository but never owns branch changes.
 - `Stacked` creates a draft below the selected parent session, with its future branch
   based on the parent session branch. Only one stacking level is available.
 
@@ -400,34 +400,58 @@ Use an orchestrator when a goal contains at least two independent pieces of work
 
 1. On the **Sessions** tab, press `a`, choose `Orchestrator` (marked `[Preview]`), and
    press `Enter`.
-1. Enter the overall goal. The controller proposes between two and eight tasks. Each
-   task includes a stable task key, a standalone prompt, and the literal
-   repository-relative files or directories it expects to touch. Wildcard patterns are
-   rejected because Agentty cannot prove them file-disjoint.
-1. Review the plan in the question panel. Select `Approve` to start the worker wave, or
-   `Revise` to return the plan to the controller. Overlapping touched areas are rejected
-   before approval. If the goal does not meaningfully split, the controller recommends a
-   regular session instead of creating one ceremonial worker.
-1. Watch progress in the controller chat and the **Sessions** list. The chat keeps one
-   animated `Orchestrating...` block with each worker and status on its own line. The
-   block updates in place instead of adding status messages to the transcript. Worker
-   rows remain grouped next to their controller. A controller label such as
-   `2 running, 1 waiting on you` calls out questions that need attention.
-1. Open any worker marked **Question**, answer it normally, and return to the
-   controller. Waiting workers continue to occupy a parallelism slot.
-1. When every worker is ready, failed, or canceled, Agentty submits a durable roll-up
-   turn to the controller. The controller remains in the submitting phase until that
-   turn completes successfully; a failed turn is retried with the same operation ID. The
-   roll-up includes each task's status, branch, bounded summary, total child token
-   usage, and a recommended merge order.
-1. Open each worker, press `d` to review its diff, and use the existing `m` merge queue
-   in the recommended order. Integration remains manual; controller sessions do not
-   expose diff, publish, sync, fork, or merge actions.
+1. Discuss the goal with the controller. It resolves repository facts itself and asks a
+   focused, recommendation-first clarification only when an unresolved choice changes
+   the decomposition or acceptance criteria. Controller clarifications and Agentty's
+   plan or follow-up routing questions provide two or three selectable options with the
+   recommended choice first; free-text answers remain available. A valid plan contains
+   between two and eight tasks. Every task has a stable key, standalone prompt, concrete
+   acceptance criteria, and literal repository-relative touched areas. Wildcards and
+   overlapping areas are rejected.
+1. Review the persisted plan on the campaign monitor above the controller chat. Before
+   pressing `a` to approve, confirm the tasks and acceptance criteria. The number of
+   simultaneous workers comes from the global **Orchestrator Parallelism** setting.
+   Continue chatting to revise decomposition. If the goal does not meaningfully split,
+   the controller recommends a regular session instead of creating a ceremonial worker.
+1. Follow real-time task status on the campaign monitor. Status changes do not add
+   transcript messages. Worker rows remain grouped with their controller in the
+   **Sessions** list. Workers are read-only: open one to inspect its transcript, press
+   `d` for its diff, or press `D` and confirm **Detach** to permanently transfer it into
+   an ordinary user-owned session. Direct reply, question-answer, cancel, merge,
+   publish, fork, worktree-open, review-comment addressing, `Ctrl+c` turn interruption,
+   and slash-command actions are unavailable while it is managed.
+1. When a worker asks a blocking question, Agentty mirrors it into the controller's
+   question panel only when the controller has no question of its own. The relay durably
+   records the exact task that owns the mirrored question, so concurrent worker
+   questions are relayed one at a time and every answer returns to the correct worker
+   without adding a controller model turn. Infrastructure failures retry twice without
+   interrupting chat. Worker failures remain visible on the campaign monitor for
+   follow-up.
+1. After every task settles, Agentty sends one hidden, durable verification envelope to
+   the controller. It contains each task's acceptance criteria, branch, bounded summary,
+   campaign goal, diffstat, token totals, merge order, and a mechanical touched-area
+   check computed from the child's changed-file list. Out-of-scope paths appear on the
+   campaign monitor and in the envelope. The controller can run targeted read-only Git
+   inspection, reports only cross-task synthesis and risks, and records an explicit pass
+   or flag for every ready task. This verification response is the campaign's single
+   controller report. Only explicit passes enter integration; flagged or missing
+   verdicts remain parked for correction. The controller reuses a task key to continue
+   the same live child when a correction is required.
+1. At **AwaitingIntegration**, press `a`, then choose **Local merges** or **Review
+   requests**. Agentty applies local merges or creates forge review requests in plan
+   order and records failures on the campaign monitor. When all integrations settle, the
+   campaign and controller become **Done** without another model turn. Local merge
+   integration archives an immutable copy of each worker diff before removing its
+   worktree and local branch. Review-request workers retain their published branch and
+   remain browsable under the controller. Detached workers remain ordinary sessions.
 
-One approval starts one worker wave. Any follow-up wave is proposed and parked for
-approval again. Ask the controller to retry failed tasks to reuse their task keys and
-increment their attempts. Manually merging a child is treated as a completed result;
-manually canceling a child marks that task failed and lets roll-up continue.
+Multi-turn feedback is routed by scope. Reusing a settled task's exact key and touched
+areas continues its existing worker, branch, and conversation and returns it to
+verification. Previously passed but not yet integrated siblings return to **Ready** so
+the next settlement verifies one coherent campaign snapshot instead of stalling behind
+old integration state. A new task key is treated as new scope and parks the campaign on
+the approval board before that worker starts. Once the controller is **Done**, a new
+goal or further feedback starts a new orchestrator campaign.
 
 Press `c` on a running controller to cancel the orchestration. The confirmation names
 the number of running children. Approval first blocks new worker fan-out, then cancels

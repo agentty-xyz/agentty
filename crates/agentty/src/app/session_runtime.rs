@@ -40,6 +40,7 @@ pub(crate) enum SessionRuntimeCommand {
     },
     /// Sends one user message.
     SendMessage {
+        access: SessionRuntimeAccess,
         message: String,
         response_tx: oneshot::Sender<Result<(), SessionError>>,
         session_id: SessionId,
@@ -52,31 +53,45 @@ pub(crate) enum SessionRuntimeCommand {
     },
     /// Answers one complete clarification-question set.
     AnswerQuestions {
+        access: SessionRuntimeAccess,
         request: AnswerQuestionsRequest,
         response_tx: oneshot::Sender<Result<(), SessionError>>,
         session_id: SessionId,
     },
     /// Cancels one session.
     Cancel {
+        access: SessionRuntimeAccess,
         response_tx: oneshot::Sender<Result<(), SessionError>>,
         session_id: SessionId,
     },
     /// Enqueues one session for merge.
     Merge {
+        access: SessionRuntimeAccess,
         response_tx: oneshot::Sender<Result<(), SessionError>>,
         session_id: SessionId,
     },
     /// Publishes one session branch and creates or refreshes its review
     /// request.
     CreateReviewRequest {
+        access: SessionRuntimeAccess,
         response_tx: oneshot::Sender<Result<ReviewRequest, SessionError>>,
         session_id: SessionId,
     },
 }
 
+/// Capability level attached to one programmatic session request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SessionRuntimeAccess {
+    /// Ordinary frontend or public API request.
+    User,
+    /// Coordinator-owned request for a managed orchestration worker.
+    Coordinator,
+}
+
 /// Cloneable control capability for the foreground session runtime.
 #[derive(Clone)]
 pub(crate) struct SessionRuntimeHandle {
+    access: SessionRuntimeAccess,
     command_tx: mpsc::Sender<SessionRuntimeCommand>,
     consumer_state: Arc<SessionRuntimeConsumerState>,
 }
@@ -117,6 +132,7 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::SendMessage {
+            access: self.access,
             message,
             response_tx,
             session_id,
@@ -152,6 +168,7 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::AnswerQuestions {
+            access: self.access,
             request,
             response_tx,
             session_id,
@@ -164,6 +181,7 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::Cancel {
+            access: self.access,
             response_tx,
             session_id,
         })
@@ -175,6 +193,7 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::Merge {
+            access: self.access,
             response_tx,
             session_id,
         })
@@ -189,6 +208,7 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::CreateReviewRequest {
+            access: self.access,
             response_tx,
             session_id,
         })
@@ -312,6 +332,16 @@ impl SessionRuntime {
     /// Returns a cloneable control handle for background or frontend callers.
     pub(crate) fn handle(&self) -> SessionRuntimeHandle {
         SessionRuntimeHandle {
+            access: SessionRuntimeAccess::User,
+            command_tx: self.command_tx.clone(),
+            consumer_state: Arc::clone(&self.consumer_state),
+        }
+    }
+
+    /// Returns a handle authorized to mutate coordinator-owned workers.
+    pub(crate) fn coordinator_handle(&self) -> SessionRuntimeHandle {
+        SessionRuntimeHandle {
+            access: SessionRuntimeAccess::Coordinator,
             command_tx: self.command_tx.clone(),
             consumer_state: Arc::clone(&self.consumer_state),
         }

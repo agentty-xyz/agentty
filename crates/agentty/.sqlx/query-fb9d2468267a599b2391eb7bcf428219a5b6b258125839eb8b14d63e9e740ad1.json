@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration\nSET status = 'Verifying',\n    verification_generation = verification_generation + 1,\n    updated_at = ?\nWHERE id = ?\n  AND status = 'Running'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "fb9d2468267a599b2391eb7bcf428219a5b6b258125839eb8b14d63e9e740ad1"
+}

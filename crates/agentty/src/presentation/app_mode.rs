@@ -53,6 +53,10 @@ pub enum ConfirmationIntent {
     MergeSession,
     /// Confirms regenerating the focused review for the active view session.
     RegenerateReview,
+    /// Confirms permanently detaching a coordinator-owned worker.
+    DetachManagedSession,
+    /// Chooses between local merges and forge review requests for a campaign.
+    ChooseIntegrationApproach,
 }
 
 /// Stored view-mode values used to restore session view after session-scoped
@@ -374,9 +378,9 @@ pub enum AppMode {
         /// Highlighted project row in most-recently-opened order.
         selected_option_index: usize,
     },
-    /// Displays a generic confirmation overlay with `Yes` and `No` options.
+    /// Displays a generic binary-choice confirmation overlay.
     Confirmation {
-        /// Semantic action to execute when users choose `Yes`.
+        /// Semantic action represented by the two visible choices.
         confirmation_intent: ConfirmationIntent,
         /// Body text explaining the decision.
         confirmation_message: String,
@@ -387,7 +391,7 @@ pub enum AppMode {
         restore_view: Option<ConfirmationViewMode>,
         /// Session affected by the action, when session-scoped.
         session_id: Option<SessionId>,
-        /// Highlighted `Yes` or `No` option index.
+        /// Highlighted first or second option index.
         selected_confirmation_index: usize,
     },
     /// Informational popup displayed above the list for sync outcomes,

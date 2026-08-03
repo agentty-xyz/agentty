@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use ag_tui_text::text_util::{format_duration_compact, inline_text, truncate_spans_with_ellipsis};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
@@ -256,10 +258,7 @@ fn render_session_row(
         String::new()
     };
     let forge_indicator = session.forge_indicator();
-    let status_label = session
-        .orchestration_progress
-        .clone()
-        .unwrap_or_else(|| status.to_string());
+    let status_label = session_list_status_label(session).into_owned();
     let status_cell = if forge_indicator.is_empty() {
         Cell::from(status_label).style(Style::default().fg(style::status_color(status)))
     } else {
@@ -287,6 +286,21 @@ fn render_session_row(
     Row::new(cells)
         .style(Style::default().fg(style::palette::text()))
         .height(1)
+}
+
+/// Returns the one-line status shown in the Sessions table.
+///
+/// Orchestrator progress also carries the multiline campaign-board snapshot.
+/// Only its phase line is visible in a one-row table cell, so using the same
+/// line for width calculation prevents hidden board details from consuming the
+/// session-title column.
+fn session_list_status_label(session: &Session) -> Cow<'_, str> {
+    session
+        .orchestration_progress
+        .as_deref()
+        .and_then(|progress| progress.lines().next())
+        .filter(|label| !label.is_empty())
+        .map_or_else(|| Cow::Owned(session.status.to_string()), Cow::Borrowed)
 }
 
 /// Returns the tree connector style with contrast on highlighted rows.
@@ -359,12 +373,9 @@ fn status_column_width(sessions: &[Session]) -> Constraint {
         "Status",
         sessions.iter().map(|session| {
             let forge_indicator = session.forge_indicator();
-            let status_label = session
-                .orchestration_progress
-                .clone()
-                .unwrap_or_else(|| session.status.to_string());
+            let status_label = session_list_status_label(session);
             if forge_indicator.is_empty() {
-                status_label
+                status_label.into_owned()
             } else {
                 format!("{status_label} {forge_indicator}")
             }
@@ -444,6 +455,9 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::{AgentModel, ReasoningLevel};
+    use crate::domain::session::{
+        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    };
     use crate::domain::theme::ColorTheme;
 
     /// Flattens a rendered test buffer into a plain string for assertions.
@@ -893,11 +907,8 @@ mod tests {
     }
 
     #[test]
-    fn test_status_column_uses_orchestration_progress_with_forge_indicator() {
+    fn test_status_column_uses_visible_orchestration_phase_with_forge_indicator() {
         // Arrange
-        use crate::domain::session::{
-            ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-        };
         let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
         session.review_request = Some(ReviewRequest {
             last_refreshed_at: 0,
@@ -912,9 +923,12 @@ mod tests {
                 web_url: String::new(),
             },
         });
-        session.orchestration_progress = Some("3 running, 1 waiting on you".to_string());
+        let expected_title = session.display_title().to_string();
+        session.orchestration_progress = Some(
+            "Phase: Running\nParallel workers: 3 (global setting)\n- protocol: running".to_string(),
+        );
         let sessions = vec![session];
-        let expected_label = "3 running, 1 waiting on you ⊙ #42";
+        let expected_label = "Phase: Running ⊙ #42";
         let expected_width = u16::try_from(expected_label.chars().count()).unwrap_or(u16::MAX);
         let backend = ratatui::backend::TestBackend::new(120, 12);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -934,6 +948,7 @@ mod tests {
         // Assert
         assert_eq!(width, Constraint::Length(expected_width));
         assert!(rendered.contains(expected_label));
+        assert!(rendered.contains(&expected_title));
     }
 
     #[test]

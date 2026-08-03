@@ -12,6 +12,7 @@ pub(crate) const DEFAULT_OPTION_INDEX: usize = NO_OPTION_INDEX;
 /// Describes how a confirmation selector should react to a pressed key.
 pub(crate) enum ConfirmationDecision {
     Confirm,
+    Reject,
     Cancel,
     Continue,
 }
@@ -24,8 +25,8 @@ pub(crate) fn handle(
 ) -> ConfirmationDecision {
     match key.code {
         KeyCode::Char(character) if is_yes_shortcut(character) => ConfirmationDecision::Confirm,
-        KeyCode::Char(character) if is_no_shortcut(character) => ConfirmationDecision::Cancel,
-        KeyCode::Esc => ConfirmationDecision::Cancel,
+        KeyCode::Char(character) if is_no_shortcut(character) => ConfirmationDecision::Reject,
+        KeyCode::Esc | KeyCode::Char('q') => ConfirmationDecision::Cancel,
         KeyCode::Left => {
             *selected_confirmation_index = selected_confirmation_index.saturating_sub(1);
 
@@ -50,7 +51,7 @@ pub(crate) fn handle(
             if *selected_confirmation_index == YES_OPTION_INDEX {
                 ConfirmationDecision::Confirm
             } else {
-                ConfirmationDecision::Cancel
+                ConfirmationDecision::Reject
             }
         }
         _ => ConfirmationDecision::Continue,
@@ -64,7 +65,7 @@ fn is_yes_shortcut(character: char) -> bool {
 
 /// Returns whether the pressed key should cancel the action.
 fn is_no_shortcut(character: char) -> bool {
-    character.eq_ignore_ascii_case(&'n') || character.eq_ignore_ascii_case(&'q')
+    character.eq_ignore_ascii_case(&'n')
 }
 
 /// Returns whether the pressed key should move selection to the left option.
@@ -99,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_returns_cancel_for_no_shortcut() {
+    fn test_handle_returns_reject_for_no_shortcut() {
         // Arrange
         let mut selected_confirmation_index = YES_OPTION_INDEX;
 
@@ -110,7 +111,7 @@ mod tests {
         );
 
         // Assert
-        assert!(matches!(decision, ConfirmationDecision::Cancel));
+        assert!(matches!(decision, ConfirmationDecision::Reject));
     }
 
     #[test]
@@ -122,6 +123,21 @@ mod tests {
         let decision = handle(
             &mut selected_confirmation_index,
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(decision, ConfirmationDecision::Cancel));
+    }
+
+    #[test]
+    fn test_handle_returns_cancel_for_quit_shortcut() {
+        // Arrange
+        let mut selected_confirmation_index = YES_OPTION_INDEX;
+
+        // Act
+        let decision = handle(
+            &mut selected_confirmation_index,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
         );
 
         // Assert
@@ -194,6 +210,6 @@ mod tests {
 
         // Assert
         assert!(matches!(yes_decision, ConfirmationDecision::Confirm));
-        assert!(matches!(no_decision, ConfirmationDecision::Cancel));
+        assert!(matches!(no_decision, ConfirmationDecision::Reject));
     }
 }

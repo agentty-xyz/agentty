@@ -37,6 +37,7 @@ pub(crate) async fn handle_with_cache(
 
         return EventResult::Continue;
     };
+    let can_reply = session_allows_review_comment_reply(app, session_id.as_str());
     let item_count = page::review_comment::review_comment_item_count(comment_snapshot.as_ref());
     if key.code == KeyCode::Enter
         && key.modifiers == KeyModifiers::NONE
@@ -63,12 +64,14 @@ pub(crate) async fn handle_with_cache(
         return EventResult::Continue;
     }
 
-    toggle_selected_comment_action(
-        &key,
-        comment_snapshot.as_ref(),
-        selected_comment_index,
-        &mut comment_actions,
-    );
+    if can_reply {
+        toggle_selected_comment_action(
+            &key,
+            comment_snapshot.as_ref(),
+            selected_comment_index,
+            &mut comment_actions,
+        );
+    }
     match key.code {
         KeyCode::Char('j') if key.modifiers == KeyModifiers::NONE => {
             let next_index = next_selected_index(selected_comment_index, item_count);
@@ -117,6 +120,16 @@ pub(crate) async fn handle_with_cache(
     };
 
     EventResult::Continue
+}
+
+/// Returns whether the review-comments page still belongs to a session that
+/// may accept direct user-driven comment work.
+fn session_allows_review_comment_reply(app: &App, session_id: &str) -> bool {
+    app.sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == session_id)
+        .is_some_and(crate::domain::session::Session::allows_review_comment_reply)
 }
 
 /// Restores session view when the review-comments exit key is pressed.
@@ -201,7 +214,8 @@ mod tests {
     };
 
     use super::*;
-    use crate::domain::session::SessionId;
+    use crate::domain::session::{SessionId, SessionRole, Status};
+    use crate::test_support::SessionFixtureBuilder;
 
     fn comment_snapshot() -> ReviewCommentSnapshot {
         ReviewCommentSnapshot {
@@ -229,6 +243,12 @@ mod tests {
     async fn test_handle_marks_address_replaces_with_deny_and_toggles_off() {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.sessions.push_session(
+            SessionFixtureBuilder::new()
+                .id("session-id")
+                .status(Status::Review)
+                .build(),
+        );
         app.mode = AppMode::ReviewComments {
             comment_actions: Vec::new(),
             comment_error: None,
@@ -250,6 +270,47 @@ mod tests {
             )
             .await;
         }
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::ReviewComments {
+                ref comment_actions,
+                ..
+            } if comment_actions.is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn managed_session_cannot_mark_review_comments() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.sessions.push_session(
+            SessionFixtureBuilder::new()
+                .id("session-id")
+                .role(SessionRole::OrchestrationWorker)
+                .status(Status::Review)
+                .build(),
+        );
+        app.mode = AppMode::ReviewComments {
+            comment_actions: Vec::new(),
+            comment_error: None,
+            comment_snapshot: Some(comment_snapshot()),
+            diff: String::new(),
+            is_loading_comments: false,
+            selected_comment_index: 0,
+            session_id: "session-id".into(),
+            scroll_offset: 0,
+        };
+
+        // Act
+        handle_with_cache(
+            &mut app,
+            &RenderCacheStore::default(),
+            Rect::new(0, 0, 80, 24),
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        )
+        .await;
 
         // Assert
         assert!(matches!(
