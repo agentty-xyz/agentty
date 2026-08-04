@@ -7,6 +7,45 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.14.0] - 2026-08-03
+
+### Added
+
+- agentty: support orchestrated child-session workflows with validated subtask plans,
+  bounded scheduling, status propagation, and session-tree navigation.
+- agentty: add per-session response-speed controls and role-specific reasoning levels
+  for model defaults.
+- agentty: add a `grilling` skill for explicitly requested, one-question-at-a-time plan
+  and decision stress tests.
+- ag-harness: add a Qwen model adapter and schema-validated structured model output with
+  bounded responses and diagnostics.
+
+### Changed
+
+- agentty: route session operations through a foreground runtime, separate orchestration
+  policy from application runtime, and centralize UI surface routing and terminal input
+  handling.
+- agentty: use native Antigravity stream output, retire obsolete model identifiers, and
+  migrate active sessions and persisted model selections to supported replacements.
+- agentty: hydrate lazy transcripts from persisted history, refine provisional titles
+  after actionable intent, and allow canceled sessions to continue.
+- agentty: complete merged stacked reviews after manual sync and keep post-sync workflow
+  statuses chronological.
+- agentty: wrap slash-command selection, navigate directly to model selector rows, use
+  lowercase `c` to continue done sessions, and stack over-wide Mermaid graphs
+  vertically.
+- agentty: harden persistence and external-command handling, validate stored lifecycle
+  state, and surface terminal reader and task-shutdown failures.
+- deps: update `agent-client-protocol` to `2.0.0`, `base64` to `0.23.0`, `jsonschema` to
+  `0.49.1`, `tokio-util` to `0.7.19`, and pinned CI actions.
+- release: bump workspace crate metadata and lockfile package versions to `0.14.0`.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.13.7] - 2026-07-27
 
 ### Added
