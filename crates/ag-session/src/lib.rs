@@ -20,6 +20,6 @@ pub use model::{
     SessionRole, SessionSettings, SessionStatus, SpeedMode, activity_day_key_with_offset,
 };
 pub use service::{
-    AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionMode, CreateSessionRequest,
-    QuestionAnswer, SessionBackend, SessionService,
+    AnswerQuestionsRequest, CoordinatorMessageRequest, CoordinatorMessageVisibility,
+    CreateSessionMode, CreateSessionRequest, QuestionAnswer, SessionBackend, SessionService,
 };

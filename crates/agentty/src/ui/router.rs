@@ -222,7 +222,9 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
                 ConfirmationIntent::ContinueSession
                 | ConfirmationIntent::ForkSession
                 | ConfirmationIntent::MergeSession
-                | ConfirmationIntent::RegenerateReview,
+                | ConfirmationIntent::RegenerateReview
+                | ConfirmationIntent::DetachManagedSession
+                | ConfirmationIntent::ChooseIntegrationApproach,
             restore_view: Some(restore_view),
             ..
         }
@@ -508,6 +510,7 @@ fn render_detail_mode(
 /// Renders the confirmation overlay after its classified base surface.
 fn render_confirmation_overlay(f: &mut Frame, area: Rect, mode: &AppMode) {
     let AppMode::Confirmation {
+        confirmation_intent,
         confirmation_message,
         confirmation_title,
         selected_confirmation_index,
@@ -517,12 +520,18 @@ fn render_confirmation_overlay(f: &mut Frame, area: Rect, mode: &AppMode) {
         return;
     };
 
-    component::confirmation_overlay::ConfirmationOverlay::new(
+    let overlay = component::confirmation_overlay::ConfirmationOverlay::new(
         confirmation_title,
         confirmation_message,
     )
-    .selected_yes(*selected_confirmation_index == 0)
-    .render(f, area);
+    .selected_first(*selected_confirmation_index == 0);
+    if *confirmation_intent == ConfirmationIntent::ChooseIntegrationApproach {
+        overlay
+            .option_labels("Local merges", "Review requests")
+            .render(f, area);
+    } else {
+        overlay.render(f, area);
+    }
 }
 
 /// Renders a session surface in either interactive or restored-view mode.
@@ -664,7 +673,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         .copied()
         .unwrap_or_default();
 
-    page::session_chat::SessionChatPage::new(page::session_chat::SessionChatPageInput {
+    let page_input = page::session_chat::SessionChatPageInput {
         active_prompt_output,
         active_progress,
         default_reasoning_level,
@@ -679,13 +688,19 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         session_update_version,
         sessions,
         frame_time,
-    })
-    .can_open_worktree(
-        *session_worktree_availability
-            .get(session_id)
-            .unwrap_or(&false),
-    )
-    .render(f, area);
+    };
+    let can_open_worktree = *session_worktree_availability
+        .get(session_id)
+        .unwrap_or(&false);
+    if sessions[session_index].role == crate::domain::session::SessionRole::Orchestrator {
+        page::orchestration::OrchestrationPage::new(page_input)
+            .can_open_worktree(can_open_worktree)
+            .render(f, area);
+    } else {
+        page::session_chat::SessionChatPage::new(page_input)
+            .can_open_worktree(can_open_worktree)
+            .render(f, area);
+    }
 }
 
 /// Renders base list tabs and the currently selected list tab content.
@@ -1493,6 +1508,59 @@ mod tests {
     }
 
     #[test]
+    fn render_session_surface_uses_campaign_page_for_orchestrators() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let session_id = "campaign-1234";
+        let mut session = session_fixture(session_id);
+        session.role = crate::domain::session::SessionRole::Orchestrator;
+        session.orchestration_progress = Some("Phase: AwaitingApproval".to_string());
+        let sessions = [session];
+        let mode = AppMode::View {
+            session_id: session_id.into(),
+            scroll_offset: None,
+        };
+        let cache = markdown::MarkdownRenderCache::default();
+        let diff_layout_cache = page::diff::DiffLayoutCache::default();
+        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+
+        // Act
+        terminal
+            .draw(|frame| {
+                render_session_surface(
+                    frame,
+                    frame.area(),
+                    SessionSurfaceMode::Interactive(&mode),
+                    None,
+                    session_id,
+                    &sessions,
+                    FrameResources {
+                        active_prompt_outputs: &HashMap::new(),
+                        default_reasoning_level: ReasoningLevel::default(),
+                        diff_layout_cache: &diff_layout_cache,
+                        markdown_render_cache: &cache,
+                        output_layout_cache: &output_layout_cache,
+                        review_snapshot: None,
+                        session_progress_messages: &HashMap::new(),
+                        session_update_versions: &HashMap::new(),
+                        session_worktree_availability: &HashMap::from([(
+                            session_id.to_string().into(),
+                            true,
+                        )]),
+                        frame_time: FrameTime::new(0, 0, 0),
+                    },
+                );
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Campaign: Router Session"));
+        assert!(text.contains("Phase: AwaitingApproval"));
+    }
+
+    #[test]
     fn render_session_surface_keeps_background_when_session_is_missing() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(80, 20);
@@ -1772,20 +1840,17 @@ mod tests {
     }
 
     #[test]
-    fn render_confirmation_overlay_renders_confirmation_text() {
+    fn render_confirmation_overlay_renders_integration_choices() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mode = AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::MergeSession,
-            confirmation_message: "Queue merge now?".to_string(),
-            confirmation_title: "Confirm Merge".to_string(),
-            restore_view: Some(ConfirmationViewMode {
-                scroll_offset: None,
-                session_id: "session-merge".into(),
-            }),
+            confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
+            confirmation_message: "How should the campaign integrate?".to_string(),
+            confirmation_title: "Integration Approach".to_string(),
+            restore_view: None,
             selected_confirmation_index: 0,
-            session_id: Some("session-merge".into()),
+            session_id: Some("session-controller".into()),
         };
 
         // Act
@@ -1797,8 +1862,10 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("Confirm Merge"));
-        assert!(text.contains("Queue merge now?"));
+        assert!(text.contains("Integration Approach"));
+        assert!(text.contains("How should the campaign integrate?"));
+        assert!(text.contains("Local merges"));
+        assert!(text.contains("Review requests"));
     }
 
     #[test]

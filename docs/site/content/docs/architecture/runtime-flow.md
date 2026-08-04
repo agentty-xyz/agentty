@@ -215,19 +215,22 @@ enters a bounded mailbox and waits on its own response channel while a foregroun
 consumer is registered. Handles reject calls made without a registered driver and stop
 waiting if its final consumer exits. The foreground event loop executes accepted
 commands through `app/session_api.rs`, reusing the existing worker, cancellation, merge,
-and review-request workflows without placing `App` behind an async mutex. Review-request
-commands snapshot the session's existing branch-publish context, spawn its push and
-forge work on the detached branch-publish task, and resolve the API response from that
-task's terminal result; the foreground mailbox remains available while publishing is in
-flight. Lookup joins persisted settings and ordered messages into one frontend-neutral
-aggregate. Creation is restricted to the active project while `SessionRuntime` owns a
-single active-project `SessionManager`, and can copy the agent, model, reasoning,
-personality, and base-branch snapshot from another session in that project without
-changing defaults for later ordinary sessions. The adapter deliberately contains no
-orchestrator policy. `app/orchestration.rs` owns that sequencing: it persists proposed
-task rows before approval, reads child status, summary, and token totals in one SQLite
-task snapshot during reconciliation, and uses the session API mailbox only for child
-creation, mutation, and a durable roll-up submission. The terminal runtime injects the
+and review-request workflows without placing `App` behind an async mutex. User handles
+and the coordinator handle carry distinct capabilities: the user path rejects every
+managed-worker mutation, while the coordinator can relay answers, continue work, cancel,
+merge, or publish through the same lifecycle workflows. Review-request commands snapshot
+the session's existing branch-publish context, spawn its push and forge work on the
+detached branch-publish task, and resolve the API response from that task's terminal
+result; the foreground mailbox remains available while publishing is in flight. Lookup
+joins persisted settings and ordered messages into one frontend-neutral aggregate.
+Creation is restricted to the active project while `SessionRuntime` owns a single
+active-project `SessionManager`, and can copy the agent, model, reasoning, personality,
+and base-branch snapshot from another session in that project without changing defaults
+for later ordinary sessions. The adapter deliberately contains no orchestrator policy.
+`app/orchestration.rs` owns that sequencing: it persists proposed task rows before
+approval, reads child status, summary, and token totals in one SQLite task snapshot
+during reconciliation, and uses the session API mailbox only for child creation,
+mutation, and a durable roll-up submission. The terminal runtime injects the
 reconciliation schedule, keeping direct timer APIs out of the coordinator. The database
 link from task to child makes restart re-linking independent of branch-name parsing.
 Session-list refreshes load controller progress and child adjacency in one project-wide
@@ -283,29 +286,45 @@ flowchart LR
 1. `AppEvent::AgentResponseReceived` carries the reducer projection so the active
    session updates without a forced reload. If persistence fails, the worker appends a
    recovery error and falls back to a durable-state reload.
-1. For orchestrator turns, validated file-disjoint subtasks are stored in
-   `session_orchestration_task` before the approval question is shown. Approval moves
-   the orchestration to running, and the coordinator creates workers up to the persisted
-   parallelism cap. Reconciliation treats persisted child session status as truth,
-   including out-of-band merges and cancellations. Once a plan is awaiting approval or
-   running, repeated subtask payloads cannot create another approval or orchestration.
-   Pre-link child-creation errors and interrupted `Creating` rows settle as failed tasks
-   instead of occupying a parallelism slot indefinitely. Retrying a failed task
-   transactionally detaches the prior child session's reverse task link before a
-   replacement child is created. Cascade cancellation atomically moves the orchestration
-   to `Canceling` before inspecting tasks, so a stale coordinator snapshot cannot claim
-   or link another worker. It moves to `Canceled` only after every active child
-   cancellation succeeds; a child failure is surfaced while the cancellation remains
-   retryable. Startup reconciliation also resumes `Canceling` rows and discovers
-   children from their reverse task links when a crash interrupted forward linking.
-   Changed child status snapshots replace one transient multiline orchestration loader;
-   unchanged polls produce no chat update. When all tasks settle, the loader is
-   retracted and the orchestration atomically moves from `Running` to `Submitting`. A
-   dedicated coordinator submission bypasses the in-memory queued-message path and
-   starts the controller roll-up from a review-ready or question state. The
-   orchestration stays `Submitting` while its `session_operation` is queued or running,
-   moves to `Done` only after that operation succeeds, and reclaims failed or canceled
-   attempts with the same identifier without starting duplicate successful turns.
+1. For orchestrator turns, validated file-disjoint subtasks and acceptance criteria are
+   stored in `session_orchestration_task` before `AwaitingApproval`. The board owns plan
+   approval; no synthetic clarification question represents approval. The campaign
+   snapshots its worker cap from the global **Orchestrator Parallelism** setting.
+   Approval moves proposed tasks to `Planned`, and the coordinator creates
+   `OrchestrationWorker` sessions up to that cap. Those workers retain branch ownership
+   but reject user-path mutations. Controller clarification prompts and deterministic
+   plan or follow-up routing guards provide selectable options rather than requiring
+   free-text recovery. A transaction claims `relayed_question_task_id` only when the
+   controller has no question of its own, then mirrors that task's questions onto the
+   controller. Answers resolve that exact task identity and route back through the
+   privileged coordinator handle; other waiting children remain queued until the relay
+   is cleared.
+1. Reconciliation treats persisted child state as truth and writes live task snapshots
+   to the campaign board, never to transient chat output. Interrupted creation and
+   prompt-delivery failures increment a durable infrastructure retry counter and retry
+   twice before settling as failed. Cascade cancellation moves the campaign to
+   `Canceling` before inspection, so stale snapshots cannot fan out another worker.
+1. Once every task settles, the campaign claims `Verifying`, increments its verification
+   generation, and submits one hidden, idempotent coordinator operation keyed by that
+   generation. Its structured envelope carries the campaign goal, criteria, branch,
+   summary, diffstat, token totals, integration order, and persisted touched-area
+   compliance computed through `GitClient::diff_changed_files()`. The controller emits
+   typed per-task verdicts; persistence admits only explicit passes to
+   `AwaitingIntegration`, while flags or missing verdicts remain parked. Re-emitting a
+   settled task key queues a visible continuation on the same child, resets other
+   unintegrated passes to `Ready`, and returns the campaign to `Running`; newly keyed
+   work is persisted as `Proposed` and parks on `AwaitingApproval`.
+1. Pressing `a` at `AwaitingIntegration` first opens a binary destination choice. The
+   selected `integration_approach` and `Integrating` transition are persisted atomically
+   so restart recovery cannot switch destinations. `Integrating` then serializes local
+   merges or review-request publication through the coordinator session service.
+   Successful managed merges persist the final patch as `session.archived_diff` before
+   cleanup removes the worker worktree and local branch; published tasks become
+   `ReviewRequested` and retain the forge-linked branch. Failures remain durable and
+   visible. Once every task is integration-settled, one transaction marks both the
+   campaign and disposable controller `Done`; no second controller report turn is
+   needed. A one-way detach transaction instead clears both task links and changes the
+   worker role back to `Worker`.
 1. When `a` requests the session-type selector, the app asks `GitClient` to verify the
    effective pre-commit hook whenever the project contains `.pre-commit-config.yaml` or
    `.pre-commit-config.yml`. A missing executable hook opens a warning overlay with

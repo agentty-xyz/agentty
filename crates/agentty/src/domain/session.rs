@@ -418,7 +418,8 @@ impl Session {
     /// statuses are excluded because active branch work or terminal cleanup
     /// could race with the snapshot.
     pub fn allows_fork_action(&self) -> bool {
-        self.role.owns_branch_changes()
+        self.accepts_user_turns()
+            && self.role.owns_branch_changes()
             && self.parent_session_id.is_none()
             && !self.is_draft_session()
             && self.status.allows_review_actions()
@@ -427,7 +428,8 @@ impl Session {
     /// Returns whether the session can submit an agent reply for actionable
     /// forge review comments.
     pub fn allows_review_comment_reply(&self) -> bool {
-        self.role.owns_branch_changes()
+        self.accepts_user_turns()
+            && self.role.owns_branch_changes()
             && (self.status.allows_review_actions() || self.status == Status::Question)
     }
 
@@ -435,6 +437,16 @@ impl Session {
     /// affordances.
     pub fn owns_branch_changes(&self) -> bool {
         self.role.owns_branch_changes()
+    }
+
+    /// Returns whether direct user turns and branch mutations are allowed.
+    pub fn accepts_user_turns(&self) -> bool {
+        self.role.accepts_user_turns()
+    }
+
+    /// Returns whether this session is owned by an orchestration campaign.
+    pub fn is_managed(&self) -> bool {
+        self.role.is_managed()
     }
 
     /// Returns whether this session belongs to a one-level stack beneath a
@@ -455,15 +467,16 @@ impl Session {
     /// unstarted draft sessions can also be canceled before they materialize a
     /// worktree.
     pub fn allows_cancel_action(&self) -> bool {
-        self.status == Status::InProgress
-            || self.status.allows_review_actions()
-            || (self.status == Status::Draft && self.is_draft_session())
+        self.accepts_user_turns()
+            && (self.status == Status::InProgress
+                || self.status.allows_review_actions()
+                || (self.status == Status::Draft && self.is_draft_session()))
     }
 
     /// Returns whether this terminal session can launch a seeded follow-on
     /// session from view mode.
     pub fn allows_terminal_continuation(&self) -> bool {
-        self.status.allows_terminal_continuation()
+        self.role == SessionRole::Worker && self.status.allows_terminal_continuation()
     }
 
     /// Returns one seeded first-prompt body for a follow-on session launched
@@ -556,7 +569,10 @@ impl Session {
             .get(TransientMessageSlot::BranchPublish)
             .is_some_and(|message| matches!(&message.body, TransientMessageBody::Loading(_)));
 
-        (self.status.allows_review_actions() && !is_publish_active)
+        (self.accepts_user_turns()
+            && self.owns_branch_changes()
+            && self.status.allows_review_actions()
+            && !is_publish_active)
             .then_some(PublishBranchAction::PublishPullRequest)
     }
 
@@ -1101,17 +1117,23 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_allows_review_comment_reply_rejects_non_reply_session() {
+    fn test_allows_review_comment_reply_rejects_non_reply_or_managed_session() {
         // Arrange
         let session = SessionFixtureBuilder::new()
             .status(Status::InProgress)
             .build();
+        let managed_session = SessionFixtureBuilder::new()
+            .role(SessionRole::OrchestrationWorker)
+            .status(Status::Review)
+            .build();
 
         // Act
         let allows_reply = session.allows_review_comment_reply();
+        let managed_allows_reply = managed_session.allows_review_comment_reply();
 
         // Assert
         assert!(!allows_reply);
+        assert!(!managed_allows_reply);
     }
 
     #[test]
@@ -1974,50 +1996,30 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
-    fn test_publish_pull_request_action_returns_publish_for_review_session() {
+    fn test_publish_pull_request_action_respects_review_session_capabilities() {
         // Arrange
-        let session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::new(),
-            follow_up_tasks: Vec::new(),
-            id: "session-id".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent: AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
-            ),
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: String::new(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::Review,
-            summary: None,
-            title: None,
-            transcript: None,
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
+        let worker = SessionFixtureBuilder::new().status(Status::Review).build();
+        let orchestrator = SessionFixtureBuilder::new()
+            .role(SessionRole::Orchestrator)
+            .status(Status::Review)
+            .build();
+        let managed_worker = SessionFixtureBuilder::new()
+            .role(SessionRole::OrchestrationWorker)
+            .status(Status::Review)
+            .build();
 
         // Act
-        let action = session.publish_pull_request_action();
+        let actions = [
+            worker.publish_pull_request_action(),
+            orchestrator.publish_pull_request_action(),
+            managed_worker.publish_pull_request_action(),
+        ];
 
         // Assert
-        assert_eq!(action, Some(PublishBranchAction::PublishPullRequest));
+        assert_eq!(
+            actions,
+            [Some(PublishBranchAction::PublishPullRequest), None, None]
+        );
     }
 
     #[test]

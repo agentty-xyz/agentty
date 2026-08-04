@@ -64,6 +64,12 @@ const COMMANDS_MENU_ACTION: HelpAction =
 /// Encodes which shortcut family is available for the viewed session state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewSessionState {
+    /// Coordinator-owned worker is available for transcript and diff
+    /// inspection only.
+    Managed,
+    /// Campaign controller keeps chat plus deterministic plan and integration
+    /// board actions while owning no branch changes.
+    Orchestrator,
     /// Session is completed; a seeded continuation prompt can be opened.
     Done,
     /// Session was canceled locally; view mode stays read-only.
@@ -192,7 +198,11 @@ impl ViewActionSet {
             state.session_state,
             ViewSessionState::Review | ViewSessionState::AgentReview
         );
-        let can_show_diff = can_show_review || state.session_state == ViewSessionState::Merged;
+        let can_show_diff = can_show_review
+            || matches!(
+                state.session_state,
+                ViewSessionState::Merged | ViewSessionState::Managed
+            );
 
         Self {
             continue_terminal_session: ViewActionAvailability::from_bool(matches!(
@@ -219,6 +229,12 @@ impl ViewActionSet {
 /// Maps one session snapshot into the shared view-mode shortcut state used by
 /// both runtime handlers and footer rendering.
 pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
+    if session.is_managed() {
+        return ViewSessionState::Managed;
+    }
+    if session.role == crate::domain::session::SessionRole::Orchestrator {
+        return ViewSessionState::Orchestrator;
+    }
     if !session.owns_branch_changes()
         && !matches!(
             session.status,
@@ -420,6 +436,8 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("diff", "d", "Show diff"));
     }
 
+    append_orchestration_actions(&mut actions, state.session_state);
+
     append_view_review_actions(&mut actions, state, action_set);
 
     if action_set.merge_session.is_enabled() {
@@ -475,6 +493,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     );
     append_view_stop_action(&mut actions, action_set);
     append_view_open_action(&mut actions, action_set);
+    append_orchestration_actions(&mut actions, state.session_state);
     append_view_review_actions(&mut actions, state, action_set);
     append_view_continue_action(&mut actions, action_set);
     actions.extend(VIEW_FOOTER_TRAILING_ACTIONS);
@@ -541,6 +560,19 @@ fn append_view_open_action(actions: &mut Vec<HelpAction>, action_set: ViewAction
     }
 }
 
+/// Appends deterministic campaign and ownership-transfer actions.
+fn append_orchestration_actions(actions: &mut Vec<HelpAction>, session_state: ViewSessionState) {
+    match session_state {
+        ViewSessionState::Managed => {
+            actions.push(HelpAction::new("detach", "D", "Detach managed worker"));
+        }
+        ViewSessionState::Orchestrator => {
+            actions.push(HelpAction::new("approve", "a", "Approve campaign step"));
+        }
+        _ => {}
+    }
+}
+
 /// Appends review and publish actions shared by full help and compact footer
 /// rows.
 fn append_view_review_actions(
@@ -590,6 +622,7 @@ fn can_open_view_prompt(
             session_state,
             ViewSessionState::Rebasing
                 | ViewSessionState::Interactive
+                | ViewSessionState::Orchestrator
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
         )
@@ -613,6 +646,7 @@ fn can_open_view_command(
         && matches!(
             session_state,
             ViewSessionState::Interactive
+                | ViewSessionState::Orchestrator
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
         )
@@ -1881,14 +1915,56 @@ mod tests {
             .role(SessionRole::Orchestrator)
             .status(Status::Review)
             .build();
+        let managed = SessionFixtureBuilder::new()
+            .role(SessionRole::OrchestrationWorker)
+            .status(Status::Review)
+            .build();
 
         // Act
         let state = session_view_state(&session);
         let orchestrator_state = session_view_state(&orchestrator);
+        let managed_state = session_view_state(&managed);
 
         // Assert
         assert_eq!(state, ViewSessionState::AgentReview);
-        assert_eq!(orchestrator_state, ViewSessionState::Interactive);
+        assert_eq!(orchestrator_state, ViewSessionState::Orchestrator);
+        assert_eq!(managed_state, ViewSessionState::Managed);
+    }
+
+    #[test]
+    fn orchestration_view_actions_expose_only_owned_controls() {
+        // Arrange
+        let mut state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Disabled,
+            can_merge_session_branch: ViewActionAvailability::Disabled,
+            can_mutate_session_branch: ViewActionAvailability::Disabled,
+            can_open_worktree: ViewActionAvailability::Disabled,
+            can_rebase_session_branch: ViewActionAvailability::Disabled,
+            reply_to_session: ViewActionAvailability::Disabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Managed,
+        };
+
+        // Act
+        let managed_keys = view_actions(state)
+            .iter()
+            .map(|action| action.key)
+            .collect::<Vec<_>>();
+        state.session_state = ViewSessionState::Orchestrator;
+        state.reply_to_session = ViewActionAvailability::Enabled;
+        let controller_keys = view_actions(state)
+            .iter()
+            .map(|action| action.key)
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(managed_keys.contains(&"d"));
+        assert!(managed_keys.contains(&"D"));
+        assert!(!managed_keys.contains(&"Enter"));
+        assert!(controller_keys.contains(&"a"));
+        assert!(controller_keys.contains(&"Enter"));
+        assert!(!controller_keys.contains(&"m"));
     }
 
     #[test]

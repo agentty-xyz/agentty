@@ -18,6 +18,15 @@ pub enum DbError {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 
+    /// Caller-provided or persisted data violated a domain invariant.
+    #[error("Invalid {entity}: {reason}")]
+    InvalidData {
+        /// Persistence entity whose data failed validation.
+        entity: &'static str,
+        /// Human-readable invariant violation.
+        reason: String,
+    },
+
     /// A persisted lifecycle value could not be decoded by its owning adapter.
     #[error("Invalid {entity} lifecycle status `{value}`")]
     InvalidStatus {

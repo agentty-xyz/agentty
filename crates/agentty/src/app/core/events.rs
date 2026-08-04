@@ -34,8 +34,8 @@ use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
 use crate::domain::question::default_option_index;
 use crate::domain::session::{
-    PublishBranchAction, PublishedBranchSyncStatus, SessionDiffStats, SessionHandles, SessionId,
-    Status,
+    PublishBranchAction, PublishedBranchSyncStatus, Session, SessionDiffStats, SessionHandles,
+    SessionId, Status,
 };
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageBody;
@@ -1713,7 +1713,11 @@ impl App {
             return;
         }
 
-        if self.is_viewing_session(session_id) {
+        let accepts_user_turns = self
+            .sessions
+            .session_for_id(session_id)
+            .is_some_and(Session::accepts_user_turns);
+        if accepts_user_turns && self.is_viewing_session(session_id) {
             self.mode = AppMode::Question {
                 at_mention_state: None,
                 selected_option_index: default_option_index(&questions, 0),

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::question::QuestionItem;
 use super::subtask::SubtaskItem;
+use super::verification::VerificationVerdictItem;
 
 /// Hard cap on the number of clarification questions extracted from one agent
 /// response. Prevents runaway output from flooding the question UI even when
@@ -239,6 +240,19 @@ pub struct AgentResponse {
                        markdown. Use `null` for one-shot prompts and legacy payloads."
     )]
     pub summary: Option<AgentResponseSummary>,
+    /// Per-task decisions emitted for an orchestration verification turn.
+    ///
+    /// Ordinary turns leave this empty. The controller must copy task keys
+    /// from the coordinator envelope so only explicit passes can proceed to
+    /// integration.
+    #[serde(default)]
+    #[schemars(
+        title = "verification_verdicts",
+        description = "Per-task decisions for an orchestration verification turn. Emit one item \
+                       for every task in the verification envelope, and use an empty array for \
+                       ordinary turns."
+    )]
+    pub verification_verdicts: Vec<VerificationVerdictItem>,
 }
 
 impl AgentResponse {
@@ -250,6 +264,7 @@ impl AgentResponse {
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
             summary: None,
+            verification_verdicts: Vec::new(),
         }
     }
 
@@ -294,6 +309,16 @@ impl AgentResponse {
     /// collide; this only bounds how much of a runaway plan is considered.
     pub fn subtask_items(&self) -> Vec<SubtaskItem> {
         self.subtasks.iter().take(MAX_SUBTASKS).cloned().collect()
+    }
+
+    /// Returns up to [`MAX_SUBTASKS`] verification decisions in response
+    /// order.
+    pub fn verification_verdict_items(&self) -> Vec<VerificationVerdictItem> {
+        self.verification_verdicts
+            .iter()
+            .take(MAX_SUBTASKS)
+            .cloned()
+            .collect()
     }
 }
 
@@ -368,6 +393,7 @@ mod tests {
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
             summary: None,
+            verification_verdicts: Vec::new(),
         };
 
         // Act
@@ -390,6 +416,7 @@ mod tests {
                 thread_id: "thread-42".to_string(),
             }],
             subtasks: Vec::new(),
+            verification_verdicts: Vec::new(),
             summary: None,
         };
 
@@ -414,6 +441,7 @@ mod tests {
                 .collect(),
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
+            verification_verdicts: Vec::new(),
             summary: None,
         };
 
@@ -434,6 +462,7 @@ mod tests {
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
             subtasks: (0..=MAX_SUBTASKS).map(test_subtask).collect(),
+            verification_verdicts: Vec::new(),
             summary: None,
         };
 
@@ -455,6 +484,7 @@ mod tests {
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
             subtasks: vec![test_subtask(1)],
+            verification_verdicts: Vec::new(),
             summary: None,
         };
 
@@ -467,6 +497,38 @@ mod tests {
         assert_eq!(deserialized, response);
         assert!(serialized.contains(r#""task_key":"task-1""#));
         assert!(AgentResponse::plain("no plan").subtask_items().is_empty());
+    }
+
+    #[test]
+    /// Preserves typed verification decisions through JSON and applies the
+    /// same bounded task count as orchestration plans.
+    fn test_agent_response_verification_verdicts_round_trip_and_cap() {
+        // Arrange
+        let response = AgentResponse {
+            answer: "Verified the settled tasks.".to_string(),
+            questions: Vec::new(),
+            review_comment_outcomes: Vec::new(),
+            subtasks: Vec::new(),
+            summary: None,
+            verification_verdicts: (0..=MAX_SUBTASKS)
+                .map(|index| VerificationVerdictItem {
+                    reason: format!("Evidence {index}"),
+                    task_key: format!("task-{index}"),
+                    verdict: crate::VerificationVerdict::Pass,
+                })
+                .collect(),
+        };
+
+        // Act
+        let serialized = serde_json::to_string(&response).expect("response should serialize");
+        let deserialized = serde_json::from_str::<AgentResponse>(&serialized)
+            .expect("response should deserialize");
+        let verdicts = deserialized.verification_verdict_items();
+
+        // Assert
+        assert_eq!(verdicts.len(), MAX_SUBTASKS);
+        assert_eq!(verdicts[0].task_key, "task-0");
+        assert!(serialized.contains(r#""verdict":"pass""#));
     }
 
     #[test]
@@ -530,6 +592,7 @@ mod tests {
     /// Builds one deterministic subtask with a file-disjoint touched area.
     fn test_subtask(index: usize) -> SubtaskItem {
         SubtaskItem {
+            acceptance_criteria: vec![format!("Work item {index} is complete")],
             prompt: format!("Complete work item {index}"),
             task_key: format!("task-{index}"),
             title: format!("Work item {index}"),

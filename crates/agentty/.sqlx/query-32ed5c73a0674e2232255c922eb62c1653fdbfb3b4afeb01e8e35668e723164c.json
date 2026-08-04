@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration\nSET relayed_question_task_id = NULL,\n    updated_at = ?\nWHERE id = ?\n  AND relayed_question_task_id IS NOT NULL\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "32ed5c73a0674e2232255c922eb62c1653fdbfb3b4afeb01e8e35668e723164c"
+}

@@ -1530,6 +1530,7 @@ mod tests {
             ],
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
+            verification_verdicts: Vec::new(),
             summary: None,
         };
 
@@ -1557,6 +1558,7 @@ mod tests {
             questions: vec![QuestionItem::new(numbered_questions)],
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
+            verification_verdicts: Vec::new(),
             summary: None,
         };
 
@@ -1578,6 +1580,7 @@ mod tests {
             questions: vec![QuestionItem::new("Need me to run tests?")],
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
+            verification_verdicts: Vec::new(),
             summary: None,
         };
 
@@ -1601,6 +1604,7 @@ mod tests {
             questions: vec![QuestionItem::new("Should I apply the patch?")],
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
+            verification_verdicts: Vec::new(),
             summary: None,
         };
 
@@ -1623,6 +1627,7 @@ mod tests {
             questions: vec![QuestionItem::new("\n")],
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
+            verification_verdicts: Vec::new(),
             summary: None,
         };
 
@@ -1643,6 +1648,7 @@ mod tests {
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
+            verification_verdicts: Vec::new(),
             summary: Some(AgentResponseSummary {
                 turn: "Updated the greeting flow.".to_string(),
                 session: "Session now greets users on startup.".to_string(),
@@ -1823,6 +1829,7 @@ mod tests {
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
+                            verification_verdicts: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -1912,6 +1919,7 @@ mod tests {
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
+                            verification_verdicts: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -2014,6 +2022,7 @@ mod tests {
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
+                            verification_verdicts: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -2119,6 +2128,7 @@ mod tests {
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
+                            verification_verdicts: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -2211,6 +2221,7 @@ mod tests {
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
+                            verification_verdicts: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,
@@ -2902,6 +2913,7 @@ mod tests {
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
+                verification_verdicts: Vec::new(),
                 summary: Some(AgentResponseSummary {
                     turn: "- Updated the worker flow.".to_string(),
                     session: "- Active review now reloads summary from persistence.".to_string(),
@@ -3437,6 +3449,7 @@ mod tests {
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
+                verification_verdicts: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3507,19 +3520,7 @@ mod tests {
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
-        let turn_result = Ok(TurnResult {
-            assistant_message: AgentResponse {
-                answer: "Implemented the change.".to_string(),
-                questions: Vec::new(),
-                review_comment_outcomes: Vec::new(),
-                subtasks: Vec::new(),
-                summary: None,
-            },
-            context_reset: false,
-            input_tokens: 0,
-            output_tokens: 0,
-            provider_conversation_id: None,
-        });
+        let turn_result = Ok(successful_turn_result("Implemented the change."));
 
         // Act
         let turn_metadata = TurnMetadata {
@@ -3604,6 +3605,7 @@ mod tests {
                     thread_id: "thread-42".to_string(),
                 }],
                 subtasks: Vec::new(),
+                verification_verdicts: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3720,6 +3722,7 @@ mod tests {
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
+                verification_verdicts: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -3817,6 +3820,7 @@ mod tests {
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
+                verification_verdicts: Vec::new(),
                 summary: None,
             },
             context_reset: false,
@@ -4017,6 +4021,7 @@ mod tests {
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
+                verification_verdicts: Vec::new(),
                 summary: Some(AgentResponseSummary {
                     turn: "- Attempted the update.".to_string(),
                     session: "- Session state should not project without persistence.".to_string(),
@@ -4125,6 +4130,7 @@ mod tests {
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
+                verification_verdicts: Vec::new(),
                 summary: Some(AgentResponseSummary {
                     turn: "No changes".to_string(),
                     session: "No changes".to_string(),
@@ -4213,6 +4219,7 @@ mod tests {
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
+                verification_verdicts: Vec::new(),
                 summary: None,
             },
             context_reset: true,
@@ -4328,6 +4335,7 @@ mod tests {
                             questions: Vec::new(),
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
+                            verification_verdicts: Vec::new(),
                             summary: None,
                         },
                         context_reset: false,

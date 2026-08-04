@@ -147,6 +147,9 @@ pub enum SessionRole {
     /// Ordinary session that owns the changes on its own branch.
     #[default]
     Worker,
+    /// Worker whose write capabilities are owned exclusively by an
+    /// orchestration coordinator.
+    OrchestrationWorker,
     /// Controller session that plans and supervises child worker sessions.
     Orchestrator,
 }
@@ -158,7 +161,18 @@ impl SessionRole {
     /// to child sessions, so their branch stays empty for the session's whole
     /// lifetime.
     pub fn owns_branch_changes(self) -> bool {
-        matches!(self, SessionRole::Worker)
+        matches!(self, SessionRole::Worker | SessionRole::OrchestrationWorker)
+    }
+
+    /// Returns whether an end user may submit turns or branch mutations
+    /// directly to this session.
+    pub fn accepts_user_turns(self) -> bool {
+        !matches!(self, SessionRole::OrchestrationWorker)
+    }
+
+    /// Returns whether this worker is owned by an orchestration coordinator.
+    pub fn is_managed(self) -> bool {
+        matches!(self, SessionRole::OrchestrationWorker)
     }
 }
 
@@ -166,6 +180,7 @@ impl fmt::Display for SessionRole {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
             SessionRole::Worker => "Worker",
+            SessionRole::OrchestrationWorker => "OrchestrationWorker",
             SessionRole::Orchestrator => "Orchestrator",
         };
 
@@ -179,6 +194,7 @@ impl FromStr for SessionRole {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "Worker" => Ok(SessionRole::Worker),
+            "OrchestrationWorker" => Ok(SessionRole::OrchestrationWorker),
             "Orchestrator" => Ok(SessionRole::Orchestrator),
             _ => Err(format!("Unknown role: {value}")),
         }
@@ -505,7 +521,11 @@ mod tests {
     #[test]
     fn session_role_round_trips_persisted_values() {
         // Arrange
-        let roles = [SessionRole::Worker, SessionRole::Orchestrator];
+        let roles = [
+            SessionRole::Worker,
+            SessionRole::OrchestrationWorker,
+            SessionRole::Orchestrator,
+        ];
 
         // Act
         let round_tripped = roles.map(|role| {
@@ -524,7 +544,11 @@ mod tests {
     fn only_worker_sessions_own_branch_changes() {
         // Arrange / Act / Assert
         assert!(SessionRole::Worker.owns_branch_changes());
+        assert!(SessionRole::OrchestrationWorker.owns_branch_changes());
         assert!(!SessionRole::Orchestrator.owns_branch_changes());
+        assert!(SessionRole::Worker.accepts_user_turns());
+        assert!(!SessionRole::OrchestrationWorker.accepts_user_turns());
+        assert!(SessionRole::OrchestrationWorker.is_managed());
     }
 
     #[test]

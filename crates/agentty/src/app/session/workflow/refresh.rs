@@ -1,6 +1,6 @@
 //! Session refresh scheduling and post-reload view state restoration.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use ag_forge as forge;
@@ -108,10 +108,22 @@ impl SessionManager {
         let selected_session_id = selected_index
             .and_then(|index| self.state.sessions.get(index))
             .map(|session| session.id.clone());
+        let live_orchestration_progress = self
+            .state
+            .sessions
+            .iter()
+            .filter_map(|session| {
+                session
+                    .orchestration_progress
+                    .as_deref()
+                    .filter(|progress| progress.starts_with("Phase:"))
+                    .map(|progress| (session.id.clone(), progress.to_string()))
+            })
+            .collect::<HashMap<_, _>>();
 
         let clock = services.clock();
         let fs_client = services.fs_client();
-        let (sessions, stats_activity, session_worktree_availability) =
+        let (mut sessions, stats_activity, session_worktree_availability) =
             Self::load_sessions_with_fs_client(
                 SessionLoadInput {
                     active_project_id: projects.active_project_id(),
@@ -125,6 +137,7 @@ impl SessionManager {
                 self.state.handles_mut(),
             )
             .await;
+        Self::preserve_live_orchestration_progress(&mut sessions, &live_orchestration_progress);
         self.state.replace_sessions(sessions);
         self.state
             .replace_session_worktree_availability(session_worktree_availability);
@@ -150,6 +163,21 @@ impl SessionManager {
             self.state.updated_at_max = sessions_updated_at_max;
         } else {
             self.update_sessions_metadata_cache(services).await;
+        }
+    }
+
+    /// Keeps a coordinator-emitted task snapshot across metadata reloads while
+    /// the persisted campaign remains active.
+    fn preserve_live_orchestration_progress(
+        sessions: &mut [crate::domain::session::Session],
+        live_progress: &HashMap<SessionId, String>,
+    ) {
+        for session in sessions {
+            if session.orchestration_progress.is_some()
+                && let Some(progress) = live_progress.get(&session.id)
+            {
+                session.orchestration_progress = Some(progress.clone());
+            }
         }
     }
 
@@ -715,6 +743,36 @@ mod tests {
         // Assert
         assert!(!refresh_due);
         assert_eq!(wall_clock, SystemTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn preserve_live_orchestration_progress_keeps_active_board_and_respects_terminal_clear() {
+        // Arrange
+        let mut session = test_session(PathBuf::from("/tmp/session"), None, Status::Review);
+        session.orchestration_progress = Some("2 running, 0 waiting on you".to_string());
+        let live_progress = HashMap::from([(
+            session.id.clone(),
+            "Phase: Running\n- protocol [protocol]: running".to_string(),
+        )]);
+
+        // Act
+        SessionManager::preserve_live_orchestration_progress(
+            std::slice::from_mut(&mut session),
+            &live_progress,
+        );
+        let active_progress = session.orchestration_progress.clone();
+        session.orchestration_progress = None;
+        SessionManager::preserve_live_orchestration_progress(
+            std::slice::from_mut(&mut session),
+            &live_progress,
+        );
+
+        // Assert
+        assert_eq!(
+            active_progress.as_deref(),
+            Some("Phase: Running\n- protocol [protocol]: running")
+        );
+        assert!(session.orchestration_progress.is_none());
     }
 
     #[test]

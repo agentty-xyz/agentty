@@ -8,7 +8,7 @@ use ratatui::widgets::Borders;
 
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::review;
-use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, Status};
+use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, SessionId, Status};
 use crate::presentation::help_action::{self, ViewHelpState};
 use crate::ui::icon::Icon;
 use crate::ui::{markdown, style};
@@ -47,6 +47,17 @@ pub fn session_header_lines(
 
     let mut lines = Vec::with_capacity(1 + metadata_lines.len());
     lines.push(Line::from(title_spans));
+
+    if session.is_managed() {
+        let controller = session
+            .controller_session_id
+            .as_ref()
+            .map_or("orchestrator", SessionId::as_str);
+        lines.push(Line::from(Span::styled(
+            format!("Managed by {controller} — read-only"),
+            Style::default().fg(style::palette::warning()),
+        )));
+    }
 
     for metadata_text in metadata_lines {
         lines.push(Line::from(Span::styled(
@@ -406,7 +417,7 @@ mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::{
-        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionRole,
     };
     use crate::test_support::SessionFixtureBuilder;
 
@@ -475,6 +486,25 @@ mod tests {
         // Assert
         assert!(metadata_text.contains("Tokens: 0/0"));
         assert!(!metadata_text.contains("https://example.test/pull/42"));
+    }
+
+    #[test]
+    fn managed_session_header_identifies_its_controller() {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new()
+            .role(SessionRole::OrchestrationWorker)
+            .build();
+        session.controller_session_id = Some(SessionId::from("campaign-controller"));
+
+        // Act
+        let header_lines = session_header_lines(&session, 100, ReasoningLevel::default(), 0);
+
+        // Assert
+        assert!(
+            header_lines[1]
+                .to_string()
+                .contains("Managed by campaign-controller — read-only")
+        );
     }
 
     #[test]

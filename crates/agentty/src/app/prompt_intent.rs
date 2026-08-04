@@ -710,6 +710,7 @@ mod tests {
 
     use super::*;
     use crate::domain::personality::Personality;
+    use crate::domain::session::SessionRole;
     use crate::domain::setting::SettingName;
     use crate::infra::personality::MockPersonalityCatalogClient;
 
@@ -1334,8 +1335,8 @@ mod tests {
         assert_eq!(outcome, ReviewCommentResolutionOutcome::KeepReviewComments);
     }
 
-    /// Ensures comment resolution does not enqueue a turn for a blocked
-    /// session or a selection without actionable review data.
+    /// Ensures comment resolution does not enqueue a turn for a blocked or
+    /// managed session, or a selection without actionable review data.
     #[tokio::test]
     async fn test_resolve_session_review_comments_rejects_blocked_and_empty_selection() {
         // Arrange
@@ -1359,6 +1360,10 @@ mod tests {
         let empty_selection = app
             .resolve_session_review_comments(&session_id, &snapshot, &[])
             .await;
+        app.sessions.sessions_mut()[0].role = SessionRole::OrchestrationWorker;
+        let managed = app
+            .resolve_session_review_comments(&session_id, &snapshot, &selections)
+            .await;
 
         // Assert
         assert_eq!(blocked, ReviewCommentResolutionOutcome::KeepReviewComments);
@@ -1366,6 +1371,7 @@ mod tests {
             empty_selection,
             ReviewCommentResolutionOutcome::KeepReviewComments
         );
+        assert_eq!(managed, ReviewCommentResolutionOutcome::KeepReviewComments);
     }
 
     /// Builds review data with one comment followed by current, resolved, and

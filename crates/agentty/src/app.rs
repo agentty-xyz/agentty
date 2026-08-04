@@ -37,7 +37,9 @@ pub(crate) use core::{AppEvent, AppRuntimeEvent};
 
 pub(crate) use assigned_issue::AssignedIssueState;
 pub use error::AppError;
-pub(crate) use orchestration::{OrchestrationCoordinator, OrchestrationSchedule};
+pub(crate) use orchestration::{
+    OrchestrationApprovalOutcome, OrchestrationCoordinator, OrchestrationSchedule,
+};
 pub use project::ProjectManager;
 pub(crate) use requested_review::RequestedReviewState;
 #[cfg(test)]
@@ -49,7 +51,9 @@ pub use service::AppServices;
 pub use session::{SessionError, SessionManager, SessionState};
 #[cfg(test)]
 pub(crate) use session::{SyncMainOutcome, SyncSessionStartError};
-pub(crate) use session_runtime::{SessionRuntimeCommand, SessionRuntimeHandle};
+pub(crate) use session_runtime::{
+    SessionRuntimeAccess, SessionRuntimeCommand, SessionRuntimeHandle,
+};
 pub use setting::SettingsManager;
 #[cfg(test)]
 pub(crate) use sync::MockSyncMainRunner;

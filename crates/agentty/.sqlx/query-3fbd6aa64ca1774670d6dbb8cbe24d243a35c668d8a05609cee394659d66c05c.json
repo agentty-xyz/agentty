@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration_task\nSET verification_reason = ?,\n    verification_verdict = ?,\n    updated_at = ?\nWHERE session_orchestration_id = ?\n  AND task_key = ?\n  AND status = 'Ready'\n  AND EXISTS (\n      SELECT 1\n      FROM session_orchestration\n      WHERE id = ?\n        AND status = 'Verifying'\n  )\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "3fbd6aa64ca1774670d6dbb8cbe24d243a35c668d8a05609cee394659d66c05c"
+}

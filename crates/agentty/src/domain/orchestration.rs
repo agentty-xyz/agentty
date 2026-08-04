@@ -14,15 +14,19 @@ use super::session::Status as SessionStatus;
 /// Lifecycle state for one controller-owned orchestration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OrchestrationStatus {
-    /// The plan is persisted and parked on a clarification question.
+    /// The plan is persisted and parked on the campaign approval board.
     AwaitingApproval,
     /// The plan is approved and its tasks are fanning out.
     Running,
     /// Cancellation is blocking new fan-out while active children stop.
     Canceling,
-    /// Every task settled and one durable roll-up delivery is being claimed.
-    Submitting,
-    /// Every task settled and the controller received its roll-up turn.
+    /// Every task settled and the controller is verifying the results.
+    Verifying,
+    /// Verification passed and user integration approval is required.
+    AwaitingIntegration,
+    /// Verified tasks are being merged or published in plan order.
+    Integrating,
+    /// Every verified task integrated and the campaign was archived.
     Done,
     /// The user canceled the orchestration or its controller session.
     Canceled,
@@ -39,7 +43,9 @@ impl OrchestrationStatus {
             OrchestrationStatus::AwaitingApproval
                 | OrchestrationStatus::Running
                 | OrchestrationStatus::Canceling
-                | OrchestrationStatus::Submitting
+                | OrchestrationStatus::Verifying
+                | OrchestrationStatus::AwaitingIntegration
+                | OrchestrationStatus::Integrating
         )
     }
 }
@@ -50,7 +56,9 @@ impl fmt::Display for OrchestrationStatus {
             OrchestrationStatus::AwaitingApproval => "AwaitingApproval",
             OrchestrationStatus::Running => "Running",
             OrchestrationStatus::Canceling => "Canceling",
-            OrchestrationStatus::Submitting => "Submitting",
+            OrchestrationStatus::Verifying => "Verifying",
+            OrchestrationStatus::AwaitingIntegration => "AwaitingIntegration",
+            OrchestrationStatus::Integrating => "Integrating",
             OrchestrationStatus::Done => "Done",
             OrchestrationStatus::Canceled => "Canceled",
         };
@@ -67,7 +75,9 @@ impl FromStr for OrchestrationStatus {
             "AwaitingApproval" => Ok(OrchestrationStatus::AwaitingApproval),
             "Running" => Ok(OrchestrationStatus::Running),
             "Canceling" => Ok(OrchestrationStatus::Canceling),
-            "Submitting" => Ok(OrchestrationStatus::Submitting),
+            "Verifying" => Ok(OrchestrationStatus::Verifying),
+            "AwaitingIntegration" => Ok(OrchestrationStatus::AwaitingIntegration),
+            "Integrating" => Ok(OrchestrationStatus::Integrating),
             "Done" => Ok(OrchestrationStatus::Done),
             "Canceled" => Ok(OrchestrationStatus::Canceled),
             _ => Err(format!("Unknown orchestration status: {value}")),
@@ -75,9 +85,43 @@ impl FromStr for OrchestrationStatus {
     }
 }
 
+/// User-selected destination for verified orchestration task branches.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegrationApproach {
+    /// Merge each verified child branch into the campaign base locally.
+    LocalMerge,
+    /// Publish each verified child branch as a forge review request.
+    ReviewRequest,
+}
+
+impl fmt::Display for IntegrationApproach {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            IntegrationApproach::LocalMerge => "LocalMerge",
+            IntegrationApproach::ReviewRequest => "ReviewRequest",
+        };
+
+        formatter.write_str(value)
+    }
+}
+
+impl FromStr for IntegrationApproach {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "LocalMerge" => Ok(IntegrationApproach::LocalMerge),
+            "ReviewRequest" => Ok(IntegrationApproach::ReviewRequest),
+            _ => Err(format!("Unknown integration approach: {value}")),
+        }
+    }
+}
+
 /// Lifecycle state for one orchestration task and its child session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OrchestrationTaskStatus {
+    /// Follow-up scope proposed by the controller and awaiting approval.
+    Proposed,
     /// Persisted with the proposed plan, not yet approved or fanned out.
     Planned,
     /// The child session is being created and started.
@@ -88,6 +132,20 @@ pub enum OrchestrationTaskStatus {
     WaitingForInput,
     /// The child session finished and is ready for review or integration.
     Ready,
+    /// Approved feedback is being delivered to the existing managed child.
+    ContinuationPending,
+    /// Verification passed and this task awaits its integration gate.
+    AwaitingIntegration,
+    /// The coordinator has started branch merge or publication.
+    Merging,
+    /// Branch work was merged locally successfully.
+    Integrated,
+    /// The child branch was published as a forge review request.
+    ReviewRequested,
+    /// Integration failed and requires attention.
+    IntegrationFailed,
+    /// Ownership permanently transferred from the coordinator to the user.
+    Detached,
     /// The child session failed, or a straggler was canceled out of band.
     Failed,
     /// The task was canceled as part of a cascade cancel.
@@ -121,9 +179,18 @@ impl OrchestrationTaskStatus {
         matches!(
             self,
             OrchestrationTaskStatus::Ready
+                | OrchestrationTaskStatus::Integrated
+                | OrchestrationTaskStatus::ReviewRequested
+                | OrchestrationTaskStatus::IntegrationFailed
                 | OrchestrationTaskStatus::Failed
                 | OrchestrationTaskStatus::Canceled
+                | OrchestrationTaskStatus::Detached
         )
+    }
+
+    /// Returns the concise user-facing label shown in campaign status output.
+    pub fn campaign_label(self) -> &'static str {
+        self.labels().1
     }
 
     /// Returns whether the task currently occupies a parallelism slot.
@@ -136,6 +203,8 @@ impl OrchestrationTaskStatus {
             OrchestrationTaskStatus::Creating
                 | OrchestrationTaskStatus::Running
                 | OrchestrationTaskStatus::WaitingForInput
+                | OrchestrationTaskStatus::ContinuationPending
+                | OrchestrationTaskStatus::Merging
         )
     }
 
@@ -152,10 +221,14 @@ impl OrchestrationTaskStatus {
         matches!(
             (self, next),
             (
+                OrchestrationTaskStatus::Proposed,
+                OrchestrationTaskStatus::Planned
+            ) | (
                 OrchestrationTaskStatus::Planned
                     | OrchestrationTaskStatus::Ready
                     | OrchestrationTaskStatus::Failed
-                    | OrchestrationTaskStatus::Canceled,
+                    | OrchestrationTaskStatus::Canceled
+                    | OrchestrationTaskStatus::IntegrationFailed,
                 OrchestrationTaskStatus::Creating
             ) | (
                 OrchestrationTaskStatus::Creating | OrchestrationTaskStatus::WaitingForInput,
@@ -167,6 +240,29 @@ impl OrchestrationTaskStatus {
                 OrchestrationTaskStatus::Running | OrchestrationTaskStatus::WaitingForInput,
                 OrchestrationTaskStatus::Ready
             ) | (
+                OrchestrationTaskStatus::Ready,
+                OrchestrationTaskStatus::AwaitingIntegration
+                    | OrchestrationTaskStatus::ContinuationPending
+                    | OrchestrationTaskStatus::Detached
+            ) | (
+                OrchestrationTaskStatus::AwaitingIntegration,
+                OrchestrationTaskStatus::Merging
+                    | OrchestrationTaskStatus::ContinuationPending
+                    | OrchestrationTaskStatus::Detached
+            ) | (
+                OrchestrationTaskStatus::IntegrationFailed,
+                OrchestrationTaskStatus::ContinuationPending | OrchestrationTaskStatus::Detached
+            ) | (
+                OrchestrationTaskStatus::ContinuationPending,
+                OrchestrationTaskStatus::Ready
+                    | OrchestrationTaskStatus::WaitingForInput
+                    | OrchestrationTaskStatus::Failed
+            ) | (
+                OrchestrationTaskStatus::Merging,
+                OrchestrationTaskStatus::Integrated
+                    | OrchestrationTaskStatus::ReviewRequested
+                    | OrchestrationTaskStatus::IntegrationFailed
+            ) | (
                 OrchestrationTaskStatus::Planned
                     | OrchestrationTaskStatus::Creating
                     | OrchestrationTaskStatus::Running
@@ -174,6 +270,42 @@ impl OrchestrationTaskStatus {
                 OrchestrationTaskStatus::Failed | OrchestrationTaskStatus::Canceled
             )
         )
+    }
+
+    /// Returns whether this task no longer needs integration work.
+    pub fn is_integration_settled(self) -> bool {
+        matches!(
+            self,
+            OrchestrationTaskStatus::Integrated
+                | OrchestrationTaskStatus::ReviewRequested
+                | OrchestrationTaskStatus::Detached
+                | OrchestrationTaskStatus::Canceled
+                | OrchestrationTaskStatus::Failed
+        )
+    }
+
+    fn labels(self) -> (&'static str, &'static str) {
+        match self {
+            OrchestrationTaskStatus::Proposed => ("Proposed", "awaiting approval"),
+            OrchestrationTaskStatus::Planned => ("Planned", "waiting"),
+            OrchestrationTaskStatus::Creating => ("Creating", "starting"),
+            OrchestrationTaskStatus::Running => ("Running", "running"),
+            OrchestrationTaskStatus::WaitingForInput => ("WaitingForInput", "waiting on you"),
+            OrchestrationTaskStatus::Ready => ("Ready", "ready"),
+            OrchestrationTaskStatus::ContinuationPending => ("ContinuationPending", "continuing"),
+            OrchestrationTaskStatus::AwaitingIntegration => {
+                ("AwaitingIntegration", "awaiting integration")
+            }
+            OrchestrationTaskStatus::Merging => ("Merging", "integrating"),
+            OrchestrationTaskStatus::Integrated => ("Integrated", "integrated"),
+            OrchestrationTaskStatus::ReviewRequested => ("ReviewRequested", "review requested"),
+            OrchestrationTaskStatus::IntegrationFailed => {
+                ("IntegrationFailed", "integration failed")
+            }
+            OrchestrationTaskStatus::Detached => ("Detached", "detached"),
+            OrchestrationTaskStatus::Failed => ("Failed", "failed"),
+            OrchestrationTaskStatus::Canceled => ("Canceled", "canceled"),
+        }
     }
 }
 
@@ -222,6 +354,8 @@ impl OrchestrationPolicy {
 /// Protocol-independent snapshot of one task proposed by an orchestration
 /// controller.
 pub struct OrchestrationPlanTask {
+    /// Observable conditions checked during settlement verification.
+    pub acceptance_criteria: Vec<String>,
     /// Standalone task prompt delivered to the child session.
     pub prompt: String,
     /// Stable kebab-case identity used for retries.
@@ -253,9 +387,14 @@ pub fn validate_subtasks(subtasks: &[OrchestrationPlanTask], is_retry: bool) -> 
         if subtask.prompt.trim().is_empty()
             || subtask.title.trim().is_empty()
             || subtask.touched_areas.is_empty()
+            || subtask
+                .acceptance_criteria
+                .iter()
+                .all(|criterion| criterion.trim().is_empty())
         {
             return Err(format!(
-                "subtask `{}` needs a title, standalone prompt, and touched areas.",
+                "subtask `{}` needs a title, standalone prompt, acceptance criteria, and touched \
+                 areas.",
                 subtask.task_key
             ));
         }
@@ -318,17 +457,7 @@ fn scopes_overlap(left: &str, right: &str) -> bool {
 
 impl fmt::Display for OrchestrationTaskStatus {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = match self {
-            OrchestrationTaskStatus::Planned => "Planned",
-            OrchestrationTaskStatus::Creating => "Creating",
-            OrchestrationTaskStatus::Running => "Running",
-            OrchestrationTaskStatus::WaitingForInput => "WaitingForInput",
-            OrchestrationTaskStatus::Ready => "Ready",
-            OrchestrationTaskStatus::Failed => "Failed",
-            OrchestrationTaskStatus::Canceled => "Canceled",
-        };
-
-        formatter.write_str(value)
+        formatter.write_str(self.labels().0)
     }
 }
 
@@ -337,11 +466,19 @@ impl FromStr for OrchestrationTaskStatus {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "Proposed" => Ok(OrchestrationTaskStatus::Proposed),
             "Planned" => Ok(OrchestrationTaskStatus::Planned),
             "Creating" => Ok(OrchestrationTaskStatus::Creating),
             "Running" => Ok(OrchestrationTaskStatus::Running),
             "WaitingForInput" => Ok(OrchestrationTaskStatus::WaitingForInput),
             "Ready" => Ok(OrchestrationTaskStatus::Ready),
+            "ContinuationPending" => Ok(OrchestrationTaskStatus::ContinuationPending),
+            "AwaitingIntegration" => Ok(OrchestrationTaskStatus::AwaitingIntegration),
+            "Merging" => Ok(OrchestrationTaskStatus::Merging),
+            "Integrated" => Ok(OrchestrationTaskStatus::Integrated),
+            "ReviewRequested" => Ok(OrchestrationTaskStatus::ReviewRequested),
+            "IntegrationFailed" => Ok(OrchestrationTaskStatus::IntegrationFailed),
+            "Detached" => Ok(OrchestrationTaskStatus::Detached),
             "Failed" => Ok(OrchestrationTaskStatus::Failed),
             "Canceled" => Ok(OrchestrationTaskStatus::Canceled),
             _ => Err(format!("Unknown orchestration task status: {value}")),
@@ -361,7 +498,9 @@ mod tests {
             OrchestrationStatus::AwaitingApproval,
             OrchestrationStatus::Running,
             OrchestrationStatus::Canceling,
-            OrchestrationStatus::Submitting,
+            OrchestrationStatus::Verifying,
+            OrchestrationStatus::AwaitingIntegration,
+            OrchestrationStatus::Integrating,
             OrchestrationStatus::Done,
             OrchestrationStatus::Canceled,
         ];
@@ -380,13 +519,36 @@ mod tests {
     }
 
     #[test]
+    fn integration_approach_round_trips_persisted_values() {
+        // Arrange
+        let approaches = [
+            IntegrationApproach::LocalMerge,
+            IntegrationApproach::ReviewRequest,
+        ];
+
+        // Act
+        let round_tripped = approaches.map(|approach| {
+            approach
+                .to_string()
+                .parse::<IntegrationApproach>()
+                .expect("approach should parse")
+        });
+
+        // Assert
+        assert_eq!(round_tripped, approaches);
+        assert!("Unknown".parse::<IntegrationApproach>().is_err());
+    }
+
+    #[test]
     /// Restricts restart re-linking to orchestrations that still need work.
     fn test_only_unsettled_orchestrations_are_active() {
         // Arrange / Act / Assert
         assert!(OrchestrationStatus::AwaitingApproval.is_active());
         assert!(OrchestrationStatus::Running.is_active());
         assert!(OrchestrationStatus::Canceling.is_active());
-        assert!(OrchestrationStatus::Submitting.is_active());
+        assert!(OrchestrationStatus::Verifying.is_active());
+        assert!(OrchestrationStatus::AwaitingIntegration.is_active());
+        assert!(OrchestrationStatus::Integrating.is_active());
         assert!(!OrchestrationStatus::Done.is_active());
         assert!(!OrchestrationStatus::Canceled.is_active());
     }
@@ -396,11 +558,19 @@ mod tests {
     fn test_orchestration_task_status_round_trips_persisted_values() {
         // Arrange
         let statuses = [
+            OrchestrationTaskStatus::Proposed,
             OrchestrationTaskStatus::Planned,
             OrchestrationTaskStatus::Creating,
             OrchestrationTaskStatus::Running,
             OrchestrationTaskStatus::WaitingForInput,
             OrchestrationTaskStatus::Ready,
+            OrchestrationTaskStatus::ContinuationPending,
+            OrchestrationTaskStatus::AwaitingIntegration,
+            OrchestrationTaskStatus::Merging,
+            OrchestrationTaskStatus::Integrated,
+            OrchestrationTaskStatus::ReviewRequested,
+            OrchestrationTaskStatus::IntegrationFailed,
+            OrchestrationTaskStatus::Detached,
             OrchestrationTaskStatus::Failed,
             OrchestrationTaskStatus::Canceled,
         ];
@@ -424,6 +594,9 @@ mod tests {
     fn test_settled_task_statuses_include_cancellation() {
         // Arrange / Act / Assert
         assert!(OrchestrationTaskStatus::Ready.is_settled());
+        assert!(OrchestrationTaskStatus::Integrated.is_settled());
+        assert!(OrchestrationTaskStatus::ReviewRequested.is_settled());
+        assert!(OrchestrationTaskStatus::IntegrationFailed.is_settled());
         assert!(OrchestrationTaskStatus::Failed.is_settled());
         assert!(OrchestrationTaskStatus::Canceled.is_settled());
         assert!(!OrchestrationTaskStatus::Planned.is_settled());
@@ -478,6 +651,76 @@ mod tests {
         );
         assert!(
             !OrchestrationTaskStatus::Canceled.can_transition_to(OrchestrationTaskStatus::Ready)
+        );
+    }
+
+    #[test]
+    fn integration_terminal_states_are_settled() {
+        // Arrange
+        let settled = [
+            OrchestrationTaskStatus::Integrated,
+            OrchestrationTaskStatus::ReviewRequested,
+            OrchestrationTaskStatus::Detached,
+            OrchestrationTaskStatus::Canceled,
+            OrchestrationTaskStatus::Failed,
+        ];
+        // Act / Assert
+        assert!(
+            settled
+                .into_iter()
+                .all(OrchestrationTaskStatus::is_integration_settled)
+        );
+        assert!(!OrchestrationTaskStatus::AwaitingIntegration.is_integration_settled());
+        assert!(
+            OrchestrationTaskStatus::Merging
+                .can_transition_to(OrchestrationTaskStatus::ReviewRequested)
+        );
+    }
+
+    #[test]
+    fn campaign_labels_cover_every_task_status() {
+        // Arrange
+        let statuses = [
+            OrchestrationTaskStatus::Proposed,
+            OrchestrationTaskStatus::Planned,
+            OrchestrationTaskStatus::Creating,
+            OrchestrationTaskStatus::Running,
+            OrchestrationTaskStatus::WaitingForInput,
+            OrchestrationTaskStatus::Ready,
+            OrchestrationTaskStatus::ContinuationPending,
+            OrchestrationTaskStatus::AwaitingIntegration,
+            OrchestrationTaskStatus::Merging,
+            OrchestrationTaskStatus::Integrated,
+            OrchestrationTaskStatus::ReviewRequested,
+            OrchestrationTaskStatus::IntegrationFailed,
+            OrchestrationTaskStatus::Detached,
+            OrchestrationTaskStatus::Failed,
+            OrchestrationTaskStatus::Canceled,
+        ];
+
+        // Act
+        let labels = statuses.map(OrchestrationTaskStatus::campaign_label);
+
+        // Assert
+        assert_eq!(
+            labels,
+            [
+                "awaiting approval",
+                "waiting",
+                "starting",
+                "running",
+                "waiting on you",
+                "ready",
+                "continuing",
+                "awaiting integration",
+                "integrating",
+                "integrated",
+                "review requested",
+                "integration failed",
+                "detached",
+                "failed",
+                "canceled",
+            ]
         );
     }
 

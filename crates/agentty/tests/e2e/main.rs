@@ -13,6 +13,7 @@ mod common;
 mod confirmation;
 mod demo;
 mod navigation;
+mod orchestration;
 mod project;
 mod session;
 mod setting;

@@ -19,6 +19,16 @@ use serde::{Deserialize, Serialize};
                    must be completable without coordinating with its siblings."
 )]
 pub struct SubtaskItem {
+    /// Observable conditions the worker must satisfy before the controller
+    /// may verify this task as complete.
+    #[serde(default)]
+    #[schemars(
+        title = "acceptance_criteria",
+        description = "Concrete, testable acceptance criteria for this subtask. The approval UI \
+                       shows these criteria and the controller verifies the finished child \
+                       against the same list."
+    )]
+    pub acceptance_criteria: Vec<String>,
     /// Complete standalone prompt handed to the child session.
     #[schemars(
         title = "prompt",

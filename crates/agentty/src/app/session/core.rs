@@ -75,8 +75,9 @@ impl SessionCreationKind {
     /// Returns the persisted role for this creation purpose.
     pub(crate) fn role(self) -> crate::domain::session::SessionRole {
         match self {
-            Self::Worker | Self::OrchestrationChild { .. } => {
-                crate::domain::session::SessionRole::Worker
+            Self::Worker => crate::domain::session::SessionRole::Worker,
+            Self::OrchestrationChild { .. } => {
+                crate::domain::session::SessionRole::OrchestrationWorker
             }
             Self::Orchestrator => crate::domain::session::SessionRole::Orchestrator,
         }
@@ -729,7 +730,7 @@ impl SessionManager {
         }
     }
 
-    /// Replaces or clears the live child-status loader for an orchestrator.
+    /// Replaces or clears the board snapshot for an orchestrator.
     pub(crate) fn update_orchestration_progress(
         &mut self,
         session_id: &str,
@@ -744,19 +745,10 @@ impl SessionManager {
             return;
         };
 
-        if let Some(progress) = progress {
-            session.transient_messages.upsert(TransientMessage {
-                anchor: TransientMessageAnchor::Tail,
-                body: TransientMessageBody::Loading(progress),
-                lifecycle: TransientMessageLifecycle::UntilResolved,
-                slot: TransientMessageSlot::Orchestration,
-                turn_position: session.latest_user_prompt_position(),
-            });
-        } else {
-            session
-                .transient_messages
-                .retract(TransientMessageSlot::Orchestration);
-        }
+        session.orchestration_progress = progress;
+        session
+            .transient_messages
+            .retract(TransientMessageSlot::Orchestration);
     }
 
     /// Applies one completed-turn projection to the matching in-memory

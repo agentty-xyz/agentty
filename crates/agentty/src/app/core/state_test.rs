@@ -3070,9 +3070,8 @@ async fn apply_app_events_session_workflow_notice_updates_session_state() {
 }
 
 #[tokio::test]
-/// Verifies orchestration progress replaces one loader and retracts it when
-/// fan-in begins.
-async fn apply_app_events_orchestration_progress_updates_replaceable_loader() {
+/// Verifies orchestration progress updates the board without transcript noise.
+async fn apply_app_events_orchestration_progress_updates_board_snapshot() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
         Arc::new(MockTmuxClient::new()),
@@ -3091,18 +3090,21 @@ async fn apply_app_events_orchestration_progress_updates_replaceable_loader() {
     .await;
 
     // Assert
+    let controller = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == "controller")
+        .expect("controller should remain loaded");
     assert_eq!(
-        app.sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == "controller")
-            .and_then(|session| {
-                session
-                    .transient_messages
-                    .get(crate::domain::transient_message::TransientMessageSlot::Orchestration)
-            })
-            .map(|message| message.body.text()),
+        controller.orchestration_progress.as_deref(),
         Some("Working... Protocol: running")
+    );
+    assert!(
+        controller
+            .transient_messages
+            .get(crate::domain::transient_message::TransientMessageSlot::Orchestration)
+            .is_none()
     );
 
     // Act
@@ -3118,12 +3120,7 @@ async fn apply_app_events_orchestration_progress_updates_replaceable_loader() {
             .sessions()
             .iter()
             .find(|session| session.id == "controller")
-            .and_then(|session| {
-                session
-                    .transient_messages
-                    .get(crate::domain::transient_message::TransientMessageSlot::Orchestration)
-            })
-            .is_none()
+            .is_some_and(|session| session.orchestration_progress.is_none())
     );
 }
 

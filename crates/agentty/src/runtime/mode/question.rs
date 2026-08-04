@@ -611,6 +611,7 @@ async fn submit_response(app: &mut App, response: String) {
     let session_id = completed_response.session_id.clone();
     let answers =
         structured_question_answers(&completed_response.questions, &completed_response.responses);
+    let is_orchestration_proxy = app.has_orchestration_question_proxy(&session_id).await;
     app.mode = AppMode::View {
         session_id: session_id.clone(),
         scroll_offset: None,
@@ -638,9 +639,18 @@ async fn submit_response(app: &mut App, response: String) {
     // never reached the worker (for example a rejected stacked reply) so the
     // pending question is not hidden behind a stalled `InProgress` state.
     if reply_enqueued {
-        mark_session_in_progress(app, &session_id);
+        mark_answered_session(app, &session_id, is_orchestration_proxy);
     } else {
         restore_completed_question_response(app, completed_response);
+    }
+}
+
+/// Advances the session that owned one accepted question response.
+fn mark_answered_session(app: &mut App, session_id: &str, is_orchestration_proxy: bool) {
+    if is_orchestration_proxy {
+        mark_orchestration_controller_review(app, session_id);
+    } else {
+        mark_session_in_progress(app, session_id);
     }
 }
 
@@ -722,6 +732,26 @@ fn mark_session_in_progress(app: &mut App, session_id: &str) {
         .find(|session| session.id == session_id)
     {
         session.status = Status::InProgress;
+    }
+}
+
+/// Optimistically restores a controller after its proxied child answers were
+/// accepted.
+fn mark_orchestration_controller_review(app: &mut App, session_id: &str) {
+    if let Some(handles) = app.sessions.session_handles().get(session_id)
+        && let Ok(mut handle_status) = handles.status.lock()
+    {
+        *handle_status = Status::Review;
+    }
+
+    if let Some(session) = app
+        .sessions
+        .sessions_mut()
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.status = Status::Review;
+        session.questions.clear();
     }
 }
 
@@ -1625,6 +1655,45 @@ mod tests {
         assert_eq!(
             *handles.status.lock().expect("lock should succeed"),
             Status::InProgress
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_orchestration_controller_review_clears_proxied_questions() {
+        // Arrange
+        use crate::domain::session::SessionHandles;
+
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let session_id = "campaign-controller";
+        app.sessions.push_session(
+            crate::test_support::SessionFixtureBuilder::new()
+                .id(session_id)
+                .role(SessionRole::Orchestrator)
+                .status(Status::Question)
+                .questions(vec![QuestionItem::new("Choose one")])
+                .build(),
+        );
+        app.sessions.session_handles_mut().insert(
+            session_id.to_string().into(),
+            SessionHandles::new(Status::Question),
+        );
+
+        // Act
+        mark_answered_session(&mut app, session_id, true);
+
+        // Assert
+        let session = &app.sessions.sessions()[0];
+        assert_eq!(session.status, Status::Review);
+        assert!(session.questions.is_empty());
+        assert_eq!(
+            *app.sessions
+                .session_handles()
+                .get(session_id)
+                .expect("handle should exist")
+                .status
+                .lock()
+                .expect("status should remain available"),
+            Status::Review
         );
     }
 

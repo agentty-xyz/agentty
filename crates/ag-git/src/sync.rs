@@ -294,6 +294,32 @@ pub(crate) async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Re
 /// Returns a [`GitError`] if preparing the temporary index or generating the
 /// diff fails.
 pub(crate) async fn diff(repo_path: PathBuf, base_branch: String) -> Result<String, GitError> {
+    diff_output(repo_path, base_branch, false).await
+}
+
+/// Returns repository-relative changed paths using the same isolated index and
+/// fork-point semantics as [`diff`].
+pub(crate) async fn diff_changed_files(
+    repo_path: PathBuf,
+    base_branch: String,
+) -> Result<Vec<String>, GitError> {
+    let output = diff_output(repo_path, base_branch, true).await?;
+
+    Ok(output
+        .lines()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Generates either a patch or name-only output without mutating the real
+/// repository index.
+async fn diff_output(
+    repo_path: PathBuf,
+    base_branch: String,
+    name_only: bool,
+) -> Result<String, GitError> {
     spawn_blocking(move || -> Result<String, GitError> {
         let index_path = run_git_command_sync(
             &repo_path,
@@ -328,12 +354,13 @@ pub(crate) async fn diff(repo_path: PathBuf, base_branch: String) -> Result<Stri
             base_branch
         };
 
-        run_git_command_with_index_sync(
-            &repo_path,
-            &["diff", diff_target.as_str()],
-            &temporary_index,
-            "Git diff failed",
-        )
+        let args = if name_only {
+            vec!["diff", "--name-only", diff_target.as_str()]
+        } else {
+            vec!["diff", diff_target.as_str()]
+        };
+
+        run_git_command_with_index_sync(&repo_path, &args, &temporary_index, "Git diff failed")
     })
     .await?
 }
@@ -1487,6 +1514,8 @@ mod tests {
 
         // Act
         let result = diff(temp_dir.path().to_path_buf(), "main".to_string()).await;
+        let changed_files =
+            diff_changed_files(temp_dir.path().to_path_buf(), "main".to_string()).await;
 
         // Assert
         let diff_output = result.expect("diff should succeed");
@@ -1499,6 +1528,10 @@ mod tests {
         assert!(diff_output.contains("staged change"));
         assert!(diff_output.contains("unstaged change"));
         assert!(diff_output.contains("untracked change"));
+        assert_eq!(
+            changed_files.expect("changed files should load"),
+            vec!["README.md".to_string(), "new.txt".to_string()]
+        );
         assert_eq!(cached_diff_after, cached_diff_before);
         assert_eq!(status_after, status_before);
     }

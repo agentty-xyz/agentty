@@ -1,0 +1,318 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT task.id AS \"id!: i64\",\n       task.acceptance_criteria,\n       task.area_violations,\n       task.areas_compliant AS \"areas_compliant?: bool\",\n       task.attempt_count,\n       COALESCE(child.added_lines, 0) AS \"child_added_lines!: i64\",\n       COALESCE(child.deleted_lines, 0) AS \"child_deleted_lines!: i64\",\n       child.has_diff AS \"child_has_diff?: bool\",\n       COALESCE(child.input_tokens, 0) AS \"child_input_tokens!: i64\",\n       COALESCE(child.output_tokens, 0) AS \"child_output_tokens!: i64\",\n       task.child_session_id,\n       child.status AS child_status,\n       child.questions AS child_questions,\n       child.summary AS child_summary,\n       task.continuation_generation,\n       task.continuation_prompt,\n       task.infrastructure_retry_count,\n       task.last_error,\n       task.merge_position,\n       task.prompt,\n       task.result_summary,\n       task.status,\n       task.task_key,\n       task.touched_areas,\n       task.title,\n       task.verification_reason,\n       task.verification_verdict\nFROM session_orchestration_task AS task\nLEFT JOIN session AS child\nON child.id = task.child_session_id\nWHERE task.session_orchestration_id = ?\nORDER BY task.merge_position, task.id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "acceptance_criteria",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "acceptance_criteria"
+          }
+        }
+      },
+      {
+        "name": "area_violations",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "area_violations"
+          }
+        }
+      },
+      {
+        "name": "areas_compliant?: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "areas_compliant"
+          }
+        }
+      },
+      {
+        "name": "attempt_count",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "attempt_count"
+          }
+        }
+      },
+      {
+        "name": "child_added_lines!: i64",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "child_deleted_lines!: i64",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "child_has_diff?: bool",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "has_diff"
+          }
+        }
+      },
+      {
+        "name": "child_input_tokens!: i64",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "child_output_tokens!: i64",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "child_session_id",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "child_session_id"
+          }
+        }
+      },
+      {
+        "name": "child_status",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "child_questions",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "questions"
+          }
+        }
+      },
+      {
+        "name": "child_summary",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "summary"
+          }
+        }
+      },
+      {
+        "name": "continuation_generation",
+        "ordinal": 14,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "continuation_generation"
+          }
+        }
+      },
+      {
+        "name": "continuation_prompt",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "continuation_prompt"
+          }
+        }
+      },
+      {
+        "name": "infrastructure_retry_count",
+        "ordinal": 16,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "infrastructure_retry_count"
+          }
+        }
+      },
+      {
+        "name": "last_error",
+        "ordinal": 17,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "last_error"
+          }
+        }
+      },
+      {
+        "name": "merge_position",
+        "ordinal": 18,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "merge_position"
+          }
+        }
+      },
+      {
+        "name": "prompt",
+        "ordinal": 19,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "prompt"
+          }
+        }
+      },
+      {
+        "name": "result_summary",
+        "ordinal": 20,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "result_summary"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 21,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "task_key",
+        "ordinal": 22,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "task_key"
+          }
+        }
+      },
+      {
+        "name": "touched_areas",
+        "ordinal": 23,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "touched_areas"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 24,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "verification_reason",
+        "ordinal": 25,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "verification_reason"
+          }
+        }
+      },
+      {
+        "name": "verification_verdict",
+        "ordinal": 26,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "verification_verdict"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "af2b84ae3aea7ba6ceb8e2e9ad6fd114f8b3505a15ae1de5d5076a80a476b792"
+}

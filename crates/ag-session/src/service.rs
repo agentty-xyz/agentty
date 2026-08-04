@@ -64,6 +64,18 @@ pub struct CoordinatorMessageRequest {
     pub message: String,
     /// Stable operation identifier reused when delivery is retried.
     pub operation_id: String,
+    /// Whether the machine-authored prompt is shown in the human transcript.
+    pub visibility: CoordinatorMessageVisibility,
+}
+
+/// Transcript treatment for one coordinator-owned prompt.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CoordinatorMessageVisibility {
+    /// Deliver agent context without duplicating board data in chat.
+    #[default]
+    Hidden,
+    /// Preserve a worker continuation instruction in its inspectable history.
+    Visible,
 }
 
 /// Host implementation boundary for session persistence and workflows.
@@ -497,6 +509,7 @@ mod tests {
                 CoordinatorMessageRequest {
                     message: "roll up".to_string(),
                     operation_id: "rollup-7".to_string(),
+                    visibility: CoordinatorMessageVisibility::Hidden,
                 },
             )
             .await
@@ -587,6 +600,7 @@ mod tests {
                 CoordinatorMessageRequest {
                     message: "roll up".to_string(),
                     operation_id: "rollup-1".to_string(),
+                    visibility: CoordinatorMessageVisibility::Hidden,
                 },
             )
             .await
