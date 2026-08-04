@@ -475,7 +475,11 @@ Always wrap these code elements in backticks when referenced in prose:
 
 ## Git Conventions
 
-- For all commit preparation and commit message work, use `skills/git-commit/SKILL.md`.
+- For all commit preparation, commit message, and pull-request description work, use
+  `skills/git-commit/SKILL.md`.
+- Write commits and pull-request descriptions for a reviewer who has not seen the
+  implementation: state the outcome, not the activity, and keep only content that
+  changes how the work is understood, reviewed, or used.
 - Never bypass `prek`-managed hooks (see MANDATORY).
 
 ## Release Automation
