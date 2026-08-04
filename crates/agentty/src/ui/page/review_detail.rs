@@ -16,7 +16,7 @@ pub struct ReviewDetailPage<'a> {
     comment_error: Option<&'a str>,
     /// Whether comments are currently being fetched in the background.
     is_loading_comments: bool,
-    /// Shared cache used for styled markdown body rendering.
+    /// Shared cache used for styled Markdown and embedded HTML body rendering.
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Requested review opened from the review list.
     review: &'a RequestedReview,
@@ -119,7 +119,6 @@ fn detail_lines(
         .map(str::trim)
         .filter(|body| !body.is_empty())
         .unwrap_or("No description provided.");
-    let description = review_description_markdown(description);
     let mut lines = vec![
         section_label("Title"),
         Line::from(review.title.clone()),
@@ -132,7 +131,7 @@ fn detail_lines(
 
     lines.extend(
         markdown_render_cache
-            .render(&description, width)
+            .render_html(description, width)
             .iter()
             .cloned(),
     );
@@ -254,175 +253,6 @@ fn error_line(text: impl Into<String>) -> Line<'static> {
         text.into(),
         Style::default().fg(style::palette::danger()),
     ))
-}
-
-/// Converts common HTML snippets embedded in forge markdown bodies to
-/// markdown-like text before terminal markdown rendering.
-fn review_description_markdown(description: &str) -> String {
-    let mut rendered = String::new();
-    let mut index = 0;
-
-    while index < description.len() {
-        if let Some(tag) = parse_html_tag(description, index) {
-            append_html_tag_replacement(&mut rendered, &tag);
-            index = tag.end_index;
-
-            continue;
-        }
-
-        if let Some((decoded, consumed)) = decode_html_entity(&description[index..]) {
-            rendered.push(decoded);
-            index += consumed;
-
-            continue;
-        }
-
-        let Some(character) = description[index..].chars().next() else {
-            break;
-        };
-        rendered.push(character);
-        index += character.len_utf8();
-    }
-
-    compact_blank_lines(&rendered)
-}
-
-/// Parsed representation of one HTML tag embedded in a forge description.
-struct HtmlTag<'a> {
-    /// Byte index immediately after the closing `>` in the source string.
-    end_index: usize,
-    /// Whether the tag starts with `/`.
-    is_closing: bool,
-    /// Lowercase-insensitive tag name without attributes.
-    name: &'a str,
-}
-
-/// Parses one ASCII HTML tag at `index`, returning `None` for literal `<`
-/// characters or malformed tags.
-fn parse_html_tag(description: &str, index: usize) -> Option<HtmlTag<'_>> {
-    let suffix = description.get(index..)?;
-    if !suffix.starts_with('<') {
-        return None;
-    }
-
-    let close_offset = suffix.find('>')?;
-    let raw_tag = suffix[1..close_offset].trim();
-    let (is_closing, tag_content) = raw_tag
-        .strip_prefix('/')
-        .map_or((false, raw_tag), |content| (true, content.trim_start()));
-    let name_end = tag_content
-        .char_indices()
-        .take_while(|(_, character)| character.is_ascii_alphanumeric())
-        .map(|(offset, character)| offset + character.len_utf8())
-        .last()?;
-    let name = &tag_content[..name_end];
-    if !name
-        .chars()
-        .next()
-        .is_some_and(|character| character.is_ascii_alphabetic())
-    {
-        return None;
-    }
-
-    Some(HtmlTag {
-        end_index: index + close_offset + 1,
-        is_closing,
-        name,
-    })
-}
-
-/// Appends markdown punctuation or spacing for one recognized HTML tag.
-fn append_html_tag_replacement(output: &mut String, tag: &HtmlTag<'_>) {
-    match (tag.name.to_ascii_lowercase().as_str(), tag.is_closing) {
-        ("h1", false) => append_line_prefix(output, "# "),
-        ("h2", false) => append_line_prefix(output, "## "),
-        ("h3" | "summary", false) => append_line_prefix(output, "### "),
-        ("h4", false) => append_line_prefix(output, "#### "),
-        ("li", false) => append_line_prefix(output, "- "),
-        ("blockquote", false) => append_line_prefix(output, "> "),
-        ("code", _) => output.push('`'),
-        ("strong" | "b", _) => output.push_str("**"),
-        ("em" | "i", _) => output.push('*'),
-        (
-            "br" | "p" | "details" | "summary" | "blockquote" | "h1" | "h2" | "h3" | "h4" | "li",
-            true,
-        )
-        | ("br" | "p" | "ul" | "ol" | "details", false) => append_line_break(output),
-        _ => {}
-    }
-}
-
-/// Appends `prefix` at the beginning of a logical markdown line.
-fn append_line_prefix(output: &mut String, prefix: &str) {
-    if !output.is_empty() && !output.ends_with('\n') {
-        output.push('\n');
-    }
-
-    output.push_str(prefix);
-}
-
-/// Appends a single line break while avoiding duplicate blank lines from
-/// adjacent HTML block tags.
-fn append_line_break(output: &mut String) {
-    if !output.ends_with('\n') {
-        output.push('\n');
-    }
-}
-
-/// Decodes a small set of named and numeric HTML entities common in forge
-/// review descriptions.
-fn decode_html_entity(input: &str) -> Option<(char, usize)> {
-    if !input.starts_with('&') {
-        return None;
-    }
-
-    let semicolon_index = input.find(';')?;
-    let entity = &input[1..semicolon_index];
-    let decoded = match entity {
-        "amp" => '&',
-        "lt" => '<',
-        "gt" => '>',
-        "quot" => '"',
-        "apos" | "#39" => '\'',
-        "nbsp" => ' ',
-        _ => decode_numeric_html_entity(entity)?,
-    };
-
-    Some((decoded, semicolon_index + 1))
-}
-
-/// Decodes decimal and hexadecimal numeric HTML entities.
-fn decode_numeric_html_entity(entity: &str) -> Option<char> {
-    let codepoint = if let Some(hexadecimal) = entity
-        .strip_prefix("#x")
-        .or_else(|| entity.strip_prefix("#X"))
-    {
-        u32::from_str_radix(hexadecimal, 16).ok()?
-    } else {
-        let decimal = entity.strip_prefix('#')?;
-        decimal.parse::<u32>().ok()?
-    };
-
-    char::from_u32(codepoint)
-}
-
-/// Collapses runs of blank lines produced by neighboring HTML block tags while
-/// preserving meaningful leading indentation inside content lines.
-fn compact_blank_lines(markdown: &str) -> String {
-    let mut compacted = Vec::new();
-    let mut previous_blank = false;
-
-    for line in markdown.lines().map(str::trim_end) {
-        let is_blank = line.trim().is_empty();
-        if is_blank && previous_blank {
-            continue;
-        }
-
-        compacted.push(line);
-        previous_blank = is_blank;
-    }
-
-    compacted.join("\n").trim().to_string()
 }
 
 /// Returns the width used to wrap rendered review description markdown.
@@ -726,18 +556,6 @@ mod tests {
 
         // Assert
         assert_eq!(max_scroll_offset, 12);
-    }
-
-    #[test]
-    fn test_review_description_markdown_preserves_literal_angle_brackets() {
-        // Arrange
-        let description = "Keep 2 < 3 and 5 > 4 visible.";
-
-        // Act
-        let rendered = review_description_markdown(description);
-
-        // Assert
-        assert_eq!(rendered, "Keep 2 < 3 and 5 > 4 visible.");
     }
 
     /// Builds one requested-review fixture for detail render tests.

@@ -42,10 +42,10 @@ For file-level detail, read the module docstrings directly.
   object-safe `SessionBackend` port exposed through the owned, cloneable
   `SessionService` for creation, lookup, messaging, structured question answers, durable
   coordinator submissions, cancellation, merge, and review-request workflows.
-- `crates/ag-tui-text/`: Shared Ratatui text-rendering library crate with markdown
-  parsing/styling, bounded mermaid-to-terminal diagram rendering, and terminal-width
-  wrapping/truncation helpers. Host applications inject semantic palette and cache
-  version settings at the render boundary.
+- `crates/ag-tui-text/`: Shared Ratatui text-rendering library crate with Markdown
+  parsing/styling, forge HTML normalization, bounded mermaid-to-terminal diagram
+  rendering, and terminal-width wrapping/truncation helpers. Host applications inject
+  semantic palette and cache version settings at the render boundary.
 - `crates/agentty/`: Main TUI application crate with composition root, application,
   domain, infrastructure, runtime, and UI layers.
 - `crates/testty/`: Rust-native TUI end-to-end testing framework with PTY-driven

@@ -4,7 +4,8 @@ use ratatui::text::{Line, Span};
 
 use crate::ui::{markdown, style};
 
-/// Appends comment author rows and two-space-indented markdown bodies.
+/// Appends comment author rows and two-space-indented Markdown bodies after
+/// normalizing embedded HTML.
 pub(crate) fn append_comment_bodies(
     lines: &mut Vec<Line<'static>>,
     comments: &[ReviewComment],
@@ -73,7 +74,7 @@ pub(crate) fn thread_anchor_line_range(thread: &ReviewCommentThread) -> Option<(
     Some((start_line.min(end_line), start_line.max(end_line)))
 }
 
-/// Appends one comment's author header followed by the markdown-rendered body.
+/// Appends one comment's author header followed by its rendered body.
 fn append_comment_body(
     lines: &mut Vec<Line<'static>>,
     comment: &ReviewComment,
@@ -88,7 +89,7 @@ fn append_comment_body(
     )));
 
     let body_width = width.saturating_sub(2).max(1);
-    let rendered = markdown_render_cache.render(&comment.body, body_width);
+    let rendered = markdown_render_cache.render_html(&comment.body, body_width);
     for rendered_line in rendered.iter() {
         let mut spans = Vec::with_capacity(rendered_line.spans.len() + 1);
         spans.push(Span::raw("  "));
@@ -185,6 +186,37 @@ mod tests {
             .join("\n");
         assert!(text.contains("alice"));
         assert!(text.contains("  Looks good."));
+    }
+
+    #[test]
+    fn test_append_comment_bodies_renders_embedded_html() {
+        // Arrange
+        let mut lines = Vec::new();
+        let comments = vec![ReviewComment {
+            author: "alice".to_string(),
+            body: concat!(
+                "<!-- hidden reviewer note -->",
+                "<p><strong>Explain</strong> this output.<br>",
+                "Use <code>stdout</code>.</p>",
+            )
+            .to_string(),
+        }];
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+
+        // Act
+        append_comment_bodies(&mut lines, &comments, &markdown_render_cache, 40);
+        let text = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("  Explain this output."));
+        assert!(text.contains("  Use stdout."));
+        assert!(!text.contains("hidden reviewer note"));
+        assert!(!text.contains("<strong>"));
+        assert!(!text.contains("<br>"));
     }
 
     #[test]

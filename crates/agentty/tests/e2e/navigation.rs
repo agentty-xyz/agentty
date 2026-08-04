@@ -160,7 +160,7 @@ if [ "$1" = "issue" ] && [ "$2" = "view" ] && [ "$3" = "124" ]; then
 {
   "assignees": [{"login": "octocat"}],
   "author": {"login": "hubot"},
-  "body": "Show the selected issue's base information without loading comments.",
+  "body": "<!-- hidden issue template --><h2>Implementation notes</h2><ul><li>Show the selected issue's base information without loading comments.</li><li>Use <code>shared</code> rendering.</li></ul><p><a title=\"x > y\">Quoted attribute link</a></p><p>Literal relation: a < b > c.</p><p>Control sample: &#x1b;[2J stays visible.</p>\n\nInline sample: `<span>literal inline HTML</span>`.\n\n```html\n<div>literal fenced HTML</div>\n```",
   "createdAt": "2026-07-01T10:00:00Z",
   "labels": [{"name": "enhancement"}, {"name": "ui"}],
   "number": 124,
@@ -460,6 +460,13 @@ fn test_assigned_github_issues() -> E2eResult {
                     .capture_labeled("issues", "Assigned GitHub issue list")
                     .press_key("Enter")
                     .wait_for_text("Description", 5000)
+                    .wait_for_text("Implementation notes", 5000)
+                    .wait_for_text("Use shared rendering.", 5000)
+                    .wait_for_text("Quoted attribute link", 5000)
+                    .wait_for_text("Literal relation: a < b > c.", 5000)
+                    .wait_for_text("Control sample: &#x1b;[2J stays visible.", 5000)
+                    .wait_for_text("<span>literal inline HTML</span>", 5000)
+                    .wait_for_text("<div>literal fenced HTML</div>", 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("issue_detail", "Selected GitHub issue details")
             },
@@ -486,6 +493,21 @@ fn test_assigned_github_issues() -> E2eResult {
                     "Show the selected issue's base information",
                     &full,
                 );
+                assertion::assert_text_in_region(frame, "Implementation notes", &full);
+                assertion::assert_text_in_region(frame, "Use shared rendering.", &full);
+                assertion::assert_text_in_region(frame, "Quoted attribute link", &full);
+                assertion::assert_text_in_region(frame, "Literal relation: a < b > c.", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Control sample: &#x1b;[2J stays visible.",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "<span>literal inline HTML</span>", &full);
+                assertion::assert_text_in_region(frame, "<div>literal fenced HTML</div>", &full);
+                assertion::assert_not_visible(frame, "hidden issue template");
+                assertion::assert_not_visible(frame, "<h2>");
+                assertion::assert_not_visible(frame, "y\">Quoted attribute link");
+                assertion::assert_not_visible(frame, "```html");
             },
         )?;
 

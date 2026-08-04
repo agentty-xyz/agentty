@@ -45,7 +45,7 @@ pub struct ReviewCommentPageInput<'a> {
     pub diff: &'a str,
     /// Whether the forge comment request is still running.
     pub is_loading_comments: bool,
-    /// Shared cache used for styled Markdown comment bodies.
+    /// Shared cache used for styled Markdown and embedded HTML comment bodies.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Vertical offset inside the selected comment detail panel.
     pub scroll_offset: u16,

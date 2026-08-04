@@ -221,7 +221,8 @@ separate groups. The Outdated group contains unresolved threads with stale ancho
 resolved threads stay in the Resolved group even when their anchors are outdated. The
 right panel shows the selected comment's author, resolution state, outdated-anchor
 metadata when applicable, current diff context for its attached line or range, and then
-the conversation. Outdated threads explicitly report that their original context is
+the conversation. Comment bodies render Markdown and common embedded HTML without
+showing HTML comments. Outdated threads explicitly report that their original context is
 unavailable instead of mapping the stale anchor onto the current diff. File-level
 comments similarly show that they have no attached code line instead of highlighting an
 arbitrary diff row. Current inline snippets use the same gutters and added/removed line

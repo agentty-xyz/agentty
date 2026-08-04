@@ -30,17 +30,20 @@ tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
 - **Inbox**: Read-only list of open GitHub pull requests or GitLab merge requests that
   request your review in the active project, including drafts. Press `s` to refresh and
   `Enter` to open a read-only detail page with the description and comment threads.
+  Description and comment bodies render Markdown plus common embedded HTML, while HTML
+  comments remain hidden.
 - **Issues**: Open GitHub issues assigned to the user authenticated with `gh` in the
   active project repository. The table labels the non-empty result group **Assigned to
   you**. Press `s` to refresh, use `j` / `k` to move through the first `100` results,
   and press `Enter` to load a read-only detail page with base metadata and the
-  description. From issue details, press `a` to create and start a regular session whose
-  first prompt instructs the agent to address the issue and includes its URL. If session
-  creation fails, the issue details remain open and show the failure inline, even when
-  the detail fetch finishes later. If prompt submission fails after creation, Agentty
-  opens the recoverable session with the error in its transcript. Comments are not
-  loaded in this iteration. Install the GitHub CLI and run `gh auth login` to enable
-  this tab.
+  description. Issue descriptions render Markdown plus common embedded HTML, while HTML
+  comments from issue templates remain hidden. From issue details, press `a` to create
+  and start a regular session whose first prompt instructs the agent to address the
+  issue and includes its URL. If session creation fails, the issue details remain open
+  and show the failure inline, even when the detail fetch finishes later. If prompt
+  submission fails after creation, Agentty opens the recoverable session with the error
+  in its transcript. Comments are not loaded in this iteration. Install the GitHub CLI
+  and run `gh auth login` to enable this tab.
 - **Settings**: Configure the color theme, orchestrator parallelism, per-role
   smart/fast/review model and reasoning defaults, the optional
   `Last used model as default` mode, the session commit coauthor trailer, and
@@ -60,12 +63,15 @@ on the left, while the selected entry's metadata, attached current-diff context,
 conversation appear on the right. In **Review**, **AgentReview**, or **Question**, press
 `a` to send the selected actionable inline thread to the active session agent or `A` to
 send every actionable inline thread. Standalone comments are read-only because they do
-not have forge thread IDs. The timer ticks only while the session is actively working.
-`Done` sessions use `c` to start a continuation draft and no longer expose review
-comments. File-level comments show an explicit no-line-context message instead of a
-synthetic code anchor. Each session stores the project's Smart reasoning default when it
-is created, so later default changes affect new sessions without relabeling existing
-ones.
+not have forge thread IDs. Conversation bodies render Markdown and common embedded HTML
+through the same shared text-rendering path used by issue and review-request details.
+Forge-authored description and comment input is capped at `1 MiB` before normalization;
+truncated bodies end with `[Forge content truncated at 1 MiB.]`. The timer ticks only
+while the session is actively working. `Done` sessions use `c` to start a continuation
+draft and no longer expose review comments. File-level comments show an explicit
+no-line-context message instead of a synthetic code anchor. Each session stores the
+project's Smart reasoning default when it is created, so later default changes affect
+new sessions without relabeling existing ones.
 
 The top status bar shows the current version and update status, and rotates short
 page-scoped `FYI:` messages once per minute in the **Sessions** list and session chat
