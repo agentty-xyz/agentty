@@ -597,8 +597,9 @@ actions. From an editable session view, press `/` to open a new composer with th
 leading slash already inserted. This replaces any prompt draft previously saved by
 returning to the sessions list:
 
-The command picker filters as you type and accepts contains or fuzzy abbreviations such
-as `/o` for `/model`.
+The command picker filters as you type, accepts contains or fuzzy abbreviations such as
+`/o` for `/model`, and wraps between its first and last options when you navigate with
+`j` / `k` or `Up` / `Down`.
 
 | Command        | Description                                                   |
 | -------------- | ------------------------------------------------------------- |

@@ -6563,6 +6563,60 @@ fn model_slash_command_contains_match_is_visible() -> E2eResult {
     Ok(())
 }
 
+/// Verify that moving up from the first slash-command option wraps selection
+/// to the final visible option.
+#[test]
+fn slash_command_selection_wraps_from_first_to_last() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("slash_command_selection_wraps")
+        .with_git()
+        .setup(seed_review_ready_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .press_key("/")
+                    .wait_for_text("Slash Command", 3000)
+                    .press_key("Up")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "slash_selection_wrapped",
+                        "Up wraps slash selection from the first option to the last",
+                    )
+            },
+            |frame, _report| {
+                let slash_menu_title = frame
+                    .find_text("Slash Command")
+                    .into_iter()
+                    .next()
+                    .expect("slash-command menu title should render");
+                let slash_menu_left_col = (0..=slash_menu_title.rect.col)
+                    .rev()
+                    .find(|column| frame.cell_text(slash_menu_title.rect.row, *column) == "╭")
+                    .expect("slash-command menu should have a left border");
+                let option_rows = (slash_menu_title.rect.row + 1..frame.rows())
+                    .take_while(|row| frame.cell_text(*row, slash_menu_left_col) == "│")
+                    .collect::<Vec<_>>();
+                let last_option_row = option_rows
+                    .last()
+                    .copied()
+                    .expect("slash-command menu should render at least one option");
+
+                assert_eq!(
+                    frame.cell_text(last_option_row, slash_menu_left_col + 1),
+                    ">",
+                    "expected the final visible slash command to be selected after wrapping up"
+                );
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify `/speed` exposes normal and fast modes, reflects the selection, and
 /// drops both fast mode and its speed display when `/model` switches to a
 /// provider without a speed control.
