@@ -4,7 +4,8 @@ Reusable skills available to agents in this repository.
 
 ## Available Skills
 
-- `git-commit` covers commit-message and commit-preparation workflow.
+- `git-commit` covers commit-message, commit-preparation, and pull-request description
+  workflow.
 - `bump-version` covers version bump selection, package metadata updates, and baseline
   release-preparation validation.
 - `review` covers structured code-review workflow.
