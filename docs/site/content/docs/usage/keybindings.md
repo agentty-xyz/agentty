@@ -301,6 +301,7 @@ short availability notice. Press `p` again to return to raw diff lines.
 | `Tab`                               | Focus chat output for scrolling     |
 | `@`                                 | Open file picker                    |
 | `/`                                 | Open slash commands                 |
+| `j` / `k` / `Up` / `Down`           | Navigate and wrap slash menu        |
 
 While the chat output is focused, the `d` diff-preview hint is hidden only when the
 latest successful refresh found an empty diff against the session's base branch. The

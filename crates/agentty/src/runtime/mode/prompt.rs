@@ -570,9 +570,7 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     if prompt_context.is_slash_command() {
-        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-            slash_state.selected_index = slash_state.selected_index.saturating_sub(1);
-        }
+        move_prompt_slash_selection(app, false);
 
         return Ok(());
     }
@@ -603,7 +601,7 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     if prompt_context.is_slash_command() {
-        advance_prompt_slash_selection(app);
+        move_prompt_slash_selection(app, true);
 
         return Ok(());
     }
@@ -686,7 +684,7 @@ fn navigate_prompt_history_down(app: &mut App) {
     }
 }
 
-fn advance_prompt_slash_selection(app: &mut App) {
+fn move_prompt_slash_selection(app: &mut App, is_next: bool) {
     let (
         available_agent_kinds,
         input_text,
@@ -732,8 +730,12 @@ fn advance_prompt_slash_selection(app: &mut App) {
     }
 
     if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        let max_index = option_count.saturating_sub(1);
-        slash_state.selected_index = (selected_index + 1).min(max_index);
+        let selected_index = selected_index.min(option_count - 1);
+        slash_state.selected_index = if is_next {
+            (selected_index + 1) % option_count
+        } else {
+            selected_index.checked_sub(1).unwrap_or(option_count - 1)
+        };
     }
 }
 
@@ -2525,16 +2527,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_advance_prompt_slash_selection_stays_on_last_agent() {
+    async fn test_next_prompt_slash_selection_wraps_to_first_agent() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
         if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
             slash_state.stage = PromptSlashStage::Agent;
             slash_state.selected_index = AgentKind::ALL.len().saturating_sub(1);
         }
+        let terminal = test_terminal();
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        advance_prompt_slash_selection(&mut app);
+        handle_prompt_down_key(&mut app, &terminal, &prompt_context)
+            .expect("slash selection should move down");
+
+        // Assert
+        if let AppMode::Prompt { slash_state, .. } = &app.mode {
+            assert_eq!(slash_state.stage, PromptSlashStage::Agent);
+            assert_eq!(slash_state.selected_index, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_previous_prompt_slash_selection_wraps_to_last_agent() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.stage = PromptSlashStage::Agent;
+            slash_state.selected_index = 0;
+        }
+        let terminal = test_terminal();
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_up_key(&mut app, &terminal, &prompt_context)
+            .expect("slash selection should move up");
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
@@ -2549,7 +2576,7 @@ mod tests {
     /// Verifies slash navigation leaves selection unchanged when the current
     /// command text matches no slash-command options.
     #[tokio::test]
-    async fn test_advance_prompt_slash_selection_ignores_empty_command_matches() {
+    async fn test_move_prompt_slash_selection_ignores_empty_command_matches() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/x", None).await;
         if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
@@ -2557,7 +2584,7 @@ mod tests {
         }
 
         // Act
-        advance_prompt_slash_selection(&mut app);
+        move_prompt_slash_selection(&mut app, true);
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
