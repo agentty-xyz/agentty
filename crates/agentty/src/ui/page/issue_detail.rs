@@ -144,7 +144,7 @@ fn issue_detail_lines(
     ]);
     lines.extend(
         markdown_render_cache
-            .render(description, width)
+            .render_html(description, width)
             .iter()
             .cloned(),
     );
@@ -282,6 +282,41 @@ mod tests {
         assert!(rendered_text.contains("Failed to start issue session: worktree unavailable"));
         assert!(rendered_text.contains("Title: Keep issue details reachable"));
         assert!(rendered_text.contains("One description line."));
+    }
+
+    #[test]
+    fn test_issue_detail_lines_renders_embedded_html() {
+        // Arrange
+        let issue = assigned_issue();
+        let mut detail = issue_detail();
+        detail.body = Some(
+            "<!-- hidden template --><h2>Details</h2><ul><li>Use <code>shared</code> \
+             rendering.</li></ul>"
+                .to_string(),
+        );
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+
+        // Act
+        let lines = issue_detail_lines(
+            &issue,
+            Some(&detail),
+            None,
+            None,
+            &markdown_render_cache,
+            80,
+        );
+        let rendered_text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(rendered_text.contains("Details"));
+        assert!(rendered_text.contains("- Use shared rendering."));
+        assert!(!rendered_text.contains("hidden template"));
+        assert!(!rendered_text.contains("<h2>"));
+        assert!(!rendered_text.contains("<code>"));
     }
 
     #[test]

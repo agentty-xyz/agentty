@@ -22,9 +22,15 @@ struct PromptBlock {
     next_line_index: usize,
 }
 
-/// Theme-aware cache for rendered markdown transcript lines.
+/// Theme-aware cache for rendered Markdown and forge HTML lines.
+///
+/// Markdown and HTML use separate bounded entry sets because identical source
+/// text can require different renderers. Both sets key entries by source text,
+/// width, and theme version, and [`Self::bump_version()`] invalidates them
+/// together.
 #[derive(Default)]
 pub struct MarkdownRenderCache {
+    html_inner: ag_tui_text::markdown::MarkdownRenderCache,
     inner: ag_tui_text::markdown::MarkdownRenderCache,
 }
 
@@ -45,8 +51,22 @@ impl MarkdownRenderCache {
         self.inner.render_with_settings(text, width, settings)
     }
 
+    /// Returns cached rendered lines after normalizing HTML embedded in a
+    /// forge-authored Markdown body.
+    pub fn render_html(&self, text: &str, width: usize) -> Arc<[Line<'static>]> {
+        let settings = style::text_render_settings();
+
+        self.html_inner.render_with_settings_and_renderer(
+            text,
+            width,
+            settings,
+            move |text, width| ag_tui_text::html::render_html_with_settings(text, width, settings),
+        )
+    }
+
     /// Bumps the cache version and drops all rendered entries.
     pub fn bump_version(&self) {
+        self.html_inner.bump_version();
         self.inner.bump_version();
     }
 
@@ -385,6 +405,31 @@ mod tests {
                         .contains(ratatui::style::Modifier::BOLD)
             })
         }));
+    }
+
+    #[test]
+    fn test_markdown_render_cache_keeps_html_entries_separate_and_invalidates_them() {
+        // Arrange
+        let cache = MarkdownRenderCache::default();
+        let input = "Use <strong>shared</strong> rendering.";
+        let initial_version = cache.version();
+
+        // Act
+        let markdown_lines = cache.render(input, 80);
+        let html_lines = cache.render_html(input, 80);
+        let cached_html_lines = cache.render_html(input, 80);
+        cache.bump_version();
+        let refreshed_markdown_lines = cache.render(input, 80);
+        let refreshed_html_lines = cache.render_html(input, 80);
+
+        // Assert
+        assert_eq!(markdown_lines[0].to_string(), input);
+        assert_eq!(html_lines[0].to_string(), "Use shared rendering.");
+        assert!(!Arc::ptr_eq(&markdown_lines, &html_lines));
+        assert!(Arc::ptr_eq(&html_lines, &cached_html_lines));
+        assert!(!Arc::ptr_eq(&markdown_lines, &refreshed_markdown_lines));
+        assert!(!Arc::ptr_eq(&html_lines, &refreshed_html_lines));
+        assert_eq!(cache.version(), initial_version + 1);
     }
 
     #[test]
