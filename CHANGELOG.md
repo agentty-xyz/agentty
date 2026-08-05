@@ -7,11 +7,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.14.1] - 2026-08-04
+
 ### Added
 
 - agentty: add standalone orchestration campaign boards with acceptance-criteria
   planning, read-only managed workers, question relay, verification-gated integration,
   follow-up continuations, detach ownership transfer, and approval-gated merges.
+
+### Changed
+
+- agentty: render embedded forge HTML in issue descriptions and review conversations
+  with bounded normalization, comment filtering, entity decoding, malformed-tag
+  preservation, and numeric control-character rejection.
+- agentty: use the `gemini-3.1-pro-preview` identifier for Gemini 3.1 Pro across Gemini
+  and Antigravity, migrate stored selections, and reject the retired identifier.
+- workflow: use bounded cumulative session summaries as intent context for diff-grounded
+  commit messages and pull-request descriptions.
+- ci: provide checksum-verified, architecture-specific E2E tool bundles for `amd64` and
+  `arm64`.
+- deps: update `schemars` from `1.2.1` to `1.2.2`.
+- release: bump workspace crate metadata and lockfile package versions to `0.14.1`.
 
 ### Fixed
 
@@ -32,6 +48,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   carries a multiline campaign-board snapshot.
 - agentty: hide the unavailable `p: PR` action from orchestrator sessions.
 - agentty: remove the misleading child-diff action from orchestrator campaign boards.
+- agentty: route review follow-ups for settled campaign workers through their original
+  branches and re-run verification after the additional work.
+- agentty: align orchestrator scroll bounds with the transcript pane below the campaign
+  board for line-by-line and half-page navigation.
+- agentty: fail startup recovery on storage or Git errors while preserving unfinished
+  operations for retry on a later launch.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.14.0] - 2026-08-03
 
