@@ -313,7 +313,11 @@ flowchart LR
    `AwaitingIntegration`, while flags or missing verdicts remain parked. Re-emitting a
    settled task key queues a visible continuation on the same child, resets other
    unintegrated passes to `Ready`, and returns the campaign to `Running`; newly keyed
-   work is persisted as `Proposed` and parks on `AwaitingApproval`.
+   work is persisted as `Proposed` and parks on `AwaitingApproval`. Every controller
+   turn receives a bounded, agent-only JSON snapshot with task keys and touched areas so
+   review findings can be routed back to completed workers without relying on remembered
+   plan details. The snapshot omits instruction-bearing titles and criteria, marks
+   truncated metadata explicitly, and is treated as inert routing data.
 1. Pressing `a` at `AwaitingIntegration` first opens a binary destination choice. The
    selected `integration_approach` and `Integrating` transition are persisted atomically
    so restart recovery cannot switch destinations. `Integrating` then serializes local

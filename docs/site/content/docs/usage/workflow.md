@@ -449,9 +449,13 @@ Multi-turn feedback is routed by scope. Reusing a settled task's exact key and t
 areas continues its existing worker, branch, and conversation and returns it to
 verification. Previously passed but not yet integrated siblings return to **Ready** so
 the next settlement verifies one coherent campaign snapshot instead of stalling behind
-old integration state. A new task key is treated as new scope and parks the campaign on
-the approval board before that worker starts. Once the controller is **Done**, a new
-goal or further feedback starts a new orchestrator campaign.
+old integration state. This supports review-first workflows: after review workers settle
+and the controller summarizes their findings, describe the implementation follow-up in
+the orchestrator chat. The controller routes those instructions to the same completed
+workers, which keep their branches and conversation context. A new task key is treated
+as new scope and parks the campaign on the approval board before that worker starts.
+Once the controller is `Done`, a new goal or further feedback starts a new orchestrator
+campaign.
 
 Press `c` on a running controller to cancel the orchestration. The confirmation names
 the number of running children. Approval first blocks new worker fan-out, then cancels
