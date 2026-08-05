@@ -34,15 +34,6 @@ impl<'a> OrchestrationPage<'a> {
         self
     }
 
-    fn board_height(&self) -> u16 {
-        campaign_board_height(
-            self.chat_input
-                .sessions
-                .get(self.chat_input.session_index)
-                .and_then(|session| session.orchestration_progress.as_deref()),
-        )
-    }
-
     fn render_board(&self, frame: &mut Frame, area: Rect) {
         let session = self.chat_input.sessions.get(self.chat_input.session_index);
         let progress = session
@@ -88,6 +79,32 @@ impl<'a> OrchestrationPage<'a> {
     }
 }
 
+impl Page for OrchestrationPage<'_> {
+    fn render(&mut self, frame: &mut Frame, area: Rect) {
+        let progress = self
+            .chat_input
+            .sessions
+            .get(self.chat_input.session_index)
+            .and_then(|session| session.orchestration_progress.as_deref());
+        let [board_area, chat_area] = campaign_page_areas(area, progress);
+
+        self.render_board(frame, board_area);
+        SessionChatPage::new(self.chat_input)
+            .can_open_worktree(self.can_open_worktree)
+            .render(frame, chat_area);
+    }
+}
+
+/// Splits a controller page into its campaign board and chat areas.
+///
+/// Runtime scroll metrics use the same chat area so line-step bounds match
+/// the compact transcript viewport painted below the campaign board.
+pub(crate) fn campaign_page_areas(area: Rect, progress: Option<&str>) -> [Rect; 2] {
+    let board_height = campaign_board_height(progress);
+
+    Layout::vertical([Constraint::Length(board_height), Constraint::Min(8)]).areas(area)
+}
+
 /// Calculates the bounded campaign board height from the current snapshot.
 fn campaign_board_height(progress: Option<&str>) -> u16 {
     let progress_lines = progress.map_or(1, |progress| progress.lines().count());
@@ -95,18 +112,6 @@ fn campaign_board_height(progress: Option<&str>) -> u16 {
     u16::try_from(progress_lines.saturating_add(4))
         .unwrap_or(12)
         .clamp(6, 12)
-}
-
-impl Page for OrchestrationPage<'_> {
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let areas = Layout::vertical([Constraint::Length(self.board_height()), Constraint::Min(8)])
-            .split(area);
-
-        self.render_board(frame, areas[0]);
-        SessionChatPage::new(self.chat_input)
-            .can_open_worktree(self.can_open_worktree)
-            .render(frame, areas[1]);
-    }
 }
 
 #[cfg(test)]
@@ -191,6 +196,20 @@ mod tests {
 
         // Assert
         assert_eq!(height, 12);
+    }
+
+    #[test]
+    fn campaign_page_areas_reserve_the_board_above_chat() {
+        // Arrange
+        let page_area = Rect::new(2, 3, 80, 24);
+        let progress = "Phase: Running\n1. api\n2. ui\n3. docs";
+
+        // Act
+        let [board_area, chat_area] = campaign_page_areas(page_area, Some(progress));
+
+        // Assert
+        assert_eq!(board_area, Rect::new(2, 3, 80, 8));
+        assert_eq!(chat_area, Rect::new(2, 11, 80, 16));
     }
 
     #[test]
