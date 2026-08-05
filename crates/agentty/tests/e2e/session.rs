@@ -1691,6 +1691,9 @@ case "$input" in
   *"Generate a concise, commit-style title"*)
     result='{\"answer\":\"Coordinate parallel work\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":null}'
     ;;
+  *"You are the controller for an Agentty orchestration"*"Implement the protocol review suggestions"*)
+    result='{\"answer\":\"I will continue the protocol worker with the review findings.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol findings on the same worker branch.\",\"touched_areas\":[\"crates/ag-protocol/\"],\"acceptance_criteria\":[\"Protocol review findings are implemented and checked\"]}],\"summary\":null}'
+    ;;
   *"Orchestration verification gate"*)
     result='{\"answer\":\"All workers finished. Review and merge protocol before UI.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Orchestration finished.\",\"turn\":\"Rolled up both worker results.\"},\"verification_verdicts\":[{\"reason\":\"Protocol criteria pass\",\"task_key\":\"protocol\",\"verdict\":\"pass\"},{\"reason\":\"UI criteria pass\",\"task_key\":\"ui\",\"verdict\":\"pass\"}]}'
     ;;
@@ -1699,6 +1702,10 @@ case "$input" in
     ;;
   *"You are the controller for an Agentty orchestration"*)
     result='{\"answer\":\"I propose independent protocol and UI workers, merged in that order.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol slice.\",\"touched_areas\":[\"crates/ag-protocol/\"],\"acceptance_criteria\":[\"Protocol worker completes\"]},{\"task_key\":\"ui\",\"title\":\"UI worker\",\"prompt\":\"Implement the UI slice.\",\"touched_areas\":[\"crates/agentty/src/ui/\"],\"acceptance_criteria\":[\"UI worker completes\"]}],\"summary\":null}'
+    ;;
+  *"Implement the protocol findings on the same worker branch"*)
+    sleep 4
+    result='{\"answer\":\"Protocol review suggestions implemented.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Protocol review suggestions implemented.\",\"turn\":\"Continued the existing worker and checked the findings.\"}}'
     ;;
   *"Task key: protocol"*)
     sleep 4
@@ -4215,6 +4222,20 @@ fn build_orchestration_scenario(scenario: Scenario) -> Scenario {
         .wait_for_stable_frame(300, 5000)
         .press_key("Enter")
         .wait_for_text("Tab: focus | Enter: send", 5000)
+        .write_text("Implement the protocol review suggestions")
+        .press_key("Enter")
+        .wait_for_text("Protocol worker [protocol]: continuing", 30000)
+        .capture_labeled(
+            "orchestration_continuation",
+            "Continue a completed worker from orchestrator chat",
+        )
+        .wait_for_text("Phase: AwaitingIntegration", 30000)
+        .capture_labeled(
+            "orchestration_reverification",
+            "Review the continued worker after reverification",
+        )
+        .press_key("Enter")
+        .wait_for_text("Tab: focus | Enter: send", 5000)
         .write_text("Continue protocol outside its declared scope")
         .press_key("Enter")
         .wait_for_text("Wait, then continue this task", 30000)
@@ -4246,6 +4267,28 @@ fn assert_orchestration_rollup_and_questions(frame: &TerminalFrame, report: &Pro
     assertion::assert_text_in_region(&approach_frame, "Integration Approach", &approach_full);
     assertion::assert_text_in_region(&approach_frame, "Local merges", &approach_full);
     assertion::assert_text_in_region(&approach_frame, "Review requests", &approach_full);
+
+    let continuation_frame = common::frame_from_capture(&report.captures[6]);
+    let continuation_full = Region::full(continuation_frame.cols(), continuation_frame.rows());
+    assertion::assert_text_in_region(
+        &continuation_frame,
+        "Protocol worker [protocol]: continuing",
+        &continuation_full,
+    );
+
+    let reverification_frame = common::frame_from_capture(&report.captures[7]);
+    let reverification_full =
+        Region::full(reverification_frame.cols(), reverification_frame.rows());
+    assertion::assert_text_in_region(
+        &reverification_frame,
+        "Phase: AwaitingIntegration",
+        &reverification_full,
+    );
+    assertion::assert_text_in_region(
+        &reverification_frame,
+        "Protocol worker [protocol]: awaiting integration",
+        &reverification_full,
+    );
 
     let full = Region::full(frame.cols(), frame.rows());
     assertion::assert_text_in_region(frame, "Question 1/1", &full);
