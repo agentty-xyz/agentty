@@ -525,23 +525,23 @@ impl SessionWorkerService {
 
     /// Marks unfinished operations from previous process runs as failed and
     /// closes any open active-work timing window at `timestamp_seconds`.
+    ///
+    /// # Errors
+    /// Returns an error when loading operations, cleaning interrupted rebases,
+    /// reconciling session status, or recording interrupted operations fails.
     pub(super) async fn fail_unfinished_operations_from_previous_run_at(
         db: &AppRepositories,
         base_path: &Path,
         git_client: Arc<dyn GitClient>,
         timestamp_seconds: i64,
-    ) {
-        let unfinished_operations = db
-            .operations()
-            .load_unfinished_session_operations()
-            .await
-            .unwrap_or_default();
+    ) -> Result<(), SessionError> {
+        let unfinished_operations = db.operations().load_unfinished_session_operations().await?;
         Self::abort_rebase_operations_from_previous_run(
             base_path,
             git_client.as_ref(),
             &unfinished_operations,
         )
-        .await;
+        .await?;
 
         let interrupted_session_ids: HashSet<String> = unfinished_operations
             .into_iter()
@@ -549,33 +549,35 @@ impl SessionWorkerService {
             .collect();
 
         for session_id in interrupted_session_ids {
-            // Best-effort: status persistence failure is non-critical.
-            let _ = db
-                .sessions()
+            db.sessions()
                 .update_session_status_with_timing_at(
                     &session_id,
                     &Status::Review.to_string(),
                     timestamp_seconds,
                 )
-                .await;
+                .await?;
         }
 
-        // Best-effort: operation tracking metadata is non-critical.
-        let _ = db
-            .operations()
+        db.operations()
             .fail_unfinished_session_operations(RESTART_FAILURE_REASON)
-            .await;
+            .await?;
+
+        Ok(())
     }
 
     /// Aborts stale git rebase state left by interrupted worker operations.
     ///
     /// Only worker-backed rebase operations are handled here because merge
     /// tasks are not yet persisted in `session_operation`.
+    ///
+    /// # Errors
+    /// Returns an error when Git cannot inspect or abort interrupted rebase
+    /// state.
     async fn abort_rebase_operations_from_previous_run(
         base_path: &Path,
         git_client: &dyn GitClient,
         unfinished_operations: &[SessionOperationRow],
-    ) {
+    ) -> Result<(), SessionError> {
         let mut rebase_session_ids = unfinished_operations
             .iter()
             .filter(|operation| operation.kind == REBASE_OPERATION_KIND)
@@ -586,14 +588,13 @@ impl SessionWorkerService {
 
         for session_id in rebase_session_ids {
             let folder = session_folder(base_path, session_id);
-            let Ok(is_rebase_in_progress) = git_client.is_rebase_in_progress(folder.clone()).await
-            else {
-                continue;
-            };
+            let is_rebase_in_progress = git_client.is_rebase_in_progress(folder.clone()).await?;
             if is_rebase_in_progress {
-                let _ = git_client.abort_rebase(folder).await;
+                git_client.abort_rebase(folder).await?;
             }
         }
+
+        Ok(())
     }
 
     /// Persists and enqueues a command on the per-session worker queue.
@@ -1067,12 +1068,16 @@ impl SessionWorkerService {
 
 impl SessionManager {
     /// Marks unfinished operations from previous process runs as failed.
+    ///
+    /// # Errors
+    /// Returns an error when startup recovery cannot finish, leaving the
+    /// unfinished operations available for a later retry.
     pub(crate) async fn fail_unfinished_operations_from_previous_run(
         db: AppRepositories,
         base_path: PathBuf,
         git_client: Arc<dyn GitClient>,
         clock: Arc<dyn Clock>,
-    ) {
+    ) -> Result<(), SessionError> {
         let timestamp_seconds = unix_timestamp_from_system_time(clock.now_system_time());
 
         SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
@@ -1081,7 +1086,7 @@ impl SessionManager {
             git_client,
             timestamp_seconds,
         )
-        .await;
+        .await
     }
 
     /// Persists and enqueues a command on the per-session worker queue.
@@ -1284,6 +1289,34 @@ mod tests {
             .expect("failed to insert session");
 
         project_id
+    }
+
+    /// Seeds one unfinished operation and its owning session for recovery
+    /// tests.
+    async fn seed_recovery_test_operation(
+        db: &AppRepositories,
+        status: Status,
+        operation_kind: &str,
+    ) {
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3.6-flash",
+                "main",
+                &status.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.operations()
+            .insert_session_operation("op-1", "sess1", operation_kind)
+            .await
+            .expect("failed to insert session operation");
     }
 
     fn empty_transcript() -> Arc<Mutex<SessionTranscript>> {
@@ -4527,6 +4560,211 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies recovery stops immediately when unfinished operations cannot
+    /// be loaded from storage.
+    async fn test_fail_unfinished_operations_from_previous_run_returns_load_error() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        pool.close().await;
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client.expect_is_rebase_in_progress().times(0);
+        mock_git_client.expect_abort_rebase().times(0);
+
+        // Act
+        let result = SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+            &db,
+            base_dir.path(),
+            Arc::new(mock_git_client),
+            300,
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Err(SessionError::Db(_))));
+    }
+
+    #[tokio::test]
+    /// Verifies recovery leaves the operation unfinished when stale rebase
+    /// cleanup fails.
+    async fn test_fail_unfinished_operations_from_previous_run_returns_rebase_cleanup_error() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        seed_recovery_test_operation(&db, Status::Rebasing, REBASE_OPERATION_KIND).await;
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_rebase_in_progress()
+            .once()
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client.expect_abort_rebase().once().returning(|_| {
+            Box::pin(async { Err(ag_git::GitError::OutputParse("abort failed".to_string())) })
+        });
+
+        // Act
+        let result = SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+            &db,
+            base_dir.path(),
+            Arc::new(mock_git_client),
+            300,
+        )
+        .await;
+        let operation_is_unfinished = db
+            .operations()
+            .is_session_operation_unfinished("op-1")
+            .await
+            .expect("failed to check operation status");
+
+        // Assert
+        assert!(matches!(result, Err(SessionError::Git(_))));
+        assert!(operation_is_unfinished);
+    }
+
+    #[tokio::test]
+    /// Verifies recovery stops before interrupting operations when session
+    /// status reconciliation fails.
+    async fn test_fail_unfinished_operations_from_previous_run_returns_session_reconciliation_error()
+     {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        seed_recovery_test_operation(&db, Status::InProgress, "reply").await;
+        sqlx::query(
+            "CREATE TRIGGER fail_recovery_session_status BEFORE UPDATE OF status ON session BEGIN \
+             SELECT RAISE(FAIL, 'session status failed'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create session status trigger");
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client.expect_is_rebase_in_progress().times(0);
+        mock_git_client.expect_abort_rebase().times(0);
+
+        // Act
+        let result = SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+            &db,
+            base_dir.path(),
+            Arc::new(mock_git_client),
+            300,
+        )
+        .await;
+        let operation_is_unfinished = db
+            .operations()
+            .is_session_operation_unfinished("op-1")
+            .await
+            .expect("failed to check operation status");
+
+        // Assert
+        assert!(matches!(result, Err(SessionError::Db(_))));
+        assert!(operation_is_unfinished);
+    }
+
+    #[tokio::test]
+    /// Verifies recovery returns an operation-interruption failure after
+    /// session reconciliation rather than admitting normal work.
+    async fn test_fail_unfinished_operations_from_previous_run_returns_operation_update_error() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        seed_recovery_test_operation(&db, Status::InProgress, "reply").await;
+        sqlx::query(
+            "CREATE TRIGGER fail_recovery_operation_update BEFORE UPDATE OF status ON \
+             session_operation BEGIN SELECT RAISE(FAIL, 'operation update failed'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create operation update trigger");
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client.expect_is_rebase_in_progress().times(0);
+        mock_git_client.expect_abort_rebase().times(0);
+
+        // Act
+        let result = SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+            &db,
+            base_dir.path(),
+            Arc::new(mock_git_client),
+            300,
+        )
+        .await;
+        let sessions = db
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+        let operation_is_unfinished = db
+            .operations()
+            .is_session_operation_unfinished("op-1")
+            .await
+            .expect("failed to check operation status");
+
+        // Assert
+        assert!(matches!(result, Err(SessionError::Db(_))));
+        assert_eq!(sessions[0].status, "Review");
+        assert!(operation_is_unfinished);
+    }
+
+    #[tokio::test]
+    /// Verifies a later startup successfully retries recovery after an
+    /// earlier operation-interruption failure.
+    async fn test_fail_unfinished_operations_from_previous_run_retries_after_failure() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        seed_recovery_test_operation(&db, Status::InProgress, "reply").await;
+        sqlx::query(
+            "CREATE TRIGGER fail_recovery_retry BEFORE UPDATE OF status ON session_operation \
+             BEGIN SELECT RAISE(FAIL, 'operation update failed'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create retry trigger");
+        let mut failed_recovery_git_client = MockGitClient::new();
+        failed_recovery_git_client
+            .expect_is_rebase_in_progress()
+            .times(0);
+        failed_recovery_git_client.expect_abort_rebase().times(0);
+
+        // Act
+        let failed_recovery =
+            SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+                &db,
+                base_dir.path(),
+                Arc::new(failed_recovery_git_client),
+                300,
+            )
+            .await;
+        sqlx::query("DROP TRIGGER fail_recovery_retry")
+            .execute(&pool)
+            .await
+            .expect("failed to remove retry trigger");
+        let mut successful_recovery_git_client = MockGitClient::new();
+        successful_recovery_git_client
+            .expect_is_rebase_in_progress()
+            .times(0);
+        successful_recovery_git_client
+            .expect_abort_rebase()
+            .times(0);
+        let successful_recovery =
+            SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+                &db,
+                base_dir.path(),
+                Arc::new(successful_recovery_git_client),
+                301,
+            )
+            .await;
+        let operation_is_unfinished = db
+            .operations()
+            .is_session_operation_unfinished("op-1")
+            .await
+            .expect("failed to check operation status");
+
+        // Assert
+        assert!(matches!(failed_recovery, Err(SessionError::Db(_))));
+        assert!(successful_recovery.is_ok());
+        assert!(!operation_is_unfinished);
+    }
+
+    #[tokio::test]
     /// Verifies restart recovery marks unfinished operations failed and
     /// restores affected sessions to `Review`.
     async fn test_fail_unfinished_operations_from_previous_run_restores_session_review_status() {
@@ -4567,7 +4805,8 @@ mod tests {
             Arc::new(mock_git_client),
             300,
         )
-        .await;
+        .await
+        .expect("restart recovery should complete");
         let sessions = db
             .sessions()
             .load_sessions()
@@ -4626,7 +4865,8 @@ mod tests {
             Arc::new(mock_git_client),
             300,
         )
-        .await;
+        .await
+        .expect("restart recovery should complete");
         let sessions = db
             .sessions()
             .load_sessions()

@@ -29,8 +29,9 @@ impl App {
     /// runs automatically after detecting a newer version.
     ///
     /// # Errors
-    /// Returns an error if startup project metadata cannot be persisted or
-    /// required startup state cannot be loaded from the database.
+    /// Returns an error if startup project metadata cannot be persisted,
+    /// required startup state cannot be loaded from the database, or restart
+    /// recovery cannot complete.
     pub async fn new(
         auto_update: bool,
         base_path: PathBuf,
@@ -60,8 +61,9 @@ impl App {
     /// `auto_update` flag for production startup.
     ///
     /// # Errors
-    /// Returns an error if startup project metadata cannot be persisted or
-    /// required startup state cannot be loaded from the database.
+    /// Returns an error if startup project metadata cannot be persisted,
+    /// required startup state cannot be loaded from the database, or restart
+    /// recovery cannot complete.
     #[cfg(test)]
     pub(crate) async fn new_with_clients(
         base_path: PathBuf,
@@ -84,8 +86,9 @@ impl App {
     /// Core constructor with all options explicit.
     ///
     /// # Errors
-    /// Returns an error if startup project metadata cannot be persisted or
-    /// required startup state cannot be loaded from the database.
+    /// Returns an error if startup project metadata cannot be persisted,
+    /// required startup state cannot be loaded from the database, or restart
+    /// recovery cannot complete.
     async fn new_with_options(
         auto_update: bool,
         base_path: PathBuf,
@@ -121,13 +124,13 @@ impl App {
             &clients,
         )
         .await?;
-        SessionManager::fail_unfinished_operations_from_previous_run(
+        Self::recover_startup_operations(
             repositories.clone(),
-            base_path.clone(),
+            base_path,
             services.git_client(),
-            Arc::clone(&clock),
+            clock,
         )
-        .await;
+        .await?;
         let projects = crate::app::project::ProjectManager::new(
             active_project_id,
             active_project_name,
@@ -351,6 +354,34 @@ impl App {
         ))
     }
 
+    /// Completes durable operation recovery before startup admits sessions.
+    ///
+    /// # Errors
+    /// Returns an actionable error when recovery cannot complete.
+    async fn recover_startup_operations(
+        repositories: AppRepositories,
+        base_path: PathBuf,
+        git_client: Arc<dyn GitClient>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<(), AppError> {
+        SessionManager::fail_unfinished_operations_from_previous_run(
+            repositories,
+            base_path,
+            git_client,
+            clock,
+        )
+        .await
+        .map_err(Self::startup_recovery_error)
+    }
+
+    /// Converts a failed startup recovery into an actionable application error.
+    fn startup_recovery_error(error: impl std::fmt::Display) -> AppError {
+        AppError::Workflow(format!(
+            "Startup recovery did not complete. Resolve the underlying storage or Git error and \
+             restart Agentty: {error}"
+        ))
+    }
+
     /// Resolves the configured upstream reference for one project branch.
     pub(super) async fn load_git_upstream_ref(
         git_client: &dyn GitClient,
@@ -462,5 +493,182 @@ impl App {
     /// Converts a project row into domain project model.
     pub(super) fn project_from_row(project_row: db::ProjectRow) -> crate::domain::project::Project {
         AppStartup::project_from_row(project_row)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::domain::session::Status;
+    use crate::infra::db::{AppRepositories, Database};
+
+    const PUBLIC_CONSTRUCTOR_COVERAGE_ENV: &str = "AGENTTY_PUBLIC_CONSTRUCTOR_COVERAGE";
+
+    #[tokio::test]
+    /// Verifies the public constructor starts with its production client
+    /// bundle in an isolated environment.
+    async fn test_new_uses_production_client_bundle() {
+        if std::env::var_os(PUBLIC_CONSTRUCTOR_COVERAGE_ENV).is_some() {
+            // Arrange
+            let base_dir = tempdir().expect("failed to create temp dir");
+            let base_path = base_dir.path().to_path_buf();
+            let database = Database::open_in_memory()
+                .await
+                .expect("failed to open in-memory database");
+
+            // Act
+            let app = App::new(false, base_path.clone(), base_path, None, database)
+                .await
+                .expect("public constructor should build app");
+
+            // Assert
+            assert!(app.selected_session().is_none());
+
+            return;
+        }
+
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let stub_bin = base_dir.path().join("stub-bin");
+        fs::create_dir_all(&stub_bin).expect("failed to create stub bin directory");
+        let codex_stub = stub_bin.join("codex");
+        fs::write(&codex_stub, "#!/bin/sh\nexit 0\n").expect("failed to write codex stub");
+        fs::set_permissions(&codex_stub, fs::Permissions::from_mode(0o755))
+            .expect("failed to mark codex stub executable");
+        let test_binary = std::env::current_exe().expect("failed to locate test binary");
+        let child_path = format!("{}:/usr/bin:/bin", stub_bin.display());
+        let child_coverage_profile = std::env::var_os("LLVM_PROFILE_FILE").map(|profile| {
+            profile
+                .to_string_lossy()
+                .replace(".profraw", "-child.profraw")
+        });
+
+        // Act
+        let mut child = Command::new(test_binary);
+        child
+            .arg("--exact")
+            .arg("app::core::new::tests::test_new_uses_production_client_bundle")
+            .arg("--nocapture")
+            .env(PUBLIC_CONSTRUCTOR_COVERAGE_ENV, "1")
+            .env("HOME", base_dir.path())
+            .env("PATH", child_path);
+        if let Some(profile) = child_coverage_profile {
+            child.env("LLVM_PROFILE_FILE", profile);
+        }
+        let child_status = child
+            .status()
+            .expect("failed to run isolated constructor test");
+
+        // Assert
+        assert!(child_status.success());
+    }
+
+    #[tokio::test]
+    /// Verifies incomplete recovery prevents startup from admitting sessions.
+    async fn test_new_with_clients_returns_actionable_error_when_recovery_fails() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let base_path = base_dir.path().to_path_buf();
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        sqlx::query("DROP TABLE session_operation")
+            .execute(&pool)
+            .await
+            .expect("failed to remove session operation table");
+
+        // Act
+        let error = App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            crate::test_support::test_app_clients(),
+        )
+        .await
+        .err();
+
+        // Assert
+        assert!(
+            error.is_some(),
+            "incomplete recovery should prevent app startup"
+        );
+        if let Some(error) = error {
+            assert!(matches!(error, AppError::Workflow(_)));
+            assert!(
+                error
+                    .to_string()
+                    .contains("Startup recovery did not complete")
+            );
+            assert!(error.to_string().contains("restart Agentty"));
+        }
+    }
+
+    #[tokio::test]
+    /// Verifies a subsequent startup admits sessions after recovery is
+    /// retried following a transient operation-update failure.
+    async fn test_new_with_clients_retries_recovery_after_operation_update_failure() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let base_path = base_dir.path().to_path_buf();
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let project_id = database
+            .projects()
+            .upsert_project(&base_path.to_string_lossy(), None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3.6-flash",
+                "main",
+                &Status::InProgress.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        database
+            .operations()
+            .insert_session_operation("op-1", "sess1", "reply")
+            .await
+            .expect("failed to insert session operation");
+        sqlx::query(
+            "CREATE TRIGGER fail_startup_recovery BEFORE UPDATE OF status ON session_operation \
+             BEGIN SELECT RAISE(FAIL, 'operation update failed'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create recovery trigger");
+
+        // Act
+        let failed_startup = App::new_with_clients(
+            base_path.clone(),
+            base_path.clone(),
+            None,
+            database.clone(),
+            crate::test_support::test_app_clients(),
+        )
+        .await;
+        sqlx::query("DROP TRIGGER fail_startup_recovery")
+            .execute(&pool)
+            .await
+            .expect("failed to remove recovery trigger");
+        let retried_startup = App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            crate::test_support::test_app_clients(),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(failed_startup, Err(AppError::Workflow(_))));
+        assert!(retried_startup.is_ok());
     }
 }

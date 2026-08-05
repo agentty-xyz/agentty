@@ -200,7 +200,7 @@ mod tests {
         }
     }
 
-    /// Clock fixture used to expose accidental fallbacks to SQLite wall time.
+    /// Clock fixture used to expose accidental fallbacks to `SQLite` wall time.
     struct FixedPersistenceClock;
 
     impl Clock for FixedPersistenceClock {
