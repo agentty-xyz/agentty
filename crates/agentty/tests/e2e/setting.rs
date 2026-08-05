@@ -139,7 +139,7 @@ fn settings_tab_shows_content() {
                 assertion::assert_text_in_region(frame, "Default Smart Model", &full);
                 assertion::assert_text_in_region(frame, "Default Fast Model", &full);
                 assertion::assert_text_in_region(frame, "Default Review Model", &full);
-                assertion::assert_text_in_region(frame, "gemini/gemini-3.1-pro", &full);
+                assertion::assert_text_in_region(frame, "gemini/gemini-3.1-pro-preview", &full);
                 assertion::assert_text_in_region(frame, "[high]", &full);
                 assertion::assert_text_in_region(frame, "Disabled", &full);
                 assertion::assert_text_in_region(frame, "Launch Configurations", &full);
@@ -380,7 +380,11 @@ fn settings_model_selector_uses_two_steps() {
                 let model_frame = common::frame_from_capture(&report.captures[1]);
                 let model_full = Region::full(model_frame.cols(), model_frame.rows());
                 assertion::assert_text_in_region(&model_frame, "Select model", &model_full);
-                assertion::assert_match_count(&model_frame, "gemini/gemini-3.1-pro [max]", 0);
+                assertion::assert_match_count(
+                    &model_frame,
+                    "gemini/gemini-3.1-pro-preview [max]",
+                    0,
+                );
             },
         )
         .expect("feature test failed");

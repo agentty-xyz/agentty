@@ -214,14 +214,15 @@ still run while GIF freshness is checked without invoking VHS or launching Chrom
 ### Record in the canonical container
 
 Committed hash sidecars must be produced by the same environment that CI verifies them
-in. `container/e2e.Containerfile` defines that environment: a pinned `linux/amd64` image
-with the Rust toolchain, `prek`, `cargo-nextest`, and the full VHS recording stack
-(`vhs`, `ttyd`, Chromium, `ffmpeg`, JetBrains Mono). Presubmit, postsubmit, and release
-checks pull this image from GHCR by digest and run the `test-agentty-e2e` hook inside it
-against a read-only checkout. Pull the same immutable digest for local recording instead
-of building or recording on the host. The host needs a running Podman environment only —
-no local Chrome or VHS — and the localhost-socket sandbox restriction below does not
-apply inside the container.
+in. `container/e2e.Containerfile` defines that environment: a pinned multi-architecture
+Linux image with the Rust toolchain, `prek`, `cargo-nextest`, and the full VHS recording
+stack (`vhs`, `ttyd`, Chromium, `ffmpeg`, JetBrains Mono). Presubmit, postsubmit, and
+release checks pull its `linux/amd64` variant from GHCR by digest and run the
+`test-agentty-e2e` hook inside it against a read-only checkout. Pull the same immutable
+manifest digest for native `linux/amd64` or `linux/arm64` recording instead of building
+or recording on the host. The host needs a running Podman environment only — no local
+Chrome or VHS — and the localhost-socket sandbox restriction below does not apply inside
+the container.
 
 On macOS or Windows, initialize the Podman machine once with `podman machine init`, then
 start it with `podman machine start` before pulling or running the image. Linux hosts
@@ -243,7 +244,7 @@ mkdir -p \
 
 podman pull "${e2e_image}"
 
-podman run --rm --platform linux/amd64 \
+podman run --rm \
   --user "$(id -u):$(id -g)" \
   --mount type=bind,source="$PWD",target=/workspace \
   --mount type=bind,source="${e2e_cache_root}",target=/cache \
@@ -268,16 +269,18 @@ nonempty-poster integrity check; a failed recording preserves the last valid pos
 #### Refresh the canonical image
 
 Only maintainers changing `container/e2e.Containerfile` should build and publish a
-replacement image. Build the `linux/amd64` candidate, run the affected focused feature
-tests with the local tag, then push `latest` after authenticating Podman to GHCR with
-package-write permission:
+replacement image. Build both supported platforms into one manifest, run affected
+focused feature tests against the native candidate for each available architecture, then
+push `latest` after authenticating Podman to GHCR with package-write permission:
 
 ```sh
-podman build --platform linux/amd64 \
+podman build --jobs 2 \
+  --platform linux/amd64,linux/arm64 \
+  --manifest ghcr.io/agentty-xyz/agentty-e2e:latest \
   --file container/e2e.Containerfile \
-  --tag ghcr.io/agentty-xyz/agentty-e2e:latest container
+  container
 
-podman push ghcr.io/agentty-xyz/agentty-e2e:latest
+podman manifest push --all ghcr.io/agentty-xyz/agentty-e2e:latest
 ```
 
 Copy the digest reported by `podman push` into every workflow `E2E_IMAGE` value and the

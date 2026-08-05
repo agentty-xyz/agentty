@@ -1321,7 +1321,7 @@ printf '{"event":"result","result":{"conversation_id":"stub-conversation","statu
         env,
         &[
             ("DefaultSmartAgent", "antigravity"),
-            ("DefaultSmartModel", "gemini-3.1-pro"),
+            ("DefaultSmartModel", "gemini-3.1-pro-preview"),
         ],
     )?;
 
@@ -1338,7 +1338,7 @@ fn seed_antigravity_oversized_replay_project(
         env,
         SessionSeed::regular(
             ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID,
-            "gemini-3.1-pro",
+            "gemini-3.1-pro-preview",
             "main",
             "Review",
         )
@@ -4732,7 +4732,7 @@ fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gemini-3.1-pro", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.1-pro-preview", &full);
                 assertion::assert_text_in_region(frame, "gemini-3.6-flash", &full);
                 assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
             },
@@ -6703,9 +6703,12 @@ fn session_speed_mode_selection() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Enter")
-                    .wait_for_text("gemini-3.1-pro", 3000)
+                    .wait_for_text("gemini-3.1-pro-preview", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Model: gemini-3.1-pro  Reasoning: high  Tokens:", 5000)
+                    .wait_for_text(
+                        "Model: gemini-3.1-pro-preview  Reasoning: high  Tokens:",
+                        5000,
+                    )
                     .capture_labeled(
                         "incompatible_model_normalizes_speed",
                         "Switching to Gemini drops fast mode and its speed display",
@@ -6731,7 +6734,7 @@ fn session_speed_mode_selection() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(
                     frame,
-                    "Model: gemini-3.1-pro  Reasoning: high  Tokens:",
+                    "Model: gemini-3.1-pro-preview  Reasoning: high  Tokens:",
                     &full,
                 );
                 assertion::assert_not_visible(frame, "· Fast");

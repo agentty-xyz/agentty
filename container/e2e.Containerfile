@@ -1,4 +1,4 @@
-# Canonical `linux/amd64` environment for the Agentty end-to-end feature suite.
+# Canonical Linux environment for the Agentty end-to-end feature suite.
 #
 # CI runs the `test-agentty-e2e` hook inside this image with a read-only
 # checkout, so `TESTTY_GIF_MODE=check` verifies committed GIF hash sidecars
@@ -8,29 +8,80 @@
 # between local recording and CI verification.
 # Every tool is pinned; upgrade pins deliberately and re-verify the committed
 # GIF hash sidecars.
-FROM scratch AS tool-downloads
+FROM debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS tool-downloads
+
+ARG TARGETARCH
 
 ARG RUSTUP_VERSION=1.29.0
-ADD https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init \
-    /rustup-init
-
 ARG NEXTEST_VERSION=0.9.140
-ADD https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-x86_64-unknown-linux-gnu.tar.gz \
-    /nextest.tar.gz
-
-# The `prek` pin matches `.github/actions/setup-rust-prek/action.yml`.
 ARG PREK_VERSION=0.4.3
-ADD https://github.com/j178/prek/releases/download/v${PREK_VERSION}/prek-x86_64-unknown-linux-gnu.tar.gz \
-    /prek.tar.gz
-
-# Debian bookworm does not package `ttyd`, so pin the upstream static binary.
 ARG TTYD_VERSION=1.7.7
-ADD https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64 \
-    /ttyd
-
 ARG VHS_VERSION=0.11.0
-ADD https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz \
-    /vhs.tar.gz
+
+ARG NEXTEST_SHA256_AMD64=4ee9aaa0d0171a985a5d0eb735b87355894c1c455972e9674fb9fdbd1387c9a3
+ARG NEXTEST_SHA256_ARM64=8b3f4d4560b6b0f83774fecc6be07e47716dbad0eb0bb6c3890f478f4affe4b6
+ARG PREK_SHA256_AMD64=8a8210d64476657cac3e797afa109011d8d872c09e3a407f50c5a4dde063b381
+ARG PREK_SHA256_ARM64=02e5731ce90e737bade91abef4c76c13495b9cc9290f609dfcb2e7b2a05b532e
+ARG RUSTUP_INIT_SHA256_AMD64=4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10
+ARG RUSTUP_INIT_SHA256_ARM64=9732d6c5e2a098d3521fca8145d826ae0aaa067ef2385ead08e6feac88fa5792
+ARG TTYD_SHA256_AMD64=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55
+ARG TTYD_SHA256_ARM64=b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165
+ARG VHS_SHA256_AMD64=99cb634587eaae0473c1ea377db80c3a048c27f99fe0a7febb1a1e8cb7ee5009
+ARG VHS_SHA256_ARM64=af782cddbf844a377df6ea41c0e72339393fa021be3f6cb70a2f47d48675d92b
+
+# Download the architecture-matched, checksum-verified tool bundle. The `prek`
+# pin matches `.github/actions/setup-rust-prek/action.yml`; Debian bookworm does
+# not package `ttyd`, so its upstream static binary is pinned here too.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && case "${TARGETARCH}" in \
+    amd64) \
+        rust_target=x86_64-unknown-linux-gnu; \
+        ttyd_arch=x86_64; \
+        vhs_arch=x86_64; \
+        nextest_sha256="${NEXTEST_SHA256_AMD64}"; \
+        prek_sha256="${PREK_SHA256_AMD64}"; \
+        rustup_init_sha256="${RUSTUP_INIT_SHA256_AMD64}"; \
+        ttyd_sha256="${TTYD_SHA256_AMD64}"; \
+        vhs_sha256="${VHS_SHA256_AMD64}" \
+        ;; \
+    arm64) \
+        rust_target=aarch64-unknown-linux-gnu; \
+        ttyd_arch=aarch64; \
+        vhs_arch=arm64; \
+        nextest_sha256="${NEXTEST_SHA256_ARM64}"; \
+        prek_sha256="${PREK_SHA256_ARM64}"; \
+        rustup_init_sha256="${RUSTUP_INIT_SHA256_ARM64}"; \
+        ttyd_sha256="${TTYD_SHA256_ARM64}"; \
+        vhs_sha256="${VHS_SHA256_ARM64}" \
+        ;; \
+    *) \
+        echo "unsupported target architecture: ${TARGETARCH}" >&2; \
+        exit 1 \
+        ;; \
+    esac \
+    && curl --fail --location --silent --show-error \
+        --output /rustup-init \
+        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rust_target}/rustup-init" \
+    && curl --fail --location --silent --show-error \
+        --output /nextest.tar.gz \
+        "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${rust_target}.tar.gz" \
+    && curl --fail --location --silent --show-error \
+        --output /prek.tar.gz \
+        "https://github.com/j178/prek/releases/download/v${PREK_VERSION}/prek-${rust_target}.tar.gz" \
+    && curl --fail --location --silent --show-error \
+        --output /ttyd \
+        "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${ttyd_arch}" \
+    && curl --fail --location --silent --show-error \
+        --output /vhs.tar.gz \
+        "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_${vhs_arch}.tar.gz" \
+    && echo "${rustup_init_sha256} */rustup-init" | sha256sum -c - \
+    && echo "${nextest_sha256} */nextest.tar.gz" | sha256sum -c - \
+    && echo "${prek_sha256} */prek.tar.gz" | sha256sum -c - \
+    && echo "${ttyd_sha256} */ttyd" | sha256sum -c - \
+    && echo "${vhs_sha256} */vhs.tar.gz" | sha256sum -c -
 
 FROM debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
@@ -73,23 +124,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG RUST_TOOLCHAIN=nightly-2026-07-15
 ENV RUSTUP_TOOLCHAIN=${RUST_TOOLCHAIN}
 
-ARG NEXTEST_SHA256=4ee9aaa0d0171a985a5d0eb735b87355894c1c455972e9674fb9fdbd1387c9a3
-ARG PREK_SHA256=8a8210d64476657cac3e797afa109011d8d872c09e3a407f50c5a4dde063b381
-ARG RUSTUP_INIT_SHA256=4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10
-ARG TTYD_SHA256=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55
-ARG VHS_SHA256=99cb634587eaae0473c1ea377db80c3a048c27f99fe0a7febb1a1e8cb7ee5009
-
 # Install the checksum-verified tools from the read-only download stage, then
 # create the unprivileged runtime user with the GitHub Actions runner's UID
 # 1001. Mounting the downloads keeps installers and archives out of the final
 # image layers, while the installed toolchain remains root-owned and read-only.
 RUN --mount=from=tool-downloads,target=/downloads \
-    echo "${RUSTUP_INIT_SHA256} */downloads/rustup-init" | sha256sum -c - \
-    && echo "${NEXTEST_SHA256} */downloads/nextest.tar.gz" | sha256sum -c - \
-    && echo "${PREK_SHA256} */downloads/prek.tar.gz" | sha256sum -c - \
-    && echo "${TTYD_SHA256} */downloads/ttyd" | sha256sum -c - \
-    && echo "${VHS_SHA256} */downloads/vhs.tar.gz" | sha256sum -c - \
-    && install -m 0755 /downloads/rustup-init /tmp/rustup-init \
+    install -m 0755 /downloads/rustup-init /tmp/rustup-init \
     && /tmp/rustup-init -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
     && rm /tmp/rustup-init \
     && tar -xzf /downloads/nextest.tar.gz -C "${CARGO_HOME}/bin" \

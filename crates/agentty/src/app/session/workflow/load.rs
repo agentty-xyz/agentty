@@ -1326,7 +1326,7 @@ mod tests {
             .expect("failed to upsert project");
         let session_id = "retired-active-session";
         db.sessions()
-            .insert_session(session_id, "claude-opus-4-6", "main", "Review", project_id)
+            .insert_session(session_id, "gemini-3.1-pro", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         let base_path = Path::new("/virtual/session-base");
@@ -1353,15 +1353,15 @@ mod tests {
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing reloaded session");
-        assert_eq!(session.agent.model(), AgentModel::ClaudeOpus5);
+        assert_eq!(session.agent.model(), AgentModel::Gemini31Pro);
         let row = db
             .sessions()
             .load_session(session_id)
             .await
             .expect("failed to load session row")
             .expect("missing session row");
-        assert_eq!(row.model, "claude-opus-5");
-        assert_eq!(row.agent, "claude");
+        assert_eq!(row.model, "gemini-3.1-pro-preview");
+        assert_eq!(row.agent, "antigravity");
     }
 
     /// Ensures automatic model migration does not make an old session appear
