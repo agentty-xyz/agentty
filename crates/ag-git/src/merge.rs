@@ -53,7 +53,7 @@ pub(crate) async fn squash_merge_diff(
 /// This function:
 /// 1. Verifies the repository is already on the target branch
 /// 2. Performs `git merge --squash` from the source branch
-/// 3. Commits the squashed changes (skipping configured commit hooks)
+/// 3. Commits the squashed changes, running configured commit hooks
 ///
 /// The caller is responsible for ensuring `repo_path` is already checked out
 /// on `target_branch`. Switching branches here would disrupt the user's
@@ -70,7 +70,7 @@ pub(crate) async fn squash_merge_diff(
 ///
 /// # Errors
 /// Returns an error if the repository is on the wrong branch, the merge
-/// fails, or the commit fails.
+/// fails, or the commit or a configured commit hook fails.
 pub(crate) async fn squash_merge(
     repo_path: PathBuf,
     source_branch: String,
@@ -119,10 +119,9 @@ pub(crate) async fn squash_merge(
             });
         }
 
-        // Skip hooks here because the session worktree already ran them.
         run_git_command_sync(
             &repo_path,
-            &["commit", "--no-verify", "-m", commit_message.as_str()],
+            &["commit", "-m", commit_message.as_str()],
             "Failed to commit squash merge",
         )?;
 
@@ -134,6 +133,8 @@ pub(crate) async fn squash_merge(
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::process::Command;
 
@@ -236,6 +237,44 @@ mod tests {
             SquashMergeOutcome::Committed,
         );
         assert_eq!(head_message, commit_message);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn squash_merge_runs_pre_commit_hook() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(temp_dir.path(), &["checkout", "-b", "feature-branch"]);
+        fs::write(temp_dir.path().join("feature.txt"), "feature content")
+            .expect("failed to write feature file");
+        run_git_command(temp_dir.path(), &["add", "feature.txt"]);
+        run_git_command(temp_dir.path(), &["commit", "-m", "Add feature"]);
+        run_git_command(temp_dir.path(), &["checkout", "main"]);
+        let hooks_dir = temp_dir.path().join("test-hooks");
+        fs::create_dir(&hooks_dir).expect("failed to create hooks directory");
+        let hook_path = hooks_dir.join("pre-commit");
+        fs::write(&hook_path, "#!/bin/sh\necho hook-blocked >&2\nexit 1\n")
+            .expect("failed to write pre-commit hook");
+        let mut permissions = fs::metadata(&hook_path)
+            .expect("failed to read hook metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&hook_path, permissions).expect("failed to make hook executable");
+        run_git_command(temp_dir.path(), &["config", "core.hooksPath", "test-hooks"]);
+
+        // Act
+        let error = squash_merge(
+            temp_dir.path().to_path_buf(),
+            "feature-branch".to_string(),
+            "main".to_string(),
+            "Squash merge feature".to_string(),
+        )
+        .await
+        .expect_err("pre-commit hook should block the squash commit");
+
+        // Assert
+        assert!(error.to_string().contains("hook-blocked"));
     }
 
     #[tokio::test]

@@ -1,5 +1,7 @@
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
@@ -11,6 +13,75 @@ use super::error::GitError;
 
 /// Maximum time one asynchronous git subprocess may run.
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// One asynchronous git invocation with owned process inputs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct AsyncGitCommand {
+    /// Git arguments excluding the executable name.
+    pub(super) arguments: Vec<String>,
+    /// Environment overrides applied after noninteractive defaults.
+    pub(super) environment: Vec<(String, String)>,
+    /// Repository or worktree used as the process working directory.
+    pub(super) repo_path: PathBuf,
+}
+
+impl AsyncGitCommand {
+    /// Builds one git command without environment overrides.
+    pub(super) fn new(repo_path: PathBuf, arguments: Vec<String>) -> Self {
+        Self {
+            arguments,
+            environment: Vec::new(),
+            repo_path,
+        }
+    }
+
+    /// Applies environment overrides to this command.
+    pub(super) fn with_environment(mut self, environment: Vec<(String, String)>) -> Self {
+        self.environment = environment;
+
+        self
+    }
+}
+
+/// Captured output from one asynchronous git subprocess.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct AsyncGitCommandOutput {
+    /// Process exit code, or `None` when terminated by a signal.
+    pub(super) exit_code: Option<i32>,
+    /// Captured standard error bytes.
+    pub(super) stderr: Vec<u8>,
+    /// Captured standard output bytes.
+    pub(super) stdout: Vec<u8>,
+}
+
+impl AsyncGitCommandOutput {
+    /// Returns whether the process exited successfully.
+    pub(super) fn success(&self) -> bool {
+        self.exit_code == Some(0)
+    }
+}
+
+/// Mockable boundary for cancellable asynchronous git subprocesses.
+#[cfg_attr(test, mockall::automock)]
+pub(super) trait AsyncGitCommandRunner: Send + Sync {
+    /// Runs one owned git command and captures its output.
+    fn run(
+        &self,
+        command: AsyncGitCommand,
+    ) -> Pin<Box<dyn Future<Output = Result<AsyncGitCommandOutput, GitError>> + Send>>;
+}
+
+/// Production asynchronous git runner backed by `tokio::process`.
+pub(super) struct ProcessAsyncGitCommandRunner;
+
+impl AsyncGitCommandRunner for ProcessAsyncGitCommandRunner {
+    fn run(
+        &self,
+        command: AsyncGitCommand,
+    ) -> Pin<Box<dyn Future<Output = Result<AsyncGitCommandOutput, GitError>> + Send>> {
+        Box::pin(async move { run_git_command_with_timeout(command, GIT_COMMAND_TIMEOUT).await })
+    }
+}
 
 /// Returns the origin repository URL normalized to HTTPS form when possible.
 ///
@@ -165,7 +236,7 @@ pub(super) fn resolve_git_dir(repo_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Runs a git command in a blocking task and returns stdout text.
+/// Runs a cancellable git command and returns stdout text.
 ///
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
@@ -176,59 +247,33 @@ pub(super) fn resolve_git_dir(repo_dir: &Path) -> Option<PathBuf> {
 /// The command stdout on success.
 ///
 /// # Errors
-/// Returns [`GitError::Join`] if the blocking task panics, or
-/// [`GitError::CommandFailed`] if spawning fails or the command exits with
-/// a non-zero status.
+/// Returns [`GitError::CommandTimedOut`] if the command exceeds its runtime
+/// bound, or [`GitError::CommandFailed`] if spawning fails or the command
+/// exits with a non-zero status.
 pub(super) async fn run_git_command(
     repo_path: PathBuf,
     args: Vec<String>,
     error_context: String,
 ) -> Result<String, GitError> {
-    spawn_blocking(move || {
-        let argument_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let command_runner = ProcessAsyncGitCommandRunner;
 
-        run_git_command_sync(&repo_path, &argument_refs, &error_context)
-    })
-    .await?
+    run_git_command_with_runner(
+        AsyncGitCommand::new(repo_path, args),
+        &error_context,
+        &command_runner,
+    )
+    .await
 }
 
-/// Runs a cancellable git subprocess with the cleanup-safe runtime bound.
-pub(super) async fn run_git_command_cancellable(
-    repo_path: PathBuf,
-    args: Vec<String>,
-    error_context: String,
+/// Runs one asynchronous git command through an injected runner.
+pub(super) async fn run_git_command_with_runner(
+    command: AsyncGitCommand,
+    error_context: &str,
+    command_runner: &dyn AsyncGitCommandRunner,
 ) -> Result<String, GitError> {
-    run_git_command_with_timeout(repo_path, args, error_context, GIT_COMMAND_TIMEOUT).await
-}
-
-/// Runs a cancellable git subprocess with an explicit runtime bound.
-async fn run_git_command_with_timeout(
-    repo_path: PathBuf,
-    args: Vec<String>,
-    error_context: String,
-    timeout: Duration,
-) -> Result<String, GitError> {
-    let argument_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let git_invocation = format_git_invocation(&argument_refs);
-    let mut command = AsyncCommand::new("git");
-    command
-        .args(&args)
-        .current_dir(repo_path)
-        .stdin(Stdio::null())
-        .kill_on_drop(true);
-    apply_non_interactive_environment_async(&mut command);
-
-    let output = time::timeout(timeout, command.output())
-        .await
-        .map_err(|_| GitError::CommandTimedOut {
-            command: git_invocation.clone(),
-            timeout,
-        })?
-        .map_err(|error| GitError::CommandFailed {
-            command: git_invocation.clone(),
-            stderr: error.to_string(),
-        })?;
-    if !output.status.success() {
+    let git_invocation = format_git_invocation_from_strings(&command.arguments);
+    let output = command_runner.run(command).await?;
+    if !output.success() {
         let detail = command_output_detail(&output.stdout, &output.stderr);
 
         return Err(GitError::CommandFailed {
@@ -238,6 +283,41 @@ async fn run_git_command_with_timeout(
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Runs a cancellable git subprocess with an explicit runtime bound.
+async fn run_git_command_with_timeout(
+    command: AsyncGitCommand,
+    timeout: Duration,
+) -> Result<AsyncGitCommandOutput, GitError> {
+    let git_invocation = format_git_invocation_from_strings(&command.arguments);
+    let mut process = AsyncCommand::new("git");
+    process
+        .args(&command.arguments)
+        .current_dir(&command.repo_path)
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    apply_non_interactive_environment_async(&mut process);
+    for (key, value) in &command.environment {
+        process.env(key, value);
+    }
+
+    let output = time::timeout(timeout, process.output())
+        .await
+        .map_err(|_| GitError::CommandTimedOut {
+            command: git_invocation.clone(),
+            timeout,
+        })?
+        .map_err(|error| GitError::CommandFailed {
+            command: git_invocation.clone(),
+            stderr: error.to_string(),
+        })?;
+
+    Ok(AsyncGitCommandOutput {
+        exit_code: output.status.code(),
+        stderr: output.stderr,
+        stdout: output.stdout,
+    })
 }
 
 /// Runs a git command in `repo_path` and returns stdout text.
@@ -280,6 +360,13 @@ fn format_git_invocation(args: &[&str]) -> String {
     }
 
     format!("git {}", args.join(" "))
+}
+
+/// Formats a git invocation from owned command arguments.
+pub(super) fn format_git_invocation_from_strings(args: &[String]) -> String {
+    let argument_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+
+    format_git_invocation(&argument_refs)
 }
 
 /// Runs a git command in `repo_path` and returns raw process output.
@@ -390,7 +477,7 @@ pub(super) fn command_output_detail(stdout: &[u8], stderr: &[u8]) -> String {
 /// Resolves the shared repository through cancellable async git commands.
 async fn resolve_shared_repo(repo_path: &Path) -> Result<SharedRepo, GitError> {
     let (git_dir, git_common_dir) = git_directory_paths_async(repo_path).await?;
-    let is_bare = run_git_command_cancellable(
+    let is_bare = run_git_command(
         git_common_dir.clone(),
         vec!["rev-parse".to_string(), "--is-bare-repository".to_string()],
         "Git rev-parse --is-bare-repository failed".to_string(),
@@ -426,7 +513,7 @@ fn normalize_repo_url(remote: &str) -> String {
 
 /// Reads absolute git and common git directory paths for `repo_path`.
 async fn git_directory_paths_async(repo_path: &Path) -> Result<(PathBuf, PathBuf), GitError> {
-    let stdout = run_git_command_cancellable(
+    let stdout = run_git_command(
         repo_path.to_path_buf(),
         vec![
             "rev-parse".to_string(),
@@ -482,7 +569,7 @@ async fn repo_root_from_git_dir_async(
         return Ok(repo_root);
     }
 
-    let root = run_git_command_cancellable(
+    let root = run_git_command(
         repo_path.to_path_buf(),
         vec!["rev-parse".to_string(), "--show-toplevel".to_string()],
         "Git rev-parse --show-toplevel failed".to_string(),
@@ -607,20 +694,19 @@ mod tests {
             .expect("failed to initialize temporary repository");
         assert!(init_output.status.success());
         let timeout = Duration::from_millis(25);
-
-        // Act
-        let error = run_git_command_with_timeout(
+        let command = AsyncGitCommand::new(
             temp_dir.path().to_path_buf(),
             vec![
                 "-c".to_string(),
                 "alias.agentty-hang=!exec sleep 1".to_string(),
                 "agentty-hang".to_string(),
             ],
-            "Git timeout test failed".to_string(),
-            timeout,
-        )
-        .await
-        .expect_err("long-running git command should time out");
+        );
+
+        // Act
+        let error = run_git_command_with_timeout(command, timeout)
+            .await
+            .expect_err("long-running git command should time out");
 
         // Assert
         assert!(matches!(
@@ -723,6 +809,25 @@ mod tests {
                 if command == "git definitely-not-a-git-subcommand"
                     && stderr.contains("Git command failed")),
             "unexpected error: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_root_from_git_dir_async_falls_back_to_git_toplevel() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        run_setup_git(temp_dir.path(), &["init", "--quiet"]);
+        let nonstandard_git_dir = temp_dir.path().join("custom-admin");
+
+        // Act
+        let repo_root = repo_root_from_git_dir_async(temp_dir.path(), &nonstandard_git_dir)
+            .await
+            .expect("repository root fallback should succeed");
+
+        // Assert
+        assert_eq!(
+            repo_root,
+            fs::canonicalize(temp_dir.path()).expect("repository root should canonicalize")
         );
     }
 

@@ -2085,8 +2085,21 @@ case "$*" in
   *"auth status"*)
     exit 0
     ;;
-  *"api --hostname github.com graphql"*)
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"carol"},"body":"Thanks for documenting the behavior."}]},"reviewThreads":{"nodes":[{"id":"thread-inline","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":1,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"<!-- hidden reviewer note --><p>Please <strong>explain</strong> why this review output is needed.<br>Use <code>stdout</code> context.</p>"}]}},{"id":"thread-file","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":null,"path":"src/main.rs","startLine":null,"subjectType":"FILE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please review the whole file."}]}},{"id":"thread-outdated","diffSide":"RIGHT","isOutdated":true,"isResolved":false,"line":2,"path":"old.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"erin"},"body":"This comment refers to an earlier diff."}]}},{"id":"thread-resolved","diffSide":"RIGHT","isOutdated":false,"isResolved":true,"line":3,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"dana"},"body":"This thread is complete."}]}},{"id":"thread-resolved-outdated","diffSide":"LEFT","isOutdated":true,"isResolved":true,"line":4,"path":"ro.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"frank"},"body":"This resolved thread refers to an earlier diff."}]}}]}}}}}'
+  *"addPullRequestReviewThreadReply"*)
+    printf '%s\n' '{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"reply-1"}}}}'
+    ;;
+  *"resolveReviewThread"*)
+    printf '%s\n' '{"data":{"resolveReviewThread":{"thread":{"id":"thread-inline","isResolved":true}}}}'
+    ;;
+  *"reviewThreads(first:"*)
+    cat <<'JSON'
+[{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-inline","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":1,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"<!-- hidden reviewer note --><p>Please <strong>explain</strong> why this review output is needed.<br>Use <code>stdout</code> context.</p>"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},{"id":"thread-file","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":null,"path":"src/main.rs","startLine":null,"subjectType":"FILE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please review the whole file."}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},{"id":"thread-outdated","diffSide":"RIGHT","isOutdated":true,"isResolved":false,"line":2,"path":"old.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"erin"},"body":"This comment refers to an earlier diff."}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},{"id":"thread-resolved","diffSide":"RIGHT","isOutdated":false,"isResolved":true,"line":3,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"dana"},"body":"This thread is complete."}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},{"id":"thread-resolved-outdated","diffSide":"LEFT","isOutdated":true,"isResolved":true,"line":4,"path":"ro.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"frank"},"body":"This resolved thread refers to an earlier diff."}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
+JSON
+    ;;
+  *"comments(first:"*)
+    cat <<'JSON'
+[{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"carol"},"body":"Thanks for documenting the behavior."}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
+JSON
     ;;
   *"pr view"*)
     printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'

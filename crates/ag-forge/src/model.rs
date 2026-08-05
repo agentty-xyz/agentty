@@ -271,7 +271,7 @@ pub struct ForgeRemote {
     pub namespace: String,
     /// Repository name without a trailing `.git` suffix.
     pub project: String,
-    /// Original remote URL returned by git.
+    /// Credential-free remote URL suitable for display and diagnostics.
     pub repo_url: String,
     /// Browser-openable repository URL derived from the remote.
     pub web_url: String,

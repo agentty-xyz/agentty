@@ -17,7 +17,7 @@ pub(crate) struct ParsedRemote {
     pub(crate) namespace: String,
     /// Repository name without a trailing `.git` suffix.
     pub(crate) project: String,
-    /// Original remote URL returned by git.
+    /// Credential-free remote URL suitable for display and diagnostics.
     pub(crate) repo_url: String,
     /// Browser-openable repository URL derived from the remote.
     pub(crate) web_url: String,
@@ -53,22 +53,24 @@ pub fn detect_remote(repo_url: &str) -> Result<ForgeRemote, ReviewRequestError> 
     }
 
     Err(ReviewRequestError::UnsupportedRemote {
-        repo_url: repo_url.to_string(),
+        repo_url: display_safe_remote_url(repo_url),
     })
 }
 
 /// Parses a git remote URL into normalized hostname and repository components.
 ///
-/// HTTPS remotes may include `username[:password]@` userinfo, which is ignored
-/// when deriving the forge host and browser-openable repository URL.
+/// URL remotes may include `username[:password]@` userinfo, which is removed
+/// before the remote is retained or used for diagnostics.
 pub(crate) fn parse_remote_url(repo_url: &str) -> Option<ParsedRemote> {
     let trimmed_url = repo_url.trim().trim_end_matches('/');
     if trimmed_url.is_empty() {
         return None;
     }
 
-    if let Some(ssh_remote) = trimmed_url.strip_prefix("git@") {
-        let (host, path) = ssh_remote.split_once(':')?;
+    if let Some((authority, path)) = trimmed_url.split_once(':')
+        && authority.contains('@')
+    {
+        let host = strip_userinfo(authority);
 
         return parsed_remote_from_parts(trimmed_url, host, path, true);
     }
@@ -117,9 +119,32 @@ fn parsed_remote_from_parts(
         host: host.clone(),
         namespace: namespace.to_string(),
         project: project.to_string(),
-        repo_url: repo_url.to_string(),
+        repo_url: display_safe_remote_url(repo_url),
         web_url: format!("https://{host}/{path}"),
     })
+}
+
+/// Removes URL userinfo so repository remotes are safe to retain or display.
+fn display_safe_remote_url(repo_url: &str) -> String {
+    let trimmed_url = repo_url.trim();
+    let Some((scheme, scheme_rest)) = trimmed_url.split_once("://") else {
+        if let Some((authority, suffix)) = trimmed_url.split_once(':')
+            && authority.contains('@')
+        {
+            return format!("{}:{suffix}", strip_userinfo(authority));
+        }
+
+        return trimmed_url.to_string();
+    };
+    let (authority, suffix) = scheme_rest
+        .split_once('/')
+        .map_or((scheme_rest, ""), |(authority, path)| (authority, path));
+    let authority = strip_userinfo(authority);
+    if suffix.is_empty() {
+        return format!("{scheme}://{authority}");
+    }
+
+    format!("{scheme}://{authority}/{suffix}")
 }
 
 /// Removes any `username[:password]@` prefix from one URL authority segment.
@@ -159,7 +184,7 @@ mod tests {
     #[test]
     fn detect_remote_ignores_https_userinfo_for_github_origin() {
         // Arrange
-        let repo_url = "https://build-bot:token123@github.com/agentty-xyz/agentty.git";
+        let repo_url = "https://test-user:placeholder@github.com/agentty-xyz/agentty.git";
 
         // Act
         let remote =
@@ -170,8 +195,72 @@ mod tests {
         assert_eq!(remote.host, "github.com");
         assert_eq!(remote.namespace, "agentty-xyz");
         assert_eq!(remote.project, "agentty");
-        assert_eq!(remote.repo_url, repo_url);
+        assert_eq!(
+            remote.repo_url,
+            "https://github.com/agentty-xyz/agentty.git"
+        );
         assert_eq!(remote.web_url, "https://github.com/agentty-xyz/agentty");
+    }
+
+    #[test]
+    fn detect_remote_redacts_https_userinfo_from_unsupported_remote_error() {
+        // Arrange
+        let repo_url = "https://test-user:placeholder@example.com/team/project.git";
+
+        // Act
+        let error = detect_remote(repo_url).expect_err("unsupported remote should fail");
+        let detail = error.detail_message();
+
+        // Assert
+        assert_eq!(
+            error,
+            ReviewRequestError::UnsupportedRemote {
+                repo_url: "https://example.com/team/project.git".to_string(),
+            }
+        );
+        assert!(!detail.contains("test-user"));
+        assert!(!detail.contains("placeholder"));
+    }
+
+    #[test]
+    fn display_safe_remote_url_redacts_userinfo_without_a_path() {
+        // Arrange
+        let repo_url = "https://test-user:placeholder@example.com";
+
+        // Act
+        let sanitized = display_safe_remote_url(repo_url);
+
+        // Assert
+        assert_eq!(sanitized, "https://example.com");
+    }
+
+    #[test]
+    fn display_safe_remote_url_preserves_scp_style_remote_without_userinfo() {
+        // Arrange
+        let repo_url = "github.com:agentty-xyz/agentty.git";
+
+        // Act
+        let sanitized = display_safe_remote_url(repo_url);
+
+        // Assert
+        assert_eq!(sanitized, repo_url);
+    }
+
+    #[test]
+    fn detect_remote_redacts_scp_style_ssh_userinfo() {
+        // Arrange
+        let repo_url = "test-user@gitlab.com:agentty-xyz/agentty.git";
+
+        // Act
+        let remote = detect_remote(repo_url).expect("GitLab SSH remote should be supported");
+
+        // Assert
+        assert_eq!(remote.forge_kind, ForgeKind::GitLab);
+        assert_eq!(
+            remote.repo_url,
+            "gitlab.com:agentty-xyz/agentty.git".to_string()
+        );
+        assert!(!remote.repo_url.contains("test-user"));
     }
 
     #[test]

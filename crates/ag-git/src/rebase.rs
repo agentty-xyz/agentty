@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
@@ -12,8 +13,8 @@ use super::repo::{
 };
 use crate::{Sleeper, ThreadSleeper};
 
-const GIT_INDEX_LOCK_RETRY_ATTEMPTS: usize = 5;
-const GIT_INDEX_LOCK_RETRY_DELAY: Duration = Duration::from_millis(100);
+pub(super) const GIT_INDEX_LOCK_RETRY_ATTEMPTS: usize = 5;
+pub(super) const GIT_INDEX_LOCK_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 /// Executes git commands for rebase operations.
 #[cfg_attr(test, mockall::automock)]
@@ -25,6 +26,22 @@ trait GitCommandRunner: Send + Sync {
         args: &[String],
         environment: &[(String, String)],
     ) -> Result<Output, GitError>;
+}
+
+/// Removes stale rebase metadata through an injectable filesystem boundary.
+#[cfg_attr(test, mockall::automock)]
+trait RebaseMetadataCleaner: Send + Sync {
+    /// Removes exact rebase metadata entries under the resolved git directory.
+    fn clean_stale_metadata(&self, repo_path: &Path) -> Result<bool, GitError>;
+}
+
+/// Rebase metadata cleaner backed by the local filesystem.
+struct FilesystemRebaseMetadataCleaner;
+
+impl RebaseMetadataCleaner for FilesystemRebaseMetadataCleaner {
+    fn clean_stale_metadata(&self, repo_path: &Path) -> Result<bool, GitError> {
+        clean_stale_rebase_metadata(repo_path)
+    }
 }
 
 /// Git command runner backed by process execution.
@@ -222,9 +239,9 @@ pub(crate) async fn rebase_continue(repo_path: PathBuf) -> Result<RebaseStepResu
 
 /// Aborts an in-progress rebase.
 ///
-/// When git reports stale or inconsistent rebase metadata and abort cannot
-/// complete normally, this helper removes stale `rebase-merge`/`rebase-apply`
-/// paths as a recovery fallback.
+/// When Git reports a known stale or inactive rebase state, this removes only
+/// `rebase-merge` and `rebase-apply` under the resolved git directory. Other
+/// failures are returned unchanged with their command output.
 ///
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
@@ -236,30 +253,11 @@ pub(crate) async fn rebase_continue(repo_path: PathBuf) -> Result<RebaseStepResu
 /// Returns a [`GitError`] when `git rebase --abort` cannot be executed.
 pub(crate) async fn abort_rebase(repo_path: PathBuf) -> Result<(), GitError> {
     spawn_blocking(move || {
-        let output =
-            run_git_command_with_index_lock_retry(&repo_path, &["rebase", "--abort"], &[])?;
+        let command_runner = ProcessGitCommandRunner;
+        let metadata_cleaner = FilesystemRebaseMetadataCleaner;
+        let sleeper = ThreadSleeper;
 
-        if !output.status.success() {
-            let detail = command_output_detail(&output.stdout, &output.stderr);
-            if !is_stale_or_inactive_rebase_error(&detail) {
-                return Err(GitError::CommandFailed {
-                    command: "git rebase --abort".to_string(),
-                    stderr: format!("Failed to abort rebase: {detail}."),
-                });
-            }
-
-            let cleaned_stale_metadata = clean_stale_rebase_metadata(&repo_path)?;
-            if cleaned_stale_metadata {
-                return Ok(());
-            }
-
-            return Err(GitError::CommandFailed {
-                command: "git rebase --abort".to_string(),
-                stderr: format!("Failed to abort rebase: {detail}."),
-            });
-        }
-
-        Ok(())
+        abort_rebase_with_dependencies(&repo_path, &command_runner, &sleeper, &metadata_cleaner)
     })
     .await?
 }
@@ -460,6 +458,84 @@ fn run_rebase_step(
     })
 }
 
+/// Aborts one rebase through injected process and retry boundaries.
+fn abort_rebase_with_dependencies(
+    repo_path: &Path,
+    command_runner: &dyn GitCommandRunner,
+    sleeper: &dyn Sleeper,
+    metadata_cleaner: &dyn RebaseMetadataCleaner,
+) -> Result<(), GitError> {
+    let output = run_git_command_with_index_lock_retry_with_dependencies(
+        repo_path,
+        &["rebase", "--abort"],
+        &[],
+        command_runner,
+        sleeper,
+    )?;
+    if !output.status.success() {
+        let detail = command_output_detail(&output.stdout, &output.stderr);
+        if is_stale_or_inactive_rebase_error(&detail) {
+            match metadata_cleaner.clean_stale_metadata(repo_path) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(cleanup_error) => {
+                    return Err(GitError::CommandFailed {
+                        command: "git rebase --abort".to_string(),
+                        stderr: format!(
+                            "Failed to abort rebase: {detail}. Stale rebase metadata cleanup \
+                             failed: {cleanup_error}."
+                        ),
+                    });
+                }
+            }
+        }
+
+        return Err(GitError::CommandFailed {
+            command: "git rebase --abort".to_string(),
+            stderr: format!("Failed to abort rebase: {detail}."),
+        });
+    }
+
+    Ok(())
+}
+
+/// Returns whether abort output identifies a known stale or inactive rebase.
+fn is_stale_or_inactive_rebase_error(detail: &str) -> bool {
+    let normalized_detail = detail.to_ascii_lowercase();
+
+    normalized_detail.contains("no rebase in progress")
+        || normalized_detail.contains("already a rebase-merge directory")
+        || normalized_detail.contains("already a rebase-apply directory")
+        || normalized_detail.contains("middle of another rebase")
+}
+
+/// Removes exact stale rebase metadata entries from the resolved git directory.
+fn clean_stale_rebase_metadata(repo_path: &Path) -> Result<bool, GitError> {
+    let git_dir = resolve_git_dir(repo_path)
+        .ok_or_else(|| GitError::OutputParse("Failed to resolve git directory".to_string()))?;
+    let removed_rebase_merge = remove_stale_rebase_metadata_path(&git_dir.join("rebase-merge"))?;
+    let removed_rebase_apply = remove_stale_rebase_metadata_path(&git_dir.join("rebase-apply"))?;
+
+    Ok(removed_rebase_merge || removed_rebase_apply)
+}
+
+/// Removes one exact metadata path without following directory symlinks.
+fn remove_stale_rebase_metadata_path(path: &Path) -> Result<bool, GitError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+
+    if metadata.file_type().is_dir() {
+        fs::remove_dir_all(path)?;
+    } else {
+        fs::remove_file(path)?;
+    }
+
+    Ok(true)
+}
+
 /// Runs a git command and retries when `index.lock` contention occurs.
 pub(super) fn run_git_command_with_index_lock_retry(
     repo_path: &Path,
@@ -529,59 +605,8 @@ pub(super) fn is_rebase_conflict(detail: &str) -> bool {
         || detail.contains("Committing is not possible")
 }
 
-/// Returns whether abort output indicates stale or inactive rebase metadata.
-fn is_stale_or_inactive_rebase_error(detail: &str) -> bool {
-    let normalized_detail = detail.to_ascii_lowercase();
-
-    normalized_detail.contains("already a rebase-merge directory")
-        || normalized_detail.contains("already a rebase-apply directory")
-        || normalized_detail.contains("middle of another rebase")
-        || normalized_detail.contains("no rebase in progress")
-        || normalized_detail.contains("rebase-merge")
-        || normalized_detail.contains("rebase-apply")
-}
-
-/// Removes stale rebase metadata directories/files from the git directory.
-///
-/// Returns `true` when at least one stale metadata path was removed.
-///
-/// # Errors
-/// Returns a [`GitError`] when the git directory cannot be resolved or
-/// metadata cleanup fails.
-fn clean_stale_rebase_metadata(repo_path: &Path) -> Result<bool, GitError> {
-    let git_dir = resolve_git_dir(repo_path)
-        .ok_or_else(|| GitError::OutputParse("Failed to resolve git directory".to_string()))?;
-    let rebase_merge = git_dir.join("rebase-merge");
-    let rebase_apply = git_dir.join("rebase-apply");
-    let removed_rebase_merge = remove_stale_rebase_metadata_path(&rebase_merge)?;
-    let removed_rebase_apply = remove_stale_rebase_metadata_path(&rebase_apply)?;
-
-    Ok(removed_rebase_merge || removed_rebase_apply)
-}
-
-/// Removes one stale rebase metadata path and returns whether anything changed.
-///
-/// # Errors
-/// Returns a [`GitError`] when a stale metadata path exists but cannot be
-/// removed.
-fn remove_stale_rebase_metadata_path(path: &Path) -> Result<bool, GitError> {
-    if !path.exists() {
-        return Ok(false);
-    }
-
-    if path.is_dir() {
-        fs::remove_dir_all(path)?;
-
-        return Ok(true);
-    }
-
-    fs::remove_file(path)?;
-
-    Ok(true)
-}
-
 /// Returns whether git output indicates transient index lock contention.
-fn is_git_index_lock_error(detail: &str) -> bool {
+pub(super) fn is_git_index_lock_error(detail: &str) -> bool {
     let normalized_detail = detail.to_ascii_lowercase();
 
     normalized_detail.contains("index.lock")
@@ -593,6 +618,8 @@ fn is_git_index_lock_error(detail: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs as unix_fs;
     use std::process::{Command, Output};
 
     use mockall::predicate::eq;
@@ -791,15 +818,327 @@ mod tests {
     }
 
     #[test]
-    fn test_is_stale_or_inactive_rebase_error_matches_no_rebase_message() {
+    fn abort_rebase_succeeds_through_injected_boundaries() {
         // Arrange
-        let detail = "fatal: No rebase in progress?";
+        let mut command_runner = MockGitCommandRunner::new();
+        let metadata_cleaner = MockRebaseMetadataCleaner::new();
+        let mut sleeper = MockSleeper::new();
+        command_runner
+            .expect_run_git_command_output_with_env()
+            .withf(|repo_path, args, environment| {
+                repo_path == Path::new("session-worktree")
+                    && args == ["rebase", "--abort"]
+                    && environment.is_empty()
+            })
+            .once()
+            .returning(|_, _, _| Ok(success_output()));
+        sleeper.expect_sleep().times(0);
 
         // Act
-        let is_stale_metadata_error = is_stale_or_inactive_rebase_error(detail);
+        let result = abort_rebase_with_dependencies(
+            Path::new("session-worktree"),
+            &command_runner,
+            &sleeper,
+            &metadata_cleaner,
+        );
 
         // Assert
-        assert!(is_stale_metadata_error);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn abort_rebase_preserves_command_runner_error() {
+        // Arrange
+        let mut command_runner = MockGitCommandRunner::new();
+        let metadata_cleaner = MockRebaseMetadataCleaner::new();
+        let mut sleeper = MockSleeper::new();
+        command_runner
+            .expect_run_git_command_output_with_env()
+            .once()
+            .return_once(|_, _, _| {
+                Err(GitError::CommandFailed {
+                    command: "git rebase --abort".to_string(),
+                    stderr: "failed to spawn git".to_string(),
+                })
+            });
+        sleeper.expect_sleep().times(0);
+
+        // Act
+        let error = abort_rebase_with_dependencies(
+            Path::new("session-worktree"),
+            &command_runner,
+            &sleeper,
+            &metadata_cleaner,
+        )
+        .expect_err("command runner failure should be preserved");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::CommandFailed { command, stderr }
+                if command == "git rebase --abort" && stderr == "failed to spawn git"
+        ));
+    }
+
+    #[test]
+    fn abort_rebase_preserves_actionable_command_failure() {
+        // Arrange
+        let mut command_runner = MockGitCommandRunner::new();
+        let metadata_cleaner = MockRebaseMetadataCleaner::new();
+        let mut sleeper = MockSleeper::new();
+        command_runner
+            .expect_run_git_command_output_with_env()
+            .once()
+            .returning(|_, _, _| {
+                let mut output = non_lock_failure_output();
+                output.stderr = b"fatal: cannot open .git/rebase-merge/head-name".to_vec();
+
+                Ok(output)
+            });
+        sleeper.expect_sleep().times(0);
+
+        // Act
+        let error = abort_rebase_with_dependencies(
+            Path::new("session-worktree"),
+            &command_runner,
+            &sleeper,
+            &metadata_cleaner,
+        )
+        .expect_err("failed abort should preserve the git error");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::CommandFailed { command, stderr }
+                if command == "git rebase --abort"
+                    && stderr.contains(".git/rebase-merge/head-name")
+        ));
+    }
+
+    #[test]
+    fn abort_rebase_recovers_when_stale_metadata_is_removed() {
+        // Arrange
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let git_dir = temp_dir.path().join(".git");
+        let stale_metadata = git_dir.join("rebase-merge");
+        fs::create_dir(&git_dir).expect("git dir should be created");
+        fs::create_dir(&stale_metadata).expect("stale metadata should be created");
+        let mut command_runner = MockGitCommandRunner::new();
+        let metadata_cleaner = FilesystemRebaseMetadataCleaner;
+        let mut sleeper = MockSleeper::new();
+        command_runner
+            .expect_run_git_command_output_with_env()
+            .once()
+            .returning(|_, _, _| Ok(stale_rebase_failure_output()));
+        sleeper.expect_sleep().times(0);
+
+        // Act
+        let result = abort_rebase_with_dependencies(
+            temp_dir.path(),
+            &command_runner,
+            &sleeper,
+            &metadata_cleaner,
+        );
+
+        // Assert
+        assert!(result.is_ok());
+        assert!(!stale_metadata.exists());
+    }
+
+    #[test]
+    fn abort_rebase_preserves_stale_error_when_no_metadata_is_removed() {
+        // Arrange
+        let mut command_runner = MockGitCommandRunner::new();
+        let mut metadata_cleaner = MockRebaseMetadataCleaner::new();
+        let mut sleeper = MockSleeper::new();
+        command_runner
+            .expect_run_git_command_output_with_env()
+            .once()
+            .returning(|_, _, _| Ok(stale_rebase_failure_output()));
+        metadata_cleaner
+            .expect_clean_stale_metadata()
+            .once()
+            .returning(|_| Ok(false));
+        sleeper.expect_sleep().times(0);
+
+        // Act
+        let error = abort_rebase_with_dependencies(
+            Path::new("session-worktree"),
+            &command_runner,
+            &sleeper,
+            &metadata_cleaner,
+        )
+        .expect_err("missing stale metadata should preserve the abort failure");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::CommandFailed { command, stderr }
+                if command == "git rebase --abort" && stderr.contains("No rebase in progress")
+        ));
+    }
+
+    #[test]
+    fn abort_rebase_appends_stale_metadata_cleanup_failure() {
+        // Arrange
+        let mut command_runner = MockGitCommandRunner::new();
+        let mut metadata_cleaner = MockRebaseMetadataCleaner::new();
+        let mut sleeper = MockSleeper::new();
+        command_runner
+            .expect_run_git_command_output_with_env()
+            .once()
+            .returning(|_, _, _| Ok(stale_rebase_failure_output()));
+        metadata_cleaner
+            .expect_clean_stale_metadata()
+            .once()
+            .returning(|_| {
+                Err(GitError::Io(std::io::Error::new(
+                    ErrorKind::PermissionDenied,
+                    "metadata is read-only",
+                )))
+            });
+        sleeper.expect_sleep().times(0);
+
+        // Act
+        let error = abort_rebase_with_dependencies(
+            Path::new("session-worktree"),
+            &command_runner,
+            &sleeper,
+            &metadata_cleaner,
+        )
+        .expect_err("cleanup failure should preserve both error contexts");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::CommandFailed { command, stderr }
+                if command == "git rebase --abort"
+                    && stderr.contains("No rebase in progress")
+                    && stderr.contains("metadata is read-only")
+        ));
+    }
+
+    #[test]
+    fn stale_rebase_error_detection_matches_only_known_diagnostics() {
+        // Arrange
+        let stale_diagnostics = [
+            "fatal: No rebase in progress?",
+            "fatal: It seems that there is already a rebase-merge directory",
+            "fatal: It seems that there is already a rebase-apply directory",
+            "fatal: It seems that I cannot tell whether you are in the middle of another rebase",
+        ];
+
+        // Act
+        let stale_results = stale_diagnostics.map(is_stale_or_inactive_rebase_error);
+        let unrelated_result =
+            is_stale_or_inactive_rebase_error("fatal: cannot read rebase-merge/head-name");
+
+        // Assert
+        assert!(stale_results.into_iter().all(|is_stale| is_stale));
+        assert!(!unrelated_result);
+    }
+
+    #[test]
+    fn filesystem_metadata_cleaner_removes_exact_rebase_entries() {
+        // Arrange
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let git_dir = temp_dir.path().join(".git");
+        let rebase_merge = git_dir.join("rebase-merge");
+        let rebase_apply = git_dir.join("rebase-apply");
+        let unrelated_metadata = git_dir.join("MERGE_HEAD");
+        fs::create_dir(&git_dir).expect("git dir should be created");
+        fs::create_dir(&rebase_merge).expect("rebase-merge should be created");
+        fs::write(rebase_merge.join("head-name"), "refs/heads/main")
+            .expect("rebase-merge metadata should be written");
+        fs::write(&rebase_apply, "apply state").expect("rebase-apply should be written");
+        fs::write(&unrelated_metadata, "merge state").expect("merge metadata should be written");
+        let metadata_cleaner = FilesystemRebaseMetadataCleaner;
+
+        // Act
+        let removed = metadata_cleaner
+            .clean_stale_metadata(temp_dir.path())
+            .expect("stale metadata cleanup should succeed");
+
+        // Assert
+        assert!(removed);
+        assert!(!rebase_merge.exists());
+        assert!(!rebase_apply.exists());
+        assert!(unrelated_metadata.exists());
+    }
+
+    #[test]
+    fn filesystem_metadata_cleaner_reports_no_change_without_rebase_entries() {
+        // Arrange
+        let temp_dir = tempdir().expect("tempdir should be created");
+        fs::create_dir(temp_dir.path().join(".git")).expect("git dir should be created");
+        let metadata_cleaner = FilesystemRebaseMetadataCleaner;
+
+        // Act
+        let removed = metadata_cleaner
+            .clean_stale_metadata(temp_dir.path())
+            .expect("empty metadata cleanup should succeed");
+
+        // Assert
+        assert!(!removed);
+    }
+
+    #[test]
+    fn filesystem_metadata_cleaner_rejects_missing_git_directory() {
+        // Arrange
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let metadata_cleaner = FilesystemRebaseMetadataCleaner;
+
+        // Act
+        let error = metadata_cleaner
+            .clean_stale_metadata(temp_dir.path())
+            .expect_err("repository without git metadata should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::OutputParse(message) if message == "Failed to resolve git directory"
+        ));
+    }
+
+    #[test]
+    fn remove_stale_metadata_preserves_non_not_found_io_error() {
+        // Arrange
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let parent_file = temp_dir.path().join("parent-file");
+        fs::write(&parent_file, "not a directory").expect("parent file should be written");
+
+        // Act
+        let error = remove_stale_rebase_metadata_path(&parent_file.join("rebase-merge"))
+            .expect_err("non-directory parent should remain an I/O error");
+
+        // Assert
+        assert!(matches!(error, GitError::Io(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_metadata_cleaner_does_not_follow_directory_symlink() {
+        // Arrange
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let git_dir = temp_dir.path().join(".git");
+        let external_dir = temp_dir.path().join("external-rebase-data");
+        let external_marker = external_dir.join("marker");
+        fs::create_dir(&git_dir).expect("git dir should be created");
+        fs::create_dir(&external_dir).expect("external directory should be created");
+        fs::write(&external_marker, "preserve").expect("external marker should be written");
+        unix_fs::symlink(&external_dir, git_dir.join("rebase-merge"))
+            .expect("metadata symlink should be created");
+        let metadata_cleaner = FilesystemRebaseMetadataCleaner;
+
+        // Act
+        let removed = metadata_cleaner
+            .clean_stale_metadata(temp_dir.path())
+            .expect("symlink cleanup should succeed");
+
+        // Assert
+        assert!(removed);
+        assert!(!git_dir.join("rebase-merge").exists());
+        assert!(external_marker.exists());
     }
 
     #[test]
@@ -882,28 +1221,6 @@ mod tests {
         assert_eq!(operation, None);
     }
 
-    #[test]
-    fn test_clean_stale_rebase_metadata_removes_existing_paths() {
-        // Arrange
-        let temp_dir = tempdir().expect("tempdir should be created");
-        let git_dir = temp_dir.path().join(".git");
-        let rebase_merge = git_dir.join("rebase-merge");
-        let rebase_apply = git_dir.join("rebase-apply");
-
-        fs::create_dir(&git_dir).expect("git dir should be created");
-        fs::create_dir(&rebase_merge).expect("rebase-merge dir should be created");
-        fs::write(&rebase_apply, "apply state").expect("rebase-apply file should be created");
-
-        // Act
-        let cleaned = clean_stale_rebase_metadata(temp_dir.path())
-            .expect("stale metadata cleanup should succeed");
-
-        // Assert
-        assert!(cleaned);
-        assert!(!rebase_merge.exists());
-        assert!(!rebase_apply.exists());
-    }
-
     /// Returns a successful git command output.
     fn success_output() -> Output {
         Command::new("git")
@@ -932,6 +1249,14 @@ mod tests {
             .expect("failed to run git invalid command");
         output.stdout = vec![];
         output.stderr = b"fatal: not a git repository".to_vec();
+
+        output
+    }
+
+    /// Returns a failing git command output for known stale rebase metadata.
+    fn stale_rebase_failure_output() -> Output {
+        let mut output = non_lock_failure_output();
+        output.stderr = b"fatal: No rebase in progress?".to_vec();
 
         output
     }
