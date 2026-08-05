@@ -3,7 +3,9 @@
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
+use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
+use testty::frame::TerminalFrame;
 use testty::region::Region;
 
 use crate::common;
@@ -102,6 +104,43 @@ fn seed_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
     Ok(())
 }
 
+/// Seeds enough controller transcript output to exercise line-by-line scroll
+/// bounds in the compact chat pane below the campaign board.
+fn seed_scrollable_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign(env)?;
+
+    let output = (0..60)
+        .map(|line_index| format!("Transcript line {line_index:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let output = format!("```text\n{output}\n```");
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(CONTROLLER_ID, SessionMessageKind::AssistantAnswer, &output)
+            .await
+    })?;
+
+    Ok(())
+}
+
+/// Returns the numbered transcript rows visible in one captured frame.
+fn visible_transcript_line_indexes(frame: &TerminalFrame) -> Vec<u16> {
+    let full = Region::full(frame.cols(), frame.rows());
+
+    frame
+        .text_in_region(&full)
+        .lines()
+        .filter_map(|line| {
+            let suffix = line.split_once("Transcript line ")?.1;
+
+            suffix.get(..2)?.parse().ok()
+        })
+        .collect()
+}
+
 /// Seeds one completed managed worker whose worktree-independent review diff
 /// has already been archived by the merge workflow.
 fn seed_archived_managed_worker(env: &BuilderEnv) -> E2eResult {
@@ -167,6 +206,48 @@ fn test_orchestration_campaign_board() -> E2eResult {
                     &full,
                 );
                 assertion::assert_text_in_region(frame, "a approve  Enter discuss/revise", &full);
+            },
+        )
+}
+
+#[test]
+fn test_orchestration_campaign_smooth_scroll() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("orchestration_campaign_smooth_scroll")
+        .with_git()
+        .with_terminal_size(80, 24)
+        .setup(seed_scrollable_orchestration_campaign)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("Transcript line 59", 5000)
+                    .capture_labeled("campaign_bottom", "Controller transcript at bottom")
+                    .press_key("k")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled("campaign_one_line_up", "Controller transcript one line up")
+            },
+            |_frame, report| {
+                assert_eq!(report.captures.len(), 2);
+
+                let bottom_frame = common::frame_from_capture(&report.captures[0]);
+                let one_line_up_frame = common::frame_from_capture(&report.captures[1]);
+                let bottom_lines = visible_transcript_line_indexes(&bottom_frame);
+                let one_line_up_lines = visible_transcript_line_indexes(&one_line_up_frame);
+                assert!(!bottom_lines.is_empty(), "expected bottom transcript rows");
+                assert!(
+                    !one_line_up_lines.is_empty(),
+                    "expected scrolled transcript rows"
+                );
+                assert_eq!(
+                    one_line_up_lines
+                        .first()
+                        .copied()
+                        .map(|line_index| line_index + 1),
+                    bottom_lines.first().copied()
+                );
             },
         )
 }

@@ -8,11 +8,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::App;
-use crate::domain::session::SessionId;
+use crate::domain::session::{SessionId, SessionRole};
 use crate::presentation::app_mode::ChatFocus;
 use crate::runtime::mode::session_output_metric;
 use crate::ui::page::session_chat::{self, SessionChatLayoutInput};
-use crate::ui::{RenderCacheStore, input_layout, layout, session_format};
+use crate::ui::{RenderCacheStore, input_layout, layout, page, session_format};
 
 /// Bottom-panel height of a chat page that only reserves a footer row.
 const FOOTER_ONLY_BOTTOM_HEIGHT: u16 = 1;
@@ -56,13 +56,24 @@ impl ChatScrollMetrics {
         terminal_size: Rect,
     ) -> Self {
         let page_area = layout::app_frame_areas(terminal_size).content_area;
-        let output_width = page_area.width.saturating_sub(2);
+        let session = app.sessions.session_at(session_index);
+        let chat_area = session.map_or(page_area, |session| {
+            if session.role != SessionRole::Orchestrator {
+                return page_area;
+            }
+
+            page::orchestration::campaign_page_areas(
+                page_area,
+                session.orchestration_progress.as_deref(),
+            )[1]
+        });
+        let output_width = chat_area.width.saturating_sub(2);
         let (_, review_text) = app.review_view_state(session_id);
-        let view_height = app.sessions.session_at(session_index).map_or_else(
-            || Self::footer_only_view_height(page_area),
+        let view_height = session.map_or_else(
+            || Self::footer_only_view_height(chat_area),
             |session| {
                 session_chat::transcript_view_height(SessionChatLayoutInput {
-                    area: page_area,
+                    area: chat_area,
                     default_reasoning_level: app.settings.default_smart_reasoning_level,
                     mode: &app.mode,
                     review_text,
@@ -272,6 +283,8 @@ fn half_page_step(metrics: ChatScrollMetrics) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::session::Status;
+    use crate::test_support::SessionFixtureBuilder;
 
     /// Builds a plain key press without modifiers.
     fn plain_key(code: KeyCode) -> KeyEvent {
@@ -372,6 +385,24 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_scroll_key_steps_up_one_line() {
+        // Arrange
+        let metrics = ChatScrollMetrics {
+            total_lines: 30,
+            view_height: 10,
+        };
+        let mut scroll_offset = Some(5);
+
+        // Act
+        let is_consumed =
+            apply_scroll_key(&mut scroll_offset, metrics, plain_key(KeyCode::Char('k')));
+
+        // Assert
+        assert!(is_consumed);
+        assert_eq!(scroll_offset, Some(4));
+    }
+
+    #[test]
     fn test_apply_scroll_key_jumps_to_top_and_bottom() {
         // Arrange
         let metrics = ChatScrollMetrics {
@@ -409,6 +440,27 @@ mod tests {
         // Assert
         assert!(is_consumed);
         assert_eq!(scroll_offset, Some(15));
+    }
+
+    #[test]
+    fn test_apply_scroll_key_scrolls_half_page_down() {
+        // Arrange
+        let metrics = ChatScrollMetrics {
+            total_lines: 30,
+            view_height: 10,
+        };
+        let mut scroll_offset = Some(5);
+
+        // Act
+        let is_consumed = apply_scroll_key(
+            &mut scroll_offset,
+            metrics,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+
+        // Assert
+        assert!(is_consumed);
+        assert_eq!(scroll_offset, Some(10));
     }
 
     #[test]
@@ -457,5 +509,76 @@ mod tests {
 
         // Assert
         assert_eq!(next_offset, 15);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_use_footer_only_viewport_when_session_is_missing() {
+        // Arrange
+        let (app, _base_dir) = crate::test_support::new_test_app().await;
+        let missing_session_id = SessionId::from("missing-session");
+        let terminal_size = Rect::new(0, 0, 80, 24);
+
+        // Act
+        let metrics = ChatScrollMetrics::new(
+            &app,
+            &RenderCacheStore::default(),
+            &missing_session_id,
+            0,
+            terminal_size,
+        );
+
+        // Assert
+        let empty_metrics = ChatScrollMetrics::empty(terminal_size);
+        assert_eq!(metrics.total_lines, 0);
+        assert_eq!(metrics.view_height, empty_metrics.view_height);
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_metrics_reserve_campaign_board_height() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let mut session = SessionFixtureBuilder::new()
+            .role(SessionRole::Orchestrator)
+            .status(Status::Review)
+            .transcript(
+                (0..60)
+                    .map(|index| format!("line {index}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .build();
+        session.orchestration_progress = Some(
+            "Phase: AwaitingApproval\nParallel workers: 3\n1. ui - awaiting approval".to_string(),
+        );
+        let session_id = session.id.clone();
+        app.sessions.push_session(session);
+        app.mode = crate::presentation::app_mode::AppMode::View {
+            scroll_offset: None,
+            session_id: session_id.clone(),
+        };
+        let terminal_size = Rect::new(0, 0, 80, 24);
+
+        // Act
+        let orchestrator_metrics = ChatScrollMetrics::new(
+            &app,
+            &RenderCacheStore::default(),
+            &session_id,
+            0,
+            terminal_size,
+        );
+        app.sessions.sessions_mut()[0].role = SessionRole::Worker;
+        let regular_metrics = ChatScrollMetrics::new(
+            &app,
+            &RenderCacheStore::default(),
+            &session_id,
+            0,
+            terminal_size,
+        );
+
+        // Assert
+        assert_eq!(
+            orchestrator_metrics.view_height + 7,
+            regular_metrics.view_height
+        );
     }
 }
