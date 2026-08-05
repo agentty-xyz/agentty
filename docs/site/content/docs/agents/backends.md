@@ -173,7 +173,7 @@ entries with different trade-offs between speed, quality, and cost.
 
 Both providers share the same Gemini model ids:
 
-- `gemini-3.1-pro` (default): Higher-quality Gemini model for deeper reasoning.
+- `gemini-3.1-pro-preview` (default): Higher-quality Gemini model for deeper reasoning.
 - `gemini-3.6-flash`: Fast Gemini model for agentic and multimodal tasks.
 - `gemini-3.5-flash-lite`: Lightweight Gemini model for fast, cost-conscious workloads.
 
@@ -191,23 +191,11 @@ Both providers share the same Gemini model ids:
 - `gpt-5.6-luna`: Current Codex model for lighter coding iterations.
 - `gpt-5.3-codex-spark`: Codex spark model for quick coding iterations.
 
-### Retired Models
+### Stored Model Upgrades
 
-When a model is retired in favor of a replacement (for example, a new Claude Opus
-release superseding the previous one), Agentty upgrades stored references automatically:
-
-- Model pickers for new sessions list only the current models above; retired ids (such
-  as `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.5-flash`,
-  `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite-preview`, `claude-opus-4-8`,
-  `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `gpt-5.5`, `gpt-5.4`,
-  `gpt-5.4-mini`, `gpt-5.3-codex`, or `gpt-5.2-codex`) are never selectable.
-- Stored project defaults that reference a retired model id are upgraded to the current
-  supported replacement when Agentty loads them.
-- Sessions that are still active are switched to the replacement model automatically,
-  and the switch is persisted so every following turn runs on the current model.
-- Finished sessions (`Merged`, `Done`, or `Canceled`) keep the retired model id in the
-  database as a historical record and are displayed with the replacement model when
-  reopened.
+Model pickers show only the current models listed above. When a stored project default
+or active session references a superseded model, Agentty upgrades and persists its
+replacement automatically. Finished sessions preserve their historical model data.
 
 ## Switching Models
 

@@ -1391,7 +1391,7 @@ mod tests {
             .upsert_project_settings(
                 project_id,
                 vec![
-                    (SettingName::DefaultSmartModel, "gpt-5.5".to_string()),
+                    (SettingName::DefaultSmartModel, "gemini-3.1-pro".to_string()),
                     (
                         SettingName::DefaultFastModel,
                         "gemini-3-flash-preview".to_string(),
@@ -1412,7 +1412,7 @@ mod tests {
         // Assert
         assert_eq!(
             settings.default_smart_selection,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini31Pro)
         );
         assert_eq!(
             settings.default_fast_selection,
@@ -1426,9 +1426,12 @@ mod tests {
         let expected_persisted_settings = [
             (
                 SettingName::DefaultSmartModel,
-                AgentModel::Gpt56Sol.as_str(),
+                AgentModel::Gemini31Pro.as_str(),
             ),
-            (SettingName::DefaultSmartAgent, AgentKind::Codex.name()),
+            (
+                SettingName::DefaultSmartAgent,
+                AgentKind::Antigravity.name(),
+            ),
             (
                 SettingName::DefaultFastModel,
                 AgentModel::Gemini36Flash.as_str(),
@@ -1916,7 +1919,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro [high]");
+        assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro-preview [high]");
     }
 
     #[test]
@@ -1935,7 +1938,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, "gemini/gemini-3.1-pro [high]");
+        assert_eq!(rows[2].1, "gemini/gemini-3.1-pro-preview [high]");
     }
 
     #[test]
