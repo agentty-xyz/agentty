@@ -154,6 +154,56 @@ fn seed_review_ready_managed_worker(env: &BuilderEnv) -> E2eResult {
     })
 }
 
+/// Seeds a review-request campaign with one worker still awaiting its forge
+/// merge and one already integrated sibling.
+fn seed_review_request_campaign_awaiting_merge(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        sqlx::query!(
+            "UPDATE session_orchestration SET status = 'Integrating', integration_approach = \
+             'ReviewRequest'",
+        )
+        .execute(database.pool())
+        .await?;
+        sqlx::query!(
+            "UPDATE session_orchestration_task SET status = CASE task_key WHEN 'protocol' THEN \
+             'ReviewRequested' ELSE 'Integrated' END",
+        )
+        .execute(database.pool())
+        .await?;
+        sqlx::query!(
+            "UPDATE session SET status = 'Review' WHERE id = ?",
+            WORKER_ID
+        )
+        .execute(database.pool())
+        .await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })
+}
+
+/// Seeds a review-request campaign whose forge review was closed without a
+/// merge so reconciliation must surface an integration failure.
+fn seed_review_request_campaign_with_closed_worker(env: &BuilderEnv) -> E2eResult {
+    seed_review_request_campaign_awaiting_merge(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        sqlx::query!(
+            "UPDATE session SET status = 'Canceled' WHERE id = ?",
+            WORKER_ID
+        )
+        .execute(database.pool())
+        .await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })
+}
+
 /// Returns the numbered transcript rows visible in one captured frame.
 fn visible_transcript_line_indexes(frame: &TerminalFrame) -> Vec<u16> {
     let full = Region::full(frame.cols(), frame.rows());
@@ -234,6 +284,90 @@ fn test_orchestration_campaign_board() -> E2eResult {
                     &full,
                 );
                 assertion::assert_text_in_region(frame, "a approve  Enter discuss/revise", &full);
+            },
+        )
+}
+
+#[test]
+fn test_review_request_campaign_waits_for_worker_merge() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_campaign_waits_for_worker_merge")
+        .with_git()
+        .setup(seed_review_request_campaign_awaiting_merge)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("Phase: Integrating", 5000)
+                    .capture_labeled(
+                        "controller_waiting",
+                        "Controller remains active while review request is open",
+                    )
+                    .press_key("q")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Managed by controller-0001", 5000)
+                    .press_key("?")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "worker_attached",
+                        "Review-request worker remains attached to controller",
+                    )
+            },
+            |frame, report| {
+                let controller_frame = common::frame_from_capture(&report.captures[0]);
+                let controller_full =
+                    Region::full(controller_frame.cols(), controller_frame.rows());
+                assertion::assert_text_in_region(
+                    &controller_frame,
+                    "Phase: Integrating",
+                    &controller_full,
+                );
+                assertion::assert_text_in_region(
+                    &controller_frame,
+                    "Protocol contract [protocol]: review requested",
+                    &controller_full,
+                );
+                let controller_text = controller_frame.text_in_region(&controller_full);
+                assert!(!controller_text.contains("Campaign complete"));
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
+                assertion::assert_text_in_region(frame, "Detach managed", &full);
+            },
+        )
+}
+
+#[test]
+fn test_review_request_campaign_reports_closed_worker() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_campaign_reports_closed_worker")
+        .with_git()
+        .setup(seed_review_request_campaign_with_closed_worker)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("integration failed", 5000)
+                    .capture_labeled(
+                        "closed_worker_failure",
+                        "Closed review request remains visible as integration failure",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Phase: Integrating", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Protocol contract [protocol]: integration failed",
+                    &full,
+                );
+                let text = frame.text_in_region(&full);
+                assert!(!text.contains("Campaign complete"));
             },
         )
 }

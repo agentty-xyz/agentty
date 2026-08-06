@@ -1011,6 +1011,7 @@ impl OrchestrationCoordinator {
             .await
             .map_err(|error| error.to_string())?;
         for task in &mut tasks {
+            self.reconcile_review_requested_task(task).await?;
             self.reconcile_merging_task(task, integration_approach)
                 .await?;
         }
@@ -1039,6 +1040,37 @@ impl OrchestrationCoordinator {
             self.complete_campaign(orchestration).await?;
         } else {
             self.emit_live_status(orchestration, &tasks);
+        }
+
+        Ok(())
+    }
+
+    async fn reconcile_review_requested_task(
+        &self,
+        task: &mut SessionOrchestrationTaskRow,
+    ) -> Result<(), String> {
+        if task_status(task) != Some(OrchestrationTaskStatus::ReviewRequested) {
+            return Ok(());
+        }
+
+        let child_status = task
+            .child_status
+            .as_deref()
+            .and_then(|status| status.parse::<SessionStatus>().ok());
+        match child_status {
+            Some(SessionStatus::Merged | SessionStatus::Done) => {
+                self.update_task_status(task, OrchestrationTaskStatus::Integrated, None)
+                    .await?;
+            }
+            Some(SessionStatus::Canceled) => {
+                self.update_task_status(
+                    task,
+                    OrchestrationTaskStatus::IntegrationFailed,
+                    Some("Review request closed without merge".to_string()),
+                )
+                .await?;
+            }
+            _ => {}
         }
 
         Ok(())
@@ -3130,10 +3162,6 @@ mod tests {
             .times(2)
             .returning(|_, _, _| Ok(()));
         repository
-            .expect_complete_orchestration_campaign()
-            .times(2)
-            .returning(|_| Ok(true));
-        repository
             .expect_load_orchestration_integration_approach()
             .times(3)
             .returning(|_| Ok(IntegrationApproach::ReviewRequest.to_string()));
@@ -3157,6 +3185,105 @@ mod tests {
                 .calls()
                 .contains(&"review:child-interrupted".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn review_request_campaign_waits_for_open_children_and_completes_after_merge() {
+        // Arrange
+        let backend = TestSessionBackend::default();
+        let mut repository = MockOrchestrationRepository::new();
+        let open = task(
+            1,
+            "open-review",
+            OrchestrationTaskStatus::ReviewRequested,
+            Some("child-review"),
+        );
+        let merged = with_child_observation(
+            task(
+                1,
+                "merged-review",
+                OrchestrationTaskStatus::ReviewRequested,
+                Some("child-review"),
+            ),
+            SessionStatus::Merged,
+            None,
+        );
+        mock_task_snapshots(&mut repository, vec![vec![open], vec![merged]]);
+        repository
+            .expect_update_orchestration_task_status()
+            .once()
+            .withf(|_, status, error| status == "Integrated" && error.as_ref().is_none())
+            .returning(|_, _, _| Ok(()));
+        repository
+            .expect_complete_orchestration_campaign()
+            .once()
+            .returning(|_| Ok(true));
+        repository
+            .expect_load_orchestration_integration_approach()
+            .times(2)
+            .returning(|_| Ok(IntegrationApproach::ReviewRequest.to_string()));
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut campaign = orchestration(2);
+        campaign.status = OrchestrationStatus::Integrating.to_string();
+
+        // Act
+        coordinator
+            .reconcile_integration(&campaign)
+            .await
+            .expect("open review request should remain active");
+        coordinator
+            .reconcile_integration(&campaign)
+            .await
+            .expect("merged review request should complete");
+
+        // Assert
+        assert!(backend.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn closed_review_request_records_integration_failure() {
+        // Arrange
+        let backend = TestSessionBackend::default();
+        let mut repository = MockOrchestrationRepository::new();
+        let canceled = with_child_observation(
+            task(
+                1,
+                "closed-review",
+                OrchestrationTaskStatus::ReviewRequested,
+                Some("child-review"),
+            ),
+            SessionStatus::Canceled,
+            None,
+        );
+        mock_task_snapshots(&mut repository, vec![vec![canceled]]);
+        repository
+            .expect_update_orchestration_task_status()
+            .once()
+            .withf(|_, status, error| {
+                status == "IntegrationFailed"
+                    && error.as_deref() == Some("Review request closed without merge")
+            })
+            .returning(|_, _, _| Ok(()));
+        repository
+            .expect_load_orchestration_integration_approach()
+            .once()
+            .returning(|_| Ok(IntegrationApproach::ReviewRequest.to_string()));
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut campaign = orchestration(2);
+        campaign.status = OrchestrationStatus::Integrating.to_string();
+
+        // Act
+        coordinator
+            .reconcile_integration(&campaign)
+            .await
+            .expect("closed review request should record a failure");
+
+        // Assert
+        assert!(backend.calls().is_empty());
     }
 
     #[tokio::test]

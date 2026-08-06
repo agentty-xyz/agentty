@@ -323,12 +323,16 @@ flowchart LR
    so restart recovery cannot switch destinations. `Integrating` then serializes local
    merges or review-request publication through the coordinator session service.
    Successful managed merges persist the final patch as `session.archived_diff` before
-   cleanup removes the worker worktree and local branch; published tasks become
-   `ReviewRequested` and retain the forge-linked branch. Failures remain durable and
-   visible. Once every task is integration-settled, one transaction marks both the
-   campaign and disposable controller `Done`; no second controller report turn is
-   needed. A one-way detach transaction instead clears both task links and changes the
-   worker role back to `Worker`.
+   cleanup removes the worker worktree and local branch. Published tasks become
+   `ReviewRequested`, retain the forge-linked branch, and keep the orchestration active
+   until review sync moves the child session to `Merged`; reconciliation then advances
+   the task to `Integrated`. A child moved to `Canceled` by closed-review sync advances
+   to `IntegrationFailed` with a durable explanation, keeping the campaign active for
+   follow-up. Other failures also remain durable and visible. Once every task is
+   integration-settled, one transaction marks both the campaign and disposable
+   controller `Done`; no second controller report turn is needed. A one-way detach
+   transaction instead clears both task links and changes the worker role back to
+   `Worker`.
 1. When `a` requests the session-type selector, the app asks `GitClient` to verify the
    effective pre-commit hook whenever the project contains `.pre-commit-config.yaml` or
    `.pre-commit-config.yml`. A missing executable hook opens a warning overlay with

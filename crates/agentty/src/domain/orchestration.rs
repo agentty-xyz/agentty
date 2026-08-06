@@ -140,7 +140,8 @@ pub enum OrchestrationTaskStatus {
     Merging,
     /// Branch work was merged locally successfully.
     Integrated,
-    /// The child branch was published as a forge review request.
+    /// The child branch was published and is waiting for its forge review
+    /// request to merge.
     ReviewRequested,
     /// Integration failed and requires attention.
     IntegrationFailed,
@@ -263,6 +264,9 @@ impl OrchestrationTaskStatus {
                     | OrchestrationTaskStatus::ReviewRequested
                     | OrchestrationTaskStatus::IntegrationFailed
             ) | (
+                OrchestrationTaskStatus::ReviewRequested,
+                OrchestrationTaskStatus::Integrated | OrchestrationTaskStatus::IntegrationFailed
+            ) | (
                 OrchestrationTaskStatus::Planned
                     | OrchestrationTaskStatus::Creating
                     | OrchestrationTaskStatus::Running
@@ -277,7 +281,6 @@ impl OrchestrationTaskStatus {
         matches!(
             self,
             OrchestrationTaskStatus::Integrated
-                | OrchestrationTaskStatus::ReviewRequested
                 | OrchestrationTaskStatus::Detached
                 | OrchestrationTaskStatus::Canceled
                 | OrchestrationTaskStatus::Failed
@@ -655,11 +658,10 @@ mod tests {
     }
 
     #[test]
-    fn integration_terminal_states_are_settled() {
+    fn integration_settlement_waits_for_review_request_merge() {
         // Arrange
         let settled = [
             OrchestrationTaskStatus::Integrated,
-            OrchestrationTaskStatus::ReviewRequested,
             OrchestrationTaskStatus::Detached,
             OrchestrationTaskStatus::Canceled,
             OrchestrationTaskStatus::Failed,
@@ -671,9 +673,18 @@ mod tests {
                 .all(OrchestrationTaskStatus::is_integration_settled)
         );
         assert!(!OrchestrationTaskStatus::AwaitingIntegration.is_integration_settled());
+        assert!(!OrchestrationTaskStatus::ReviewRequested.is_integration_settled());
         assert!(
             OrchestrationTaskStatus::Merging
                 .can_transition_to(OrchestrationTaskStatus::ReviewRequested)
+        );
+        assert!(
+            OrchestrationTaskStatus::ReviewRequested
+                .can_transition_to(OrchestrationTaskStatus::Integrated)
+        );
+        assert!(
+            OrchestrationTaskStatus::ReviewRequested
+                .can_transition_to(OrchestrationTaskStatus::IntegrationFailed)
         );
     }
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session SET status = 'Canceled' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "8e497fd139db0f21837f300e0c15b9251deaeaa67ee175ae8af167cb6c951ec0"
+}
