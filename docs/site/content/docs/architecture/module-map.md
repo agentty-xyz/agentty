@@ -31,10 +31,9 @@ For file-level detail, read the module docstrings directly.
   metadata, commit/diff/push/pull sync, rebase/conflict handling, and squash-merge
   workflows behind the `GitClient` boundary.
 - `crates/ag-harness/`: Application-facing LLM harness crate with the provider-neutral
-  `Model` contract, its first Qwen adapter, and a backend-neutral request-duration
-  metric. Application binaries own OpenTelemetry SDK and OTLP exporter setup. Its local
-  `AGENTS.md` records the intended agent loop, tools, session, event, and permission
-  boundaries.
+  `Model` lifecycle, private provider adapters for Qwen and Kimi, shared Chat
+  Completions behavior, and backend-neutral request-duration telemetry. Application
+  binaries own telemetry setup.
 - `crates/ag-protocol/`: Shared structured response protocol library crate with
   transport-neutral response models, schema generation, parser diagnostics, protocol
   prompt envelopes, repair prompts, review-comment outcomes, and turn prompt payload

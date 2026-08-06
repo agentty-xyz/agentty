@@ -181,10 +181,10 @@ repos:
         stages: [manual]
       - id: coverage
         name: coverage
-        description: Verify source and Qwen example coverage meets workspace ratchet thresholds and write the CI LCOV report for SonarQube and Codecov.
+        description: Verify source and example coverage meets workspace ratchet thresholds and write the CI LCOV report for SonarQube and Codecov.
         entry: >-
           env CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
-          cargo llvm-cov nextest --workspace --lib --bins --example qwen --locked --profile ci
+          cargo llvm-cov nextest --workspace --lib --bins --examples --locked --profile ci
           --fail-under-lines 93 --fail-under-functions 91
           --lcov --no-default-ignore-filename-regex
           --ignore-filename-regex '(/rustc/|/(tests|benches)/|/(tests\.rs|[0-9a-zA-Z_-]+[_-]tests\.rs)$|/target/llvm-cov-target/|/\.cargo/(registry|git)/|/\.rustup/toolchains/)'

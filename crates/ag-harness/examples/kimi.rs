@@ -1,38 +1,39 @@
-//! Requests structured output from a configured Qwen model and prints the
+//! Requests structured output from a configured Kimi model and prints the
 //! validated JSON, with optional request-duration metrics over OTLP/HTTP.
 
 use std::io::{self, Write};
 
-use ag_harness::{Model, ModelRequest, OutputSchema, Qwen, QwenConfig};
-use serde_json::json;
+use ag_harness::{Kimi, KimiConfig, Model, ModelRequest, OutputSchema};
 
 #[path = "support/telemetry.rs"]
 mod telemetry;
 
 use telemetry::DynError;
 
+const GREETING_SCHEMA: &str = r#"{
+    "type": "object",
+    "properties": {
+        "message": {
+            "type": "string",
+            "enum": ["hello"]
+        }
+    },
+    "required": ["message"],
+    "additionalProperties": false
+}"#;
+
 #[tokio::main]
 async fn main() -> Result<(), DynError> {
-    telemetry::run_with_metrics("ag-harness-qwen", run()).await
+    telemetry::run_with_metrics("ag-harness-kimi", run()).await
 }
 
 async fn run() -> Result<(), DynError> {
-    let model = Qwen::new(QwenConfig {
-        api_key: std::env::var("DASHSCOPE_API_KEY")?,
-        base_url: std::env::var("DASHSCOPE_BASE_URL")?,
-        model: "qwen-plus".to_string(),
+    let model = Kimi::new(KimiConfig {
+        api_key: std::env::var("KIMI_API_KEY")?,
+        base_url: std::env::var("KIMI_BASE_URL")?,
+        model: std::env::var("KIMI_MODEL")?,
     });
-    let schema = OutputSchema::new(json!({
-        "type": "object",
-        "properties": {
-            "message": {
-                "type": "string",
-                "const": "hello"
-            }
-        },
-        "required": ["message"],
-        "additionalProperties": false
-    }))?;
+    let schema = OutputSchema::new(serde_json::from_str(GREETING_SCHEMA)?)?;
     let response = model
         .complete(ModelRequest::new(
             "Return a JSON greeting with the message set to hello.",
@@ -50,6 +51,7 @@ mod tests {
     use std::process::{ExitStatus, Stdio};
     use std::time::Duration;
 
+    use serde_json::json;
     use tokio::process::{Child, Command};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -74,7 +76,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn process_exports_metrics_over_otlp_http_on_shutdown() {
         // Arrange
-        let qwen_server = MockServer::start().await;
+        let kimi_server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -84,7 +86,7 @@ mod tests {
                 }]
             })))
             .expect(1)
-            .mount(&qwen_server)
+            .mount(&kimi_server)
             .await;
         let otlp_server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -95,7 +97,7 @@ mod tests {
             .mount(&otlp_server)
             .await;
         let executable = std::env::current_exe().expect("test executable should be available");
-        let qwen_endpoint = qwen_server.uri();
+        let kimi_endpoint = kimi_server.uri();
         let otlp_endpoint = format!("{}/otlp", otlp_server.uri());
 
         // Act
@@ -104,8 +106,9 @@ mod tests {
             .arg("--exact")
             .arg("--nocapture")
             .env("AG_HARNESS_RUN_MAIN_FIXTURE", "1")
-            .env("DASHSCOPE_API_KEY", "test-key")
-            .env("DASHSCOPE_BASE_URL", qwen_endpoint)
+            .env("KIMI_API_KEY", "test-key")
+            .env("KIMI_BASE_URL", kimi_endpoint)
+            .env("KIMI_MODEL", "kimi-k2.6")
             .env("OTEL_EXPORTER_OTLP_ENDPOINT", otlp_endpoint)
             .env(
                 "OTEL_EXPORTER_OTLP_HEADERS",
@@ -134,11 +137,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn process_timeout_kills_and_reaps_fixture() {
         // Arrange
-        let qwen_server = MockServer::start().await;
+        let kimi_server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(10)))
-            .mount(&qwen_server)
+            .mount(&kimi_server)
             .await;
         let executable = std::env::current_exe().expect("test executable should be available");
         let mut child = Command::new(executable)
@@ -146,8 +149,9 @@ mod tests {
             .arg("--exact")
             .arg("--nocapture")
             .env("AG_HARNESS_RUN_MAIN_FIXTURE", "1")
-            .env("DASHSCOPE_API_KEY", "test-key")
-            .env("DASHSCOPE_BASE_URL", qwen_server.uri())
+            .env("KIMI_API_KEY", "test-key")
+            .env("KIMI_BASE_URL", kimi_server.uri())
+            .env("KIMI_MODEL", "kimi-k2.6")
             .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
