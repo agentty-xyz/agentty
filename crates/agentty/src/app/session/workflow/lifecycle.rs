@@ -2987,7 +2987,8 @@ impl SessionManager {
         .await;
     }
 
-    /// Cancels a review, running, or unstarted draft session.
+    /// Cancels a review, running, unstarted draft, or draft orchestrator
+    /// session.
     ///
     /// Persisted transcript metadata remains available after the worktree
     /// checkout and session branch are removed. Draft sessions that never
@@ -3049,8 +3050,7 @@ impl SessionManager {
                 || session.status.allows_review_actions());
         if !session.allows_cancel_action() && !managed_cancel_allowed {
             return Err(SessionError::Workflow(
-                "Session must be running, in review, or be an unstarted draft to be canceled"
-                    .to_string(),
+                "Session is not cancelable in its current state".to_string(),
             ));
         }
 

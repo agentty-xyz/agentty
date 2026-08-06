@@ -5963,7 +5963,7 @@ async fn test_cancel_session_requires_cancelable_status() {
         result
             .expect_err("should be error")
             .to_string()
-            .contains("must be running, in review")
+            .contains("not cancelable in its current state")
     );
 }
 

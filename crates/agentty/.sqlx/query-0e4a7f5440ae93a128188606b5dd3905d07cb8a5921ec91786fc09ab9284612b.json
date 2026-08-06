@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session SET role = 'Orchestrator' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "0e4a7f5440ae93a128188606b5dd3905d07cb8a5921ec91786fc09ab9284612b"
+}
