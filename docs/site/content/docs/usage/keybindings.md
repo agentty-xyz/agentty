@@ -61,8 +61,9 @@ option are marked `[Preview]`.
 
 In the `a` selector, `Stacked` is enabled only when the selected session is a root
 session with an active branch. `c` appears only for cancelable rows: running sessions,
-review-ready sessions, and unstarted draft sessions. Canceling a running orchestrator
-opens a confirmation that names its running-child count and cascades to those children.
+review-ready sessions, unstarted draft sessions, and draft orchestrators. Canceling a
+running orchestrator opens a confirmation that names its running-child count and
+cascades to those children.
 
 <a id="usage-session-list-project-switcher"></a> The `p` popup lists registered projects
 in most-recently-opened order with the active project marked by a `* ` prefix. Each row

@@ -22,8 +22,8 @@ use crate::runtime::mode::input_key;
 /// with `No` selected by default. Pressing `Enter` on the `Projects` tab
 /// selects the active project and then moves focus to `Tab::Sessions`.
 /// `c` opens a cancel confirmation overlay for running sessions, review
-/// sessions, and unstarted draft sessions, and `Tab` cycles tabs forward while
-/// `Shift+Tab` cycles backward.
+/// sessions, unstarted draft sessions, and draft orchestrators, and `Tab`
+/// cycles tabs forward while `Shift+Tab` cycles backward.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
     if app.tabs.current() == Tab::Settings
         && (app

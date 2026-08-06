@@ -2281,7 +2281,7 @@ mod tests {
         assert!(
             cancel_error
                 .to_string()
-                .contains("must be running, in review, or be an unstarted draft")
+                .contains("not cancelable in its current state")
         );
         assert_eq!(controller.status, controller_before.status);
         assert_eq!(

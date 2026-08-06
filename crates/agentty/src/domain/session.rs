@@ -465,12 +465,14 @@ impl Session {
     /// Running sessions can be canceled from the list after their active turn
     /// is signaled to stop. Review-oriented sessions remain cancelable, and
     /// unstarted draft sessions can also be canceled before they materialize a
-    /// worktree.
+    /// worktree. Draft orchestrators remain cancelable after their controller
+    /// worktree is materialized but before their first goal is submitted.
     pub fn allows_cancel_action(&self) -> bool {
         self.accepts_user_turns()
             && (self.status == Status::InProgress
                 || self.status.allows_review_actions()
-                || (self.status == Status::Draft && self.is_draft_session()))
+                || (self.status == Status::Draft
+                    && (self.is_draft_session() || self.role == SessionRole::Orchestrator)))
     }
 
     /// Returns whether this terminal session can launch a seeded follow-on
@@ -2517,6 +2519,20 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
         let mut session = test_session(None);
         session.status = Status::Draft;
         session.is_draft = true;
+
+        // Act
+        let allows_cancel_action = session.allows_cancel_action();
+
+        // Assert
+        assert!(allows_cancel_action);
+    }
+
+    #[test]
+    fn test_session_allows_cancel_action_for_draft_orchestrator() {
+        // Arrange
+        let mut session = test_session(None);
+        session.status = Status::Draft;
+        session.role = SessionRole::Orchestrator;
 
         // Act
         let allows_cancel_action = session.allows_cancel_action();

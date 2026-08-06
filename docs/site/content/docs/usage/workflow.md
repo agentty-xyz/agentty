@@ -459,11 +459,12 @@ as new scope and parks the campaign on the approval board before that worker sta
 Once the controller is `Done`, a new goal or further feedback starts a new orchestrator
 campaign.
 
-Press `c` on a running controller to cancel the orchestration. The confirmation names
-the number of running children. Approval first blocks new worker fan-out, then cancels
-the controller and its active children idempotently. If any child cannot be canceled,
-Agentty reports the error and leaves the orchestration in **Canceling** so `c` can retry
-without reporting a false terminal cancellation.
+Press `c` on a draft or running controller to cancel it. Draft controllers can be
+canceled before their first goal is submitted. For running controllers, the confirmation
+names the number of running children. Approval first blocks new worker fan-out, then
+cancels the controller and its active children idempotently. If any child cannot be
+canceled, Agentty reports the error and leaves the orchestration in **Canceling** so `c`
+can retry without reporting a false terminal cancellation.
 
 ## Branch Publish Flow
 
