@@ -37,7 +37,8 @@ use crate::domain::session::{
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transient_message::{
-    TransientMessageAnchor, TransientMessageBody, TransientMessageSlot, TransientMessageStore,
+    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
+    TransientMessageSlot, TransientMessageStore,
 };
 use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db::AppRepositories;
@@ -869,6 +870,44 @@ fn test_append_workflow_notice_anchors_active_status_notices_after_active_turn()
             "unexpected anchor for {status}"
         );
     }
+}
+
+#[test]
+fn test_finish_review_request_publish_keeps_loading_review_at_tail() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+    session_manager.sessions_mut()[0]
+        .transient_messages
+        .upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Reviewing changes...".to_string()),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::Review,
+            turn_position: None,
+        });
+    session_manager.start_branch_publish("session-id", "Publishing review request...".to_string());
+
+    // Act
+    let finished = session_manager.finish_review_request_publish(
+        "session-id",
+        "[Review Request] Created PR https://example.test/pull/42",
+    );
+
+    // Assert
+    assert!(finished);
+    let transient_messages = &session_manager.sessions()[0].transient_messages;
+    assert_eq!(
+        transient_messages
+            .get(TransientMessageSlot::Review)
+            .expect("loading review should remain visible")
+            .anchor,
+        TransientMessageAnchor::Tail
+    );
+    assert!(
+        transient_messages
+            .get(TransientMessageSlot::BranchPublish)
+            .is_none()
+    );
 }
 
 #[test]

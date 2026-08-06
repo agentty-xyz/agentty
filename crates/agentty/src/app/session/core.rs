@@ -601,11 +601,32 @@ impl SessionManager {
                 .get_or_insert_default()
                 .append_message(SessionMessageKind::WorkflowNotice, persistent_notice);
         }
+        Self::place_completed_review_before_new_workflow_notice(session);
         session
             .transient_messages
             .retract(TransientMessageSlot::BranchPublish);
 
         true
+    }
+
+    /// Moves an already-completed focused review ahead of a newer durable
+    /// workflow notice while leaving an in-flight review at the output tail.
+    fn place_completed_review_before_new_workflow_notice(session: &mut Session) {
+        let Some(mut review_message) = session
+            .transient_messages
+            .get(TransientMessageSlot::Review)
+            .filter(|message| {
+                matches!(
+                    &message.body,
+                    TransientMessageBody::Markdown(_) | TransientMessageBody::Plain(_)
+                )
+            })
+            .cloned()
+        else {
+            return;
+        };
+        review_message.anchor = TransientMessageAnchor::AfterCompletedTurn;
+        session.transient_messages.upsert(review_message);
     }
 
     /// Marks one session branch as currently auto-syncing to its published

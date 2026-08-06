@@ -177,10 +177,13 @@ queued chat. A worker-start event replaces that row with animated publish progre
 terminal reducer event then replaces it with inline success or failure output without
 changing whichever app mode is active at completion. Successful review-request creation
 retracts the transient row and appends its single-line URL result as a durable
-`WorkflowNotice` at the current transcript position. Later turns therefore leave the
-result in its original history position instead of reconstructing a transient between
-turns. The manual task holds the same per-session branch-operation lock as
-completed-turn auto-push for its full push and forge-metadata workflow. Queued
+`WorkflowNotice` at the current transcript position. If focused review already completed
+at the output tail, the reducer first moves that result into completed-turn placement so
+the newer review-request notice remains below it. An in-flight focused review stays at
+the tail and therefore appears after the notice when it completes later. Later turns
+leave the durable result in its original history position instead of reconstructing a
+transient between turns. The manual task holds the same per-session branch-operation
+lock as completed-turn auto-push for its full push and forge-metadata workflow. Queued
 review-request creation also registers as unfinished branch work before the current turn
 can start automatic publishing. Its UI and API handlers only attempt a non-blocking lock
 reservation while persisting the command; when another branch action already owns the
