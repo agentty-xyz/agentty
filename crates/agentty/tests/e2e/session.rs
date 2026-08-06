@@ -1739,6 +1739,10 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
 /// Answer emitted before the queued session sync is allowed to start.
 const QUEUED_SYNC_TURN_ANSWER: &str = "Running turn completed before sync";
 
+/// Answer emitted before queued review-request creation begins.
+const QUEUED_REVIEW_REQUEST_TURN_ANSWER: &str =
+    "Running turn completed before review request creation";
+
 /// Installs a delayed Claude turn so the scenario can queue sync while the
 /// worker is still active, then observe the answer before the rebase result.
 fn install_delayed_sync_claude_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -1758,6 +1762,89 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+}
+
+/// Installs delayed agent, Git, and GitHub stubs so review-request creation
+/// can be queued during a live turn and observed after that turn completes.
+fn install_queued_review_request_stubs(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    run_git(
+        &env.workdir,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/agentty-xyz/agentty.git",
+        ],
+    )?;
+
+    let claude_path = env.stub_bin.join("claude");
+    let claude_script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+sleep 8
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}"}}]}}}}'
+printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+"#
+    );
+    std::fs::write(&claude_path, claude_script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
+    let git_path = env.stub_bin.join("git");
+    let git_script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "push" ]; then
+  sleep 2
+  exit 0
+fi
+exec '{}' "$@"
+"#,
+        real_git.display()
+    );
+    std::fs::write(&git_path, git_script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
+
+    let gh_path = env.stub_bin.join("gh");
+    std::fs::write(
+        &gh_path,
+        r#"#!/bin/sh
+marker_path="${0}.created"
+case "$*" in
+  *"auth status"*)
+    exit 0
+    ;;
+  *"api"*"/pulls"*)
+    if [ -f "$marker_path" ]; then
+      printf '%s\n' '[{"number":42}]'
+    else
+      printf '%s\n' '[]'
+    fi
+    ;;
+  *"pr create"*)
+    touch "$marker_path"
+    ;;
+  *"pr view"*)
+    printf '%s\n' '{"number":42,"title":"Queued review request","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/queued-review","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
+    ;;
+  *)
+    echo "unexpected gh invocation: $*" >&2
+    exit 1
+    ;;
+esac
+"#,
+    )?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
@@ -3531,6 +3618,96 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     .rect
                     .row;
                 assert!(answer_row < sync_row);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify review-request creation queues behind a running turn, begins only
+/// after the answer is complete, and records the created forge link.
+#[test]
+fn review_request_creation_queues_during_running_turn() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_queued_creation")
+        .with_git()
+        .setup(install_queued_review_request_stubs)
+        .zola(
+            "Queued review-request creation",
+            "Queue review-request creation behind a running session turn and publish it next.",
+            41,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Queue the review request")
+                    .wait_for_text("Queue the review request", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("p: PR", 5000)
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 5000)
+                    .press_key("Enter")
+                    .wait_for_text(
+                        "Review request queued; publishing after the current turn finishes...",
+                        5000,
+                    )
+                    .viewing_pause_ms(1200)
+                    .capture_labeled(
+                        "review_request_queued",
+                        "Review-request creation queued behind the active turn",
+                    )
+                    .wait_for_text(QUEUED_REVIEW_REQUEST_TURN_ANSWER, 30000)
+                    .wait_for_text("Publishing review request...", 5000)
+                    .capture_labeled(
+                        "review_request_started",
+                        "Queued review-request creation starts after the turn completes",
+                    )
+                    .wait_for_text("[Review Request] Created PR", 15000)
+                    .capture_labeled(
+                        "review_request_created",
+                        "Created review-request link recorded after the completed turn",
+                    )
+            },
+            |frame, report| {
+                let queued_frame = common::frame_from_capture(&report.captures[0]);
+                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                assertion::assert_text_in_region(
+                    &queued_frame,
+                    "Review request queued; publishing after the current turn finishes...",
+                    &queued_full,
+                );
+                assertion::assert_text_in_region(
+                    &queued_frame,
+                    "Queue the review request",
+                    &queued_full,
+                );
+                assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
+
+                let started_frame = common::frame_from_capture(&report.captures[1]);
+                let started_full = Region::full(started_frame.cols(), started_frame.rows());
+                assertion::assert_text_in_region(
+                    &started_frame,
+                    QUEUED_REVIEW_REQUEST_TURN_ANSWER,
+                    &started_full,
+                );
+                assertion::assert_text_in_region(
+                    &started_frame,
+                    "Publishing review request...",
+                    &started_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42",
+                    &full,
+                );
+                assertion::assert_not_visible(frame, "Review request queued;");
             },
         )?;
 

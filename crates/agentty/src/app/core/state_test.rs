@@ -1717,6 +1717,168 @@ async fn manual_branch_publish_waits_for_existing_branch_operation() {
 }
 
 #[tokio::test]
+async fn review_request_enqueue_does_not_wait_for_existing_branch_operation() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("session should be created");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Done);
+    let branch_operation_lock = Arc::clone(
+        &app.sessions
+            .session_handles_or_err(&session_id)
+            .expect("expected session handles")
+            .branch_operation_lock,
+    );
+    let existing_operation_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
+    let restore_view = ConfirmationViewMode {
+        scroll_offset: None,
+        session_id: session_id.clone().into(),
+    };
+
+    // Act
+    let enqueue_result = tokio::time::timeout(
+        Duration::from_secs(1),
+        app.start_publish_branch_action(
+            restore_view,
+            &session_id,
+            PublishBranchAction::PublishPullRequest,
+            None,
+        ),
+    )
+    .await;
+    let publish_label = app.sessions.state().sessions()[0]
+        .transient_messages
+        .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+        .map(|message| message.body.text().to_string());
+    drop(existing_operation_guard);
+
+    // Assert
+    assert!(
+        enqueue_result.is_ok(),
+        "queueing should not wait for the existing branch operation"
+    );
+    assert_eq!(
+        publish_label.as_deref(),
+        Some("Publishing review request...")
+    );
+}
+
+#[tokio::test]
+async fn review_request_enqueue_failure_replaces_queued_status_with_error() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("session should be created");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+    let restore_view = ConfirmationViewMode {
+        scroll_offset: Some(3),
+        session_id: session_id.clone().into(),
+    };
+
+    // Act
+    app.start_publish_branch_action(
+        restore_view,
+        &session_id,
+        PublishBranchAction::PublishPullRequest,
+        None,
+    )
+    .await;
+    let publish_body = app
+        .sessions
+        .state()
+        .sessions()
+        .iter()
+        .find(|session| session.id == session_id)
+        .and_then(|session| {
+            session
+                .transient_messages
+                .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+        })
+        .map(|message| message.body.text().to_string());
+
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::View {
+            session_id: ref viewed_session_id,
+            scroll_offset: Some(3),
+        } if viewed_session_id == &session_id
+    ));
+    assert!(
+        publish_body
+            .as_deref()
+            .is_some_and(|body| body.contains("**Review request publish failed**"))
+    );
+    assert!(
+        publish_body
+            .as_deref()
+            .is_some_and(|body| body.contains("active session worker is unavailable"))
+    );
+}
+
+#[tokio::test]
+async fn push_action_still_dispatches_through_background_publish_path() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("session should be created");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+    let restore_view = ConfirmationViewMode {
+        scroll_offset: Some(5),
+        session_id: session_id.clone().into(),
+    };
+    let pending_git_status_event =
+        tokio::time::timeout(Duration::from_secs(1), app.next_app_event())
+            .await
+            .expect("pending git status event should arrive")
+            .expect("app event channel should remain open");
+    assert!(matches!(
+        pending_git_status_event,
+        AppEvent::GitStatusUpdated { .. }
+    ));
+
+    // Act
+    app.start_publish_branch_action(restore_view, &session_id, PublishBranchAction::Push, None)
+        .await;
+    let completion_event = tokio::time::timeout(Duration::from_secs(1), app.next_app_event())
+        .await
+        .expect("background branch publish should complete")
+        .expect("app event channel should remain open");
+    let publish_label = app.sessions.state().sessions()[0]
+        .transient_messages
+        .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+        .map(|message| message.body.text());
+
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::View {
+            session_id: ref viewed_session_id,
+            scroll_offset: Some(5),
+        } if viewed_session_id == &session_id
+    ));
+    assert_eq!(publish_label, Some("Pushing branch..."));
+    assert!(matches!(
+        completion_event,
+        AppEvent::BranchPublishActionCompleted {
+            result,
+            session_id: completed_session_id,
+        } if completed_session_id == session_id
+            && matches!(
+                *result,
+                Err(BranchPublishTaskFailure { ref message, .. })
+                    if message == "Session must be in review to push the branch."
+            )
+    ));
+}
+
+#[tokio::test]
 async fn branch_publish_task_context_targets_stacked_parent_review_source_branch() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
@@ -2079,6 +2241,37 @@ async fn apply_branch_publish_action_update_persists_pull_request_notice() {
             .first()
             .and_then(|session| session.review_request.clone()),
         Some(review_request)
+    );
+}
+
+#[tokio::test]
+async fn apply_branch_publish_started_replaces_queued_label() {
+    // Arrange
+    let session_folder = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_selected_session(
+        session_folder.path().to_path_buf(),
+        "",
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    app.sessions.start_branch_publish(
+        "session-1",
+        "Review request queued; publishing after the current turn finishes...".to_string(),
+    );
+
+    // Act
+    app.apply_app_events(AppEvent::BranchPublishActionStarted {
+        session_id: "session-1".into(),
+    })
+    .await;
+
+    // Assert
+    assert_eq!(
+        app.sessions.state().sessions()[0]
+            .transient_messages
+            .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
+            .map(|message| message.body.text()),
+        Some("Publishing review request...")
     );
 }
 
@@ -2883,6 +3076,9 @@ fn app_event_batch_collect_event_keeps_publish_results_and_latest_reviews() {
         result: Box::new(Ok(test_pushed_branch_result("feature/final"))),
         session_id: "session-b".into(),
     });
+    event_batch.collect_event(AppEvent::BranchPublishActionStarted {
+        session_id: "session-a".into(),
+    });
 
     // Assert
     assert_eq!(
@@ -2911,6 +3107,11 @@ fn app_event_batch_collect_event_keeps_publish_results_and_latest_reviews() {
                 session_id: "session-b".into(),
             },
         ]
+    );
+    assert!(
+        event_batch
+            .branch_publish_started_session_ids
+            .contains("session-a")
     );
     assert!(event_batch.should_refresh_git_status);
 }

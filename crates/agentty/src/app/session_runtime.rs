@@ -70,8 +70,8 @@ pub(crate) enum SessionRuntimeCommand {
         response_tx: oneshot::Sender<Result<(), SessionError>>,
         session_id: SessionId,
     },
-    /// Publishes one session branch and creates or refreshes its review
-    /// request.
+    /// Queues publication of one session branch and creates or refreshes its
+    /// review request.
     CreateReviewRequest {
         access: SessionRuntimeAccess,
         response_tx: oneshot::Sender<Result<ReviewRequest, SessionError>>,
@@ -200,7 +200,8 @@ impl SessionRuntimeHandle {
         .await
     }
 
-    /// Creates or refreshes one review request through the runtime actor.
+    /// Queues creation or refresh of one review request through the runtime
+    /// actor.
     pub(crate) async fn create_review_request(
         &self,
         session_id: &SessionId,

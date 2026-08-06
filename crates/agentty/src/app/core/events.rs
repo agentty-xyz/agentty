@@ -202,6 +202,9 @@ pub(crate) enum AppEvent {
         result: Box<BranchPublishTaskResult>,
         session_id: SessionId,
     },
+    /// Indicates a queued review-request action has begun executing on its
+    /// session worker.
+    BranchPublishActionStarted { session_id: SessionId },
     /// Indicates review assist output became available for a session.
     ReviewPrepared {
         diff_hash: u64,
@@ -278,6 +281,7 @@ pub(super) struct AppEventBatch {
     pub(super) agent_cli_updates: Option<Vec<AgentCliInfo>>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
     pub(super) branch_publish_action_updates: Vec<BranchPublishActionUpdate>,
+    pub(super) branch_publish_started_session_ids: HashSet<SessionId>,
     pub(super) diff_preview_updates: Vec<DiffPreviewUpdate>,
     pub(super) focused_review_persistence_retries: Vec<FocusedReviewPersistenceRetry>,
     pub(super) git_status_update: Option<GitStatusBatchUpdate>,
@@ -426,6 +430,7 @@ impl AppEventBatch {
             || !self.applied_turns.is_empty()
             || !self.at_mention_entries_updates.is_empty()
             || !self.branch_publish_action_updates.is_empty()
+            || !self.branch_publish_started_session_ids.is_empty()
             || !self.diff_preview_updates.is_empty()
             || !self.published_branch_sync_updates.is_empty()
             || !self.review_request_status_updates.is_empty()
@@ -564,8 +569,7 @@ impl AppEventBatch {
                 session_id,
             } => self.collect_session_progress_updated(session_id, progress_message),
             AppEvent::SessionReviewCommentSnapshotLoaded { result, session_id } => {
-                self.session_review_comment_snapshots
-                    .insert(session_id, result);
+                self.collect_session_review_comment_snapshot_loaded(session_id, result);
             }
             AppEvent::SyncMainCompleted { result } => self.collect_sync_main_completed(result),
             AppEvent::SyncMainConflictResolutionStarted { conflicted_files } => {
@@ -582,11 +586,13 @@ impl AppEventBatch {
                 generation,
                 session_id,
             } => {
-                self.session_title_generation_finished
-                    .insert(session_id, generation);
+                self.collect_session_title_generation_finished(session_id, generation);
             }
             AppEvent::BranchPublishActionCompleted { result, session_id } => {
                 self.collect_branch_publish_action_completed(*result, session_id);
+            }
+            AppEvent::BranchPublishActionStarted { session_id } => {
+                self.branch_publish_started_session_ids.insert(session_id);
             }
             AppEvent::ReviewPrepared {
                 diff_hash,
@@ -646,6 +652,26 @@ impl AppEventBatch {
             } => self.collect_review_request_status_updated(generation, result, session_id),
             _ => unreachable!("top-level app event should be collected before runtime events"),
         }
+    }
+
+    /// Keeps the latest loaded review-comment snapshot for one session.
+    fn collect_session_review_comment_snapshot_loaded(
+        &mut self,
+        session_id: SessionId,
+        result: Result<ag_forge::ReviewCommentSnapshot, String>,
+    ) {
+        self.session_review_comment_snapshots
+            .insert(session_id, result);
+    }
+
+    /// Keeps the latest completed title-generation task for one session.
+    fn collect_session_title_generation_finished(
+        &mut self,
+        session_id: SessionId,
+        generation: u64,
+    ) {
+        self.session_title_generation_finished
+            .insert(session_id, generation);
     }
 
     /// Keeps the freshest assigned-issue result when one batch contains
@@ -1052,6 +1078,10 @@ impl App {
         self.apply_batch_session_snapshot_updates(&mut event_batch);
         self.apply_app_event_effects(after_snapshot_effects).await;
 
+        self.apply_branch_publish_starts(std::mem::take(
+            &mut event_batch.branch_publish_started_session_ids,
+        ));
+
         for branch_publish_action_update in
             std::mem::take(&mut event_batch.branch_publish_action_updates)
         {
@@ -1139,6 +1169,16 @@ impl App {
 
         if should_mark_dirty {
             self.mark_dirty();
+        }
+    }
+
+    /// Replaces queued review-request labels when their worker actions start.
+    fn apply_branch_publish_starts(&mut self, session_ids: HashSet<SessionId>) {
+        for session_id in session_ids {
+            self.sessions.start_branch_publish(
+                &session_id,
+                Self::branch_publish_loading_label(PublishBranchAction::PublishPullRequest),
+            );
         }
     }
 

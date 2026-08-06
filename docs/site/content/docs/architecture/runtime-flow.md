@@ -170,16 +170,22 @@ output anchor, and an explicit lifecycle. Reducer paths upsert or retract summar
 focused-review, workflow-feedback, manual-branch-publish, and published-branch-sync
 slots; starting a later turn clears older turn-scoped slots in one place.
 
-Manual branch and review-request publishing returns from its branch-name popup to
-`AppMode::View` before spawning the task. Its session-scoped transient slot renders the
-animated progress row, then the terminal reducer event replaces that row with inline
-success or failure output without changing whichever app mode is active at completion.
-Successful review-request creation retracts the transient row and appends its
-single-line URL result as a durable `WorkflowNotice` at the current transcript position.
-Later turns therefore leave the result in its original history position instead of
-reconstructing a transient between turns. The manual task holds the same per-session
-branch-operation lock as completed-turn auto-push for its full push and forge-metadata
-workflow.
+Manual branch publishing and review-request creation return from the branch-name popup
+to `AppMode::View`. Review-request creation is persisted on the per-session worker, so
+an action accepted during an active turn renders a queued row and executes before later
+queued chat. A worker-start event replaces that row with animated publish progress; the
+terminal reducer event then replaces it with inline success or failure output without
+changing whichever app mode is active at completion. Successful review-request creation
+retracts the transient row and appends its single-line URL result as a durable
+`WorkflowNotice` at the current transcript position. Later turns therefore leave the
+result in its original history position instead of reconstructing a transient between
+turns. The manual task holds the same per-session branch-operation lock as
+completed-turn auto-push for its full push and forge-metadata workflow. Queued
+review-request creation also registers as unfinished branch work before the current turn
+can start automatic publishing. Its UI and API handlers only attempt a non-blocking lock
+reservation while persisting the command; when another branch action already owns the
+lock, they return after queueing and let the worker wait without stalling the foreground
+event loop.
 
 Published-branch auto-push completion sends one terminal reducer event carrying its
 `WorkflowNotice`. After accepting the current operation identifier, the reducer persists
@@ -219,14 +225,14 @@ and review-request workflows without placing `App` behind an async mutex. User h
 and the coordinator handle carry distinct capabilities: the user path rejects every
 managed-worker mutation, while the coordinator can relay answers, continue work, cancel,
 merge, or publish through the same lifecycle workflows. Review-request commands snapshot
-the session's existing branch-publish context, spawn its push and forge work on the
-detached branch-publish task, and resolve the API response from that task's terminal
-result; the foreground mailbox remains available while publishing is in flight. Lookup
-joins persisted settings and ordered messages into one frontend-neutral aggregate.
-Creation is restricted to the active project while `SessionRuntime` owns a single
-active-project `SessionManager`, and can copy the agent, model, reasoning, personality,
-and base-branch snapshot from another session in that project without changing defaults
-for later ordinary sessions. The adapter deliberately contains no orchestrator policy.
+the session's existing branch-publish context, persist it on the per-session worker, and
+resolve the API response from that command's terminal result; the foreground mailbox
+remains available while publishing is queued or in flight. Lookup joins persisted
+settings and ordered messages into one frontend-neutral aggregate. Creation is
+restricted to the active project while `SessionRuntime` owns a single active-project
+`SessionManager`, and can copy the agent, model, reasoning, personality, and base-branch
+snapshot from another session in that project without changing defaults for later
+ordinary sessions. The adapter deliberately contains no orchestrator policy.
 `app/orchestration.rs` owns that sequencing: it persists proposed task rows before
 approval, reads child status, summary, and token totals in one SQLite task snapshot
 during reconciliation, and uses the session API mailbox only for child creation,
@@ -264,13 +270,13 @@ flowchart LR
 1. `start_session()` (first prompt) or `reply()` (follow-up) persists the command in
    `session_operation` and enqueues it on the per-session worker.
 1. The worker marks the operation `running`, checks cancel flags, verifies worktree
-   isolation, and delegates to `workflow/turn.rs` or the queued session-sync workflow.
-   An **InProgress** sync request can enqueue only through the sender already owned by
-   that worker; it cannot lazily create another worker. The same in-memory chat queue
-   accepts follow-up prompts while the worker is **InProgress** or **Rebasing**, and
-   drains them after the active operation. The receiver is checked between every pair of
-   retractable queued-chat turns, so a command received during one chat turn waits for
-   that turn and then runs before the remaining chat queue.
+   isolation, and delegates to `workflow/turn.rs`, queued session sync, or queued
+   review-request creation. An **InProgress** branch action can enqueue only through the
+   sender already owned by that worker; it cannot lazily create another worker. The same
+   in-memory chat queue accepts follow-up prompts while the worker is **InProgress** or
+   **Rebasing**, and drains them after the active operation. The receiver is checked
+   between every pair of retractable queued-chat turns, so a command received during one
+   chat turn waits for that turn and then runs before the remaining chat queue.
 1. Immediately before a chat turn, the worker resolves the persisted personality ID
    through `PersonalityCatalogClient`. The catalog scans only the session worktree's
    `.agents/agents` directory. The worker compares the resolved prompt fingerprint with

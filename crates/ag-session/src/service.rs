@@ -121,8 +121,8 @@ pub trait SessionBackend: Send + Sync {
     /// Requests merge processing for one review-ready session.
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError>;
 
-    /// Publishes one session branch and creates or refreshes its review
-    /// request.
+    /// Queues publication of one session branch and creates or refreshes its
+    /// review request.
     async fn create_review_request(
         &self,
         session_id: &SessionId,
@@ -219,11 +219,12 @@ impl SessionService {
         self.backend.merge_session(session_id).await
     }
 
-    /// Publishes one session and creates or refreshes its review request.
+    /// Queues publication of one session and creates or refreshes its review
+    /// request.
     ///
     /// # Errors
-    /// Returns an error when branch publication, forge access, or persistence
-    /// fails.
+    /// Returns an error when queueing, branch publication, forge access, or
+    /// persistence fails.
     pub async fn create_review_request(
         &self,
         session_id: &SessionId,

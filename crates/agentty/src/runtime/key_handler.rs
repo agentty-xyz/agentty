@@ -46,7 +46,7 @@ where
     } else if matches!(app.mode, AppMode::LaunchConfigurationSelector { .. }) {
         handle_launch_configuration_selector_key(app, key).await
     } else if matches!(app.mode, AppMode::PublishBranchInput { .. }) {
-        Ok(handle_publish_branch_input_key(app, key))
+        Ok(handle_publish_branch_input_key(app, key).await)
     } else {
         match &app.mode {
             AppMode::List => mode::list::handle(app, key).await,
@@ -428,7 +428,7 @@ fn handle_view_info_popup_key(app: &mut App, key: KeyEvent) -> EventResult {
 /// Only `Esc` cancels the overlay. Plain character keys continue to edit the
 /// branch name so session-view shortcuts like `q` and `p` do not leak through
 /// while the text field has focus.
-fn handle_publish_branch_input_key(app: &mut App, key: KeyEvent) -> EventResult {
+async fn handle_publish_branch_input_key(app: &mut App, key: KeyEvent) -> EventResult {
     let publish_branch_input =
         PublishBranchInputModeState::from_mode(std::mem::replace(&mut app.mode, AppMode::List));
     let input_locked = publish_branch_input.locked_upstream_ref.is_some();
@@ -451,7 +451,8 @@ fn handle_publish_branch_input_key(app: &mut App, key: KeyEvent) -> EventResult 
                 &session_id,
                 publish_branch_input.publish_branch_action,
                 remote_branch_name,
-            );
+            )
+            .await;
         }
         _ if !input_locked => {
             app.mode = if let Some(command) = mode::input_key::command_for_key(
@@ -2061,6 +2062,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_key_event_routes_publish_branch_input() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
+        app.mode = AppMode::PublishBranchInput {
+            default_branch_name: "wt/session".to_string(),
+            input: crate::domain::input::InputState::with_text("review/custom".to_string()),
+            locked_upstream_ref: None,
+            publish_branch_action: crate::domain::session::PublishBranchAction::Push,
+            restore_view: ConfirmationViewMode {
+                scroll_offset: Some(7),
+                session_id: "session-id".into(),
+            },
+        };
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        let event_result = handle_key_event(
+            &mut app,
+            &PresentationState::default(),
+            &mut terminal,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                scroll_offset: Some(7),
+            } if session_id == "session-id"
+        ));
+    }
+
+    #[tokio::test]
     async fn test_handle_publish_branch_input_key_escape_restores_view_mode() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
@@ -2079,7 +2117,8 @@ mod tests {
         let event_result = handle_publish_branch_input_key(
             &mut app,
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
@@ -2121,7 +2160,8 @@ mod tests {
         let event_result = handle_publish_branch_input_key(
             &mut app,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
@@ -2164,7 +2204,8 @@ mod tests {
         let event_result = handle_publish_branch_input_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
@@ -2208,7 +2249,8 @@ mod tests {
             let event_result = handle_publish_branch_input_key(
                 &mut app,
                 KeyEvent::new(KeyCode::Char(character), modifiers),
-            );
+            )
+            .await;
 
             // Assert
             assert!(matches!(event_result, EventResult::Continue));
@@ -2241,7 +2283,8 @@ mod tests {
         let event_result = handle_publish_branch_input_key(
             &mut app,
             KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
@@ -2271,11 +2314,13 @@ mod tests {
         handle_publish_branch_input_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
-        );
+        )
+        .await;
         handle_publish_branch_input_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
-        );
+        )
+        .await;
         assert!(matches!(
             &app.mode,
             AppMode::PublishBranchInput { input, .. } if input.text() == "review custom"
@@ -2283,7 +2328,8 @@ mod tests {
         handle_publish_branch_input_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -2311,7 +2357,8 @@ mod tests {
         let result = handle_publish_branch_input_key(
             &mut app,
             KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(result, EventResult::Continue));
@@ -2340,7 +2387,8 @@ mod tests {
         let event_result = handle_publish_branch_input_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
-        );
+        )
+        .await;
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));

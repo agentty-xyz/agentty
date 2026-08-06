@@ -574,7 +574,7 @@ impl Session {
     }
 
     /// Returns the review-request publish action currently available in session
-    /// view.
+    /// view, including queueing behind an active turn.
     pub fn publish_pull_request_action(&self) -> Option<PublishBranchAction> {
         let is_publish_active = self
             .transient_messages
@@ -583,7 +583,7 @@ impl Session {
 
         (self.accepts_user_turns()
             && self.owns_branch_changes()
-            && self.status.allows_review_actions()
+            && (self.status.allows_review_actions() || self.status == Status::InProgress)
             && !is_publish_active)
             .then_some(PublishBranchAction::PublishPullRequest)
     }
@@ -2119,7 +2119,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
-    fn test_publish_pull_request_action_returns_none_for_in_progress_session() {
+    fn test_publish_pull_request_action_queues_for_in_progress_session() {
         // Arrange
         let session = Session {
             base_branch: "main".to_string(),
@@ -2162,7 +2162,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
         let action = session.publish_pull_request_action();
 
         // Assert
-        assert_eq!(action, None);
+        assert_eq!(action, Some(PublishBranchAction::PublishPullRequest));
     }
 
     #[test]
