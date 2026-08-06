@@ -224,6 +224,7 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
                 | ConfirmationIntent::MergeSession
                 | ConfirmationIntent::RegenerateReview
                 | ConfirmationIntent::DetachManagedSession
+                | ConfirmationIntent::OpenManagedWorktree
                 | ConfirmationIntent::ChooseIntegrationApproach,
             restore_view: Some(restore_view),
             ..

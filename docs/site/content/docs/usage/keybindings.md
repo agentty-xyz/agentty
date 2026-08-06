@@ -194,12 +194,14 @@ State-specific differences:
   approves the plan; after verification, `a` opens a choice between local merges and
   review requests. Worker parallelism comes from the global **Orchestrator Parallelism**
   setting. Controllers hide branch actions: `d`, `o`, `p`, `F`, `m`, and `r`.
-- Managed orchestration workers are read-only. `d` opens their diff and `D` confirms a
-  one-way detach into a regular user-owned session. Reply, slash-command, worktree,
-  publish, fork, merge, sync, cancel, linked review-comment, and direct question-answer
-  actions stay hidden; `Ctrl+c` is ignored while the worker remains managed. After a
-  managed merge removes the worktree, `d` reads the immutable diff archived during
-  integration.
+- Managed orchestration workers restrict direct Agentty actions. `d` opens their diff,
+  `D` confirms a one-way detach into a regular user-owned session, and a worker in
+  **Review** exposes `o` to open its materialized worktree. The confirmation warns that
+  the shell has normal write access and edits can invalidate orchestration verification.
+  Reply, slash-command, publish, fork, merge, sync, cancel, linked review-comment, and
+  direct question-answer actions stay hidden; `Ctrl+c` is ignored while the worker
+  remains managed. After a managed merge removes the worktree, `d` reads the immutable
+  diff archived during integration.
 - Review-ready stacked parents with a materialized child keep `Enter`, `/`, `m`, and `r`
   while the stack is idle.
 - Sessions with a linked pull request or merge request use `c` to open its comments page

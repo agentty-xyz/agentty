@@ -55,6 +55,9 @@ pub enum ConfirmationIntent {
     RegenerateReview,
     /// Confirms permanently detaching a coordinator-owned worker.
     DetachManagedSession,
+    /// Acknowledges that a managed worker worktree opens with normal write
+    /// access.
+    OpenManagedWorktree,
     /// Chooses between local merges and forge review requests for a campaign.
     ChooseIntegrationApproach,
 }

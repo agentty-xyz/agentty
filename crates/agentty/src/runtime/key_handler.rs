@@ -636,6 +636,7 @@ fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
             | ConfirmationIntent::MergeSession
             | ConfirmationIntent::RegenerateReview
             | ConfirmationIntent::DetachManagedSession
+            | ConfirmationIntent::OpenManagedWorktree
             | ConfirmationIntent::ChooseIntegrationApproach,
         restore_view: Some(restore_view),
         ..
@@ -689,6 +690,10 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
             handle_detach_managed_session_confirmation(app, confirmation_session_id, restore_view)
                 .await
         }
+        ConfirmationIntent::OpenManagedWorktree => {
+            handle_open_managed_worktree_confirmation(app, confirmation_session_id, restore_view)
+                .await
+        }
         ConfirmationIntent::ChooseIntegrationApproach => {
             handle_integration_approach_confirmation(
                 app,
@@ -699,6 +704,28 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
             .await
         }
     }
+}
+
+/// Opens a managed worker worktree after the user acknowledges write access.
+async fn handle_open_managed_worktree_confirmation(
+    app: &mut App,
+    confirmation_session_id: Option<SessionId>,
+    restore_view: Option<ConfirmationViewMode>,
+) -> io::Result<EventResult> {
+    let Some(restore_view) = restore_view else {
+        app.mode = AppMode::List;
+
+        return Ok(EventResult::Continue);
+    };
+    if confirmation_session_id.as_ref() != Some(&restore_view.session_id) {
+        app.mode = restore_view.into_view_mode();
+
+        return Ok(EventResult::Continue);
+    }
+
+    mode::session_view::open_worktree_for_view_session(app, restore_view).await;
+
+    Ok(EventResult::Continue)
 }
 
 /// Resolves the second binary choice, which only has distinct semantics for
@@ -1552,11 +1579,61 @@ mod tests {
         // Act
         let cancel_result = handle_cancel_session_confirmation(&mut app, None).await;
         let merge_result = handle_merge_confirmation(&mut app, None, None).await;
+        let open_result = handle_open_managed_worktree_confirmation(&mut app, None, None).await;
 
         // Assert
         assert!(matches!(cancel_result, Ok(EventResult::Continue)));
         assert!(matches!(merge_result, Ok(EventResult::Continue)));
+        assert!(matches!(open_result, Ok(EventResult::Continue)));
         assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn managed_worktree_confirmation_validates_target_then_opens_selector() {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
+        let restore_view = ConfirmationViewMode {
+            scroll_offset: Some(3),
+            session_id: session_id.clone().into(),
+        };
+
+        // Act
+        let mismatched_result = handle_open_managed_worktree_confirmation(
+            &mut app,
+            Some(SessionId::from("other-session")),
+            Some(restore_view.clone()),
+        )
+        .await;
+        app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::OpenManagedWorktree,
+            confirmation_message: "Open?".to_string(),
+            confirmation_title: "Open Managed Worktree".to_string(),
+            restore_view: Some(restore_view),
+            session_id: Some(session_id.clone().into()),
+            selected_confirmation_index: 0,
+        };
+        let confirmed_result =
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+        // Assert
+        assert!(matches!(mismatched_result, Ok(EventResult::Continue)));
+        assert!(matches!(confirmed_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::LaunchConfigurationSelector {
+                ref commands,
+                ref restore_view,
+                selected_command_index: 0,
+            } if commands == &["cargo test".to_string(), "npm run dev".to_string()]
+                && restore_view.session_id == session_id
+                && restore_view.scroll_offset == Some(3)
+        ));
     }
 
     #[tokio::test]

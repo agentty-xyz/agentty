@@ -433,6 +433,16 @@ impl Session {
             && (self.status.allows_review_actions() || self.status == Status::Question)
     }
 
+    /// Returns whether the session lifecycle and ownership role permit opening
+    /// its materialized worktree.
+    ///
+    /// Managed orchestration workers remain unavailable for direct user turns,
+    /// but a settled worker in `Review` may be opened for external inspection.
+    pub fn allows_worktree_open_action(&self) -> bool {
+        self.status.allows_session_actions()
+            && (self.accepts_user_turns() || (self.is_managed() && self.status == Status::Review))
+    }
+
     /// Returns whether this session exposes branch diff, merge, and publish
     /// affordances.
     pub fn owns_branch_changes(&self) -> bool {
@@ -1136,6 +1146,24 @@ pub(crate) mod tests {
         // Assert
         assert!(!allows_reply);
         assert!(!managed_allows_reply);
+    }
+
+    #[test]
+    fn test_allows_worktree_open_action_accepts_managed_worker_only_in_review() {
+        // Arrange
+        let statuses = [Status::InProgress, Status::Review, Status::AgentReview];
+
+        // Act
+        let open_permissions = statuses.map(|status| {
+            SessionFixtureBuilder::new()
+                .role(SessionRole::OrchestrationWorker)
+                .status(status)
+                .build()
+                .allows_worktree_open_action()
+        });
+
+        // Assert
+        assert_eq!(open_permissions, [false, true, false]);
     }
 
     #[test]

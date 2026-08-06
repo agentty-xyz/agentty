@@ -178,7 +178,8 @@ impl ViewActionSet {
         let can_open_worktree = state.can_open_worktree.is_enabled()
             && matches!(
                 state.session_state,
-                ViewSessionState::Interactive
+                ViewSessionState::Managed
+                    | ViewSessionState::Interactive
                     | ViewSessionState::NewSession
                     | ViewSessionState::StackedDraft
                     | ViewSessionState::Review
@@ -1961,10 +1962,38 @@ mod tests {
         // Assert
         assert!(managed_keys.contains(&"d"));
         assert!(managed_keys.contains(&"D"));
+        assert!(!managed_keys.contains(&"o"));
         assert!(!managed_keys.contains(&"Enter"));
         assert!(controller_keys.contains(&"a"));
         assert!(controller_keys.contains(&"Enter"));
         assert!(!controller_keys.contains(&"m"));
+    }
+
+    #[test]
+    fn managed_review_view_actions_expose_worktree_open_when_available() {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Disabled,
+            can_merge_session_branch: ViewActionAvailability::Disabled,
+            can_mutate_session_branch: ViewActionAvailability::Disabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            can_rebase_session_branch: ViewActionAvailability::Disabled,
+            reply_to_session: ViewActionAvailability::Disabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Managed,
+        };
+
+        // Act
+        let managed_keys = view_actions(state)
+            .iter()
+            .map(|action| action.key)
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(managed_keys.contains(&"o"));
+        assert!(!managed_keys.contains(&"Enter"));
+        assert!(!managed_keys.contains(&"m"));
     }
 
     #[test]

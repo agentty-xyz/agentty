@@ -54,7 +54,7 @@ pub fn session_header_lines(
             .as_ref()
             .map_or("orchestrator", SessionId::as_str);
         lines.push(Line::from(Span::styled(
-            format!("Managed by {controller} — read-only"),
+            format!("Managed by {controller} — actions restricted"),
             Style::default().fg(style::palette::warning()),
         )));
     }
@@ -503,7 +503,7 @@ mod tests {
         assert!(
             header_lines[1]
                 .to_string()
-                .contains("Managed by campaign-controller — read-only")
+                .contains("Managed by campaign-controller — actions restricted")
         );
     }
 
