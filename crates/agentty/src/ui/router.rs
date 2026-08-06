@@ -72,6 +72,31 @@ enum Surface<'a> {
     },
 }
 
+impl Surface<'_> {
+    /// Returns the stable base-page identity used across mode overlays.
+    fn kind(self) -> SurfaceKind {
+        match self {
+            Self::Diff { .. } => SurfaceKind::Diff,
+            Self::IssueDetail(_) => SurfaceKind::IssueDetail,
+            Self::List => SurfaceKind::List,
+            Self::ReviewComments(_) => SurfaceKind::ReviewComments,
+            Self::ReviewDetail(_) => SurfaceKind::ReviewDetail,
+            Self::Session { .. } => SurfaceKind::Session,
+        }
+    }
+}
+
+/// Stable identity for the base page painted beneath mode-specific overlays.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SurfaceKind {
+    Diff,
+    IssueDetail,
+    List,
+    ReviewComments,
+    ReviewDetail,
+    Session,
+}
+
 /// Session mode used while rendering a chat surface.
 #[derive(Clone, Copy)]
 enum SessionSurfaceMode<'a> {
@@ -212,6 +237,11 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
 
     render_surface(f, area, surface_for_mode(mode), &mut shared, resources);
     render_mode_overlay(f, area, mode, &shared, resources);
+}
+
+/// Resolves the stable base-page identity for terminal transition handling.
+pub(crate) fn surface_kind_for_mode(mode: &AppMode) -> SurfaceKind {
+    surface_for_mode(mode).kind()
 }
 
 /// Resolves the base page painted for every mode before any overlay.
@@ -1044,6 +1074,48 @@ mod tests {
         assert!(matches!(list_surface, Surface::List));
         assert!(matches!(view_surface, Surface::Session { .. }));
         assert!(matches!(diff_surface, Surface::Diff { .. }));
+    }
+
+    #[test]
+    fn surface_kind_classifies_each_base_page() {
+        // Arrange
+        let mode = AppMode::List;
+        let diff = String::new();
+        let preview = DiffPreview::default();
+        let surfaces = [
+            Surface::Diff {
+                diff: &diff,
+                file_explorer_selected_index: 0,
+                preview: &preview,
+                scroll_offset: 0,
+                session_id: "session-surface-kind",
+            },
+            Surface::IssueDetail(&mode),
+            Surface::List,
+            Surface::ReviewComments(&mode),
+            Surface::ReviewDetail(&mode),
+            Surface::Session {
+                mode: SessionSurfaceMode::View,
+                scroll_offset: None,
+                session_id: "session-surface-kind",
+            },
+        ];
+
+        // Act
+        let surface_kinds = surfaces.map(Surface::kind);
+
+        // Assert
+        assert_eq!(
+            surface_kinds,
+            [
+                SurfaceKind::Diff,
+                SurfaceKind::IssueDetail,
+                SurfaceKind::List,
+                SurfaceKind::ReviewComments,
+                SurfaceKind::ReviewDetail,
+                SurfaceKind::Session,
+            ]
+        );
     }
 
     #[test]

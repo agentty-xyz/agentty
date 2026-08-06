@@ -213,16 +213,17 @@ still run while GIF freshness is checked without invoking VHS or launching Chrom
 
 ### Record in the canonical container
 
-Committed hash sidecars must be produced by the same environment that CI verifies them
-in. `container/e2e.Containerfile` defines that environment: a pinned multi-architecture
-Linux image with the Rust toolchain, `prek`, `cargo-nextest`, and the full VHS recording
-stack (`vhs`, `ttyd`, Chromium, `ffmpeg`, JetBrains Mono). Presubmit, postsubmit, and
-release checks pull its `linux/amd64` variant from GHCR by digest and run the
-`test-agentty-e2e` hook inside it against a read-only checkout. Pull the same immutable
-manifest digest for native `linux/amd64` or `linux/arm64` recording instead of building
-or recording on the host. The host needs a running Podman environment only — no local
-Chrome or VHS — and the localhost-socket sandbox restriction below does not apply inside
-the container.
+Committed hash sidecars must be produced by the same pinned container definition that CI
+uses. `container/e2e.Containerfile` supports both `linux/amd64` and `linux/arm64`, with
+architecture-specific checksums for the Rust installer, `prek`, `cargo-nextest`, `vhs`,
+and `ttyd`, plus the full recording stack (Chromium, `ffmpeg`, JetBrains Mono).
+Presubmit, postsubmit, and release checks currently pull the published `linux/amd64`
+image from GHCR by digest and run the `test-agentty-e2e` hook inside it against a
+read-only checkout. That published digest is not currently a multi-architecture
+manifest, so ARM64 hosts must build the native image from `container/e2e.Containerfile`
+instead of attempting to emulate its AMD64 image. The host needs a running Podman
+environment only — no local Chrome or VHS — and the localhost-socket sandbox restriction
+below does not apply inside the container.
 
 On macOS or Windows, initialize the Podman machine once with `podman machine init`, then
 start it with `podman machine start` before pulling or running the image. Linux hosts
@@ -234,7 +235,7 @@ Linux bind mounts remain writable. A host-owned cache directory provides writabl
 Cargo, `prek`, and build locations while preserving them between runs:
 
 ```sh
-e2e_image=ghcr.io/agentty-xyz/agentty-e2e@sha256:d348629b6c449d33f5285c9ef2b7ea0ac3c47fcf264b1ec7f3f4c58a6952a696
+published_e2e_image=ghcr.io/agentty-xyz/agentty-e2e@sha256:d348629b6c449d33f5285c9ef2b7ea0ac3c47fcf264b1ec7f3f4c58a6952a696
 e2e_cache_root="${XDG_CACHE_HOME:-${HOME}/.cache}/agentty-e2e"
 mkdir -p \
   "${e2e_cache_root}/home" \
@@ -242,9 +243,29 @@ mkdir -p \
   "${e2e_cache_root}/prek" \
   "${e2e_cache_root}/target"
 
-podman pull "${e2e_image}"
+case "$(uname -m)" in
+  x86_64 | amd64)
+    e2e_platform=linux/amd64
+    e2e_image="${published_e2e_image}"
+    podman pull "${e2e_image}"
+    ;;
+  arm64 | aarch64)
+    e2e_platform=linux/arm64
+    e2e_image=localhost/agentty-e2e:recording-arm64
+    podman build \
+      --platform "${e2e_platform}" \
+      --tag "${e2e_image}" \
+      --file container/e2e.Containerfile \
+      container
+    ;;
+  *)
+    echo "unsupported recording architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
 
 podman run --rm \
+  --platform "${e2e_platform}" \
   --user "$(id -u):$(id -g)" \
   --mount type=bind,source="$PWD",target=/workspace \
   --mount type=bind,source="${e2e_cache_root}",target=/cache \
@@ -255,11 +276,20 @@ podman run --rm \
   --env TESTTY_GIF_MODE=generate \
   "${e2e_image}" \
   cargo nextest run --locked --profile ci -p agentty --test e2e test_{name}
+
+test -s docs/site/static/features/{name}.gif || {
+  echo "generated feature GIF is missing or empty: {name}.gif" >&2
+  exit 1
+}
 ```
 
-The `--user` override is only for writable local recording. CI does not use it: the
-image retains its unprivileged UID 1001 default, and workflows mount the checkout
-read-only for `check` mode.
+The ARM64 branch builds natively; do not pull or run the published AMD64 digest under
+QEMU because Rust compiler probes can crash before the test starts. The `--user`
+override is only for writable local recording. CI does not use it: the image retains its
+unprivileged UID 1001 default, and workflows mount the checkout read-only for `check`
+mode. Always perform the nonempty-file check after recording: VHS can exit successfully
+after creating its screenshots even when GIF finalization has not produced a usable
+artifact.
 
 Review the changed GIF and `.{name}.hash` sidecar, then refresh the PNG poster for every
 regenerated GIF (section 4) before committing all three together. Successful generation
@@ -389,6 +419,7 @@ When using the legacy pattern, create the Zola page manually at
 - [ ] Assertions verify visible UI text or state, not internal implementation details.
 - [ ] A same-named PNG poster exists, shows a meaningful stable frame, and was refreshed
   after the latest GIF change.
+- [ ] The generated GIF exists and is nonempty before its hash sidecar is accepted.
 - [ ] Focused E2E workflow passes with
   `TESTTY_GIF_MODE=check cargo nextest run --locked --profile ci -p agentty --test e2e test_{name}`.
 - [ ] Zola site validates with `prek run zola-check --all-files --hook-stage manual`
