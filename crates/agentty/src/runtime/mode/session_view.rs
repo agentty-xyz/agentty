@@ -318,7 +318,7 @@ async fn handle_primary_view_key(
             app.mode = AppMode::List;
         }
         KeyCode::Char('o') if view_session_snapshot.can_open_worktree() => {
-            open_worktree_for_view_session(app, view_context).await;
+            return Some(handle_open_worktree_key(app, view_context, view_session_snapshot).await);
         }
         KeyCode::Char('l') if view_session_snapshot.follow_up_task_action.is_some() => {
             if let Err(error) = app
@@ -408,6 +408,23 @@ async fn handle_primary_view_key(
     }
 
     Some(true)
+}
+
+/// Opens a regular worktree immediately or warns for a managed worker.
+async fn handle_open_worktree_key(
+    app: &mut App,
+    view_context: &ViewContext,
+    view_session_snapshot: &ViewSessionSnapshot,
+) -> bool {
+    let restore_view = confirmation_view_mode(view_context);
+    if view_session_snapshot.is_managed {
+        open_managed_worktree_confirmation(app, restore_view);
+
+        return false;
+    }
+    open_worktree_for_view_session(app, restore_view).await;
+
+    true
 }
 
 /// Applies campaign-board controls owned by an orchestrator session.
@@ -578,14 +595,31 @@ fn open_continue_confirmation(app: &mut App, view_context: &ViewContext) {
     };
 }
 
+/// Warns before opening a controller-managed worker's writable worktree.
+fn open_managed_worktree_confirmation(app: &mut App, restore_view: ConfirmationViewMode) {
+    app.mode = AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::OpenManagedWorktree,
+        confirmation_message: "This opens a writable shell in a controller-managed worktree. \
+                               Edits can invalidate orchestration verification. Open anyway?"
+            .to_string(),
+        confirmation_title: "Open Managed Worktree".to_string(),
+        session_id: Some(restore_view.session_id.clone()),
+        restore_view: Some(restore_view),
+        selected_confirmation_index: DEFAULT_OPTION_INDEX,
+    };
+}
+
 /// Opens the viewed session worktree directly or shows a command selector when
 /// multiple launch configurations are configured.
-async fn open_worktree_for_view_session(app: &mut App, view_context: &ViewContext) {
+pub(crate) async fn open_worktree_for_view_session(
+    app: &mut App,
+    restore_view: ConfirmationViewMode,
+) {
     let launch_configurations = app.configured_launch_configurations();
     if launch_configurations.len() > 1 {
         app.mode = AppMode::LaunchConfigurationSelector {
             commands: launch_configurations,
-            restore_view: confirmation_view_mode(view_context),
+            restore_view,
             selected_command_index: 0,
         };
 
@@ -593,6 +627,7 @@ async fn open_worktree_for_view_session(app: &mut App, view_context: &ViewContex
     }
 
     let selected_launch_configuration = launch_configurations.first().map(String::as_str);
+    app.mode = restore_view.into_view_mode();
 
     app.open_session_worktree_in_tmux_with_command(selected_launch_configuration)
         .await;
@@ -647,7 +682,7 @@ async fn open_or_regenerate_review(
 fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSessionSnapshot> {
     let session = app.sessions.session_at(view_context.session_index)?;
     let session_status = session.status;
-    let can_open_worktree = session_status.allows_session_actions()
+    let can_open_worktree = session.allows_worktree_open_action()
         && *app
             .sessions
             .session_worktree_availability()
@@ -681,9 +716,7 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
                     .sessions
                     .can_mutate_session_branch_in_stack(view_context.session_id.as_str()),
         ),
-        open_worktree: ViewActionState::from_bool(
-            can_open_worktree && session.accepts_user_turns(),
-        ),
+        open_worktree: ViewActionState::from_bool(can_open_worktree),
         publish_pull_request_action: session.publish_pull_request_action(),
         rebase_session_branch: ViewActionState::from_bool(
             session.owns_branch_changes()
@@ -1482,7 +1515,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn managed_session_snapshot_hides_review_comment_entry() {
+    async fn managed_review_session_snapshot_allows_open_but_hides_review_comments() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let session = &mut app.sessions.sessions_mut()[0];
@@ -1499,7 +1532,28 @@ mod tests {
         let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
 
         // Assert
+        assert!(snapshot.can_open_worktree());
         assert!(!snapshot.can_open_review_comments());
+    }
+
+    #[tokio::test]
+    async fn managed_running_session_snapshot_hides_worktree_open() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let session = &mut app.sessions.sessions_mut()[0];
+        session.role = SessionRole::OrchestrationWorker;
+        session.status = Status::InProgress;
+        app.mode = AppMode::View {
+            session_id: session_id.into(),
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert!(!snapshot.can_open_worktree());
     }
 
     #[tokio::test]
@@ -2311,7 +2365,7 @@ mod tests {
         let context = view_context(&mut app).expect("expected view context");
 
         // Act
-        open_worktree_for_view_session(&mut app, &context).await;
+        open_worktree_for_view_session(&mut app, confirmation_view_mode(&context)).await;
 
         // Assert
         assert!(matches!(
@@ -2352,7 +2406,7 @@ mod tests {
         let context = view_context(&mut app).expect("expected view context");
 
         // Act
-        open_worktree_for_view_session(&mut app, &context).await;
+        open_worktree_for_view_session(&mut app, confirmation_view_mode(&context)).await;
 
         // Assert
         assert!(matches!(
@@ -3057,6 +3111,81 @@ mod tests {
                 confirmation_intent: ConfirmationIntent::DetachManagedSession,
                 ..
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn managed_worktree_open_requires_write_access_confirmation() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_test_app().await;
+        let view_context = ViewContext {
+            scroll_offset: Some(2),
+            session_id: SessionId::from("managed-worker"),
+            session_index: 0,
+        };
+        let pending_update = ViewPendingUpdate::from_context(&view_context);
+        let mut snapshot = reply_enabled_review_snapshot();
+        snapshot.is_managed = true;
+
+        // Act
+        let result = handle_primary_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
+            &view_context,
+            &snapshot,
+            &pending_update,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, Some(false));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::OpenManagedWorktree,
+                ref confirmation_message,
+                ref confirmation_title,
+                restore_view: Some(ConfirmationViewMode {
+                    scroll_offset: Some(2),
+                    ref session_id,
+                }),
+                selected_confirmation_index: DEFAULT_OPTION_INDEX,
+                ..
+            } if confirmation_title == "Open Managed Worktree"
+                && confirmation_message.contains("writable shell")
+                && session_id == "managed-worker"
+        ));
+    }
+
+    #[tokio::test]
+    async fn regular_worktree_open_skips_warning_and_opens_selector() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_test_app().await;
+        app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
+        let view_context = ViewContext {
+            scroll_offset: Some(2),
+            session_id: SessionId::from("regular-worker"),
+            session_index: 0,
+        };
+        let snapshot = reply_enabled_review_snapshot();
+
+        // Act
+        let should_apply_pending_update =
+            handle_open_worktree_key(&mut app, &view_context, &snapshot).await;
+
+        // Assert
+        assert!(should_apply_pending_update);
+        assert!(matches!(
+            app.mode,
+            AppMode::LaunchConfigurationSelector {
+                ref commands,
+                restore_view: ConfirmationViewMode {
+                    scroll_offset: Some(2),
+                    ref session_id,
+                },
+                selected_command_index: 0,
+            } if commands == &["cargo test".to_string(), "npm run dev".to_string()]
+                && session_id == "regular-worker"
         ));
     }
 

@@ -93,6 +93,12 @@ fn seed_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
                 }),
             )
             .await?;
+        // Keep the controller as the deterministic initial raw selection so
+        // one `j` press always reaches its grouped worker row.
+        database
+            .sessions()
+            .update_session_title(CONTROLLER_ID, "Managed feature delivery")
+            .await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
     });
@@ -124,6 +130,28 @@ fn seed_scrollable_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
     })?;
 
     Ok(())
+}
+
+/// Seeds one parked campaign whose managed worker is ready for review.
+fn seed_review_ready_managed_worker(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_status_with_timing_at(WORKER_ID, "Review", 0)
+            .await?;
+        // The worker status update touches its row, so restore the same stable
+        // initial selection ordering used by the base campaign seed.
+        database
+            .sessions()
+            .update_session_title(CONTROLLER_ID, "Managed feature delivery")
+            .await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })
 }
 
 /// Returns the numbered transcript rows visible in one captured frame.
@@ -253,9 +281,9 @@ fn test_orchestration_campaign_smooth_scroll() -> E2eResult {
 }
 
 #[test]
-fn test_managed_worker_read_only_view() -> E2eResult {
+fn test_managed_worker_restricted_view() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("managed_worker_read_only_view")
+    FeatureTest::new("managed_worker_restricted_view")
         .with_git()
         .setup(seed_orchestration_campaign)
         .run(
@@ -276,7 +304,7 @@ fn test_managed_worker_read_only_view() -> E2eResult {
                     .wait_for_stable_frame(300, 5000)
                     .press_key("?")
                     .wait_for_stable_frame(300, 5000)
-                    .capture_labeled("managed_worker", "Managed worker read-only actions")
+                    .capture_labeled("managed_worker", "Managed worker restricted actions")
             },
             |frame, report| {
                 let running_frame = common::frame_from_capture(&report.captures[0]);
@@ -290,13 +318,56 @@ fn test_managed_worker_read_only_view() -> E2eResult {
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
-                assertion::assert_text_in_region(frame, "read-only", &full);
+                assertion::assert_text_in_region(frame, "actions restricted", &full);
                 assertion::assert_text_in_region(frame, "d: Show diff", &full);
                 assertion::assert_text_in_region(frame, "Detach managed", &full);
                 let text = frame.text_in_region(&full);
                 assert!(!text.contains("Enter: Reply"));
                 assert!(!text.contains("p: Create or refresh"));
                 assert!(!text.contains("Review comments"));
+            },
+        )
+}
+
+#[test]
+fn test_managed_worker_review_open_action() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("managed_worker_review_open_action")
+        .with_git()
+        .setup(seed_review_ready_managed_worker)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Managed by controller-0001", 5000)
+                    .compose(&common::open_help_overlay())
+                    .capture_labeled(
+                        "managed_worker_review_help",
+                        "Review-ready managed worker exposes worktree open",
+                    )
+                    .press_key("q")
+                    .press_key("o")
+                    .wait_for_text("Open Managed Worktree", 5000)
+                    .capture_labeled(
+                        "managed_worker_open_warning",
+                        "Managed worktree write-access warning",
+                    )
+            },
+            |frame, report| {
+                let help_frame = common::frame_from_capture(&report.captures[0]);
+                let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                assertion::assert_text_in_region(&help_frame, "o: Open worktree", &help_full);
+                let help_text = help_frame.text_in_region(&help_full);
+                assert!(!help_text.contains("Enter: Reply"));
+                assert!(!help_text.contains("m: Add to merge queue"));
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
+                assertion::assert_text_in_region(frame, "Open Managed Worktree", &full);
+                assertion::assert_text_in_region(frame, "This opens a writable", &full);
             },
         )
 }

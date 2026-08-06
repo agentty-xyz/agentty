@@ -415,13 +415,15 @@ Use an orchestrator when a goal contains at least two independent pieces of work
    the controller recommends a regular session instead of creating a ceremonial worker.
 1. Follow real-time task status on the campaign monitor. Status changes do not add
    transcript messages. Worker rows remain grouped with their controller in the
-   **Sessions** list. Workers are read-only: open one to inspect its transcript, press
-   `d` for its diff, or press `D` and confirm **Detach** to permanently transfer it into
-   an ordinary user-owned session. Direct reply, question-answer, cancel, merge,
-   publish, fork, worktree-open, review-comment addressing, `Ctrl+c` turn interruption,
-   and slash-command actions are unavailable while it is managed. The controller
-   conversation below the monitor uses the same line-by-line transcript scrolling as a
-   regular session.
+   **Sessions** list. Workers restrict direct Agentty actions: open one to inspect its
+   transcript, press `d` for its diff, or press `D` and confirm **Detach** to
+   permanently transfer it into an ordinary user-owned session. A worker in **Review**
+   also exposes `o` to open its materialized worktree. The confirmation warns that the
+   shell has normal write access and edits can invalidate orchestration verification.
+   Direct reply, question-answer, cancel, merge, publish, fork, review-comment
+   addressing, `Ctrl+c` turn interruption, and slash-command actions are unavailable
+   while it is managed. The controller conversation below the monitor uses the same
+   line-by-line transcript scrolling as a regular session.
 1. When a worker asks a blocking question, Agentty mirrors it into the controller's
    question panel only when the controller has no question of its own. The relay durably
    records the exact task that owns the mirrored question, so concurrent worker

@@ -355,7 +355,9 @@ impl<'a> SessionChatPage<'a> {
             can_fork_session: ViewActionAvailability::from_bool(session.allows_fork_action()),
             can_merge_session_branch: ViewActionAvailability::from_bool(can_merge_session_branch),
             can_mutate_session_branch: ViewActionAvailability::from_bool(can_mutate_session_branch),
-            can_open_worktree: ViewActionAvailability::from_bool(self.can_open_worktree),
+            can_open_worktree: ViewActionAvailability::from_bool(
+                self.can_open_worktree && session.allows_worktree_open_action(),
+            ),
             can_rebase_session_branch: ViewActionAvailability::from_bool(can_rebase_session_branch),
             reply_to_session: ViewActionAvailability::from_bool(can_reply_to_session),
             can_start_staged_session: ViewActionAvailability::from_bool(can_start_staged_session),
