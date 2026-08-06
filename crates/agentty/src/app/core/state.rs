@@ -1112,7 +1112,7 @@ impl App {
         self.services
             .db()
             .sessions()
-            .update_session_focused_review(session_id, None, None)
+            .update_session_focused_review(session_id, None, None, None)
             .await?;
 
         Ok(self
@@ -1150,7 +1150,7 @@ impl App {
         self.services
             .db()
             .sessions()
-            .update_session_focused_review(session_id, None, None)
+            .update_session_focused_review(session_id, None, None, None)
             .await?;
 
         Ok(self
@@ -1179,7 +1179,7 @@ impl App {
             .services
             .db()
             .sessions()
-            .update_session_focused_review(session_id, None, None)
+            .update_session_focused_review(session_id, None, None, None)
             .await;
 
         self.sessions
@@ -1681,7 +1681,7 @@ impl App {
             self.services
                 .db()
                 .sessions()
-                .update_session_focused_review(session_id, None, None)
+                .update_session_focused_review(session_id, None, None, None)
                 .await?;
             self.clear_review_output(session_id);
         }

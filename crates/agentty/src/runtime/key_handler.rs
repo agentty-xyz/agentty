@@ -938,7 +938,7 @@ async fn handle_regenerate_review_confirmation(
         .services
         .db()
         .sessions()
-        .update_session_focused_review(session_id.as_str(), None, None)
+        .update_session_focused_review(session_id.as_str(), None, None, None)
         .await;
     app.start_review_assist(session_id.as_str(), &session_folder, diff_hash, &diff);
 

@@ -197,6 +197,7 @@ async fn seed_persisted_review_session(
         .sessions()
         .update_session_focused_review(
             session_id,
+            Some(crate::domain::review::FocusedReviewStatus::Ready),
             Some(diff_hash.to_string()),
             Some(review_text.to_string()),
         )
@@ -4107,7 +4108,7 @@ async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_alread
         ));
     // Simulate sync_from_handles() having already updated the snapshot
     // to `Review` in a prior render tick.
-    app.sessions.sessions_mut()[0].status = Status::Review;
+    app.sessions.sessions_mut()[0].status = Status::AgentReview;
     app.sessions.session_handles_mut().insert(
         session_id.to_string().into(),
         SessionHandles::new(Status::Review),
@@ -5593,6 +5594,39 @@ async fn auto_start_reviews_starts_loading_for_review_session() {
 
     // Act
     app.auto_start_reviews(&session_ids).await;
+
+    // Assert
+    assert!(matches!(
+        app.review_cache.get(session_id),
+        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
+    ));
+    assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
+}
+
+#[tokio::test]
+async fn startup_recovery_restarts_incomplete_managed_focused_review() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let session_id = "session-1";
+    app.sessions
+        .push_session(crate::test_support::session_fixture_with_folder(
+            PathBuf::from("/tmp/session-recovered-review"),
+        ));
+    app.sessions.sessions_mut()[0].status = Status::Review;
+    let diff_text = "diff --git a/file.rs b/file.rs\n+recovered line";
+    let expected_hash = diff_content_hash(diff_text);
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_diff()
+        .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+    install_mock_git_client(&mut app, mock_git_client);
+
+    // Act
+    app.recover_startup_focused_reviews(vec![session_id.to_string()])
+        .await;
 
     // Assert
     assert!(matches!(

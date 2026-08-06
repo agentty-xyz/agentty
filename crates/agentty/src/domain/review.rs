@@ -1,5 +1,42 @@
 //! Pure focused-review parsing helpers shared by UI and runtime behavior.
 
+use std::fmt;
+use std::str::FromStr;
+
+/// Durable state of one focused-review generation attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FocusedReviewStatus {
+    /// Review generation is still running.
+    Pending,
+    /// Review generation completed and persisted its markdown.
+    Ready,
+    /// Review generation completed without usable markdown.
+    Failed,
+}
+
+impl fmt::Display for FocusedReviewStatus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Pending => "Pending",
+            Self::Ready => "Ready",
+            Self::Failed => "Failed",
+        })
+    }
+}
+
+impl FromStr for FocusedReviewStatus {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "Pending" => Ok(Self::Pending),
+            "Ready" => Ok(Self::Ready),
+            "Failed" => Ok(Self::Failed),
+            _ => Err(format!("Unknown focused review status: {value}")),
+        }
+    }
+}
+
 /// Extracts actionable suggestion content from focused-review markdown.
 ///
 /// Returns `None` when the `### Suggestions` section is missing, empty, or
@@ -40,6 +77,22 @@ pub fn has_actionable_review_suggestions(review_text: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focused_review_status_round_trips_persisted_values() {
+        // Arrange
+        let statuses = [
+            FocusedReviewStatus::Pending,
+            FocusedReviewStatus::Ready,
+            FocusedReviewStatus::Failed,
+        ];
+
+        // Act / Assert
+        for status in statuses {
+            assert_eq!(status.to_string().parse(), Ok(status));
+        }
+        assert!("Unknown".parse::<FocusedReviewStatus>().is_err());
+    }
 
     #[test]
     fn test_review_suggestions_returns_suggestions_content() {

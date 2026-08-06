@@ -1433,6 +1433,7 @@ fn seed_review_ready_session_with_persisted_focused_review(
             .sessions()
             .update_session_focused_review(
                 "review-shortcut-0001",
+                Some(agentty::domain::review::FocusedReviewStatus::Ready),
                 Some("42".to_string()),
                 Some(
                     "## Review\n\n### Project Impact\n\n- Persisted focused review \
@@ -1470,6 +1471,7 @@ fn seed_sessions_with_persisted_focused_reviews(
             .sessions()
             .update_session_focused_review(
                 "second-review-0001",
+                Some(agentty::domain::review::FocusedReviewStatus::Ready),
                 Some("84".to_string()),
                 Some(
                     "## Review\n\n### Project Impact\n\n- Second persisted review finding.\n\n### \

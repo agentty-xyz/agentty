@@ -11,6 +11,10 @@ use std::str::FromStr;
 
 use super::session::Status as SessionStatus;
 
+/// Maximum number of automatic focused-review remediation turns per managed
+/// worker settlement wave.
+pub const MAX_AUTOMATED_REVIEW_ITERATIONS: i64 = 3;
+
 /// Lifecycle state for one controller-owned orchestration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OrchestrationStatus {
@@ -128,6 +132,10 @@ pub enum OrchestrationTaskStatus {
     Creating,
     /// The child session is running its turn.
     Running,
+    /// Focused review is running or awaiting a persisted result.
+    Reviewing,
+    /// The coordinator is applying one focused-review suggestion set.
+    ReviewApplying,
     /// The child session parked on clarification questions.
     WaitingForInput,
     /// The child session finished and is ready for review or integration.
@@ -164,10 +172,8 @@ impl OrchestrationTaskStatus {
             | SessionStatus::Rebasing
             | SessionStatus::Merging => Self::Running,
             SessionStatus::Question => Self::WaitingForInput,
-            SessionStatus::Review
-            | SessionStatus::AgentReview
-            | SessionStatus::Merged
-            | SessionStatus::Done => Self::Ready,
+            SessionStatus::Review | SessionStatus::AgentReview => Self::Reviewing,
+            SessionStatus::Merged | SessionStatus::Done => Self::Ready,
             SessionStatus::Canceled => Self::Failed,
         }
     }
@@ -203,6 +209,8 @@ impl OrchestrationTaskStatus {
             self,
             OrchestrationTaskStatus::Creating
                 | OrchestrationTaskStatus::Running
+                | OrchestrationTaskStatus::Reviewing
+                | OrchestrationTaskStatus::ReviewApplying
                 | OrchestrationTaskStatus::WaitingForInput
                 | OrchestrationTaskStatus::ContinuationPending
                 | OrchestrationTaskStatus::Merging
@@ -236,10 +244,20 @@ impl OrchestrationTaskStatus {
                 OrchestrationTaskStatus::Running
             ) | (
                 OrchestrationTaskStatus::Running,
-                OrchestrationTaskStatus::WaitingForInput
+                OrchestrationTaskStatus::Reviewing | OrchestrationTaskStatus::WaitingForInput
             ) | (
-                OrchestrationTaskStatus::Running | OrchestrationTaskStatus::WaitingForInput,
+                OrchestrationTaskStatus::Running
+                    | OrchestrationTaskStatus::Reviewing
+                    | OrchestrationTaskStatus::WaitingForInput,
                 OrchestrationTaskStatus::Ready
+            ) | (
+                OrchestrationTaskStatus::Reviewing,
+                OrchestrationTaskStatus::ReviewApplying
+            ) | (
+                OrchestrationTaskStatus::ReviewApplying,
+                OrchestrationTaskStatus::Reviewing
+                    | OrchestrationTaskStatus::WaitingForInput
+                    | OrchestrationTaskStatus::Failed
             ) | (
                 OrchestrationTaskStatus::Ready,
                 OrchestrationTaskStatus::AwaitingIntegration
@@ -270,6 +288,8 @@ impl OrchestrationTaskStatus {
                 OrchestrationTaskStatus::Planned
                     | OrchestrationTaskStatus::Creating
                     | OrchestrationTaskStatus::Running
+                    | OrchestrationTaskStatus::Reviewing
+                    | OrchestrationTaskStatus::ReviewApplying
                     | OrchestrationTaskStatus::WaitingForInput,
                 OrchestrationTaskStatus::Failed | OrchestrationTaskStatus::Canceled
             )
@@ -293,6 +313,8 @@ impl OrchestrationTaskStatus {
             OrchestrationTaskStatus::Planned => ("Planned", "waiting"),
             OrchestrationTaskStatus::Creating => ("Creating", "starting"),
             OrchestrationTaskStatus::Running => ("Running", "running"),
+            OrchestrationTaskStatus::Reviewing => ("Reviewing", "reviewing"),
+            OrchestrationTaskStatus::ReviewApplying => ("ReviewApplying", "applying review"),
             OrchestrationTaskStatus::WaitingForInput => ("WaitingForInput", "waiting on you"),
             OrchestrationTaskStatus::Ready => ("Ready", "ready"),
             OrchestrationTaskStatus::ContinuationPending => ("ContinuationPending", "continuing"),
@@ -451,6 +473,8 @@ impl FromStr for OrchestrationTaskStatus {
             "Planned" => Ok(OrchestrationTaskStatus::Planned),
             "Creating" => Ok(OrchestrationTaskStatus::Creating),
             "Running" => Ok(OrchestrationTaskStatus::Running),
+            "Reviewing" => Ok(OrchestrationTaskStatus::Reviewing),
+            "ReviewApplying" => Ok(OrchestrationTaskStatus::ReviewApplying),
             "WaitingForInput" => Ok(OrchestrationTaskStatus::WaitingForInput),
             "Ready" => Ok(OrchestrationTaskStatus::Ready),
             "ContinuationPending" => Ok(OrchestrationTaskStatus::ContinuationPending),
@@ -543,6 +567,8 @@ mod tests {
             OrchestrationTaskStatus::Planned,
             OrchestrationTaskStatus::Creating,
             OrchestrationTaskStatus::Running,
+            OrchestrationTaskStatus::Reviewing,
+            OrchestrationTaskStatus::ReviewApplying,
             OrchestrationTaskStatus::WaitingForInput,
             OrchestrationTaskStatus::Ready,
             OrchestrationTaskStatus::ContinuationPending,
@@ -583,6 +609,8 @@ mod tests {
         assert!(!OrchestrationTaskStatus::Planned.is_settled());
         assert!(!OrchestrationTaskStatus::Creating.is_settled());
         assert!(!OrchestrationTaskStatus::Running.is_settled());
+        assert!(!OrchestrationTaskStatus::Reviewing.is_settled());
+        assert!(!OrchestrationTaskStatus::ReviewApplying.is_settled());
         assert!(!OrchestrationTaskStatus::WaitingForInput.is_settled());
     }
 
@@ -593,6 +621,8 @@ mod tests {
         // Arrange / Act / Assert
         assert!(OrchestrationTaskStatus::Creating.occupies_parallelism_slot());
         assert!(OrchestrationTaskStatus::Running.occupies_parallelism_slot());
+        assert!(OrchestrationTaskStatus::Reviewing.occupies_parallelism_slot());
+        assert!(OrchestrationTaskStatus::ReviewApplying.occupies_parallelism_slot());
         assert!(OrchestrationTaskStatus::WaitingForInput.occupies_parallelism_slot());
         assert!(!OrchestrationTaskStatus::Planned.occupies_parallelism_slot());
         assert!(!OrchestrationTaskStatus::Ready.occupies_parallelism_slot());
@@ -620,6 +650,17 @@ mod tests {
                 .can_transition_to(OrchestrationTaskStatus::Running)
         );
         assert!(OrchestrationTaskStatus::Running.can_transition_to(OrchestrationTaskStatus::Ready));
+        assert!(
+            OrchestrationTaskStatus::Running.can_transition_to(OrchestrationTaskStatus::Reviewing)
+        );
+        assert!(
+            OrchestrationTaskStatus::Reviewing
+                .can_transition_to(OrchestrationTaskStatus::ReviewApplying)
+        );
+        assert!(
+            OrchestrationTaskStatus::ReviewApplying
+                .can_transition_to(OrchestrationTaskStatus::Reviewing)
+        );
         assert!(
             OrchestrationTaskStatus::Running.can_transition_to(OrchestrationTaskStatus::Canceled)
         );
@@ -674,6 +715,8 @@ mod tests {
             OrchestrationTaskStatus::Planned,
             OrchestrationTaskStatus::Creating,
             OrchestrationTaskStatus::Running,
+            OrchestrationTaskStatus::Reviewing,
+            OrchestrationTaskStatus::ReviewApplying,
             OrchestrationTaskStatus::WaitingForInput,
             OrchestrationTaskStatus::Ready,
             OrchestrationTaskStatus::ContinuationPending,
@@ -698,6 +741,8 @@ mod tests {
                 "waiting",
                 "starting",
                 "running",
+                "reviewing",
+                "applying review",
                 "waiting on you",
                 "ready",
                 "continuing",
@@ -775,8 +820,11 @@ mod tests {
                 SessionStatus::Question,
                 OrchestrationTaskStatus::WaitingForInput,
             ),
-            (SessionStatus::Review, OrchestrationTaskStatus::Ready),
-            (SessionStatus::AgentReview, OrchestrationTaskStatus::Ready),
+            (SessionStatus::Review, OrchestrationTaskStatus::Reviewing),
+            (
+                SessionStatus::AgentReview,
+                OrchestrationTaskStatus::Reviewing,
+            ),
             (SessionStatus::Merged, OrchestrationTaskStatus::Ready),
             (SessionStatus::Done, OrchestrationTaskStatus::Ready),
             (SessionStatus::Canceled, OrchestrationTaskStatus::Failed),

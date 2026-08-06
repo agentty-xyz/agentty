@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- agentty: automatically verify and apply focused-review suggestions to orchestrated
+  workers for up to three durable remediation passes before controller verification.
+
+### Fixed
+
+- agentty: route post-verification worker continuations back through focused review, and
+  recover only interrupted review generation with bounded persistence backoff, while
+  persisting diff-preparation failures so storage or Git failures cannot strand
+  orchestrated workers.
+
 ## [v0.14.2] - 2026-08-05
 
 ### Changed

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT child.id AS \"id!: String\"\nFROM session_orchestration_task AS task\nINNER JOIN session_orchestration AS orchestration\nON orchestration.id = task.session_orchestration_id\nINNER JOIN session AS child\nON child.id = task.child_session_id\nWHERE child.project_id = ?\n  AND orchestration.status IN ('AwaitingApproval', 'Running')\n  AND task.status = 'Reviewing'\n  AND child.status IN ('Review', 'AgentReview')\n  AND (\n      child.focused_review_status IS NULL\n      OR child.focused_review_status = 'Pending'\n  )\nORDER BY task.id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0663a6358dbf04d4d32f178f83b9732deee61e4aea1d90599c23351e33a306f3"
+}

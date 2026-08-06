@@ -12,6 +12,7 @@ use super::session_message::SessionMessageStore;
 use super::session_snapshot::SessionSnapshotStore;
 use super::status;
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel, SpeedMode};
+use crate::domain::review::FocusedReviewStatus;
 use crate::domain::session::SessionStats;
 use crate::domain::session_message::SessionMessageKind;
 use crate::infra::clock::{self, Clock};
@@ -593,6 +594,7 @@ pub trait SessionRepository: Send + Sync {
     async fn update_session_focused_review(
         &self,
         id: &str,
+        status: Option<FocusedReviewStatus>,
         diff_hash: Option<String>,
         text: Option<String>,
     ) -> Result<(), DbError>;
@@ -2411,6 +2413,7 @@ WHERE id = ?
     async fn update_session_focused_review(
         &self,
         id: &str,
+        status: Option<FocusedReviewStatus>,
         diff_hash: Option<String>,
         text: Option<String>,
     ) -> Result<(), DbError> {
@@ -2419,11 +2422,13 @@ WHERE id = ?
         sqlx::query!(
             r"
 UPDATE session
-SET focused_review_diff_hash = ?,
+SET focused_review_status = ?,
+    focused_review_diff_hash = ?,
     focused_review_text = ?,
     updated_at = ?
 WHERE id = ?
 ",
+            status.map(|status| status.to_string()),
             diff_hash.as_deref(),
             text.as_deref(),
             now,
@@ -2986,6 +2991,7 @@ WHERE id = ?
             .sessions()
             .update_session_focused_review(
                 "source-session",
+                Some(FocusedReviewStatus::Ready),
                 Some("diff123".to_string()),
                 Some("Focused review text".to_string()),
             )

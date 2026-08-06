@@ -1174,7 +1174,7 @@ async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
         .services
         .db()
         .sessions()
-        .update_session_focused_review(&view_context.session_id, None, None)
+        .update_session_focused_review(&view_context.session_id, None, None, None)
         .await;
     app.start_review_assist(&view_context.session_id, &session_folder, diff_hash, &diff);
 }

@@ -23,11 +23,14 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::app::AppEvent;
+use crate::app::prompt_intent::build_apply_review_prompt;
 use crate::app::session::session_branch;
 use crate::domain::orchestration::{
-    IntegrationApproach, OrchestrationPlanTask, OrchestrationPolicy, OrchestrationStatus,
-    OrchestrationTaskStatus, validate_subtasks as validate_orchestration_plan,
+    IntegrationApproach, MAX_AUTOMATED_REVIEW_ITERATIONS, OrchestrationPlanTask,
+    OrchestrationPolicy, OrchestrationStatus, OrchestrationTaskStatus,
+    validate_subtasks as validate_orchestration_plan,
 };
+use crate::domain::review::{self, FocusedReviewStatus};
 use crate::domain::setting::{
     DEFAULT_ORCHESTRATION_PARALLELISM, MAX_ORCHESTRATION_PARALLELISM, SettingName,
 };
@@ -793,6 +796,8 @@ impl OrchestrationCoordinator {
 
             status == Some(OrchestrationTaskStatus::ContinuationPending)
                 || status == Some(OrchestrationTaskStatus::Running)
+                || status == Some(OrchestrationTaskStatus::Reviewing)
+                || status == Some(OrchestrationTaskStatus::ReviewApplying)
                 || status == Some(OrchestrationTaskStatus::WaitingForInput)
         });
         for task in live_tasks {
@@ -1210,6 +1215,11 @@ impl OrchestrationCoordinator {
     }
 
     async fn reconcile_task(&self, task: &mut SessionOrchestrationTaskRow) -> Result<(), String> {
+        if task_status(task) == Some(OrchestrationTaskStatus::ReviewApplying) {
+            self.reconcile_review_application(task).await?;
+
+            return Ok(());
+        }
         if task_status(task) == Some(OrchestrationTaskStatus::ContinuationPending) {
             self.reconcile_continuation(task).await?;
 
@@ -1251,6 +1261,14 @@ impl OrchestrationCoordinator {
             .as_deref()
             .and_then(|status| status.parse::<SessionStatus>().ok())
             .unwrap_or(SessionStatus::Canceled);
+        if matches!(
+            child_status,
+            SessionStatus::Review | SessionStatus::AgentReview
+        ) {
+            self.reconcile_focused_review(task).await?;
+
+            return Ok(());
+        }
         let next = OrchestrationTaskStatus::from_child_status(child_status);
         self.update_task_status(task, next, None).await?;
         if next == OrchestrationTaskStatus::Ready {
@@ -1262,6 +1280,151 @@ impl OrchestrationCoordinator {
                     .map_err(|error| error.to_string())?;
                 task.result_summary = Some(summary);
             }
+        }
+
+        Ok(())
+    }
+
+    async fn reconcile_focused_review(
+        &self,
+        task: &mut SessionOrchestrationTaskRow,
+    ) -> Result<(), String> {
+        if task.child_has_diff != Some(true) {
+            self.complete_task_review(task).await?;
+
+            return Ok(());
+        }
+
+        let review_status = task
+            .child_focused_review_status
+            .as_deref()
+            .map(str::parse::<FocusedReviewStatus>)
+            .transpose()?;
+        match review_status {
+            None | Some(FocusedReviewStatus::Pending) => {
+                self.update_task_status(task, OrchestrationTaskStatus::Reviewing, None)
+                    .await?;
+            }
+            Some(FocusedReviewStatus::Failed) => self.complete_task_review(task).await?,
+            Some(FocusedReviewStatus::Ready) => {
+                let suggestions = task
+                    .child_focused_review_text
+                    .as_deref()
+                    .and_then(review::review_suggestions);
+                let Some(suggestions) = suggestions else {
+                    self.complete_task_review(task).await?;
+
+                    return Ok(());
+                };
+                if task.review_iteration >= MAX_AUTOMATED_REVIEW_ITERATIONS {
+                    self.complete_task_review(task).await?;
+
+                    return Ok(());
+                }
+
+                self.update_task_status(task, OrchestrationTaskStatus::Reviewing, None)
+                    .await?;
+                let prompt = build_apply_review_prompt(&suggestions).agent_text();
+                let claimed = self
+                    .repository
+                    .claim_orchestration_review_application(
+                        task.id,
+                        &prompt,
+                        MAX_AUTOMATED_REVIEW_ITERATIONS,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if claimed {
+                    task.continuation_generation = task.continuation_generation.saturating_add(1);
+                    task.continuation_prompt = Some(prompt);
+                    task.review_iteration = task.review_iteration.saturating_add(1);
+                    task.status = OrchestrationTaskStatus::ReviewApplying.to_string();
+                    task.child_focused_review_status = None;
+                    task.child_focused_review_text = None;
+                    self.reconcile_review_application(task).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn reconcile_review_application(
+        &self,
+        task: &mut SessionOrchestrationTaskRow,
+    ) -> Result<(), String> {
+        let operation_id = continuation_operation_id(task);
+        let operation_status = self
+            .repository
+            .load_rollup_operation_status(&operation_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        match operation_status.as_deref() {
+            None | Some("failed" | "canceled") => {
+                let child_session_id = task
+                    .child_session_id
+                    .as_deref()
+                    .map(SessionId::from)
+                    .ok_or_else(|| "Review remediation lost its managed child".to_string())?;
+                let prompt = task
+                    .continuation_prompt
+                    .clone()
+                    .ok_or_else(|| "Review remediation lost its verification prompt".to_string())?;
+                self.session_service
+                    .submit_coordinator_message(
+                        &child_session_id,
+                        CoordinatorMessageRequest {
+                            message: prompt,
+                            operation_id,
+                            visibility: CoordinatorMessageVisibility::Visible,
+                        },
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            Some("queued" | "running") => {}
+            Some("done") => {
+                let next = match task
+                    .child_status
+                    .as_deref()
+                    .and_then(|status| status.parse::<SessionStatus>().ok())
+                {
+                    Some(SessionStatus::Question) => OrchestrationTaskStatus::WaitingForInput,
+                    Some(SessionStatus::Canceled) => OrchestrationTaskStatus::Failed,
+                    Some(SessionStatus::Review | SessionStatus::AgentReview) => {
+                        OrchestrationTaskStatus::Reviewing
+                    }
+                    Some(SessionStatus::Merged | SessionStatus::Done) => {
+                        OrchestrationTaskStatus::Ready
+                    }
+                    _ => return Ok(()),
+                };
+                self.update_task_status(task, next, None).await?;
+            }
+            Some(status) => {
+                return Err(format!(
+                    "Unknown review remediation operation status `{status}` for task {}",
+                    task.id
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn complete_task_review(
+        &self,
+        task: &mut SessionOrchestrationTaskRow,
+    ) -> Result<(), String> {
+        self.update_task_status(task, OrchestrationTaskStatus::Ready, None)
+            .await?;
+        let summary = bounded_summary(task.child_summary.as_deref().unwrap_or("Completed"));
+        if task.result_summary.as_deref() != Some(summary.as_str()) {
+            self.repository
+                .update_orchestration_task_result_summary(task.id, &summary)
+                .await
+                .map_err(|error| error.to_string())?;
+            task.result_summary = Some(summary);
         }
 
         Ok(())
@@ -1308,15 +1471,20 @@ impl OrchestrationCoordinator {
                     .child_status
                     .as_deref()
                     .and_then(|status| status.parse::<SessionStatus>().ok());
+                if matches!(
+                    observed_status,
+                    Some(SessionStatus::Review | SessionStatus::AgentReview)
+                ) {
+                    self.reconcile_focused_review(task).await?;
+
+                    return Ok(());
+                }
                 let next = match observed_status {
                     Some(SessionStatus::Question) => OrchestrationTaskStatus::WaitingForInput,
                     Some(SessionStatus::Canceled) => OrchestrationTaskStatus::Failed,
-                    Some(
-                        SessionStatus::Review
-                        | SessionStatus::AgentReview
-                        | SessionStatus::Merged
-                        | SessionStatus::Done,
-                    ) => OrchestrationTaskStatus::Ready,
+                    Some(SessionStatus::Merged | SessionStatus::Done) => {
+                        OrchestrationTaskStatus::Ready
+                    }
                     _ => return Ok(()),
                 };
                 let summary = (next == OrchestrationTaskStatus::Ready)
@@ -1797,8 +1965,46 @@ fn campaign_task_evidence(task: &SessionOrchestrationTaskRow) -> String {
         (Some("Flag"), _) => "; flagged".to_string(),
         _ => String::new(),
     };
+    let review = match task_status(task) {
+        Some(OrchestrationTaskStatus::Reviewing)
+            if task.review_iteration >= MAX_AUTOMATED_REVIEW_ITERATIONS =>
+        {
+            format!(
+                "; final review after \
+                 {MAX_AUTOMATED_REVIEW_ITERATIONS}/{MAX_AUTOMATED_REVIEW_ITERATIONS}"
+            )
+        }
+        Some(OrchestrationTaskStatus::Reviewing) => format!(
+            "; review pass {}/{}",
+            task.review_iteration.saturating_add(1),
+            MAX_AUTOMATED_REVIEW_ITERATIONS
+        ),
+        Some(OrchestrationTaskStatus::ReviewApplying) => format!(
+            "; remediation {}/{}",
+            task.review_iteration, MAX_AUTOMATED_REVIEW_ITERATIONS
+        ),
+        Some(OrchestrationTaskStatus::Ready)
+            if task.child_focused_review_status.as_deref() == Some("Failed") =>
+        {
+            "; focused review failed".to_string()
+        }
+        Some(OrchestrationTaskStatus::Ready)
+            if task.review_iteration >= MAX_AUTOMATED_REVIEW_ITERATIONS
+                && task
+                    .child_focused_review_text
+                    .as_deref()
+                    .and_then(review::review_suggestions)
+                    .is_some() =>
+        {
+            format!(
+                "; review limit \
+                 {MAX_AUTOMATED_REVIEW_ITERATIONS}/{MAX_AUTOMATED_REVIEW_ITERATIONS}"
+            )
+        }
+        _ => String::new(),
+    };
 
-    format!("{compliance}{verification}")
+    format!("{compliance}{review}{verification}")
 }
 
 fn rollup_message(goal_statement: &str, tasks: &[SessionOrchestrationTaskRow]) -> String {
@@ -1852,6 +2058,7 @@ fn rollup_message(goal_statement: &str, tasks: &[SessionOrchestrationTaskRow]) -
                     .as_deref()
                     .unwrap_or("No summary available")
             ),
+            format!("Focused review: {}", rollup_review_evidence(task)),
             String::new(),
         ]);
     }
@@ -1867,6 +2074,44 @@ fn rollup_message(goal_statement: &str, tasks: &[SessionOrchestrationTaskRow]) -
     );
 
     lines.join("\n")
+}
+
+fn rollup_review_evidence(task: &SessionOrchestrationTaskRow) -> String {
+    let review_status = task
+        .child_focused_review_status
+        .as_deref()
+        .and_then(|status| status.parse::<FocusedReviewStatus>().ok());
+    match review_status {
+        Some(FocusedReviewStatus::Ready) => {
+            if let Some(suggestions) = task
+                .child_focused_review_text
+                .as_deref()
+                .and_then(review::review_suggestions)
+            {
+                return format!(
+                    "automatic remediation limit reached after {}/{} turns; remaining \
+                     suggestions: {}",
+                    task.review_iteration,
+                    MAX_AUTOMATED_REVIEW_ITERATIONS,
+                    bounded_summary(&suggestions)
+                );
+            }
+            if task.review_iteration > 0 {
+                return format!(
+                    "no actionable suggestions after {}/{} remediation turns",
+                    task.review_iteration, MAX_AUTOMATED_REVIEW_ITERATIONS
+                );
+            }
+
+            "completed with no actionable suggestions".to_string()
+        }
+        Some(FocusedReviewStatus::Failed) => {
+            "generation failed; controller verification is still required".to_string()
+        }
+        Some(FocusedReviewStatus::Pending) => "generation still pending".to_string(),
+        None if task.child_has_diff == Some(false) => "not needed for an empty diff".to_string(),
+        None => "not available".to_string(),
+    }
 }
 
 fn area_compliance_evidence(
@@ -2165,7 +2410,8 @@ mod tests {
             | OrchestrationTaskStatus::AwaitingIntegration
             | OrchestrationTaskStatus::Merging
             | OrchestrationTaskStatus::ReviewRequested
-            | OrchestrationTaskStatus::IntegrationFailed => SessionStatus::Review,
+            | OrchestrationTaskStatus::IntegrationFailed
+            | OrchestrationTaskStatus::Reviewing => SessionStatus::Review,
             OrchestrationTaskStatus::Integrated | OrchestrationTaskStatus::Detached => {
                 SessionStatus::Done
             }
@@ -2175,8 +2421,10 @@ mod tests {
             OrchestrationTaskStatus::Proposed
             | OrchestrationTaskStatus::Planned
             | OrchestrationTaskStatus::Creating
-            | OrchestrationTaskStatus::Running => SessionStatus::InProgress,
+            | OrchestrationTaskStatus::Running
+            | OrchestrationTaskStatus::ReviewApplying => SessionStatus::InProgress,
         });
+        let has_completed_review = status == OrchestrationTaskStatus::Ready;
 
         SessionOrchestrationTaskRow {
             acceptance_criteria: format!(r#"["{task_key} is complete"]"#),
@@ -2185,6 +2433,10 @@ mod tests {
             attempt_count: i64::from(child_session_id.is_some()),
             child_added_lines: 3,
             child_deleted_lines: 1,
+            child_focused_review_status: has_completed_review
+                .then(|| FocusedReviewStatus::Ready.to_string()),
+            child_focused_review_text: has_completed_review
+                .then(|| "## Review\n\n### Suggestions\n\n- None".to_string()),
             child_has_diff: child_session_id.map(|_| true),
             child_input_tokens: i64::from(child_session_id.is_some()) * 10,
             child_output_tokens: i64::from(child_session_id.is_some()) * 5,
@@ -2200,6 +2452,7 @@ mod tests {
             merge_position: id,
             prompt: format!("Implement {task_key}"),
             result_summary: None,
+            review_iteration: 0,
             status: status.to_string(),
             task_key: task_key.to_string(),
             title: task_key.to_string(),
@@ -2216,6 +2469,38 @@ mod tests {
     ) -> SessionOrchestrationTaskRow {
         task.child_status = Some(status.to_string());
         task.child_summary = summary.map(str::to_string);
+
+        task
+    }
+
+    fn focused_review_task(
+        id: i64,
+        task_key: &str,
+        child_session_id: &str,
+        status: FocusedReviewStatus,
+        text: Option<&str>,
+    ) -> SessionOrchestrationTaskRow {
+        let mut task = task(
+            id,
+            task_key,
+            OrchestrationTaskStatus::Reviewing,
+            Some(child_session_id),
+        );
+        task.child_focused_review_status = Some(status.to_string());
+        task.child_focused_review_text = text.map(str::to_string);
+
+        task
+    }
+
+    fn review_applying_task() -> SessionOrchestrationTaskRow {
+        let mut task = task(
+            7,
+            "review",
+            OrchestrationTaskStatus::ReviewApplying,
+            Some("child-review"),
+        );
+        task.continuation_generation = 2;
+        task.continuation_prompt = Some("Verify then apply".to_string());
 
         task
     }
@@ -2775,8 +3060,11 @@ mod tests {
                 SessionStatus::Question,
                 OrchestrationTaskStatus::WaitingForInput,
             ),
-            (SessionStatus::Review, OrchestrationTaskStatus::Ready),
-            (SessionStatus::AgentReview, OrchestrationTaskStatus::Ready),
+            (SessionStatus::Review, OrchestrationTaskStatus::Reviewing),
+            (
+                SessionStatus::AgentReview,
+                OrchestrationTaskStatus::Reviewing,
+            ),
             (SessionStatus::Merged, OrchestrationTaskStatus::Ready),
             (SessionStatus::Done, OrchestrationTaskStatus::Ready),
             (SessionStatus::Canceled, OrchestrationTaskStatus::Failed),
@@ -2967,6 +3255,92 @@ mod tests {
         assert!(
             continuation.contains("Expected touched areas (planning references): invalid JSON")
         );
+    }
+
+    #[test]
+    fn review_evidence_reports_every_review_state() {
+        // Arrange
+        let reviewing = focused_review_task(
+            1,
+            "reviewing",
+            "child-reviewing",
+            FocusedReviewStatus::Pending,
+            None,
+        );
+        let mut final_review = reviewing.clone();
+        final_review.review_iteration = MAX_AUTOMATED_REVIEW_ITERATIONS;
+        let mut applying = review_applying_task();
+        applying.review_iteration = 2;
+        let mut failed = focused_review_task(
+            2,
+            "failed",
+            "child-failed",
+            FocusedReviewStatus::Failed,
+            None,
+        );
+        failed.status = OrchestrationTaskStatus::Ready.to_string();
+        let mut remaining = focused_review_task(
+            3,
+            "remaining",
+            "child-remaining",
+            FocusedReviewStatus::Ready,
+            Some("### Suggestions\n\n- Fix the remaining issue"),
+        );
+        remaining.status = OrchestrationTaskStatus::Ready.to_string();
+        remaining.review_iteration = MAX_AUTOMATED_REVIEW_ITERATIONS;
+        let mut remediated = focused_review_task(
+            4,
+            "remediated",
+            "child-remediated",
+            FocusedReviewStatus::Ready,
+            Some("### Suggestions\n\n- None"),
+        );
+        remediated.status = OrchestrationTaskStatus::Ready.to_string();
+        remediated.review_iteration = 1;
+        let completed = focused_review_task(
+            5,
+            "completed",
+            "child-completed",
+            FocusedReviewStatus::Ready,
+            Some("### Suggestions\n\n- None"),
+        );
+
+        // Act
+        let campaign_evidence = [
+            campaign_task_evidence(&reviewing),
+            campaign_task_evidence(&final_review),
+            campaign_task_evidence(&applying),
+            campaign_task_evidence(&failed),
+            campaign_task_evidence(&remaining),
+        ];
+        let rollup_evidence = [
+            rollup_review_evidence(&remaining),
+            rollup_review_evidence(&remediated),
+            rollup_review_evidence(&completed),
+            rollup_review_evidence(&failed),
+            rollup_review_evidence(&reviewing),
+        ];
+
+        // Assert
+        assert!(campaign_evidence[0].contains("review pass 1/3"));
+        assert!(campaign_evidence[1].contains("final review after 3/3"));
+        assert!(campaign_evidence[2].contains("remediation 2/3"));
+        assert!(campaign_evidence[3].contains("focused review failed"));
+        assert!(campaign_evidence[4].contains("review limit 3/3"));
+        assert!(rollup_evidence[0].contains("remaining suggestions"));
+        assert_eq!(
+            rollup_evidence[1],
+            "no actionable suggestions after 1/3 remediation turns"
+        );
+        assert_eq!(
+            rollup_evidence[2],
+            "completed with no actionable suggestions"
+        );
+        assert_eq!(
+            rollup_evidence[3],
+            "generation failed; controller verification is still required"
+        );
+        assert_eq!(rollup_evidence[4], "generation still pending");
     }
 
     #[tokio::test]
@@ -3463,10 +3837,6 @@ mod tests {
             .once()
             .returning(|_, _, _| Ok(()));
         repository
-            .expect_update_orchestration_task_result_summary()
-            .once()
-            .returning(|_, _| Ok(()));
-        repository
             .expect_load_orchestration_integration_approach()
             .once()
             .returning(|_| Ok(IntegrationApproach::LocalMerge.to_string()));
@@ -3534,9 +3904,252 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn continuation_reconciliation_recovers_every_operation_and_child_state() {
+    async fn focused_review_reconciliation_waits_and_settles_terminal_results() {
         // Arrange
         let mut repository = MockOrchestrationRepository::new();
+        repository
+            .expect_update_orchestration_task_status()
+            .times(0..)
+            .returning(|_, _, _| Ok(()));
+        repository
+            .expect_update_orchestration_task_result_summary()
+            .times(3)
+            .returning(|_, _| Ok(()));
+        let backend = TestSessionBackend::default();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut pending = focused_review_task(
+            1,
+            "pending",
+            "child-pending",
+            FocusedReviewStatus::Pending,
+            None,
+        );
+        let mut failed = focused_review_task(
+            2,
+            "failed",
+            "child-failed",
+            FocusedReviewStatus::Failed,
+            None,
+        );
+        failed.child_summary = Some("Review failed, task complete".to_string());
+        let mut empty = focused_review_task(
+            3,
+            "empty",
+            "child-empty",
+            FocusedReviewStatus::Ready,
+            Some("### Suggestions\n\n- None"),
+        );
+        let mut no_diff = task(
+            4,
+            "no-diff",
+            OrchestrationTaskStatus::Reviewing,
+            Some("child-no-diff"),
+        );
+        no_diff.child_has_diff = Some(false);
+        no_diff.child_summary = Some("No changes needed".to_string());
+        let mut invalid = task(
+            5,
+            "invalid",
+            OrchestrationTaskStatus::Reviewing,
+            Some("child-invalid"),
+        );
+        invalid.child_focused_review_status = Some("Unknown".to_string());
+
+        // Act
+        coordinator
+            .reconcile_focused_review(&mut pending)
+            .await
+            .expect("pending review should wait");
+        coordinator
+            .reconcile_focused_review(&mut failed)
+            .await
+            .expect("failed review should settle for controller verification");
+        coordinator
+            .reconcile_focused_review(&mut empty)
+            .await
+            .expect("empty review should settle");
+        coordinator
+            .reconcile_focused_review(&mut no_diff)
+            .await
+            .expect("a child without a diff should settle immediately");
+        let invalid_result = coordinator.reconcile_focused_review(&mut invalid).await;
+
+        // Assert
+        assert_eq!(
+            pending.status,
+            OrchestrationTaskStatus::Reviewing.to_string()
+        );
+        assert_eq!(failed.status, OrchestrationTaskStatus::Ready.to_string());
+        assert_eq!(empty.status, OrchestrationTaskStatus::Ready.to_string());
+        assert_eq!(no_diff.status, OrchestrationTaskStatus::Ready.to_string());
+        assert_eq!(
+            invalid_result,
+            Err("Unknown focused review status: Unknown".to_string())
+        );
+        assert!(backend.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn focused_review_reconciliation_applies_suggestions_and_stops_at_limit() {
+        // Arrange
+        let mut repository = MockOrchestrationRepository::new();
+        repository
+            .expect_update_orchestration_task_status()
+            .times(0..)
+            .returning(|_, _, _| Ok(()));
+        repository
+            .expect_update_orchestration_task_result_summary()
+            .once()
+            .returning(|_, _| Ok(()));
+        let claims = Arc::new(Mutex::new(VecDeque::from([false, true])));
+        repository
+            .expect_claim_orchestration_review_application()
+            .times(2)
+            .returning({
+                let claims = Arc::clone(&claims);
+
+                move |_, prompt, limit| {
+                    assert!(prompt.starts_with("Verify the focused-review suggestions"));
+                    assert_eq!(limit, MAX_AUTOMATED_REVIEW_ITERATIONS);
+
+                    Ok(claims
+                        .lock()
+                        .expect("review claims should remain available")
+                        .pop_front()
+                        .expect("review claim should exist"))
+                }
+            });
+        repository
+            .expect_load_rollup_operation_status()
+            .once()
+            .returning(|operation_id| {
+                assert_eq!(operation_id, "orchestration-continuation-5-1");
+
+                Ok(None)
+            });
+        let backend = TestSessionBackend::default();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut unclaimed = focused_review_task(
+            4,
+            "unclaimed",
+            "child-unclaimed",
+            FocusedReviewStatus::Ready,
+            Some("### Suggestions\n\n- Fix one"),
+        );
+        let mut actionable = focused_review_task(
+            5,
+            "actionable",
+            "child-actionable",
+            FocusedReviewStatus::Ready,
+            Some("### Suggestions\n\n- Fix two"),
+        );
+        let mut capped = focused_review_task(
+            6,
+            "capped",
+            "child-capped",
+            FocusedReviewStatus::Ready,
+            Some("### Suggestions\n\n- Still present"),
+        );
+        capped.review_iteration = MAX_AUTOMATED_REVIEW_ITERATIONS;
+
+        // Act
+        coordinator
+            .reconcile_focused_review(&mut unclaimed)
+            .await
+            .expect("lost claim should retry from a fresh snapshot");
+        coordinator
+            .reconcile_focused_review(&mut actionable)
+            .await
+            .expect("actionable review should start remediation");
+        coordinator
+            .reconcile_focused_review(&mut capped)
+            .await
+            .expect("iteration cap should settle for controller verification");
+
+        // Assert
+        assert_eq!(
+            unclaimed.status,
+            OrchestrationTaskStatus::Reviewing.to_string()
+        );
+        assert_eq!(
+            actionable.status,
+            OrchestrationTaskStatus::ReviewApplying.to_string()
+        );
+        assert_eq!(actionable.review_iteration, 1);
+        assert_eq!(capped.status, OrchestrationTaskStatus::Ready.to_string());
+        assert!(backend.calls().iter().any(|call| {
+            call.starts_with("rollup:child-actionable:Verify the focused-review suggestions")
+        }));
+    }
+
+    #[tokio::test]
+    async fn review_application_reconciliation_reports_missing_data_and_recovers_delivery() {
+        // Arrange
+        let operation_states = Arc::new(Mutex::new(VecDeque::from([
+            None,
+            None,
+            Some("failed".to_string()),
+        ])));
+        let mut repository = MockOrchestrationRepository::new();
+        repository
+            .expect_load_rollup_operation_status()
+            .times(3)
+            .returning({
+                let operation_states = Arc::clone(&operation_states);
+
+                move |_| {
+                    Ok(operation_states
+                        .lock()
+                        .expect("operation states should remain available")
+                        .pop_front()
+                        .expect("operation state should exist"))
+                }
+            });
+        let backend = TestSessionBackend::default();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut base = review_applying_task();
+        let mut lost_child = base.clone();
+        lost_child.child_session_id = None;
+        let mut lost_prompt = base.clone();
+        lost_prompt.continuation_prompt = None;
+
+        // Act
+        let lost_child_result = coordinator
+            .reconcile_review_application(&mut lost_child)
+            .await;
+        let lost_prompt_result = coordinator
+            .reconcile_review_application(&mut lost_prompt)
+            .await;
+        coordinator
+            .reconcile_review_application(&mut base)
+            .await
+            .expect("failed operation should resubmit");
+
+        // Assert
+        assert_eq!(
+            lost_child_result,
+            Err("Review remediation lost its managed child".to_string())
+        );
+        assert_eq!(
+            lost_prompt_result,
+            Err("Review remediation lost its verification prompt".to_string())
+        );
+        assert!(
+            backend
+                .calls()
+                .contains(&"rollup:child-review:Verify then apply".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn review_application_reconciliation_maps_operation_and_child_states() {
+        // Arrange
         let operation_states = Arc::new(Mutex::new(VecDeque::from([
             Some("queued".to_string()),
             Some("running".to_string()),
@@ -3544,9 +4157,10 @@ mod tests {
             Some("done".to_string()),
             Some("done".to_string()),
             Some("done".to_string()),
+            Some("done".to_string()),
             Some("unexpected".to_string()),
-            Some("failed".to_string()),
         ])));
+        let mut repository = MockOrchestrationRepository::new();
         repository
             .expect_load_rollup_operation_status()
             .times(8)
@@ -3564,6 +4178,118 @@ mod tests {
         repository
             .expect_update_orchestration_task_status()
             .times(4)
+            .returning(|_, _, _| Ok(()));
+        let backend = TestSessionBackend::default();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let base = review_applying_task();
+        let observed = [
+            SessionStatus::Question,
+            SessionStatus::Canceled,
+            SessionStatus::Review,
+            SessionStatus::Merged,
+            SessionStatus::InProgress,
+        ];
+
+        // Act
+        for _ in 0..2 {
+            coordinator
+                .reconcile_review_application(&mut base.clone())
+                .await
+                .expect("pending operation should wait");
+        }
+        let mut reconciled = Vec::new();
+        for status in observed {
+            let mut observed_task = with_child_observation(base.clone(), status, None);
+            coordinator
+                .reconcile_review_application(&mut observed_task)
+                .await
+                .expect("completed review application should reconcile");
+            reconciled.push(observed_task.status);
+        }
+        let unknown = coordinator
+            .reconcile_review_application(&mut base.clone())
+            .await;
+
+        // Assert
+        assert_eq!(
+            reconciled,
+            [
+                OrchestrationTaskStatus::WaitingForInput.to_string(),
+                OrchestrationTaskStatus::Failed.to_string(),
+                OrchestrationTaskStatus::Reviewing.to_string(),
+                OrchestrationTaskStatus::Ready.to_string(),
+                OrchestrationTaskStatus::ReviewApplying.to_string(),
+            ]
+        );
+        assert_eq!(
+            unknown,
+            Err("Unknown review remediation operation status `unexpected` for task 7".to_string())
+        );
+        assert!(backend.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn review_application_restart_reconciles_through_task_dispatch() {
+        // Arrange
+        let mut repository = MockOrchestrationRepository::new();
+        repository
+            .expect_load_rollup_operation_status()
+            .once()
+            .returning(|_| Ok(Some("queued".to_string())));
+        let backend = TestSessionBackend::default();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let coordinator =
+            OrchestrationCoordinator::new(event_tx, Arc::new(repository), backend.service());
+        let mut applying = review_applying_task();
+
+        // Act
+        coordinator
+            .reconcile_task(&mut applying)
+            .await
+            .expect("restart should dispatch review remediation reconciliation");
+
+        // Assert
+        assert_eq!(
+            applying.status,
+            OrchestrationTaskStatus::ReviewApplying.to_string()
+        );
+        assert!(backend.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn continuation_reconciliation_recovers_every_operation_and_child_state() {
+        // Arrange
+        let mut repository = MockOrchestrationRepository::new();
+        let operation_states = Arc::new(Mutex::new(VecDeque::from([
+            Some("queued".to_string()),
+            Some("running".to_string()),
+            Some("done".to_string()),
+            Some("done".to_string()),
+            Some("done".to_string()),
+            Some("done".to_string()),
+            Some("done".to_string()),
+            Some("unexpected".to_string()),
+            Some("failed".to_string()),
+        ])));
+        repository
+            .expect_load_rollup_operation_status()
+            .times(9)
+            .returning({
+                let operation_states = Arc::clone(&operation_states);
+
+                move |_| {
+                    Ok(operation_states
+                        .lock()
+                        .expect("operation states should remain available")
+                        .pop_front()
+                        .expect("operation state should exist"))
+                }
+            });
+        repository
+            .expect_update_orchestration_task_status()
+            .times(5)
             .returning(|_, _, _| Ok(()));
         repository
             .expect_update_orchestration_task_result_summary()
@@ -3587,6 +4313,7 @@ mod tests {
             SessionStatus::Question,
             SessionStatus::Canceled,
             SessionStatus::Review,
+            SessionStatus::Merged,
             SessionStatus::InProgress,
         ];
 
@@ -3601,12 +4328,14 @@ mod tests {
                 .await
                 .expect("pending continuation operation should wait");
         }
+        let mut reconciled = Vec::new();
         for status in observed {
             let mut task = with_child_observation(base.clone(), status, Some("Follow-up complete"));
             coordinator
                 .reconcile_continuation(&mut task)
                 .await
                 .expect("completed continuation should reconcile");
+            reconciled.push(task.status);
         }
         let unknown = coordinator.reconcile_continuation(&mut base.clone()).await;
         coordinator
@@ -3618,6 +4347,16 @@ mod tests {
         assert_eq!(
             unknown,
             Err("Unknown continuation operation status `unexpected` for task 1".to_string())
+        );
+        assert_eq!(
+            reconciled,
+            [
+                OrchestrationTaskStatus::WaitingForInput.to_string(),
+                OrchestrationTaskStatus::Failed.to_string(),
+                OrchestrationTaskStatus::Reviewing.to_string(),
+                OrchestrationTaskStatus::Ready.to_string(),
+                OrchestrationTaskStatus::ContinuationPending.to_string(),
+            ]
         );
         assert!(backend.calls().iter().any(|call| {
             call.starts_with("rollup:child:Continue task `continue` on the same branch")

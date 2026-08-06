@@ -51,6 +51,10 @@ pub struct SessionOrchestrationTaskRow {
     pub child_added_lines: i64,
     /// Persisted deleted-line count from the latest child diff refresh.
     pub child_deleted_lines: i64,
+    /// Durable focused-review generation state observed on the child.
+    pub child_focused_review_status: Option<String>,
+    /// Latest focused-review markdown observed on the child.
+    pub child_focused_review_text: Option<String>,
     /// Whether the latest child diff refresh found any content.
     pub child_has_diff: Option<bool>,
     /// Total input tokens observed on the linked child session.
@@ -81,6 +85,8 @@ pub struct SessionOrchestrationTaskRow {
     pub prompt: String,
     /// Bounded child-reported result summary used for fan-in, when present.
     pub result_summary: Option<String>,
+    /// Number of automatic focused-review remediation turns already consumed.
+    pub review_iteration: i64,
     /// Persisted task status string.
     pub status: String,
     /// Stable subtask key unique within the owning orchestration.
@@ -181,6 +187,13 @@ pub trait OrchestrationRepository: Send + Sync {
     /// Loads every orchestration whose persisted status is still active.
     async fn load_active_orchestrations(&self) -> Result<Vec<SessionOrchestrationRow>, DbError>;
 
+    /// Loads managed `Reviewing` sessions whose incomplete focused-review
+    /// state must be regenerated during app startup.
+    async fn load_recoverable_focused_review_session_ids(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<String>, DbError>;
+
     /// Loads controller progress and child adjacency for one project's
     /// sessions in a single query.
     async fn load_session_metadata_for_project(
@@ -212,6 +225,15 @@ pub trait OrchestrationRepository: Send + Sync {
 
     /// Atomically claims one planned task while its orchestration is running.
     async fn claim_orchestration_task(&self, id: i64) -> Result<bool, DbError>;
+
+    /// Atomically claims one focused-review remediation turn and clears the
+    /// consumed child review cache.
+    async fn claim_orchestration_review_application(
+        &self,
+        id: i64,
+        prompt: &str,
+        iteration_limit: i64,
+    ) -> Result<bool, DbError>;
 
     /// Atomically claims roll-up submission for one running orchestration.
     async fn claim_orchestration_rollup(&self, id: i64) -> Result<bool, DbError>;
@@ -479,7 +501,11 @@ SET title = excluded.title,
     merge_position = excluded.merge_position,
     status = 'Planned',
     child_session_id = NULL,
+    continuation_prompt = NULL,
+    review_iteration = 0,
     result_summary = NULL,
+    verification_reason = NULL,
+    verification_verdict = NULL,
     last_error = NULL,
     updated_at = excluded.updated_at
 RETURNING id AS "id!: i64"
@@ -588,6 +614,36 @@ ORDER BY orchestration.id
         Ok(rows)
     }
 
+    async fn load_recoverable_focused_review_session_ids(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<String>, DbError> {
+        let session_ids = sqlx::query_scalar!(
+            r#"
+SELECT child.id AS "id!: String"
+FROM session_orchestration_task AS task
+INNER JOIN session_orchestration AS orchestration
+ON orchestration.id = task.session_orchestration_id
+INNER JOIN session AS child
+ON child.id = task.child_session_id
+WHERE child.project_id = ?
+  AND orchestration.status IN ('AwaitingApproval', 'Running')
+  AND task.status = 'Reviewing'
+  AND child.status IN ('Review', 'AgentReview')
+  AND (
+      child.focused_review_status IS NULL
+      OR child.focused_review_status = 'Pending'
+  )
+ORDER BY task.id
+"#,
+            project_id
+        )
+        .fetch_all(&self.0)
+        .await?;
+
+        Ok(session_ids)
+    }
+
     async fn load_session_metadata_for_project(
         &self,
         project_id: i64,
@@ -613,7 +669,13 @@ controller_metadata AS (
     SELECT orchestration.controller_session_id AS session_id,
            orchestration.status AS orchestration_status,
            COALESCE(SUM(
-               CASE WHEN task.status IN ('Creating', 'Running', 'ContinuationPending')
+               CASE WHEN task.status IN (
+                        'Creating',
+                        'Running',
+                        'Reviewing',
+                        'ReviewApplying',
+                        'ContinuationPending'
+                    )
                     THEN 1 ELSE 0 END
            ), 0) AS running_task_count,
            COALESCE(SUM(
@@ -676,6 +738,8 @@ SELECT task.id AS "id!: i64",
        task.attempt_count,
        COALESCE(child.added_lines, 0) AS "child_added_lines!: i64",
        COALESCE(child.deleted_lines, 0) AS "child_deleted_lines!: i64",
+       child.focused_review_status AS child_focused_review_status,
+       child.focused_review_text AS child_focused_review_text,
        child.has_diff AS "child_has_diff?: bool",
        COALESCE(child.input_tokens, 0) AS "child_input_tokens!: i64",
        COALESCE(child.output_tokens, 0) AS "child_output_tokens!: i64",
@@ -690,6 +754,7 @@ SELECT task.id AS "id!: i64",
        task.merge_position,
        task.prompt,
        task.result_summary,
+       task.review_iteration,
        task.status,
        task.task_key,
        task.touched_areas,
@@ -821,6 +886,75 @@ WHERE id = ?
         .db_context("claim orchestration task")?;
 
         Ok(result.rows_affected() == 1)
+    }
+
+    async fn claim_orchestration_review_application(
+        &self,
+        id: i64,
+        prompt: &str,
+        iteration_limit: i64,
+    ) -> Result<bool, DbError> {
+        let now = self.now();
+        let mut transaction = self
+            .0
+            .begin()
+            .await
+            .db_context("claim orchestration review application")?;
+        let claim = sqlx::query!(
+            r"
+UPDATE session_orchestration_task
+SET continuation_generation = continuation_generation + 1,
+    continuation_prompt = ?,
+    review_iteration = review_iteration + 1,
+    status = 'ReviewApplying',
+    updated_at = ?
+WHERE id = ?
+  AND status = 'Reviewing'
+  AND review_iteration < ?
+  AND child_session_id IS NOT NULL
+",
+            prompt,
+            now,
+            id,
+            iteration_limit
+        )
+        .execute(&mut *transaction)
+        .await
+        .db_context("claim orchestration review application")?;
+        if claim.rows_affected() == 0 {
+            transaction
+                .rollback()
+                .await
+                .db_context("claim orchestration review application")?;
+
+            return Ok(false);
+        }
+
+        sqlx::query!(
+            r"
+UPDATE session
+SET focused_review_status = NULL,
+    focused_review_diff_hash = NULL,
+    focused_review_text = NULL,
+    updated_at = ?
+WHERE id = (
+    SELECT child_session_id
+    FROM session_orchestration_task
+    WHERE id = ?
+)
+",
+            now,
+            id
+        )
+        .execute(&mut *transaction)
+        .await
+        .db_context("claim orchestration review application")?;
+        transaction
+            .commit()
+            .await
+            .db_context("claim orchestration review application")?;
+
+        Ok(true)
     }
 
     async fn claim_orchestration_rollup(&self, id: i64) -> Result<bool, DbError> {
@@ -1067,6 +1201,11 @@ WHERE id = ?
         touched_areas: &str,
     ) -> Result<bool, DbError> {
         let now = self.now();
+        let mut transaction = self
+            .0
+            .begin()
+            .await
+            .db_context("queue orchestration continuation")?;
         let result = sqlx::query!(
             r"
 UPDATE session_orchestration_task
@@ -1075,6 +1214,7 @@ SET acceptance_criteria = ?,
     areas_compliant = NULL,
     continuation_generation = continuation_generation + 1,
     continuation_prompt = ?,
+    review_iteration = 0,
     status = 'ContinuationPending',
     touched_areas = ?,
     result_summary = NULL,
@@ -1092,8 +1232,30 @@ WHERE id = ?
             now,
             id
         )
-        .execute(&self.0)
+        .execute(&mut *transaction)
         .await?;
+
+        if result.rows_affected() == 1 {
+            sqlx::query!(
+                r"
+UPDATE session
+SET focused_review_status = NULL,
+    focused_review_diff_hash = NULL,
+    focused_review_text = NULL,
+    updated_at = ?
+WHERE id = (
+    SELECT child_session_id
+    FROM session_orchestration_task
+    WHERE id = ?
+)
+",
+                now,
+                id
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
 
         Ok(result.rows_affected() == 1)
     }
@@ -1492,6 +1654,7 @@ mod tests {
     use super::*;
     use crate::domain::agent::{AgentKind, ReasoningLevel, SpeedMode};
     use crate::domain::orchestration::{OrchestrationStatus, OrchestrationTaskStatus};
+    use crate::domain::review::FocusedReviewStatus;
     use crate::infra::db::{AppRepositories, PersistedSessionCreation, SessionRow};
 
     /// Inserts one project plus one controller session and returns the
@@ -2398,6 +2561,209 @@ mod tests {
             orchestration.status,
             OrchestrationStatus::Integrating.to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn recoverable_focused_reviews_exclude_outstanding_continuations() {
+        // Arrange
+        let database = controller_fixture().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to reload project");
+        let orchestration_id = database
+            .orchestrations()
+            .insert_orchestration("controller", &OrchestrationStatus::Running.to_string(), 2)
+            .await
+            .expect("failed to insert orchestration");
+        let task_id = database
+            .orchestrations()
+            .upsert_orchestration_task(planned_task(orchestration_id, "recoverable"))
+            .await
+            .expect("failed to insert recoverable task");
+        assert!(
+            database
+                .orchestrations()
+                .claim_orchestration_task(task_id)
+                .await
+                .expect("failed to claim recoverable task")
+        );
+        insert_orchestration_child(&database, project_id, "child-recoverable", task_id).await;
+        assert!(
+            database
+                .orchestrations()
+                .link_orchestration_task_child(task_id, "child-recoverable")
+                .await
+                .expect("failed to link recoverable child")
+        );
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                task_id,
+                &OrchestrationTaskStatus::Reviewing.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to mark child reviewing");
+
+        // Act
+        let incomplete = database
+            .orchestrations()
+            .load_recoverable_focused_review_session_ids(project_id)
+            .await
+            .expect("failed to load incomplete review");
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                task_id,
+                &OrchestrationTaskStatus::ContinuationPending.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to mark continuation pending");
+        let pending = database
+            .orchestrations()
+            .load_recoverable_focused_review_session_ids(project_id)
+            .await
+            .expect("failed to inspect pending continuation recovery");
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                task_id,
+                &OrchestrationTaskStatus::ReviewApplying.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to mark review application pending");
+        let applying = database
+            .orchestrations()
+            .load_recoverable_focused_review_session_ids(project_id)
+            .await
+            .expect("failed to inspect review application recovery");
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                task_id,
+                &OrchestrationTaskStatus::Reviewing.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to restore reviewing state");
+        database
+            .sessions()
+            .update_session_focused_review(
+                "child-recoverable",
+                Some(FocusedReviewStatus::Ready),
+                Some("42".to_string()),
+                Some("### Suggestions\n\n- None".to_string()),
+            )
+            .await
+            .expect("failed to complete focused review");
+        let completed = database
+            .orchestrations()
+            .load_recoverable_focused_review_session_ids(project_id)
+            .await
+            .expect("failed to reload completed review");
+
+        // Assert
+        assert_eq!(incomplete, ["child-recoverable"]);
+        assert!(pending.is_empty() && applying.is_empty() && completed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn review_application_claim_is_bounded_and_clears_consumed_review() {
+        // Arrange
+        let database = controller_fixture().await;
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to reload project");
+        let orchestration_id = database
+            .orchestrations()
+            .insert_orchestration("controller", &OrchestrationStatus::Running.to_string(), 2)
+            .await
+            .expect("failed to insert orchestration");
+        let task_id = database
+            .orchestrations()
+            .upsert_orchestration_task(planned_task(orchestration_id, "reviewed"))
+            .await
+            .expect("failed to insert reviewed task");
+        assert!(
+            database
+                .orchestrations()
+                .claim_orchestration_task(task_id)
+                .await
+                .expect("failed to claim reviewed task")
+        );
+        insert_orchestration_child(&database, project_id, "child-reviewed", task_id).await;
+        assert!(
+            database
+                .orchestrations()
+                .link_orchestration_task_child(task_id, "child-reviewed")
+                .await
+                .expect("failed to link reviewed child")
+        );
+        database
+            .orchestrations()
+            .update_orchestration_task_status(
+                task_id,
+                &OrchestrationTaskStatus::Reviewing.to_string(),
+                None,
+            )
+            .await
+            .expect("failed to mark child reviewing");
+        database
+            .sessions()
+            .update_session_focused_review(
+                "child-reviewed",
+                Some(FocusedReviewStatus::Ready),
+                Some("42".to_string()),
+                Some("### Suggestions\n\n- Fix it".to_string()),
+            )
+            .await
+            .expect("failed to seed focused review");
+
+        // Act
+        let claimed = database
+            .orchestrations()
+            .claim_orchestration_review_application(task_id, "Verify then apply", 3)
+            .await
+            .expect("failed to claim review application");
+        let duplicate_claim = database
+            .orchestrations()
+            .claim_orchestration_review_application(task_id, "Duplicate", 3)
+            .await
+            .expect("failed to inspect duplicate review application");
+        let task = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration_id)
+            .await
+            .expect("failed to load reviewed task")
+            .remove(0);
+        let review_cache = database
+            .sessions()
+            .load_session_focused_reviews_for_project(project_id)
+            .await
+            .expect("failed to load consumed review cache");
+
+        // Assert
+        assert!(claimed);
+        assert!(!duplicate_claim);
+        assert_eq!(
+            task.status,
+            OrchestrationTaskStatus::ReviewApplying.to_string()
+        );
+        assert_eq!(task.continuation_generation, 1);
+        assert_eq!(
+            task.continuation_prompt.as_deref(),
+            Some("Verify then apply")
+        );
+        assert_eq!(task.review_iteration, 1);
+        assert!(review_cache.is_empty());
+        assert_eq!(task.child_focused_review_status, None);
+        assert_eq!(task.child_focused_review_text, None);
     }
 
     #[tokio::test]
