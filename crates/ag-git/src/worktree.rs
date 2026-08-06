@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use tokio::task::spawn_blocking;
 
 use super::error::GitError;
-use super::repo::{
-    main_repo_root, resolve_git_dir, run_git_command_cancellable, run_git_command_sync,
-};
+use super::repo::{main_repo_root, resolve_git_dir, run_git_command, run_git_command_sync};
 
 /// Detects git repository information for the given directory.
 /// Returns the current branch name if in a git repository, None otherwise.
@@ -85,7 +83,7 @@ pub(crate) async fn create_worktree(
 pub(crate) async fn remove_worktree(worktree_path: PathBuf) -> Result<(), GitError> {
     let repo_root = main_repo_root(worktree_path.clone()).await?;
     let worktree_path = worktree_path.to_string_lossy().to_string();
-    run_git_command_cancellable(
+    run_git_command(
         repo_root,
         vec![
             "worktree".to_string(),

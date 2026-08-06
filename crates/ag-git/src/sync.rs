@@ -2,16 +2,22 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::Output;
+use std::time::Duration;
 
 #[cfg(unix)]
 use rustix::fs::{self as rustix_fs, Access};
 use tokio::task::spawn_blocking;
+use tokio::time;
 
 use super::error::GitError;
-use super::rebase::{is_rebase_conflict, run_git_command_with_index_lock_retry};
+use super::rebase::{
+    GIT_INDEX_LOCK_RETRY_ATTEMPTS, GIT_INDEX_LOCK_RETRY_DELAY, is_git_index_lock_error,
+    is_rebase_conflict, run_git_command_with_index_lock_retry,
+};
 use super::repo::{
-    command_output_detail, run_git_command, run_git_command_cancellable,
-    run_git_command_output_sync, run_git_command_output_with_env_sync, run_git_command_sync,
+    AsyncGitCommand, AsyncGitCommandOutput, AsyncGitCommandRunner, ProcessAsyncGitCommandRunner,
+    command_output_detail, run_git_command, run_git_command_output_sync,
+    run_git_command_output_with_env_sync, run_git_command_sync, run_git_command_with_runner,
 };
 
 /// Map of local branch names to their ahead/behind counts relative to their
@@ -262,7 +268,7 @@ pub(crate) async fn head_commit_message(repo_path: PathBuf) -> Result<Option<Str
 /// Returns a [`GitError`] if the branch delete command fails or exceeds its
 /// runtime bound.
 pub(crate) async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Result<(), GitError> {
-    run_git_command_cancellable(
+    run_git_command(
         repo_path,
         vec!["branch".to_string(), "-D".to_string(), branch_name],
         "Git branch deletion failed".to_string(),
@@ -564,39 +570,49 @@ pub(crate) async fn tracked_worktree_status(repo_path: PathBuf) -> Result<String
 /// # Errors
 /// Returns a [`GitError`] for non-conflict pull/rebase failures.
 pub(crate) async fn pull_rebase(repo_path: PathBuf) -> Result<PullRebaseResult, GitError> {
-    spawn_blocking(move || {
-        let pull_arguments = pull_rebase_arguments(&repo_path)
-            .unwrap_or_else(|_| vec!["pull".to_string(), "--rebase".to_string()]);
-        let pull_argument_refs: Vec<&str> = pull_arguments.iter().map(String::as_str).collect();
-        let output = run_git_command_with_index_lock_retry(
-            &repo_path,
-            &pull_argument_refs,
-            &[("GIT_EDITOR", ":"), ("GIT_SEQUENCE_EDITOR", ":")],
-        )?;
+    let command_runner = ProcessAsyncGitCommandRunner;
 
-        if output.status.success() {
-            return Ok(PullRebaseResult::Completed);
-        }
+    pull_rebase_with_runner(repo_path, &command_runner, GIT_INDEX_LOCK_RETRY_DELAY).await
+}
 
-        let detail = command_output_detail(&output.stdout, &output.stderr);
-        if is_rebase_conflict(&detail) {
-            return Ok(PullRebaseResult::Conflict { detail });
-        }
+/// Runs pull/rebase through an injected asynchronous command boundary.
+async fn pull_rebase_with_runner(
+    repo_path: PathBuf,
+    command_runner: &dyn AsyncGitCommandRunner,
+    retry_delay: Duration,
+) -> Result<PullRebaseResult, GitError> {
+    let pull_arguments = pull_rebase_arguments(&repo_path, command_runner).await?;
+    let command = AsyncGitCommand::new(repo_path, pull_arguments).with_environment(vec![
+        ("GIT_EDITOR".to_string(), ":".to_string()),
+        ("GIT_SEQUENCE_EDITOR".to_string(), ":".to_string()),
+    ]);
+    let output =
+        run_async_git_command_with_index_lock_retry(command, command_runner, retry_delay).await?;
 
-        Err(GitError::CommandFailed {
-            command: "git pull --rebase".to_string(),
-            stderr: detail,
-        })
+    if output.success() {
+        return Ok(PullRebaseResult::Completed);
+    }
+
+    let detail = command_output_detail(&output.stdout, &output.stderr);
+    if is_rebase_conflict(&detail) {
+        return Ok(PullRebaseResult::Conflict { detail });
+    }
+
+    Err(GitError::CommandFailed {
+        command: "git pull --rebase".to_string(),
+        stderr: detail,
     })
-    .await?
 }
 
 /// Builds pull arguments that target a single upstream branch when available.
 ///
 /// Resolves an explicit `<remote> <branch>` pull target for both remote and
 /// local upstreams so git does not need to infer one from branch config.
-fn pull_rebase_arguments(repo_path: &Path) -> Result<Vec<String>, GitError> {
-    let upstream_reference = primary_upstream_reference(repo_path)?;
+async fn pull_rebase_arguments(
+    repo_path: &Path,
+    command_runner: &dyn AsyncGitCommandRunner,
+) -> Result<Vec<String>, GitError> {
+    let upstream_reference = primary_upstream_reference(repo_path, command_runner).await?;
 
     if let Some((remote_name, branch_name)) = upstream_reference.split_once('/') {
         return Ok(vec![
@@ -607,7 +623,13 @@ fn pull_rebase_arguments(repo_path: &Path) -> Result<Vec<String>, GitError> {
         ]);
     }
 
-    let remote_name = current_branch_remote_name(repo_path)?;
+    let remote_name = current_branch_remote_name(repo_path, command_runner)
+        .await?
+        .ok_or_else(|| {
+            GitError::OutputParse(
+                "Failed to resolve current branch remote: not configured".to_string(),
+            )
+        })?;
 
     Ok(vec![
         "pull".to_string(),
@@ -622,8 +644,11 @@ fn pull_rebase_arguments(repo_path: &Path) -> Result<Vec<String>, GitError> {
 /// Git can return multiple lines when multiple merge targets are configured.
 /// Pulling with rebase needs one concrete target, so this selects the first
 /// non-empty line.
-fn primary_upstream_reference(repo_path: &Path) -> Result<String, GitError> {
-    let upstream_reference = upstream_reference_name(repo_path)?;
+async fn primary_upstream_reference(
+    repo_path: &Path,
+    command_runner: &dyn AsyncGitCommandRunner,
+) -> Result<String, GitError> {
+    let upstream_reference = upstream_reference_name(repo_path, command_runner).await?;
     let Some(primary_reference) = upstream_reference
         .lines()
         .map(str::trim)
@@ -638,12 +663,24 @@ fn primary_upstream_reference(repo_path: &Path) -> Result<String, GitError> {
 }
 
 /// Returns the full upstream reference for `HEAD` (for example, `origin/main`).
-fn upstream_reference_name(repo_path: &Path) -> Result<String, GitError> {
-    let upstream_reference = run_git_command_sync(
-        repo_path,
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+async fn upstream_reference_name(
+    repo_path: &Path,
+    command_runner: &dyn AsyncGitCommandRunner,
+) -> Result<String, GitError> {
+    let upstream_reference = run_git_command_with_runner(
+        AsyncGitCommand::new(
+            repo_path.to_path_buf(),
+            vec![
+                "rev-parse".to_string(),
+                "--abbrev-ref".to_string(),
+                "--symbolic-full-name".to_string(),
+                "@{u}".to_string(),
+            ],
+        ),
         "Failed to resolve upstream branch",
-    )?;
+        command_runner,
+    )
+    .await?;
     let upstream_reference = upstream_reference.trim().to_string();
     if upstream_reference.is_empty() {
         return Err(GitError::OutputParse(
@@ -658,31 +695,73 @@ fn upstream_reference_name(repo_path: &Path) -> Result<String, GitError> {
 ///
 /// This is used when the upstream short name omits a remote prefix (for
 /// example, `main` with `branch.<name>.remote=.`).
-fn current_branch_remote_name(repo_path: &Path) -> Result<String, GitError> {
-    let current_branch_name = current_branch_name(repo_path)?;
+async fn current_branch_remote_name(
+    repo_path: &Path,
+    command_runner: &dyn AsyncGitCommandRunner,
+) -> Result<Option<String>, GitError> {
+    let current_branch_name = current_branch_name(repo_path, command_runner).await?;
     let remote_config_key = format!("branch.{current_branch_name}.remote");
-    let remote_name = run_git_command_sync(
-        repo_path,
-        &["config", "--get", &remote_config_key],
-        &format!("Failed to resolve current branch remote `{remote_config_key}`"),
-    )?;
-    let remote_name = remote_name.trim().to_string();
+    let output = command_runner
+        .run(AsyncGitCommand::new(
+            repo_path.to_path_buf(),
+            vec![
+                "config".to_string(),
+                "--get".to_string(),
+                remote_config_key.clone(),
+            ],
+        ))
+        .await?;
+
+    parse_current_branch_remote_output(&output, &remote_config_key)
+}
+
+/// Parses `git config --get` output for one current-branch remote.
+fn parse_current_branch_remote_output(
+    output: &AsyncGitCommandOutput,
+    remote_config_key: &str,
+) -> Result<Option<String>, GitError> {
+    if output.exit_code == Some(1) {
+        return Ok(None);
+    }
+    if !output.success() {
+        let detail = command_output_detail(&output.stdout, &output.stderr);
+
+        return Err(GitError::CommandFailed {
+            command: format!("git config --get {remote_config_key}"),
+            stderr: format!(
+                "Failed to resolve current branch remote `{remote_config_key}`: {detail}"
+            ),
+        });
+    }
+
+    let remote_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if remote_name.is_empty() {
         return Err(GitError::OutputParse(format!(
             "Failed to resolve current branch remote `{remote_config_key}`: empty output"
         )));
     }
 
-    Ok(remote_name)
+    Ok(Some(remote_name))
 }
 
 /// Returns the current local branch name for `HEAD`.
-fn current_branch_name(repo_path: &Path) -> Result<String, GitError> {
-    let branch_name = run_git_command_sync(
-        repo_path,
-        &["rev-parse", "--abbrev-ref", "HEAD"],
+async fn current_branch_name(
+    repo_path: &Path,
+    command_runner: &dyn AsyncGitCommandRunner,
+) -> Result<String, GitError> {
+    let branch_name = run_git_command_with_runner(
+        AsyncGitCommand::new(
+            repo_path.to_path_buf(),
+            vec![
+                "rev-parse".to_string(),
+                "--abbrev-ref".to_string(),
+                "HEAD".to_string(),
+            ],
+        ),
         "Failed to resolve current branch name",
-    )?;
+        command_runner,
+    )
+    .await?;
     let branch_name = branch_name.trim().to_string();
     if branch_name.is_empty() {
         return Err(GitError::OutputParse(
@@ -697,6 +776,31 @@ fn current_branch_name(repo_path: &Path) -> Result<String, GitError> {
     }
 
     Ok(branch_name)
+}
+
+/// Runs one asynchronous git command and retries transient index lock
+/// contention without blocking a Tokio worker.
+async fn run_async_git_command_with_index_lock_retry(
+    command: AsyncGitCommand,
+    command_runner: &dyn AsyncGitCommandRunner,
+    retry_delay: Duration,
+) -> Result<AsyncGitCommandOutput, GitError> {
+    let mut attempt_count = 0;
+    loop {
+        attempt_count += 1;
+        let output = command_runner.run(command.clone()).await?;
+        if output.success() {
+            return Ok(output);
+        }
+
+        let detail = command_output_detail(&output.stdout, &output.stderr);
+        let is_last_attempt = attempt_count == GIT_INDEX_LOCK_RETRY_ATTEMPTS;
+        if !is_git_index_lock_error(&detail) || is_last_attempt {
+            return Ok(output);
+        }
+
+        time::sleep(retry_delay).await;
+    }
 }
 
 /// Pushes the current branch to its upstream remote with
@@ -716,36 +820,55 @@ fn current_branch_name(repo_path: &Path) -> Result<String, GitError> {
 /// Returns a [`GitError`] if `git push` fails or upstream tracking cannot be
 /// resolved afterwards.
 pub(crate) async fn push_current_branch(repo_path: PathBuf) -> Result<String, GitError> {
-    spawn_blocking(move || -> Result<String, GitError> {
-        let push_output = run_git_command_output_sync(&repo_path, &["push", "--force-with-lease"])?;
+    let command_runner = ProcessAsyncGitCommandRunner;
 
-        if push_output.status.success() {
-            return primary_upstream_reference(&repo_path);
-        }
+    push_current_branch_with_runner(repo_path, &command_runner).await
+}
 
-        let push_detail = command_output_detail(&push_output.stdout, &push_output.stderr);
-        if !is_no_upstream_error(&push_detail) {
-            return Err(GitError::CommandFailed {
-                command: "git push".to_string(),
-                stderr: push_detail,
-            });
-        }
+/// Pushes the current branch through an injected asynchronous command
+/// boundary.
+async fn push_current_branch_with_runner(
+    repo_path: PathBuf,
+    command_runner: &dyn AsyncGitCommandRunner,
+) -> Result<String, GitError> {
+    let push_command = AsyncGitCommand::new(
+        repo_path.clone(),
+        vec!["push".to_string(), "--force-with-lease".to_string()],
+    );
+    let push_output = command_runner.run(push_command).await?;
 
-        run_git_command_sync(
-            &repo_path,
-            &[
-                "push",
-                "--force-with-lease",
-                "--set-upstream",
-                "origin",
-                "HEAD",
+    if push_output.success() {
+        return primary_upstream_reference(&repo_path, command_runner).await;
+    }
+
+    let push_detail = command_output_detail(&push_output.stdout, &push_output.stderr);
+    if !is_no_upstream_error(&push_detail) {
+        return Err(GitError::CommandFailed {
+            command: "git push --force-with-lease".to_string(),
+            stderr: push_detail,
+        });
+    }
+
+    let remote_name = current_branch_remote_name(&repo_path, command_runner)
+        .await?
+        .unwrap_or_else(|| "origin".to_string());
+    run_git_command_with_runner(
+        AsyncGitCommand::new(
+            repo_path.clone(),
+            vec![
+                "push".to_string(),
+                "--force-with-lease".to_string(),
+                "--set-upstream".to_string(),
+                remote_name,
+                "HEAD".to_string(),
             ],
-            "Git push failed",
-        )?;
+        ),
+        "Git push failed",
+        command_runner,
+    )
+    .await?;
 
-        primary_upstream_reference(&repo_path)
-    })
-    .await?
+    primary_upstream_reference(&repo_path, command_runner).await
 }
 
 /// Checks whether a branch already exists on the remote.
@@ -764,28 +887,34 @@ pub(crate) async fn remote_branch_exists(
     repo_path: PathBuf,
     remote_branch_name: String,
 ) -> Result<bool, GitError> {
-    spawn_blocking(move || -> Result<bool, GitError> {
-        let remote_name =
-            current_branch_remote_name(&repo_path).unwrap_or_else(|_| "origin".to_string());
-        let output = run_git_command_output_sync(
-            &repo_path,
-            &["ls-remote", "--heads", &remote_name, &remote_branch_name],
-        )?;
+    let command_runner = ProcessAsyncGitCommandRunner;
 
-        if !output.status.success() {
-            let detail = command_output_detail(&output.stdout, &output.stderr);
+    remote_branch_exists_with_runner(repo_path, remote_branch_name, &command_runner).await
+}
 
-            return Err(GitError::CommandFailed {
-                command: "git ls-remote".to_string(),
-                stderr: detail,
-            });
-        }
+/// Checks a remote branch through an injected asynchronous command boundary.
+async fn remote_branch_exists_with_runner(
+    repo_path: PathBuf,
+    remote_branch_name: String,
+    command_runner: &dyn AsyncGitCommandRunner,
+) -> Result<bool, GitError> {
+    let remote_name = current_branch_remote_name(&repo_path, command_runner)
+        .await?
+        .unwrap_or_else(|| "origin".to_string());
+    let arguments = vec![
+        "ls-remote".to_string(),
+        "--heads".to_string(),
+        remote_name,
+        remote_branch_name,
+    ];
+    let stdout = run_git_command_with_runner(
+        AsyncGitCommand::new(repo_path, arguments),
+        "Git ls-remote failed",
+        command_runner,
+    )
+    .await?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        Ok(!stdout.trim().is_empty())
-    })
-    .await?
+    Ok(!stdout.trim().is_empty())
 }
 
 /// Pushes the current branch to one explicit remote branch name with
@@ -808,26 +937,38 @@ pub(crate) async fn push_current_branch_to_remote_branch(
     repo_path: PathBuf,
     remote_branch_name: String,
 ) -> Result<String, GitError> {
-    spawn_blocking(move || -> Result<String, GitError> {
-        let remote_name =
-            current_branch_remote_name(&repo_path).unwrap_or_else(|_| "origin".to_string());
-        let push_refspec = format!("HEAD:{remote_branch_name}");
+    let command_runner = ProcessAsyncGitCommandRunner;
 
-        run_git_command_sync(
-            &repo_path,
-            &[
-                "push",
-                "--force-with-lease",
-                "--set-upstream",
-                &remote_name,
-                &push_refspec,
-            ],
-            "Git push failed",
-        )?;
+    push_current_branch_to_remote_branch_with_runner(repo_path, remote_branch_name, &command_runner)
+        .await
+}
 
-        Ok(format!("{remote_name}/{remote_branch_name}"))
-    })
-    .await?
+/// Pushes one explicit branch through an injected asynchronous command
+/// boundary.
+async fn push_current_branch_to_remote_branch_with_runner(
+    repo_path: PathBuf,
+    remote_branch_name: String,
+    command_runner: &dyn AsyncGitCommandRunner,
+) -> Result<String, GitError> {
+    let remote_name = current_branch_remote_name(&repo_path, command_runner)
+        .await?
+        .unwrap_or_else(|| "origin".to_string());
+    let push_refspec = format!("HEAD:{remote_branch_name}");
+    let arguments = vec![
+        "push".to_string(),
+        "--force-with-lease".to_string(),
+        "--set-upstream".to_string(),
+        remote_name.clone(),
+        push_refspec,
+    ];
+    run_git_command_with_runner(
+        AsyncGitCommand::new(repo_path, arguments),
+        "Git push failed",
+        command_runner,
+    )
+    .await?;
+
+    Ok(format!("{remote_name}/{remote_branch_name}"))
 }
 
 /// Returns the current upstream reference for `HEAD`.
@@ -842,7 +983,9 @@ pub(crate) async fn push_current_branch_to_remote_branch(
 /// Returns a [`GitError`] when upstream tracking information cannot be
 /// resolved.
 pub(crate) async fn current_upstream_reference(repo_path: PathBuf) -> Result<String, GitError> {
-    spawn_blocking(move || primary_upstream_reference(&repo_path)).await?
+    let command_runner = ProcessAsyncGitCommandRunner;
+
+    primary_upstream_reference(&repo_path, &command_runner).await
 }
 
 /// Fetches from the configured remote.
@@ -1438,9 +1581,25 @@ mod tests {
     use std::path::Path;
     use std::process::{Command, Output};
 
+    use mockall::Sequence;
+    use mockall::predicate::function;
     use tempfile::tempdir;
 
     use super::*;
+    use crate::repo::MockAsyncGitCommandRunner;
+
+    /// Builds captured asynchronous git output for command-runner tests.
+    fn async_git_output(
+        exit_code: i32,
+        stdout: impl Into<Vec<u8>>,
+        stderr: impl Into<Vec<u8>>,
+    ) -> AsyncGitCommandOutput {
+        AsyncGitCommandOutput {
+            exit_code: Some(exit_code),
+            stderr: stderr.into(),
+            stdout: stdout.into(),
+        }
+    }
 
     /// Runs `git` in `repo_path` and asserts the command succeeds.
     fn run_git_command(repo_path: &Path, args: &[&str]) {
@@ -1488,6 +1647,26 @@ mod tests {
         fs::write(repo_path.join("README.md"), "base\n").expect("failed to write base file");
         run_git_command(repo_path, &["add", "README.md"]);
         run_git_command(repo_path, &["commit", "-m", "Initial commit"]);
+    }
+
+    #[tokio::test]
+    async fn delete_branch_removes_branch_from_isolated_repository() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(temp_dir.path(), &["branch", "review/topic"]);
+
+        // Act
+        delete_branch(temp_dir.path().to_path_buf(), "review/topic".to_string())
+            .await
+            .expect("branch deletion should succeed");
+
+        // Assert
+        let branch_lookup = git_command_output(
+            temp_dir.path(),
+            &["show-ref", "--verify", "--quiet", "refs/heads/review/topic"],
+        );
+        assert!(!branch_lookup.status.success());
     }
 
     #[tokio::test]
@@ -1868,23 +2047,82 @@ mod tests {
         );
     }
 
-    #[test]
-    fn current_branch_name_returns_error_for_detached_head() {
+    #[tokio::test]
+    async fn current_branch_name_returns_error_for_detached_head() {
         // Arrange
         let temp_dir = tempdir().expect("failed to create temp dir");
         setup_test_git_repo(temp_dir.path());
         run_git_command(temp_dir.path(), &["checkout", "--detach"]);
+        let command_runner = ProcessAsyncGitCommandRunner;
 
         // Act
-        let result = current_branch_name(temp_dir.path());
+        let result = current_branch_name(temp_dir.path(), &command_runner).await;
 
         // Assert
         let error = result.expect_err("detached HEAD should fail");
         assert!(error.to_string().contains("detached HEAD"));
     }
 
+    #[tokio::test]
+    async fn current_branch_remote_name_returns_none_when_remote_is_not_configured() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        let command_runner = ProcessAsyncGitCommandRunner;
+
+        // Act
+        let remote_name = current_branch_remote_name(temp_dir.path(), &command_runner)
+            .await
+            .expect("missing branch remote should not be a command failure");
+
+        // Assert
+        assert_eq!(remote_name, None);
+    }
+
+    #[tokio::test]
+    async fn current_branch_remote_name_returns_configured_non_origin_remote() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(
+            temp_dir.path(),
+            &["config", "branch.main.remote", "review-remote"],
+        );
+        let command_runner = ProcessAsyncGitCommandRunner;
+
+        // Act
+        let remote_name = current_branch_remote_name(temp_dir.path(), &command_runner)
+            .await
+            .expect("configured branch remote should resolve");
+
+        // Assert
+        assert_eq!(remote_name, Some("review-remote".to_string()));
+    }
+
     #[test]
-    fn primary_upstream_reference_uses_first_non_empty_line() {
+    fn parse_current_branch_remote_output_preserves_fatal_config_error() {
+        // Arrange
+        let output = AsyncGitCommandOutput {
+            exit_code: Some(128),
+            stderr: b"fatal: bad config line".to_vec(),
+            stdout: Vec::new(),
+        };
+
+        // Act
+        let error = parse_current_branch_remote_output(&output, "branch.main.remote")
+            .expect_err("malformed config should remain an error");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::CommandFailed { command, stderr }
+                if command == "git config --get branch.main.remote"
+                    && stderr.contains("Failed to resolve current branch remote")
+        ));
+    }
+
+    #[tokio::test]
+    async fn primary_upstream_reference_uses_first_non_empty_line() {
         // Arrange
         let temp_dir = tempdir().expect("failed to create temp dir");
         let remote_dir = tempdir().expect("failed to create remote temp dir");
@@ -1906,13 +2144,370 @@ mod tests {
             temp_dir.path(),
             &["config", "--add", "branch.main.merge", "refs/heads/feature"],
         );
+        let command_runner = ProcessAsyncGitCommandRunner;
 
         // Act
-        let upstream_reference =
-            primary_upstream_reference(temp_dir.path()).expect("failed to resolve upstream");
+        let upstream_reference = primary_upstream_reference(temp_dir.path(), &command_runner)
+            .await
+            .expect("failed to resolve upstream");
 
         // Assert
         assert_eq!(upstream_reference, "origin/main");
+    }
+
+    #[tokio::test]
+    async fn pull_rebase_retries_index_lock_through_async_runner() {
+        // Arrange
+        let repo_path = PathBuf::from("test-repo");
+        let mut command_runner = MockAsyncGitCommandRunner::new();
+        let mut sequence = Sequence::new();
+        command_runner
+            .expect_run()
+            .with(function(|command: &AsyncGitCommand| {
+                command.arguments == ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
+            }))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(|_| {
+                Box::pin(async { Ok(async_git_output(0, "origin/main\n", Vec::new())) })
+            });
+        for output in [
+            async_git_output(
+                128,
+                Vec::new(),
+                "fatal: Unable to create '.git/index.lock': File exists.",
+            ),
+            async_git_output(0, Vec::new(), Vec::new()),
+        ] {
+            command_runner
+                .expect_run()
+                .with(function(|command: &AsyncGitCommand| {
+                    command.arguments == ["pull", "--rebase", "origin", "main"]
+                        && command.environment
+                            == [
+                                ("GIT_EDITOR".to_string(), ":".to_string()),
+                                ("GIT_SEQUENCE_EDITOR".to_string(), ":".to_string()),
+                            ]
+                }))
+                .times(1)
+                .in_sequence(&mut sequence)
+                .return_once(move |_| Box::pin(async move { Ok(output) }));
+        }
+
+        // Act
+        let result = pull_rebase_with_runner(repo_path, &command_runner, Duration::ZERO).await;
+
+        // Assert
+        assert!(matches!(result, Ok(PullRebaseResult::Completed)));
+    }
+
+    #[tokio::test]
+    async fn pull_rebase_preserves_non_conflict_command_failure() {
+        // Arrange
+        let repo_path = PathBuf::from("test-repo");
+        let mut command_runner = MockAsyncGitCommandRunner::new();
+        let mut sequence = Sequence::new();
+        command_runner
+            .expect_run()
+            .with(function(|command: &AsyncGitCommand| {
+                command.arguments == ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
+            }))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(|_| {
+                Box::pin(async { Ok(async_git_output(0, "origin/main\n", Vec::new())) })
+            });
+        command_runner
+            .expect_run()
+            .with(function(|command: &AsyncGitCommand| {
+                command.arguments == ["pull", "--rebase", "origin", "main"]
+            }))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(|_| {
+                Box::pin(async { Ok(async_git_output(128, Vec::new(), "fatal: transport failed")) })
+            });
+
+        // Act
+        let error = pull_rebase_with_runner(repo_path, &command_runner, Duration::ZERO)
+            .await
+            .expect_err("non-conflict pull failure should remain an error");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::CommandFailed { command, stderr }
+                if command == "git pull --rebase" && stderr == "fatal: transport failed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn pull_rebase_rejects_local_upstream_without_configured_remote() {
+        // Arrange
+        let repo_path = PathBuf::from("test-repo");
+        let mut command_runner = MockAsyncGitCommandRunner::new();
+        let mut sequence = Sequence::new();
+        let expectations = [
+            (
+                vec!["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                async_git_output(0, "main\n", Vec::new()),
+            ),
+            (
+                vec!["rev-parse", "--abbrev-ref", "HEAD"],
+                async_git_output(0, "main\n", Vec::new()),
+            ),
+            (
+                vec!["config", "--get", "branch.main.remote"],
+                async_git_output(1, Vec::new(), Vec::new()),
+            ),
+        ];
+        for (arguments, output) in expectations {
+            let arguments = arguments
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            command_runner
+                .expect_run()
+                .with(function(move |command: &AsyncGitCommand| {
+                    command.arguments == arguments
+                }))
+                .times(1)
+                .in_sequence(&mut sequence)
+                .return_once(move |_| Box::pin(async move { Ok(output) }));
+        }
+
+        // Act
+        let error = pull_rebase_with_runner(repo_path, &command_runner, Duration::ZERO)
+            .await
+            .expect_err("local upstream without a remote should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::OutputParse(message)
+                if message == "Failed to resolve current branch remote: not configured"
+        ));
+    }
+
+    #[tokio::test]
+    async fn pull_rebase_returns_last_index_lock_failure_after_retry_exhaustion() {
+        // Arrange
+        let repo_path = PathBuf::from("test-repo");
+        let mut command_runner = MockAsyncGitCommandRunner::new();
+        let mut sequence = Sequence::new();
+        command_runner
+            .expect_run()
+            .with(function(|command: &AsyncGitCommand| {
+                command.arguments == ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
+            }))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(|_| {
+                Box::pin(async { Ok(async_git_output(0, "origin/main\n", Vec::new())) })
+            });
+        command_runner
+            .expect_run()
+            .with(function(|command: &AsyncGitCommand| {
+                command.arguments == ["pull", "--rebase", "origin", "main"]
+            }))
+            .times(GIT_INDEX_LOCK_RETRY_ATTEMPTS)
+            .in_sequence(&mut sequence)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(async_git_output(
+                        128,
+                        Vec::new(),
+                        "fatal: Unable to create '.git/index.lock': File exists.",
+                    ))
+                })
+            });
+
+        // Act
+        let error = pull_rebase_with_runner(repo_path, &command_runner, Duration::ZERO)
+            .await
+            .expect_err("exhausted index-lock retries should return the last failure");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::CommandFailed { command, stderr }
+                if command == "git pull --rebase" && stderr.contains("index.lock")
+        ));
+    }
+
+    #[tokio::test]
+    async fn remote_branch_lookup_uses_origin_fallback_through_async_runner() {
+        // Arrange
+        let repo_path = PathBuf::from("test-repo");
+        let mut command_runner = MockAsyncGitCommandRunner::new();
+        let mut sequence = Sequence::new();
+        let expectations = [
+            (
+                vec!["rev-parse", "--abbrev-ref", "HEAD"],
+                async_git_output(0, "main\n", Vec::new()),
+            ),
+            (
+                vec!["config", "--get", "branch.main.remote"],
+                async_git_output(1, Vec::new(), Vec::new()),
+            ),
+            (
+                vec!["ls-remote", "--heads", "origin", "review/topic"],
+                async_git_output(0, "abc123\trefs/heads/review/topic\n", Vec::new()),
+            ),
+        ];
+        for (arguments, output) in expectations {
+            let arguments = arguments
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            command_runner
+                .expect_run()
+                .with(function(move |command: &AsyncGitCommand| {
+                    command.arguments == arguments
+                }))
+                .times(1)
+                .in_sequence(&mut sequence)
+                .return_once(move |_| Box::pin(async move { Ok(output) }));
+        }
+
+        // Act
+        let exists = remote_branch_exists_with_runner(
+            repo_path,
+            "review/topic".to_string(),
+            &command_runner,
+        )
+        .await
+        .expect("remote branch lookup should succeed");
+
+        // Assert
+        assert!(exists);
+    }
+
+    #[tokio::test]
+    async fn remote_branch_lookup_checks_isolated_local_remote() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let remote_dir = tempdir().expect("failed to create remote temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(remote_dir.path(), &["init", "--bare"]);
+        let remote_path = remote_dir.path().to_string_lossy().to_string();
+        run_git_command(temp_dir.path(), &["remote", "add", "origin", &remote_path]);
+        run_git_command(temp_dir.path(), &["push", "-u", "origin", "main"]);
+
+        // Act
+        let exists = remote_branch_exists(temp_dir.path().to_path_buf(), "main".to_string())
+            .await
+            .expect("local remote branch lookup should succeed");
+
+        // Assert
+        assert!(exists);
+    }
+
+    #[tokio::test]
+    async fn remote_branch_lookup_preserves_remote_config_failure() {
+        // Arrange
+        let repo_path = PathBuf::from("test-repo");
+        let mut command_runner = MockAsyncGitCommandRunner::new();
+        let mut sequence = Sequence::new();
+        command_runner
+            .expect_run()
+            .with(function(|command: &AsyncGitCommand| {
+                command.arguments == ["rev-parse", "--abbrev-ref", "HEAD"]
+            }))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(|_| Box::pin(async { Ok(async_git_output(0, "main\n", Vec::new())) }));
+        command_runner
+            .expect_run()
+            .with(function(|command: &AsyncGitCommand| {
+                command.arguments == ["config", "--get", "branch.main.remote"]
+            }))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(|_| {
+                Box::pin(async {
+                    Ok(async_git_output(
+                        128,
+                        Vec::new(),
+                        "fatal: malformed branch config",
+                    ))
+                })
+            });
+
+        // Act
+        let error = remote_branch_exists_with_runner(
+            repo_path,
+            "review/topic".to_string(),
+            &command_runner,
+        )
+        .await
+        .expect_err("remote config failure should not fall back to origin");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::CommandFailed { command, stderr }
+                if command == "git config --get branch.main.remote"
+                    && stderr.contains("malformed branch config")
+        ));
+    }
+
+    #[tokio::test]
+    async fn push_without_upstream_reuses_configured_remote() {
+        // Arrange
+        let repo_path = PathBuf::from("test-repo");
+        let mut command_runner = MockAsyncGitCommandRunner::new();
+        let mut sequence = Sequence::new();
+        let expectations = [
+            (
+                vec!["push", "--force-with-lease"],
+                async_git_output(128, Vec::new(), "fatal: no upstream branch"),
+            ),
+            (
+                vec!["rev-parse", "--abbrev-ref", "HEAD"],
+                async_git_output(0, "main\n", Vec::new()),
+            ),
+            (
+                vec!["config", "--get", "branch.main.remote"],
+                async_git_output(0, "review-remote\n", Vec::new()),
+            ),
+            (
+                vec![
+                    "push",
+                    "--force-with-lease",
+                    "--set-upstream",
+                    "review-remote",
+                    "HEAD",
+                ],
+                async_git_output(0, Vec::new(), Vec::new()),
+            ),
+            (
+                vec!["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                async_git_output(0, "review-remote/main\n", Vec::new()),
+            ),
+        ];
+        for (arguments, output) in expectations {
+            let arguments = arguments
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            command_runner
+                .expect_run()
+                .with(function(move |command: &AsyncGitCommand| {
+                    command.arguments == arguments
+                }))
+                .times(1)
+                .in_sequence(&mut sequence)
+                .return_once(move |_| Box::pin(async move { Ok(output) }));
+        }
+
+        // Act
+        let upstream_reference = push_current_branch_with_runner(repo_path, &command_runner)
+            .await
+            .expect("configured remote push should succeed");
+
+        // Assert
+        assert_eq!(upstream_reference, "review-remote/main");
     }
 
     #[test]

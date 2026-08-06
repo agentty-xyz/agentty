@@ -85,16 +85,28 @@ fi
 
 if [ "$1" = "api" ] && [ "$2" = "--hostname" ] && [ "$4" = "graphql" ]; then
   case "$*" in
-    *"number=42"*)
+    *"reviewThreads(first:"*"number=42"*)
       sleep 3
       cat <<'JSON'
-{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"alice"},"body":"General **review** comment."}]},"reviewThreads":{"nodes":[{"id":"thread-navigation","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":7,"path":"crates/agentty/src/ui/page/review_detail.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please show this selected review comment."}]}}]}}}}}
+[{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-navigation","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":7,"path":"crates/agentty/src/ui/page/review_detail.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please show this selected review comment."}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
 JSON
       exit 0
       ;;
-    *"number=43"*)
+    *"reviewThreads(first:"*"number=43"*)
       cat <<'JSON'
-{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviewThreads":{"nodes":[]}}}}}
+[{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
+JSON
+      exit 0
+      ;;
+    *"comments(first:"*"number=42"*)
+      cat <<'JSON'
+[{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"alice"},"body":"General **review** comment."}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
+JSON
+      exit 0
+      ;;
+    *"comments(first:"*"number=43"*)
+      cat <<'JSON'
+[{"data":{"repository":{"pullRequest":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
 JSON
       exit 0
       ;;
