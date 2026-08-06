@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use ratatui::Terminal;
-use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::backend::{Backend, ClearType, CrosstermBackend};
 use tokio::sync::mpsc;
 
 use crate::app::{App, OrchestrationCoordinator, OrchestrationSchedule};
@@ -293,13 +293,37 @@ where
     }
 
     let snapshot = app.view_snapshot();
+    if presentation.terminal_clear_needed(&snapshot) {
+        clear_terminal_for_surface_change(terminal)?;
+    }
     terminal
         .draw(|frame| {
             presentation.render(&snapshot, frame);
         })
         .map_err(backend_err)?;
+    presentation.record_rendered_surface(&snapshot);
     app.clear_redraw();
     *last_draw_at = clock.now_instant();
+
+    Ok(())
+}
+
+/// Clears the fullscreen backend and invalidates Ratatui's previous frame.
+///
+/// `Terminal::clear()` snapshots the cursor through an interactive terminal
+/// query. Agentty renders in the alternate fullscreen buffer, so clearing the
+/// full backend directly preserves the cursor while avoiding that query. The
+/// extra buffer swap resets Ratatui's previous frame and forces the following
+/// draw to repaint every rendered cell.
+fn clear_terminal_for_surface_change<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()>
+where
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    terminal
+        .backend_mut()
+        .clear_region(ClearType::All)
+        .map_err(backend_err)?;
+    terminal.swap_buffers();
 
     Ok(())
 }
@@ -319,7 +343,7 @@ mod tests {
     use std::time::Duration;
 
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
+    use ratatui::backend::{Backend, TestBackend, WindowSize};
     use ratatui::buffer::Cell;
     use ratatui::layout::{Position, Size};
     use testty::session::PtySessionBuilder;
@@ -584,22 +608,26 @@ mod tests {
             .collect()
     }
 
-    /// Test backend wrapper that counts each `Terminal::draw()` flush.
+    /// Test backend wrapper that counts terminal clears and draw flushes.
     struct CountingBackend {
+        clear_count: Arc<AtomicUsize>,
         draw_count: Arc<AtomicUsize>,
         inner: TestBackend,
     }
 
     impl CountingBackend {
         /// Creates a counting wrapper around one `TestBackend`.
-        fn new(width: u16, height: u16) -> (Self, Arc<AtomicUsize>) {
+        fn new(width: u16, height: u16) -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+            let clear_count = Arc::new(AtomicUsize::new(0));
             let draw_count = Arc::new(AtomicUsize::new(0));
 
             (
                 Self {
+                    clear_count: Arc::clone(&clear_count),
                     draw_count: Arc::clone(&draw_count),
                     inner: TestBackend::new(width, height),
                 },
+                clear_count,
                 draw_count,
             )
         }
@@ -640,6 +668,7 @@ mod tests {
         }
 
         fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+            self.clear_count.fetch_add(1, Ordering::Relaxed);
             self.inner.clear_region(clear_type)
         }
 
@@ -658,6 +687,63 @@ mod tests {
         fn flush(&mut self) -> Result<(), Self::Error> {
             self.inner.flush()
         }
+    }
+
+    /// Verifies base-page transitions clear stale terminal cells while
+    /// redraws within one page keep Ratatui's normal diff rendering.
+    #[tokio::test]
+    async fn render_frame_clears_terminal_only_when_base_page_changes() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let (backend, clear_count, _draw_count) = CountingBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
+        let clock = crate::infra::clock::RealClock;
+        let mut last_draw_at = clock.now_instant();
+        let presentation = PresentationState::default();
+
+        // Act
+        render_frame(
+            &mut app,
+            &mut terminal,
+            &clock,
+            &mut last_draw_at,
+            &presentation,
+        )
+        .expect("initial list frame should render");
+        app.mode = AppMode::View {
+            session_id: "missing-session".into(),
+            scroll_offset: None,
+        };
+        app.mark_dirty();
+        let repeated_clear_decisions = {
+            let snapshot = app.view_snapshot();
+
+            [
+                presentation.terminal_clear_needed(&snapshot),
+                presentation.terminal_clear_needed(&snapshot),
+            ]
+        };
+        render_frame(
+            &mut app,
+            &mut terminal,
+            &clock,
+            &mut last_draw_at,
+            &presentation,
+        )
+        .expect("session frame should render");
+        app.mark_dirty();
+        render_frame(
+            &mut app,
+            &mut terminal,
+            &clock,
+            &mut last_draw_at,
+            &presentation,
+        )
+        .expect("same session page should redraw");
+
+        // Assert
+        assert_eq!(repeated_clear_decisions, [true, true]);
+        assert_eq!(clear_count.load(Ordering::Relaxed), 1);
     }
 
     /// Verifies that `run_with_backend` drives the main loop with a
@@ -775,7 +861,7 @@ mod tests {
     async fn run_with_backend_skips_idle_redraws_without_tick_driven_ui() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-        let (backend, draw_count) = CountingBackend::new(80, 24);
+        let (backend, _clear_count, draw_count) = CountingBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let run_future = run_with_backend(&mut app, &mut terminal, &mut event_rx);
