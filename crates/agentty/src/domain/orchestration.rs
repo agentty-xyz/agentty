@@ -362,7 +362,7 @@ pub struct OrchestrationPlanTask {
     pub task_key: String,
     /// Short user-facing task title.
     pub title: String,
-    /// Literal repository-relative files or directories owned by the task.
+    /// Best-effort repository-relative files or directories expected to change.
     pub touched_areas: Vec<String>,
 }
 
@@ -370,14 +370,13 @@ pub struct OrchestrationPlanTask {
 ///
 /// # Errors
 ///
-/// Returns a user-facing reason when the plan is too small, incomplete, uses
-/// invalid task keys or paths, or gives different tasks overlapping scopes.
+/// Returns a user-facing reason when the plan is too small, incomplete, or uses
+/// invalid task keys or planning paths.
 pub fn validate_subtasks(subtasks: &[OrchestrationPlanTask], is_retry: bool) -> Result<(), String> {
     if subtasks.len() < 2 && !is_retry {
         return Err("a meaningful orchestration requires at least two subtasks.".to_string());
     }
     let mut task_keys = HashSet::new();
-    let mut scopes = Vec::<(&str, String)>::new();
     for subtask in subtasks {
         if !is_kebab_case_task_key(&subtask.task_key)
             || !task_keys.insert(subtask.task_key.as_str())
@@ -386,34 +385,23 @@ pub fn validate_subtasks(subtasks: &[OrchestrationPlanTask], is_retry: bool) -> 
         }
         if subtask.prompt.trim().is_empty()
             || subtask.title.trim().is_empty()
-            || subtask.touched_areas.is_empty()
             || subtask
                 .acceptance_criteria
                 .iter()
                 .all(|criterion| criterion.trim().is_empty())
         {
             return Err(format!(
-                "subtask `{}` needs a title, standalone prompt, acceptance criteria, and touched \
-                 areas.",
+                "subtask `{}` needs a title, standalone prompt, and acceptance criteria.",
                 subtask.task_key
             ));
         }
         for area in &subtask.touched_areas {
-            let scope = normalized_scope(area).map_err(|reason| {
+            normalized_scope(area).map_err(|reason| {
                 format!(
                     "subtask `{}` has invalid touched area `{area}`: {reason}.",
                     subtask.task_key
                 )
             })?;
-            if let Some((other_key, _)) = scopes.iter().find(|(other_key, other_scope)| {
-                *other_key != subtask.task_key && scopes_overlap(other_scope, &scope)
-            }) {
-                return Err(format!(
-                    "subtasks `{other_key}` and `{}` overlap at `{area}`.",
-                    subtask.task_key
-                ));
-            }
-            scopes.push((subtask.task_key.as_str(), scope));
         }
     }
 
@@ -443,16 +431,6 @@ fn normalized_scope(area: &str) -> Result<String, &'static str> {
     }
 
     Ok(normalized.to_string())
-}
-
-fn scopes_overlap(left: &str, right: &str) -> bool {
-    left == right
-        || left
-            .strip_prefix(right)
-            .is_some_and(|suffix| suffix.starts_with('/'))
-        || right
-            .strip_prefix(left)
-            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 impl fmt::Display for OrchestrationTaskStatus {

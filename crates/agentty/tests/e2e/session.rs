@@ -1697,15 +1697,19 @@ case "$input" in
   *"Orchestration verification gate"*)
     result='{\"answer\":\"All workers finished. Review and merge protocol before UI.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Orchestration finished.\",\"turn\":\"Rolled up both worker results.\"},\"verification_verdicts\":[{\"reason\":\"Protocol criteria pass\",\"task_key\":\"protocol\",\"verdict\":\"pass\"},{\"reason\":\"UI criteria pass\",\"task_key\":\"ui\",\"verdict\":\"pass\"}]}'
     ;;
-  *"Continue protocol outside its declared scope"*)
-    result='{\"answer\":\"I will route that feedback.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Continue protocol outside its declared scope.\",\"touched_areas\":[\"docs/\"],\"acceptance_criteria\":[\"Apply the requested feedback\"]}],\"summary\":null}'
+  *"You are the controller for an Agentty orchestration"*"Continue protocol beyond its expected areas"*)
+    result='{\"answer\":\"I will route that feedback to the existing worker.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Continue protocol beyond its expected areas.\",\"touched_areas\":[\"docs/\"],\"acceptance_criteria\":[\"Apply the requested feedback\"]}],\"summary\":null}'
     ;;
   *"You are the controller for an Agentty orchestration"*)
-    result='{\"answer\":\"I propose independent protocol and UI workers, merged in that order.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol slice.\",\"touched_areas\":[\"crates/ag-protocol/\"],\"acceptance_criteria\":[\"Protocol worker completes\"]},{\"task_key\":\"ui\",\"title\":\"UI worker\",\"prompt\":\"Implement the UI slice.\",\"touched_areas\":[\"crates/agentty/src/ui/\"],\"acceptance_criteria\":[\"UI worker completes\"]}],\"summary\":null}'
+    result='{\"answer\":\"I propose independent protocol and UI workers, merged in that order.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol slice.\",\"touched_areas\":[\"crates/shared/\"],\"acceptance_criteria\":[\"Protocol worker completes\"]},{\"task_key\":\"ui\",\"title\":\"UI worker\",\"prompt\":\"Implement the UI slice.\",\"touched_areas\":[\"crates/shared/\"],\"acceptance_criteria\":[\"UI worker completes\"]}],\"summary\":null}'
     ;;
   *"Implement the protocol findings on the same worker branch"*)
     sleep 4
     result='{\"answer\":\"Protocol review suggestions implemented.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Protocol review suggestions implemented.\",\"turn\":\"Continued the existing worker and checked the findings.\"}}'
+    ;;
+  *"Continue protocol beyond its expected areas"*"Expected touched areas (planning references): [\"docs/\"]"*)
+    sleep 4
+    result='{\"answer\":\"Protocol feedback implemented beyond the expected areas.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Protocol feedback implemented.\",\"turn\":\"Continued the existing worker beyond its planning references.\"}}'
     ;;
   *"Task key: protocol"*)
     sleep 4
@@ -4140,7 +4144,7 @@ fn session_orchestration_runs_approved_parallel_wave() -> E2eResult {
         .setup(install_orchestration_claude_stub)
         .zola(
             "Parallel orchestration",
-            "Approve a file-disjoint plan, watch workers run, and review the roll-up.",
+            "Approve an independent plan, watch workers run, and review the roll-up.",
             35,
         )
         .run(build_orchestration_scenario, |frame, report| {
@@ -4183,7 +4187,7 @@ fn session_orchestration_runs_approved_parallel_wave() -> E2eResult {
 
             let list_frame = common::frame_from_capture(&report.captures[3]);
             assert_running_orchestration_session_list(&list_frame);
-            assert_orchestration_rollup_and_questions(frame, report);
+            assert_orchestration_rollup_and_references(frame, report);
         })?;
 
     Ok(())
@@ -4205,7 +4209,7 @@ fn build_orchestration_scenario(scenario: Scenario) -> Scenario {
         .wait_for_text("Phase: AwaitingApproval", 30000)
         .capture_labeled(
             "plan_approval",
-            "Review the file-disjoint plan before fan-out",
+            "Review the independent plan before fan-out",
         )
         .press_key("a")
         .wait_for_stable_frame(500, 5000)
@@ -4249,16 +4253,17 @@ fn build_orchestration_scenario(scenario: Scenario) -> Scenario {
         )
         .press_key("Enter")
         .wait_for_text("Tab: focus | Enter: send", 5000)
-        .write_text("Continue protocol outside its declared scope")
+        .write_text("Continue protocol beyond its expected areas")
         .press_key("Enter")
-        .wait_for_text("Wait, then continue this task", 30000)
+        .wait_for_text("Protocol worker [protocol]: continuing", 30000)
         .capture_labeled(
-            "orchestration_question_options",
-            "Choose an actionable response to routing feedback",
+            "orchestration_reference_areas",
+            "Continue work beyond its planning references",
         )
+        .wait_for_text("Phase: AwaitingIntegration", 30000)
 }
 
-fn assert_orchestration_rollup_and_questions(frame: &TerminalFrame, report: &ProofReport) {
+fn assert_orchestration_rollup_and_references(frame: &TerminalFrame, report: &ProofReport) {
     let rollup_frame = common::frame_from_capture(&report.captures[4]);
     let rollup_full = Region::full(rollup_frame.cols(), rollup_frame.rows());
     assertion::assert_text_in_region(&rollup_frame, "Phase: AwaitingIntegration", &rollup_full);
@@ -4272,7 +4277,11 @@ fn assert_orchestration_rollup_and_questions(frame: &TerminalFrame, report: &Pro
         "Protocol worker [protocol]: awaiting integration",
         &rollup_full,
     );
-    assertion::assert_text_in_region(&rollup_frame, "areas compliant; verified", &rollup_full);
+    assertion::assert_text_in_region(
+        &rollup_frame,
+        "within expected areas; verified",
+        &rollup_full,
+    );
     assertion::assert_not_visible(&rollup_frame, "d: diff");
 
     let approach_frame = common::frame_from_capture(&report.captures[5]);
@@ -4303,11 +4312,17 @@ fn assert_orchestration_rollup_and_questions(frame: &TerminalFrame, report: &Pro
         &reverification_full,
     );
 
+    let reference_frame = common::frame_from_capture(&report.captures[8]);
+    let reference_full = Region::full(reference_frame.cols(), reference_frame.rows());
+    assertion::assert_text_in_region(
+        &reference_frame,
+        "Protocol worker [protocol]: continuing",
+        &reference_full,
+    );
+
     let full = Region::full(frame.cols(), frame.rows());
-    assertion::assert_text_in_region(frame, "Question 1/1", &full);
-    assertion::assert_text_in_region(frame, "Wait, then continue this task", &full);
-    assertion::assert_text_in_region(frame, "Create a separate follow-up task", &full);
-    assertion::assert_text_in_region(frame, "Drop this feedback", &full);
+    assertion::assert_text_in_region(frame, "Phase: AwaitingIntegration", &full);
+    assertion::assert_not_visible(frame, "Question 1/1");
 }
 
 /// Verifies that multiline campaign progress preserves the title column in

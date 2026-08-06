@@ -229,8 +229,8 @@ pub(crate) async fn persist_controller_plan(
     Ok(())
 }
 
-/// Computes and persists touched-area compliance for one settled managed
-/// child through the injected Git boundary.
+/// Computes and persists a touched-area planning comparison for one settled
+/// managed child through the injected Git boundary.
 pub(crate) async fn persist_managed_child_area_compliance(
     db: &AppRepositories,
     git_client: &dyn GitClient,
@@ -251,13 +251,19 @@ pub(crate) async fn persist_managed_child_area_compliance(
         .diff_changed_files(worktree.to_path_buf(), scope.base_branch)
         .await
         .map_err(|error| error.to_string())?;
-    let area_violations = area_violations(&changed_files, &touched_areas);
+    let (areas_compliant, area_violations) = if touched_areas.is_empty() {
+        (None, Vec::new())
+    } else {
+        let area_violations = area_violations(&changed_files, &touched_areas);
+
+        (Some(area_violations.is_empty()), area_violations)
+    };
     let serialized_violations =
         serde_json::to_string(&area_violations).map_err(|error| error.to_string())?;
     db.orchestrations()
         .update_orchestration_task_area_compliance(
             scope.id,
-            area_violations.is_empty(),
+            areas_compliant,
             &serialized_violations,
         )
         .await
@@ -370,13 +376,20 @@ async fn route_active_subtasks(
     for subtask in subtasks {
         let acceptance_criteria = serde_json::to_string(&subtask.acceptance_criteria)
             .unwrap_or_else(|_| "[]".to_string());
+        let touched_areas =
+            serde_json::to_string(&subtask.touched_areas).unwrap_or_else(|_| "[]".to_string());
         if let Some(task) = existing_by_key.get(subtask.task_key.as_str()) {
             if task_as_subtask(task).as_ref() == Some(&subtask) {
                 continue;
             }
             if !db
                 .orchestrations()
-                .queue_orchestration_continuation(task.id, &subtask.prompt, &acceptance_criteria)
+                .queue_orchestration_continuation(
+                    task.id,
+                    &subtask.prompt,
+                    &acceptance_criteria,
+                    &touched_areas,
+                )
                 .await?
             {
                 response.subtasks.clear();
@@ -398,8 +411,7 @@ async fn route_active_subtasks(
                 session_orchestration_id: orchestration.id,
                 task_key: subtask.task_key,
                 title: subtask.title,
-                touched_areas: serde_json::to_string(&subtask.touched_areas)
-                    .unwrap_or_else(|_| "[]".to_string()),
+                touched_areas,
             })
             .await?;
         db.orchestrations()
@@ -497,8 +509,6 @@ fn active_subtask_validation_question(
         if task_as_subtask(task).as_ref() == Some(subtask) {
             continue;
         }
-        let touched_areas =
-            serde_json::to_string(&subtask.touched_areas).unwrap_or_else(|_| "[]".to_string());
         let can_continue = matches!(
             task_status(task),
             Some(
@@ -507,7 +517,7 @@ fn active_subtask_validation_question(
                     | OrchestrationTaskStatus::IntegrationFailed
             )
         );
-        if task.touched_areas != touched_areas || !can_continue {
+        if !can_continue {
             return Some(continuation_routing_question(&subtask.task_key));
         }
     }
@@ -518,8 +528,8 @@ fn active_subtask_validation_question(
 fn continuation_routing_question(task_key: &str) -> QuestionItem {
     QuestionItem::with_options(
         format!(
-            "Task `{task_key}` cannot be continued in place. Keep feedback within its declared \
-             areas and wait until the live child settles, or use a new task key."
+            "Task `{task_key}` cannot be continued in place until its live child settles. Wait \
+             for it, or use a new task key."
         ),
         vec![
             "Wait, then continue this task".to_string(),
@@ -1727,11 +1737,22 @@ fn bounded_snapshot_value(value: &str, max_chars: usize) -> (String, bool) {
     (truncated, true)
 }
 
+#[derive(Clone, Copy)]
+enum TouchedAreaHints<'a> {
+    Empty,
+    Invalid,
+    Provided(&'a str),
+}
+
 fn campaign_task_evidence(task: &SessionOrchestrationTaskRow) -> String {
-    let compliance = match task.areas_compliant {
-        Some(true) => "; areas compliant".to_string(),
-        Some(false) => format!("; out-of-scope: {}", task.area_violations),
-        None => String::new(),
+    let compliance = match touched_area_hints(task) {
+        TouchedAreaHints::Empty => "; areas not provided".to_string(),
+        TouchedAreaHints::Invalid => "; invalid area hints".to_string(),
+        TouchedAreaHints::Provided(_) => match task.areas_compliant {
+            Some(true) => "; within expected areas".to_string(),
+            Some(false) => format!("; additional paths: {}", task.area_violations),
+            None => String::new(),
+        },
     };
     let verification = match (
         task.verification_verdict.as_deref(),
@@ -1762,6 +1783,7 @@ fn rollup_message(goal_statement: &str, tasks: &[SessionOrchestrationTaskRow]) -
     let mut output_tokens = 0_u64;
     let mut merge_order = Vec::new();
     for task in tasks {
+        let area_hints = touched_area_hints(task);
         let branch = task
             .child_session_id
             .as_deref()
@@ -1777,10 +1799,10 @@ fn rollup_message(goal_statement: &str, tasks: &[SessionOrchestrationTaskRow]) -
             format!("Task `{}` — {}", task.task_key, task.status),
             format!("Branch: `{branch}`"),
             format!("Acceptance criteria: {}", task.acceptance_criteria),
-            format!("Declared areas: {}", task.touched_areas),
+            format!("Expected areas: {}", expected_areas_evidence(area_hints)),
             format!(
-                "Touched-area compliance: {}",
-                area_compliance_evidence(task)
+                "Expected-area comparison: {}",
+                area_compliance_evidence(task, area_hints)
             ),
             format!(
                 "Diffstat: +{} -{} ({})",
@@ -1815,11 +1837,36 @@ fn rollup_message(goal_statement: &str, tasks: &[SessionOrchestrationTaskRow]) -
     lines.join("\n")
 }
 
-fn area_compliance_evidence(task: &SessionOrchestrationTaskRow) -> String {
+fn area_compliance_evidence(
+    task: &SessionOrchestrationTaskRow,
+    area_hints: TouchedAreaHints<'_>,
+) -> String {
+    match area_hints {
+        TouchedAreaHints::Empty => return "not checked (areas not provided)".to_string(),
+        TouchedAreaHints::Invalid => return "not checked (invalid areas)".to_string(),
+        TouchedAreaHints::Provided(_) => {}
+    }
+
     match task.areas_compliant {
-        Some(true) => "compliant".to_string(),
-        Some(false) => format!("VIOLATION {}", task.area_violations),
-        None => "unavailable".to_string(),
+        Some(true) => "within expected areas".to_string(),
+        Some(false) => format!("additional paths {}", task.area_violations),
+        None => "not checked".to_string(),
+    }
+}
+
+fn expected_areas_evidence(area_hints: TouchedAreaHints<'_>) -> &str {
+    match area_hints {
+        TouchedAreaHints::Empty => "not provided",
+        TouchedAreaHints::Invalid => "invalid JSON",
+        TouchedAreaHints::Provided(touched_areas) => touched_areas,
+    }
+}
+
+fn touched_area_hints(task: &SessionOrchestrationTaskRow) -> TouchedAreaHints<'_> {
+    match serde_json::from_str::<Vec<String>>(&task.touched_areas) {
+        Ok(areas) if areas.is_empty() => TouchedAreaHints::Empty,
+        Ok(_) => TouchedAreaHints::Provided(&task.touched_areas),
+        Err(_) => TouchedAreaHints::Invalid,
     }
 }
 
@@ -1835,20 +1882,25 @@ fn continuation_operation_id(task: &SessionOrchestrationTaskRow) -> String {
 }
 
 fn continuation_message(task: &SessionOrchestrationTaskRow) -> String {
+    let area_hints = touched_area_hints(task);
+
     format!(
         "Continue task `{}` on the same branch. Address this approved feedback:\n\n{}\n\nRe-check \
-         these acceptance criteria before reporting completion: {}",
+         these acceptance criteria before reporting completion: {}\n\nExpected touched areas \
+         (planning references): {}",
         task.task_key,
         task.continuation_prompt
             .as_deref()
             .unwrap_or("Complete the requested follow-up"),
-        task.acceptance_criteria
+        task.acceptance_criteria,
+        expected_areas_evidence(area_hints)
     )
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::{HashSet, VecDeque};
+    use std::error::Error;
     use std::sync::Mutex;
 
     use ag_agent::{AgentKind, ReasoningLevel};
@@ -2273,11 +2325,27 @@ mod tests {
         AgentResponse,
         OrchestrationSessionMetadata,
     ) {
+        persist_approved_plan(
+            database,
+            vec![
+                subtask("protocol", &["crates/ag-protocol/"]),
+                subtask("ui", &["crates/agentty/src/ui/"]),
+            ],
+        )
+        .await
+    }
+
+    async fn persist_approved_plan(
+        database: &AppRepositories,
+        subtasks: Vec<SubtaskItem>,
+    ) -> (
+        SessionOrchestrationRow,
+        Vec<SessionOrchestrationTaskRow>,
+        AgentResponse,
+        OrchestrationSessionMetadata,
+    ) {
         let mut response = AgentResponse::plain("Plan");
-        response.subtasks = vec![
-            subtask("protocol", &["crates/ag-protocol/"]),
-            subtask("ui", &["crates/agentty/src/ui/"]),
-        ];
+        response.subtasks = subtasks;
         persist_controller_plan(database, "controller", &mut response)
             .await
             .expect("plan should persist");
@@ -2403,11 +2471,11 @@ mod tests {
     }
 
     #[test]
-    fn validates_file_disjoint_multi_task_plans() {
+    fn validates_independent_multi_task_plans_with_shared_area_hints() {
         // Arrange
         let tasks = [
-            subtask("protocol", &["crates/ag-protocol/"]),
-            subtask("ui", &["crates/agentty/src/ui/"]),
+            subtask("protocol", &["crates/shared/"]),
+            subtask("ui", &["crates/shared/"]),
         ];
 
         // Act
@@ -2418,7 +2486,7 @@ mod tests {
     }
 
     #[test]
-    fn active_follow_up_validation_covers_conflicts_and_live_task_constraints() {
+    fn active_follow_up_validation_allows_shared_hints_and_checks_live_tasks() {
         // Arrange
         let mut active = orchestration(2);
         let ready = task(1, "protocol", OrchestrationTaskStatus::Ready, Some("child"));
@@ -2426,16 +2494,16 @@ mod tests {
         running.status = OrchestrationTaskStatus::Running.to_string();
         let mut changed = subtask("protocol", &["protocol/"]);
         changed.prompt = "Apply feedback".to_string();
-        let overlapping = subtask("docs", &["protocol/"]);
+        let shared_hint = subtask("docs", &["protocol/"]);
         let mut invalid = subtask("invalid", &["invalid/"]);
         invalid.prompt.clear();
 
         // Act
         let incomplete = active_subtask_validation_question(&active, &[], &[invalid]);
-        let conflict = active_subtask_validation_question(
+        let shared_hint_result = active_subtask_validation_question(
             &active,
             std::slice::from_ref(&ready),
-            std::slice::from_ref(&overlapping),
+            std::slice::from_ref(&shared_hint),
         );
         active.status = OrchestrationStatus::Integrating.to_string();
         let merging = task(
@@ -2469,11 +2537,7 @@ mod tests {
                 .as_ref()
                 .is_some_and(|question| question.text.contains("needs a title"))
         );
-        assert!(
-            conflict
-                .as_ref()
-                .is_some_and(|question| question.text.contains("overlap at"))
-        );
+        assert_eq!(shared_hint_result, None);
         assert!(
             integration
                 .as_ref()
@@ -2528,24 +2592,13 @@ mod tests {
         follow_up.prompt = "Apply feedback".to_string();
         let mut response = AgentResponse::plain("Continue the task");
         response.subtasks = vec![follow_up];
-        let mut invalid_response = AgentResponse::plain("Invalid continuation");
-        invalid_response.subtasks = vec![subtask("new-scope", &["crates/ag-protocol/"])];
 
         // Act
-        route_active_subtasks(&database, &orchestration, &mut invalid_response)
-            .await
-            .expect("invalid follow-up routing should complete");
         route_active_subtasks(&database, &orchestration, &mut response)
             .await
             .expect("follow-up routing should complete");
 
         // Assert
-        assert!(invalid_response.subtasks.is_empty());
-        assert!(invalid_response.questions[0].text.contains("overlap at"));
-        assert_eq!(
-            invalid_response.questions[0].options,
-            ["Revise the follow-up", "Drop the follow-up"]
-        );
         assert!(response.subtasks.is_empty());
         assert!(response.questions[0].text.contains("cannot be continued"));
         assert_eq!(
@@ -2625,13 +2678,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_single_overlapping_and_wildcard_task_plans() {
+    fn accepts_area_hints_but_rejects_invalid_plan_details() {
         // Arrange
         let single = [subtask("only", &["src/"])];
         let overlap = [
             subtask("all-ui", &["src/ui/"]),
             subtask("page", &["src/ui/page/session.rs"]),
         ];
+        let no_areas = [subtask("logic", &[]), subtask("docs", &[])];
         let wildcard_overlap = [
             subtask("pattern", &["src/foo*.rs"]),
             subtask("file", &["src/foobar.rs"]),
@@ -2654,8 +2708,8 @@ mod tests {
         let single_error =
             validate_subtasks(&single, false).expect_err("single task should be rejected");
         let retry_result = validate_subtasks(&single, true);
-        let overlap_error =
-            validate_subtasks(&overlap, false).expect_err("overlap should be rejected");
+        let overlap_result = validate_subtasks(&overlap, false);
+        let no_areas_result = validate_subtasks(&no_areas, false);
         let wildcard_error = validate_subtasks(&wildcard_overlap, false)
             .expect_err("wildcard touched areas should be rejected");
         let invalid_area_error = validate_subtasks(&invalid_area, false)
@@ -2668,7 +2722,8 @@ mod tests {
         // Assert
         assert!(single_error.contains("at least two"));
         assert_eq!(retry_result, Ok(()));
-        assert!(overlap_error.contains("overlap"));
+        assert_eq!(overlap_result, Ok(()));
+        assert_eq!(no_areas_result, Ok(()));
         assert!(wildcard_error.contains("wildcard patterns are not supported"));
         assert!(invalid_area_error.contains("repository-relative path"));
         assert!(key_error.contains("kebab-case"));
@@ -2838,8 +2893,10 @@ mod tests {
         let bounded = bounded_goal(&long_goal);
         let fallback = bounded_goal("  ");
         let rollup = rollup_message("Complete the campaign", &[completed]);
-        let compliant_evidence = area_compliance_evidence(&compliant);
-        let unavailable_evidence = area_compliance_evidence(&unavailable);
+        let compliant_evidence =
+            area_compliance_evidence(&compliant, touched_area_hints(&compliant));
+        let unavailable_evidence =
+            area_compliance_evidence(&unavailable, touched_area_hints(&unavailable));
         let first_verification = rollup_operation_id(7, 1);
         let second_verification = rollup_operation_id(7, 2);
 
@@ -2849,10 +2906,35 @@ mod tests {
         assert_eq!(fallback, "Complete the approved orchestration plan");
         assert!(rollup.contains("Campaign goal: Complete the campaign"));
         assert!(rollup.contains("no known diff"));
-        assert!(rollup.contains(r#"Touched-area compliance: VIOLATION ["README.md"]"#));
-        assert_eq!(compliant_evidence, "compliant");
-        assert_eq!(unavailable_evidence, "unavailable");
+        assert!(rollup.contains(r#"Expected-area comparison: additional paths ["README.md"]"#));
+        assert_eq!(compliant_evidence, "within expected areas");
+        assert_eq!(unavailable_evidence, "not checked");
         assert_ne!(first_verification, second_verification);
+    }
+
+    #[test]
+    fn invalid_touched_area_hints_are_reported_as_unchecked() {
+        // Arrange
+        let mut invalid = task(
+            2,
+            "invalid-hints",
+            OrchestrationTaskStatus::Ready,
+            Some("child"),
+        );
+        invalid.touched_areas = "invalid JSON".to_string();
+
+        // Act
+        let campaign_evidence = campaign_task_evidence(&invalid);
+        let rollup = rollup_message("Complete the campaign", std::slice::from_ref(&invalid));
+        let continuation = continuation_message(&invalid);
+
+        // Assert
+        assert_eq!(campaign_evidence, "; invalid area hints");
+        assert!(rollup.contains("Expected areas: invalid JSON"));
+        assert!(rollup.contains("Expected-area comparison: not checked (invalid areas)"));
+        assert!(
+            continuation.contains("Expected touched areas (planning references): invalid JSON")
+        );
     }
 
     #[tokio::test]
@@ -3871,6 +3953,7 @@ mod tests {
             call.starts_with("rollup:child-protocol:")
                 && call.contains("Continue task `protocol` on the same branch")
                 && call.contains("Add the missing validation")
+                && call.contains("Expected touched areas (planning references): [\"protocol/\"]")
         }));
     }
 
@@ -4069,8 +4152,8 @@ mod tests {
             assert!(message.contains(&format!("- {status} [{status}]: {label}")));
         }
         assert!(message.contains("- invalid [invalid]: unknown"));
-        assert!(message.contains("areas compliant; verified"));
-        assert!(message.contains(r#"out-of-scope: ["README.md"]; flagged: Wrong file"#));
+        assert!(message.contains("within expected areas; verified"));
+        assert!(message.contains(r#"additional paths: ["README.md"]; flagged: Wrong file"#));
         assert!(message.contains("Creating [Creating]: starting; flagged"));
     }
 
@@ -4486,7 +4569,7 @@ mod tests {
         assert!(
             controller_turn
                 .agent_text()
-                .contains("After settled workers report review or")
+                .contains("planning references, not exclusive boundaries")
         );
         assert!(
             controller_turn
@@ -4675,7 +4758,7 @@ mod tests {
             )
             .await
             .expect("failed to settle existing task");
-        let mut continuation = subtask("protocol", &["crates/ag-protocol/"]);
+        let mut continuation = subtask("protocol", &["docs/"]);
         continuation.prompt = "Add the missing validation".to_string();
         continuation.acceptance_criteria = vec!["Validation is covered".to_string()];
         let mut response = AgentResponse::plain("Routing feedback and new scope");
@@ -4699,6 +4782,7 @@ mod tests {
             .iter()
             .find(|task| task.task_key == "protocol")
             .expect("continued task should remain");
+        let continuation_prompt = continued.continuation_prompt.as_deref();
         let proposed = routed_tasks
             .iter()
             .find(|task| task.task_key == "docs")
@@ -4725,10 +4809,8 @@ mod tests {
             Some("child-protocol")
         );
         assert_eq!(continued.continuation_generation, 1);
-        assert_eq!(
-            continued.continuation_prompt.as_deref(),
-            Some("Add the missing validation")
-        );
+        assert_eq!(continuation_prompt, Some("Add the missing validation"));
+        assert_eq!(continued.touched_areas, r#"["docs/"]"#);
         assert_eq!(
             proposed.status,
             OrchestrationTaskStatus::Proposed.to_string()
@@ -4944,7 +5026,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn managed_child_evidence_records_paths_outside_declared_areas() {
+    async fn managed_child_evidence_records_paths_outside_expected_area_hints() {
         // Arrange
         let (database, project_id) = controller_database().await;
         let (orchestration, tasks, _, _) = persist_approved_two_task_plan(&database).await;
@@ -5017,6 +5099,60 @@ mod tests {
         // Assert
         assert_eq!(task.areas_compliant, Some(true));
         assert_eq!(task.area_violations, "[]");
+    }
+
+    #[tokio::test]
+    async fn changed_managed_child_without_area_hints_remains_unchecked()
+    -> Result<(), Box<dyn Error>> {
+        // Arrange
+        let (database, project_id) = controller_database().await;
+        let (orchestration, tasks, _, _) = persist_approved_plan(
+            &database,
+            vec![
+                subtask("protocol", &[]),
+                subtask("ui", &["crates/agentty/src/ui/"]),
+            ],
+        )
+        .await;
+        assert!(
+            database
+                .orchestrations()
+                .claim_orchestration_task(tasks[0].id)
+                .await?
+        );
+        insert_managed_child(&database, project_id, tasks[0].id, "child-protocol").await;
+        let mut git_client = MockGitClient::new();
+        git_client
+            .expect_diff_changed_files()
+            .once()
+            .return_once(|_, _| Box::pin(async { Ok(vec!["README.md".to_string()]) }));
+
+        // Act
+        persist_managed_child_area_compliance(
+            &database,
+            &git_client,
+            "child-protocol",
+            Path::new("/tmp/child-protocol"),
+        )
+        .await
+        .map_err(std::io::Error::other)?;
+        let task = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration.id)
+            .await?
+            .into_iter()
+            .find(|task| task.task_key == "protocol")
+            .ok_or_else(|| std::io::Error::other("protocol task should exist"))?;
+        let rollup = rollup_message("Complete the campaign", std::slice::from_ref(&task));
+
+        // Assert
+        assert_eq!(task.areas_compliant, None);
+        assert_eq!(task.area_violations, "[]");
+        assert_eq!(campaign_task_evidence(&task), "; areas not provided");
+        assert!(rollup.contains("Expected areas: not provided"));
+        assert!(rollup.contains("Expected-area comparison: not checked (areas not provided)"));
+
+        Ok(())
     }
 
     #[tokio::test]
