@@ -11,6 +11,7 @@ use super::core::AppEvent;
 use super::task;
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel};
+use crate::domain::review::FocusedReviewStatus;
 use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transient_message::{
@@ -59,6 +60,19 @@ impl ReviewCacheEntry {
         }
     }
 
+    /// Returns whether one persistence update still represents this cache
+    /// generation and lifecycle state.
+    pub(crate) fn matches_persistence(&self, update: &FocusedReviewPersistence) -> bool {
+        let status = match self {
+            Self::Loading { .. } => FocusedReviewStatus::Pending,
+            Self::Ready { .. } => FocusedReviewStatus::Ready,
+            Self::Failed { .. } => FocusedReviewStatus::Failed,
+            Self::Suppressed => return false,
+        };
+
+        status == update.status && self.diff_hash() == update.diff_hash
+    }
+
     /// Builds one cache entry from a completed focused-review result.
     pub(crate) fn from_result(diff_hash: u64, result: &Result<String, String>) -> Self {
         match result {
@@ -91,8 +105,42 @@ pub(crate) struct FocusedReviewPersistence {
     pub(crate) diff_hash: Option<u64>,
     /// Stable session identifier for the focused-review cache row.
     pub(crate) session_id: SessionId,
+    /// Durable generation state consumed by managed-worker orchestration.
+    pub(crate) status: FocusedReviewStatus,
     /// Focused-review markdown to persist, or `None` when clearing it.
     pub(crate) text: Option<String>,
+}
+
+/// Maximum number of delayed persistence attempts after the initial
+/// focused-review write fails.
+pub(crate) const MAX_FOCUSED_REVIEW_PERSISTENCE_RETRIES: u8 = 3;
+
+/// One delayed focused-review persistence attempt carried by the app event
+/// reducer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FocusedReviewPersistenceRetry {
+    /// One-based delayed retry number.
+    pub(crate) attempt: u8,
+    /// Focused-review generation that still needs persistence.
+    pub(crate) persistence_update: FocusedReviewPersistence,
+}
+
+impl FocusedReviewPersistenceRetry {
+    /// Wraps one initial write before any delayed retries have run.
+    pub(crate) fn initial(persistence_update: FocusedReviewPersistence) -> Self {
+        Self {
+            attempt: 0,
+            persistence_update,
+        }
+    }
+
+    /// Returns the next bounded retry, or `None` after the retry limit.
+    pub(crate) fn next(self) -> Option<Self> {
+        (self.attempt < MAX_FOCUSED_REVIEW_PERSISTENCE_RETRIES).then(|| Self {
+            attempt: self.attempt.saturating_add(1),
+            persistence_update: self.persistence_update,
+        })
+    }
 }
 
 /// Prefix for the focused-review loading status while assist output is being
@@ -346,9 +394,10 @@ pub(crate) async fn auto_start_reviews(
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     reasoning_level: ReasoningLevel,
     review_selection: AgentSelection,
-) {
+) -> Vec<FocusedReviewPersistence> {
+    let mut persistence_updates = Vec::new();
     for session_id in session_ids {
-        auto_start_review_for_session(
+        if let Some(persistence_update) = auto_start_review_for_session(
             review_cache,
             session_state,
             git_client.as_ref(),
@@ -357,8 +406,13 @@ pub(crate) async fn auto_start_reviews(
             review_selection,
             session_id,
         )
-        .await;
+        .await
+        {
+            persistence_updates.push(persistence_update);
+        }
     }
+
+    persistence_updates
 }
 
 /// Starts focused review generation for one eligible session snapshot.
@@ -370,10 +424,8 @@ async fn auto_start_review_for_session(
     reasoning_level: ReasoningLevel,
     review_selection: AgentSelection,
     session_id: &SessionId,
-) {
-    let Some(session) = session_state.session_for_id(session_id) else {
-        return;
-    };
+) -> Option<FocusedReviewPersistence> {
+    let session = session_state.session_for_id(session_id)?;
     let current_status = session.status;
 
     if current_status == Status::InProgress {
@@ -384,16 +436,16 @@ async fn auto_start_review_for_session(
                 .retract(TransientMessageSlot::Review);
         }
 
-        return;
+        return None;
     }
 
-    if current_status != Status::Review
+    if !matches!(current_status, Status::Review | Status::AgentReview)
         || matches!(
             review_cache.get(session_id),
             Some(ReviewCacheEntry::Suppressed)
         )
     {
-        return;
+        return None;
     }
 
     let base_branch = session.base_branch.clone();
@@ -402,13 +454,30 @@ async fn auto_start_review_for_session(
         .as_ref()
         .and_then(SessionTranscript::conversation_replay_text);
     let session_folder = session.folder.clone();
-    let diff = git_client
-        .diff(session_folder.clone(), base_branch)
-        .await
-        .unwrap_or_default();
+    let diff = match git_client.diff(session_folder.clone(), base_branch).await {
+        Ok(diff) => diff,
+        Err(error) => {
+            return Some(fail_review_preparation(
+                review_cache,
+                session_state,
+                session_id,
+                format!("Failed to run git diff: {error}"),
+                review_selection.model(),
+            ));
+        }
+    };
 
-    if diff.trim().is_empty() || diff.starts_with("Failed to run git diff:") {
-        return;
+    if diff.starts_with("Failed to run git diff:") {
+        return Some(fail_review_preparation(
+            review_cache,
+            session_state,
+            session_id,
+            diff,
+            review_selection.model(),
+        ));
+    }
+    if diff.trim().is_empty() {
+        return None;
     }
 
     let new_hash = diff_content_hash(&diff);
@@ -416,7 +485,7 @@ async fn auto_start_review_for_session(
         .get(session_id)
         .is_some_and(|entry| entry.diff_hash() == Some(new_hash))
     {
-        return;
+        return None;
     }
 
     review_cache.insert(
@@ -444,6 +513,37 @@ async fn auto_start_review_for_session(
         &diff,
         session_chat_history.as_deref(),
     );
+
+    Some(FocusedReviewPersistence {
+        diff_hash: Some(new_hash),
+        session_id: session_id.clone(),
+        status: FocusedReviewStatus::Pending,
+        text: None,
+    })
+}
+
+/// Records a terminal focused-review failure when preparation cannot load a
+/// diff for review generation.
+fn fail_review_preparation(
+    review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
+    session_state: &mut SessionState,
+    session_id: &SessionId,
+    error: String,
+    review_model: AgentModel,
+) -> FocusedReviewPersistence {
+    let diff_hash = diff_content_hash("");
+    review_cache.insert(
+        session_id.clone(),
+        ReviewCacheEntry::Failed { diff_hash, error },
+    );
+    hydrate_review_transient(review_cache, session_state, session_id, review_model);
+
+    FocusedReviewPersistence {
+        diff_hash: Some(diff_hash),
+        session_id: session_id.clone(),
+        status: FocusedReviewStatus::Failed,
+        text: None,
+    }
 }
 
 /// Applies one review assist update to cache and session review status.
@@ -463,8 +563,13 @@ fn apply_review_update(
     }
 
     let persistence_update = FocusedReviewPersistence {
-        diff_hash: result.as_ref().ok().map(|_| diff_hash),
+        diff_hash: Some(diff_hash),
         session_id: SessionId::from(session_id),
+        status: if result.is_ok() {
+            FocusedReviewStatus::Ready
+        } else {
+            FocusedReviewStatus::Failed
+        },
         text: result.as_ref().ok().cloned(),
     };
     review_cache.insert(
@@ -518,7 +623,7 @@ fn update_transient_review_status(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
     use super::*;
@@ -626,6 +731,121 @@ mod tests {
 
         // Assert
         assert_eq!(review_text, None);
+    }
+
+    #[test]
+    fn review_cache_matches_only_current_persistence_state() {
+        // Arrange
+        let update = |status| FocusedReviewPersistence {
+            diff_hash: Some(42),
+            session_id: "session-id".into(),
+            status,
+            text: None,
+        };
+        let loading = ReviewCacheEntry::Loading { diff_hash: 42 };
+        let ready = ReviewCacheEntry::Ready {
+            diff_hash: 42,
+            text: "review".to_string(),
+        };
+        let failed = ReviewCacheEntry::Failed {
+            diff_hash: 42,
+            error: "failed".to_string(),
+        };
+
+        // Act / Assert
+        assert!(loading.matches_persistence(&update(FocusedReviewStatus::Pending)));
+        assert!(ready.matches_persistence(&update(FocusedReviewStatus::Ready)));
+        assert!(failed.matches_persistence(&update(FocusedReviewStatus::Failed)));
+        assert!(!ready.matches_persistence(&update(FocusedReviewStatus::Pending)));
+        assert!(
+            !ReviewCacheEntry::Suppressed.matches_persistence(&update(FocusedReviewStatus::Failed))
+        );
+        let mut stale = update(FocusedReviewStatus::Ready);
+        stale.diff_hash = Some(41);
+        assert!(!ready.matches_persistence(&stale));
+    }
+
+    #[tokio::test]
+    async fn auto_start_reviews_persists_diff_preparation_failures() {
+        let cases = [
+            (
+                Err(ag_git::GitError::OutputParse(
+                    "diff unavailable".to_string(),
+                )),
+                "Failed to run git diff: diff unavailable",
+            ),
+            (
+                Ok("Failed to run git diff: command failed".to_string()),
+                "Failed to run git diff: command failed",
+            ),
+        ];
+
+        for (diff_result, expected_error) in cases {
+            // Arrange
+            let session_id = SessionId::from("session-id");
+            let mut review_cache = HashMap::new();
+            let mut session_state = session_state_with_stale_review(&session_id);
+            let review_selection = session_state.sessions()[0].agent;
+            let session_ids = HashSet::from([session_id.clone()]);
+            let mut git_client = ag_git::MockGitClient::new();
+            git_client
+                .expect_diff()
+                .return_once(move |_, _| Box::pin(async move { diff_result }));
+            let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+            let expected_diff_hash = diff_content_hash("");
+
+            // Act
+            let persistence_updates = auto_start_reviews(
+                &mut review_cache,
+                &session_ids,
+                &mut session_state,
+                Arc::new(git_client),
+                app_event_tx,
+                ReasoningLevel::High,
+                review_selection,
+            )
+            .await;
+
+            // Assert
+            assert_eq!(
+                persistence_updates,
+                [FocusedReviewPersistence {
+                    diff_hash: Some(expected_diff_hash),
+                    session_id: session_id.clone(),
+                    status: FocusedReviewStatus::Failed,
+                    text: None,
+                }]
+            );
+            assert!(matches!(
+                review_cache.get(&session_id),
+                Some(ReviewCacheEntry::Failed { diff_hash, error })
+                    if *diff_hash == expected_diff_hash && error == expected_error
+            ));
+            assert_eq!(session_state.sessions()[0].status, Status::Review);
+        }
+    }
+
+    #[test]
+    fn focused_review_persistence_retry_stops_after_limit() {
+        // Arrange
+        let persistence_update = FocusedReviewPersistence {
+            diff_hash: Some(42),
+            session_id: "session-id".into(),
+            status: FocusedReviewStatus::Ready,
+            text: Some("review".to_string()),
+        };
+
+        // Act
+        let first = FocusedReviewPersistenceRetry::initial(persistence_update)
+            .next()
+            .expect("first retry should exist");
+        let second = first.clone().next().expect("second retry should exist");
+        let third = second.clone().next().expect("third retry should exist");
+        let exhausted = third.clone().next();
+
+        // Assert
+        assert_eq!((first.attempt, second.attempt, third.attempt), (1, 2, 3));
+        assert_eq!(exhausted, None);
     }
 
     #[test]
@@ -855,6 +1075,7 @@ mod tests {
             vec![FocusedReviewPersistence {
                 diff_hash: Some(diff_hash),
                 session_id: session_id.clone(),
+                status: FocusedReviewStatus::Ready,
                 text: Some(review_text.to_string()),
             }]
         );
@@ -884,8 +1105,9 @@ mod tests {
         assert_eq!(
             persistence_updates,
             vec![FocusedReviewPersistence {
-                diff_hash: None,
+                diff_hash: Some(diff_hash),
                 session_id,
+                status: FocusedReviewStatus::Failed,
                 text: None,
             }]
         );

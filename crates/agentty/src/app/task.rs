@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::app::error::AppError;
+use crate::app::review::FocusedReviewPersistenceRetry;
 use crate::app::{AppEvent, UpdateStatus, at_mention_task};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::file_entry::FileEntry;
@@ -26,6 +27,9 @@ use crate::infra::{file_index, version};
 
 /// Delay applied before a fresh `@`-mention filesystem walk starts.
 const AT_MENTION_LOAD_DEBOUNCE: Duration = Duration::from_millis(75);
+/// Delay before a failed focused-review persistence write is retried through
+/// the foreground event reducer.
+const FOCUSED_REVIEW_PERSISTENCE_RETRY_BASE_DELAY: Duration = Duration::from_millis(250);
 /// Monotonic counter used to distinguish stale and current at-mention loads.
 static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -457,6 +461,28 @@ impl TaskService {
         let one_shot_client: Arc<dyn OneShotClient> = Arc::new(agent::RealOneShotClient::new(None));
 
         Self::spawn_review_assist_task_with_client(input, one_shot_client);
+    }
+
+    /// Requeues one failed focused-review persistence write after a bounded
+    /// delay so transient database errors cannot strand orchestration review.
+    pub(crate) fn spawn_focused_review_persistence_retry(
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        retry: FocusedReviewPersistenceRetry,
+    ) {
+        tokio::spawn(async move {
+            tokio::time::sleep(Self::focused_review_persistence_retry_delay(retry.attempt)).await;
+
+            // Fire-and-forget: receiver may be dropped during shutdown.
+            let _ = app_event_tx.send(AppEvent::FocusedReviewPersistenceRetry { retry });
+        });
+    }
+
+    /// Returns exponential focused-review persistence backoff for one bounded
+    /// retry attempt.
+    fn focused_review_persistence_retry_delay(attempt: u8) -> Duration {
+        let exponent = attempt.saturating_sub(1).min(2);
+
+        FOCUSED_REVIEW_PERSISTENCE_RETRY_BASE_DELAY.saturating_mul(1_u32 << exponent)
     }
 
     /// Spawns review assist generation through the provided one-shot boundary.
@@ -1127,6 +1153,23 @@ mod tests {
                 review_text: "Review completed.".to_string(),
                 session_id: "session-42".into(),
             }
+        );
+    }
+
+    #[test]
+    fn focused_review_persistence_retries_use_capped_exponential_backoff() {
+        // Arrange / Act
+        let delays = [1, 2, 3, 4].map(TaskService::focused_review_persistence_retry_delay);
+
+        // Assert
+        assert_eq!(
+            delays,
+            [
+                Duration::from_millis(250),
+                Duration::from_millis(500),
+                Duration::from_millis(1_000),
+                Duration::from_millis(1_000),
+            ]
         );
     }
 

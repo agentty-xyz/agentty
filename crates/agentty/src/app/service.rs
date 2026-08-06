@@ -336,6 +336,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::BranchPublishActionCompleted { .. } => "BranchPublishActionCompleted",
         AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
         AppEvent::ReviewPreparationFailed { .. } => "ReviewPreparationFailed",
+        AppEvent::FocusedReviewPersistenceRetry { .. } => "FocusedReviewPersistenceRetry",
         AppEvent::SessionUpdated { .. } => "SessionUpdated",
         AppEvent::AgentResponseReceived { .. } => "AgentResponseReceived",
         AppEvent::StackedParentTurnCompleted { .. } => "StackedParentTurnCompleted",
@@ -386,6 +387,28 @@ mod tests {
 
         // Assert
         assert_eq!(label, "DiffPreviewLoaded");
+    }
+
+    #[test]
+    fn app_event_label_names_focused_review_persistence_retries() {
+        // Arrange
+        let event = AppEvent::FocusedReviewPersistenceRetry {
+            retry: crate::app::review::FocusedReviewPersistenceRetry {
+                attempt: 1,
+                persistence_update: crate::app::review::FocusedReviewPersistence {
+                    diff_hash: Some(42),
+                    session_id: "session-id".into(),
+                    status: crate::domain::review::FocusedReviewStatus::Ready,
+                    text: Some("review".to_string()),
+                },
+            },
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "FocusedReviewPersistenceRetry");
     }
 
     #[test]

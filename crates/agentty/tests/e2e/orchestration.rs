@@ -110,6 +110,52 @@ fn seed_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
     Ok(())
 }
 
+/// Seeds one managed worker executing its first accepted review-remediation
+/// continuation so the campaign board exposes stable remediation progress.
+fn seed_orchestration_review_remediation(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        let task_id = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM session_orchestration_task WHERE task_key = 'protocol'",
+        )
+        .fetch_one(database.pool())
+        .await?;
+        sqlx::query(
+            "UPDATE session_orchestration_task SET status = 'ReviewApplying', review_iteration = \
+             1, continuation_generation = 1, continuation_prompt = 'Verify then apply sensible \
+             review suggestions' WHERE id = ?",
+        )
+        .bind(task_id)
+        .execute(database.pool())
+        .await?;
+        sqlx::query(
+            "UPDATE session SET status = 'InProgress', has_diff = 1, focused_review_status = \
+             NULL, focused_review_diff_hash = NULL, focused_review_text = NULL WHERE id = ?",
+        )
+        .bind(WORKER_ID)
+        .execute(database.pool())
+        .await?;
+        sqlx::query(
+            "INSERT INTO session_operation (id, session_id, kind, status, queued_at, finished_at) \
+             VALUES (?, ?, 'reply', 'done', 1, 1)",
+        )
+        .bind(format!("orchestration-continuation-{task_id}-1"))
+        .bind(WORKER_ID)
+        .execute(database.pool())
+        .await?;
+        sqlx::query("UPDATE session_orchestration SET status = 'Running'")
+            .execute(database.pool())
+            .await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    Ok(())
+}
+
 /// Seeds enough controller transcript output to exercise line-by-line scroll
 /// bounds in the compact chat pane below the campaign board.
 fn seed_scrollable_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
@@ -368,6 +414,35 @@ fn test_review_request_campaign_reports_closed_worker() -> E2eResult {
                 );
                 let text = frame.text_in_region(&full);
                 assert!(!text.contains("Campaign complete"));
+            },
+        )
+}
+
+#[test]
+fn test_orchestration_review_remediation() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("orchestration_review_remediation")
+        .with_git()
+        .setup(seed_orchestration_review_remediation)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("remediation 1/3", 5000)
+                    .capture_labeled(
+                        "review_remediation",
+                        "Managed worker focused-review remediation progress",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "Protocol contract [protocol]: applying review; remediation 1/3",
+                    &full,
+                );
             },
         )
 }

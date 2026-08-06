@@ -140,25 +140,20 @@ impl App {
             startup_working_dir.clone(),
         );
         let settings = Self::load_settings(&repositories, &services, active_project_id).await;
-        let default_session_model = SessionManager::load_default_session_model(
-            &services,
-            Some(active_project_id),
-            AgentKind::Antigravity.default_model(),
-        )
-        .await;
         let mut sessions = Self::load_and_restack_startup_sessions(
             &services,
             active_project_id,
-            default_session_model,
             startup_working_dir.as_path(),
         )
         .await;
-        let review_cache = Self::load_focused_review_cache(&repositories, active_project_id).await;
-        review::hydrate_review_transients(
-            &review_cache,
-            sessions.state_mut(),
-            settings.default_review_selection.model(),
-        );
+        let (review_cache, recoverable_focused_review_session_ids) =
+            Self::load_startup_focused_reviews(
+                &repositories,
+                active_project_id,
+                &mut sessions,
+                settings.default_review_selection.model(),
+            )
+            .await?;
 
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);
@@ -166,7 +161,7 @@ impl App {
         let sync_main_runner = clients
             .sync_main_runner
             .unwrap_or_else(|| sync_handle.sync_main_runner());
-        Ok(Self {
+        let mut app = Self {
             mode: crate::presentation::app_mode::AppMode::List,
             needs_redraw: true,
             settings,
@@ -196,7 +191,46 @@ impl App {
             sync_handle,
             sync_main_runner,
             tmux_client: clients.tmux_client,
-        })
+        };
+        app.recover_startup_focused_reviews(recoverable_focused_review_session_ids)
+            .await;
+
+        Ok(app)
+    }
+
+    /// Loads focused-review cache state and the managed reviews that must be
+    /// regenerated during startup recovery.
+    async fn load_startup_focused_reviews(
+        repositories: &AppRepositories,
+        active_project_id: i64,
+        sessions: &mut SessionManager,
+        review_model: AgentModel,
+    ) -> Result<
+        (
+            std::collections::HashMap<crate::domain::session::SessionId, review::ReviewCacheEntry>,
+            Vec<String>,
+        ),
+        AppError,
+    > {
+        let review_cache = Self::load_focused_review_cache(repositories, active_project_id).await;
+        let recoverable_session_ids = repositories
+            .orchestrations()
+            .load_recoverable_focused_review_session_ids(active_project_id)
+            .await?;
+        review::hydrate_review_transients(&review_cache, sessions.state_mut(), review_model);
+
+        Ok((review_cache, recoverable_session_ids))
+    }
+
+    /// Restarts focused review for durable managed tasks whose persistence was
+    /// interrupted before a terminal review result was stored.
+    pub(super) async fn recover_startup_focused_reviews(&mut self, session_ids: Vec<String>) {
+        let session_ids = session_ids
+            .into_iter()
+            .map(crate::domain::session::SessionId::from)
+            .collect();
+
+        self.auto_start_reviews(&session_ids).await;
     }
 
     /// Loads active-project settings from the feature-scoped dependencies.
@@ -233,9 +267,14 @@ impl App {
     async fn load_and_restack_startup_sessions(
         services: &AppServices,
         active_project_id: i64,
-        default_session_model: AgentModel,
         startup_working_dir: &Path,
     ) -> SessionManager {
+        let default_session_model = SessionManager::load_default_session_model(
+            services,
+            Some(active_project_id),
+            AgentKind::Antigravity.default_model(),
+        )
+        .await;
         let mut sessions = AppStartup::load_startup_sessions(
             services,
             StartupSessionLoadContext {

@@ -2848,6 +2848,7 @@ async fn test_load_session_focused_reviews_for_project_returns_persisted_review(
         .sessions()
         .update_session_focused_review(
             "session-a",
+            Some(crate::domain::review::FocusedReviewStatus::Ready),
             Some("42".to_string()),
             Some("## Review\nPersisted".to_string()),
         )
@@ -2892,6 +2893,7 @@ async fn test_update_session_focused_review_clears_persisted_review() {
         .sessions()
         .update_session_focused_review(
             "session-a",
+            Some(crate::domain::review::FocusedReviewStatus::Ready),
             Some("42".to_string()),
             Some("## Review\nPersisted".to_string()),
         )
@@ -2901,7 +2903,7 @@ async fn test_update_session_focused_review_clears_persisted_review() {
     // Act
     database
         .sessions()
-        .update_session_focused_review("session-a", None, None)
+        .update_session_focused_review("session-a", None, None, None)
         .await
         .expect("failed to clear focused review");
     let focused_reviews = database

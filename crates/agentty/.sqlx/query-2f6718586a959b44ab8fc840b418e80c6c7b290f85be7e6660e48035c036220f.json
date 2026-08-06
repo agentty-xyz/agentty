@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration_task\nSET continuation_generation = continuation_generation + 1,\n    continuation_prompt = ?,\n    review_iteration = review_iteration + 1,\n    status = 'ReviewApplying',\n    updated_at = ?\nWHERE id = ?\n  AND status = 'Reviewing'\n  AND review_iteration < ?\n  AND child_session_id IS NOT NULL\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "2f6718586a959b44ab8fc840b418e80c6c7b290f85be7e6660e48035c036220f"
+}

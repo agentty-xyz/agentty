@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET focused_review_status = ?,\n    focused_review_diff_hash = ?,\n    focused_review_text = ?,\n    updated_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "f2bea878d394ab7bc5964ec9868fa9917424a54afff935f760faa49992331d20"
+}

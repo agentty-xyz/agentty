@@ -128,7 +128,7 @@ impl App {
             .services
             .db()
             .sessions()
-            .update_session_focused_review(session_id, None, None)
+            .update_session_focused_review(session_id, None, None, None)
             .await;
         let enqueued = self
             .sessions

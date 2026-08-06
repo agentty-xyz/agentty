@@ -305,24 +305,40 @@ flowchart LR
    prompt-delivery failures increment a durable infrastructure retry counter and retry
    twice before settling as failed. Cascade cancellation moves the campaign to
    `Canceling` before inspection, so stale snapshots cannot fan out another worker.
+   Review-ready workers with diffs park in `Reviewing` until their focused review is
+   durably `Ready` or `Failed`. Actionable suggestions are atomically claimed as a
+   `ReviewApplying` continuation using the same verification-gated prompt as `/apply`;
+   operation IDs make delivery restart-safe, and the persisted iteration counter caps
+   remediation at three worker turns. Focused-review persistence uses three stale-safe
+   reducer retries with exponential backoff. If those writes remain unavailable, the
+   durable managed-task and child-session state restarts an incomplete `Reviewing` task
+   on the next launch. `ContinuationPending` and `ReviewApplying` tasks resume their
+   outstanding continuation instead of reviewing the pre-continuation diff. Diff
+   preparation failures persist `Failed` immediately. Each completed remediation
+   re-enters focused review, including work continued after controller verification. A
+   failed review or unresolved suggestions at the cap settle with explicit evidence for
+   controller verification instead of blocking fan-in.
 1. Once every task settles, the campaign claims `Verifying`, increments its verification
    generation, and submits one hidden, idempotent coordinator operation keyed by that
    generation. Its structured envelope carries the campaign goal, criteria, branch,
-   summary, diffstat, token totals, integration order, and a persisted comparison of
-   expected and changed paths computed through `GitClient::diff_changed_files()`. The
-   comparison is review context rather than a pass/fail gate; tasks without area
-   references persist an unchecked result even when their diff contains changed files.
-   The controller emits typed per-task verdicts; persistence admits only explicit passes
-   to `AwaitingIntegration`, while flags or missing verdicts remain parked. Re-emitting
-   a settled task key queues a visible continuation on the same child regardless of
-   changed area references. The continuation transaction replaces the persisted area
-   references, clears prior comparison evidence, and the coordinator includes the new
-   references in the resumed worker prompt. It also resets other unintegrated passes to
-   `Ready` and returns the campaign to `Running`; newly keyed work is persisted as
-   `Proposed` and parks on `AwaitingApproval`. Every controller turn receives a bounded,
-   agent-only JSON snapshot with task keys for routing and touched areas for planning
-   context. The snapshot omits instruction-bearing titles and criteria, marks truncated
-   metadata explicitly, and is treated as inert routing data.
+   summary, focused-review outcome, diffstat, token totals, integration order, and a
+   persisted comparison of expected and changed paths computed through
+   `GitClient::diff_changed_files()`. The comparison is review context rather than a
+   pass/fail gate; tasks without area references persist an unchecked result even when
+   their diff contains changed files. The controller emits typed per-task verdicts;
+   persistence admits only explicit passes to `AwaitingIntegration`, while flags or
+   missing verdicts remain parked. Re-emitting a settled task key queues a visible
+   continuation on the same child regardless of changed area references. The
+   continuation transaction replaces the persisted area references, clears prior
+   comparison evidence, and the coordinator includes the new references in the resumed
+   worker prompt. It also resets the task's review iteration plus other unintegrated
+   passes to `Ready` and returns the campaign to `Running`; newly keyed work is
+   persisted as `Proposed` and parks on `AwaitingApproval`. Every controller turn
+   receives a bounded, agent-only JSON snapshot with task keys for routing and touched
+   areas for planning context, allowing review findings to reach completed workers
+   without relying on remembered plan details. The snapshot omits instruction-bearing
+   titles and criteria, marks truncated metadata explicitly, and is treated as inert
+   routing data.
 1. Pressing `a` at `AwaitingIntegration` first opens a binary destination choice. The
    selected `integration_approach` and `Integrating` transition are persisted atomically
    so restart recovery cannot switch destinations. `Integrating` then serializes local

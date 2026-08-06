@@ -2619,6 +2619,7 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
         .sessions()
         .update_session_focused_review(
             &session_id,
+            Some(crate::domain::review::FocusedReviewStatus::Ready),
             Some("42".to_string()),
             Some("Focused review".to_string()),
         )
@@ -3426,6 +3427,7 @@ async fn test_periodic_session_refresh_preserves_focused_review_states() {
     db.sessions()
         .update_session_focused_review(
             ready_session_id,
+            Some(crate::domain::review::FocusedReviewStatus::Ready),
             Some("42".to_string()),
             Some(review_text.to_string()),
         )
@@ -5152,6 +5154,7 @@ async fn test_rebase_session_cancels_pending_focused_review() {
     db.sessions()
         .update_session_focused_review(
             &session_id,
+            Some(crate::domain::review::FocusedReviewStatus::Ready),
             Some("111".to_string()),
             Some("old persisted focused review".to_string()),
         )
@@ -5219,6 +5222,7 @@ async fn test_rebase_session_cleanup_failure_does_not_start_sync() {
     db.sessions()
         .update_session_focused_review(
             &session_id,
+            Some(crate::domain::review::FocusedReviewStatus::Ready),
             Some("111".to_string()),
             Some("old persisted focused review".to_string()),
         )

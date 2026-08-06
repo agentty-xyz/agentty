@@ -432,18 +432,30 @@ Use an orchestrator when a goal contains at least two independent pieces of work
    without adding a controller model turn. Infrastructure failures retry twice without
    interrupting chat. Worker failures remain visible on the campaign monitor for
    follow-up.
+1. When a worker reaches review with a diff, Agentty waits for its focused auto-review.
+   Actionable suggestions are sent back to that worker using the same verification-gated
+   prompt as `/apply`: the worker checks each comment against the current code, applies
+   only suggestions that make sense, runs the required checks, and explains any rejected
+   comment. Agentty repeats this review and remediation cycle at most three times. A
+   worker continued after controller verification re-enters the same focused-review
+   cycle before the controller can verify its updated work again. Pending reviews and
+   the current pass remain visible on the campaign monitor; failed reviews, including
+   review-preparation failures, and suggestions that remain after pass three move on as
+   explicit evidence for controller verification instead of stalling the campaign. On
+   restart, Agentty regenerates only an interrupted review; a queued remediation or
+   controller-requested continuation resumes before the updated diff is reviewed.
 1. After every task settles, Agentty sends one hidden, durable verification envelope to
    the controller. It contains each task's acceptance criteria, branch, bounded summary,
-   campaign goal, diffstat, token totals, merge order, and a mechanical comparison
-   between expected and changed paths. Additional paths appear on the campaign monitor
-   and in the envelope as review context, not an automatic verification failure. The
-   comparison remains **not checked** when no expected areas were provided, even if the
-   child changed files. The controller can run targeted read-only Git inspection,
-   reports only cross-task synthesis and risks, and records an explicit pass or flag for
-   every ready task. This verification response is the campaign's single controller
-   report. Only explicit passes enter integration; flagged or missing verdicts remain
-   parked for correction. The controller reuses a task key to continue the same live
-   child when a correction is required.
+   campaign goal, focused-review outcome, diffstat, token totals, merge order, and a
+   mechanical comparison between expected and changed paths. Additional paths appear on
+   the campaign monitor and in the envelope as review context, not an automatic
+   verification failure. The comparison remains **not checked** when no expected areas
+   were provided, even if the child changed files. The controller can run targeted
+   read-only Git inspection, reports only cross-task synthesis and risks, and records an
+   explicit pass or flag for every ready task. This verification response is the
+   campaign's single controller report. Only explicit passes enter integration; flagged
+   or missing verdicts remain parked for correction. The controller reuses a task key to
+   continue the same live child when a correction is required.
 1. At **AwaitingIntegration**, press `a`, then choose **Local merges** or **Review
    requests**. Agentty applies local merges or creates forge review requests in plan
    order and records failures on the campaign monitor. A published review-request task
