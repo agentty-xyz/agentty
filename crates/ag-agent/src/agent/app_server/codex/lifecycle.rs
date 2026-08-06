@@ -642,11 +642,16 @@ impl CodexTurnEventLoopState {
         else {
             return Ok(None);
         };
+        let completed_assistant_message = stream_parser::extract_turn_completed_agent_message(
+            response_value,
+            self.active_turn_id.as_deref(),
+        );
         let (input_tokens, output_tokens) =
             usage::resolve_turn_usage(self.completed_turn_usage, self.latest_stream_usage);
 
         finalize_turn_completion(
             turn_result,
+            completed_assistant_message.as_ref(),
             &self.assistant_messages,
             &self.stream_tx,
             input_tokens,
@@ -865,6 +870,7 @@ fn emit_phase_progress_update(
 /// response tuple.
 fn finalize_turn_completion(
     turn_result: Result<(), String>,
+    completed_assistant_message: Option<&stream_parser::ExtractedAgentMessage>,
     assistant_messages: &[String],
     stream_tx: &mpsc::UnboundedSender<AppServerStreamEvent>,
     input_tokens: u64,
@@ -872,8 +878,10 @@ fn finalize_turn_completion(
 ) -> Result<(String, u64, u64), AppServerError> {
     match turn_result {
         Ok(()) => {
-            let assistant_message =
-                stream_parser::preferred_completed_assistant_message(assistant_messages);
+            let assistant_message = completed_assistant_message.map_or_else(
+                || stream_parser::preferred_completed_assistant_message(assistant_messages),
+                |message| message.message.clone(),
+            );
 
             Ok((assistant_message, input_tokens, output_tokens))
         }

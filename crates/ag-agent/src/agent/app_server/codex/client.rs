@@ -515,6 +515,138 @@ mod tests {
         assert_eq!(result.expect("turn should complete"), (String::new(), 0, 0));
     }
 
+    #[tokio::test]
+    async fn execute_turn_event_loop_prefers_completed_final_message_over_commentary() {
+        // Arrange
+        let folder = tempdir().expect("temporary folder should be created");
+        let turn_start_id = Arc::new(Mutex::new(None));
+        let mut transport = MockCodexRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+        let final_response = r#"{"answer":"Final focused review.","questions":[],"summary":null}"#;
+
+        expect_commentary_then_completed_final_turn(
+            &mut transport,
+            &mut sequence,
+            turn_start_id,
+            final_response,
+        );
+
+        // Act
+        let result = lifecycle::execute_turn_event_loop(
+            &mut transport,
+            lifecycle::CodexTurnEventLoopInput {
+                folder: folder.path(),
+                model: AgentModel::Gpt56Sol.as_str(),
+                prompt: "Review the current diff".into(),
+                reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::default(),
+                stream_tx,
+                thread_id: "thread-1",
+                turn_timeout: app_server_transport::TURN_TIMEOUT,
+            },
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            result.expect("turn should return its final answer"),
+            (final_response.to_string(), 0, 0)
+        );
+    }
+
+    /// Expects one turn to emit commentary before carrying its structured
+    /// final answer in `turn/completed`.
+    fn expect_commentary_then_completed_final_turn(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        turn_start_id: Arc<Mutex<Option<String>>>,
+        final_response: &'static str,
+    ) {
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| payload.get("method").and_then(Value::as_str) == Some("turn/start"))
+            .returning({
+                let turn_start_id = Arc::clone(&turn_start_id);
+
+                move |payload| {
+                    remember_request_id(&turn_start_id, &payload);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(move || {
+                let response_id = turn_start_id
+                    .lock()
+                    .expect("turn/start mutex should lock")
+                    .clone()
+                    .expect("turn/start id should be recorded");
+
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "id": response_id,
+                            "result": {"turn": {"id": "turn-123"}}
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(|| {
+                Box::pin(async {
+                    Ok(Some(
+                        serde_json::json!({
+                            "method": "item/completed",
+                            "params": {
+                                "turnId": "turn-123",
+                                "item": {
+                                    "type": "agentMessage",
+                                    "phase": "commentary",
+                                    "text": "I'll inspect the current code."
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(move || {
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "method": "turn/completed",
+                            "params": {
+                                "turnId": "turn-123",
+                                "turn": {
+                                    "status": "completed",
+                                    "items": [{
+                                        "type": "agentMessage",
+                                        "phase": "final_answer",
+                                        "text": final_response
+                                    }]
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+    }
+
     /// Expects a user-input request to receive an empty response before turn
     /// completion.
     fn expect_user_input_request_turn(

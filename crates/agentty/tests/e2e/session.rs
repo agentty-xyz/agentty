@@ -612,6 +612,57 @@ printf '{{"type":"result","subtype":"success","result":"{{\\"answer\\":\\"## Rev
     )
 }
 
+/// Seeds a Codex focused review with commentary, a valid final item, and a
+/// blank duplicate final item in `turn/completed`.
+fn seed_codex_review_with_blank_completed_fallback(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+    seed_review_worktree_with_diff(env)?;
+
+    let codex_path = env.stub_bin.join("codex");
+    let script = r###"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'codex-cli 0.146.0\n'; exit 0; fi
+
+extract_id() {
+    printf '%s\n' "$1" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
+}
+
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{}}\n' "$request_id"
+            ;;
+        *'"method":"thread/start"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{"thread":{"id":"review-thread"}}}\n' "$request_id"
+            ;;
+        *'"method":"turn/start"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{"turn":{"id":"review-turn"}}}\n' "$request_id"
+            printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"review-turn"}}}'
+            printf '%s\n' '{"method":"item/completed","params":{"threadId":"review-thread","turnId":"review-turn","item":{"type":"agentMessage","id":"commentary-item","text":"I will inspect the current code.","phase":"commentary"}}}'
+            printf '%s\n' '{"method":"item/completed","params":{"threadId":"review-thread","turnId":"review-turn","item":{"type":"agentMessage","id":"final-item","text":"{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Final focused review result.\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[],\"summary\":null}","phase":"final_answer"}}}'
+            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"review-thread","turn":{"id":"review-turn","status":"completed","items":[{"type":"agentMessage","id":"blank-final-item","text":"   ","phase":"final_answer"}]}}}'
+            ;;
+    esac
+done
+"###;
+    std::fs::write(&codex_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultReviewAgent", "codex"),
+            ("DefaultReviewModel", "gpt-5.6-sol"),
+        ],
+    )
+}
+
 /// Seeds one review-ready session plus its default source branch and
 /// propagates setup errors to the caller.
 fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -6412,6 +6463,40 @@ fn focused_review_honors_resolved_session_decisions() -> E2eResult {
                 assertion::assert_text_in_region(frame, "- None", &full);
                 assertion::assert_not_visible(frame, MISSING_DECISION_CONTEXT_POLICY_TEXT);
                 assertion::assert_not_visible(frame, MISSING_RESOLVED_DECISION_HISTORY_TEXT);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify a blank Codex completion fallback cannot replace an earlier final
+/// focused-review item.
+#[test]
+fn focused_review_ignores_blank_completed_fallback() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("focused_review_ignores_blank_completed_fallback")
+        .with_git()
+        .setup(seed_codex_review_with_blank_completed_fallback)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .press_key("f")
+                    .wait_for_text("Final focused review result.", 30000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "final_review",
+                        "Focused review preserves the nonblank final answer",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Final focused review result.", &full);
+                assertion::assert_text_in_region(frame, "Suggestions", &full);
+                assertion::assert_not_visible(frame, "I will inspect the current code.");
+                assertion::assert_not_visible(frame, "Reviewing changes with");
             },
         )?;
 
