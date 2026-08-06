@@ -443,11 +443,15 @@ Use an orchestrator when a goal contains at least two independent pieces of work
    the same live child when a correction is required.
 1. At **AwaitingIntegration**, press `a`, then choose **Local merges** or **Review
    requests**. Agentty applies local merges or creates forge review requests in plan
-   order and records failures on the campaign monitor. When all integrations settle, the
+   order and records failures on the campaign monitor. A published review-request task
+   remains **Review requested**, and the controller stays active, until review sync
+   observes that worker's request as merged. When every integration has settled, the
    campaign and controller become **Done** without another model turn. Local merge
    integration archives an immutable copy of each worker diff before removing its
    worktree and local branch. Review-request workers retain their published branch and
-   remain browsable under the controller. Detached workers remain ordinary sessions.
+   remain browsable under the controller. A review request closed without merging is
+   recorded as an **Integration failed** task, leaving the controller active for
+   follow-up. Detached workers remain ordinary sessions.
 
 Multi-turn feedback is routed by scope. Reusing a settled task's exact key and touched
 areas continues its existing worker, branch, and conversation and returns it to

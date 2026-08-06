@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session SET status = 'Review' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "02f4c9e54e5a0008f94d6ac5d22f116718019bb38d7b178c6c70f4fe0827033e"
+}

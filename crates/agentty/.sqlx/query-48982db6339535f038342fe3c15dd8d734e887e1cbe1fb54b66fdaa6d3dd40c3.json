@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session_orchestration SET status = 'Integrating', integration_approach = 'ReviewRequest'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "48982db6339535f038342fe3c15dd8d734e887e1cbe1fb54b66fdaa6d3dd40c3"
+}

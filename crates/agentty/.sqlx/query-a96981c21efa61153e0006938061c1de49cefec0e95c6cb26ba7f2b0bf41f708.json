@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session_orchestration_task SET status = CASE task_key WHEN 'protocol' THEN 'ReviewRequested' ELSE 'Integrated' END",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "a96981c21efa61153e0006938061c1de49cefec0e95c6cb26ba7f2b0bf41f708"
+}
