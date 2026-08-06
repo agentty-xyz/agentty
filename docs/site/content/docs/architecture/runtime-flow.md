@@ -286,19 +286,20 @@ flowchart LR
 1. `AppEvent::AgentResponseReceived` carries the reducer projection so the active
    session updates without a forced reload. If persistence fails, the worker appends a
    recovery error and falls back to a durable-state reload.
-1. For orchestrator turns, validated file-disjoint subtasks and acceptance criteria are
-   stored in `session_orchestration_task` before `AwaitingApproval`. The board owns plan
-   approval; no synthetic clarification question represents approval. The campaign
-   snapshots its worker cap from the global **Orchestrator Parallelism** setting.
-   Approval moves proposed tasks to `Planned`, and the coordinator creates
-   `OrchestrationWorker` sessions up to that cap. Those workers retain branch ownership
-   but reject user-path mutations. Controller clarification prompts and deterministic
-   plan or follow-up routing guards provide selectable options rather than requiring
-   free-text recovery. A transaction claims `relayed_question_task_id` only when the
-   controller has no question of its own, then mirrors that task's questions onto the
-   controller. Answers resolve that exact task identity and route back through the
-   privileged coordinator handle; other waiting children remain queued until the relay
-   is cleared.
+1. For orchestrator turns, validated independent subtasks, acceptance criteria, and
+   optional touched-area planning references are stored in `session_orchestration_task`
+   before `AwaitingApproval`. Area references may overlap and do not constrain worker
+   changes. The board owns plan approval; no synthetic clarification question represents
+   approval. The campaign snapshots its worker cap from the global **Orchestrator
+   Parallelism** setting. Approval moves proposed tasks to `Planned`, and the
+   coordinator creates `OrchestrationWorker` sessions up to that cap. Those workers
+   retain branch ownership but reject user-path mutations. Controller clarification
+   prompts and deterministic plan or follow-up routing guards provide selectable options
+   rather than requiring free-text recovery. A transaction claims
+   `relayed_question_task_id` only when the controller has no question of its own, then
+   mirrors that task's questions onto the controller. Answers resolve that exact task
+   identity and route back through the privileged coordinator handle; other waiting
+   children remain queued until the relay is cleared.
 1. Reconciliation treats persisted child state as truth and writes live task snapshots
    to the campaign board, never to transient chat output. Interrupted creation and
    prompt-delivery failures increment a durable infrastructure retry counter and retry
@@ -307,17 +308,21 @@ flowchart LR
 1. Once every task settles, the campaign claims `Verifying`, increments its verification
    generation, and submits one hidden, idempotent coordinator operation keyed by that
    generation. Its structured envelope carries the campaign goal, criteria, branch,
-   summary, diffstat, token totals, integration order, and persisted touched-area
-   compliance computed through `GitClient::diff_changed_files()`. The controller emits
-   typed per-task verdicts; persistence admits only explicit passes to
-   `AwaitingIntegration`, while flags or missing verdicts remain parked. Re-emitting a
-   settled task key queues a visible continuation on the same child, resets other
-   unintegrated passes to `Ready`, and returns the campaign to `Running`; newly keyed
-   work is persisted as `Proposed` and parks on `AwaitingApproval`. Every controller
-   turn receives a bounded, agent-only JSON snapshot with task keys and touched areas so
-   review findings can be routed back to completed workers without relying on remembered
-   plan details. The snapshot omits instruction-bearing titles and criteria, marks
-   truncated metadata explicitly, and is treated as inert routing data.
+   summary, diffstat, token totals, integration order, and a persisted comparison of
+   expected and changed paths computed through `GitClient::diff_changed_files()`. The
+   comparison is review context rather than a pass/fail gate; tasks without area
+   references persist an unchecked result even when their diff contains changed files.
+   The controller emits typed per-task verdicts; persistence admits only explicit passes
+   to `AwaitingIntegration`, while flags or missing verdicts remain parked. Re-emitting
+   a settled task key queues a visible continuation on the same child regardless of
+   changed area references. The continuation transaction replaces the persisted area
+   references, clears prior comparison evidence, and the coordinator includes the new
+   references in the resumed worker prompt. It also resets other unintegrated passes to
+   `Ready` and returns the campaign to `Running`; newly keyed work is persisted as
+   `Proposed` and parks on `AwaitingApproval`. Every controller turn receives a bounded,
+   agent-only JSON snapshot with task keys for routing and touched areas for planning
+   context. The snapshot omits instruction-bearing titles and criteria, marks truncated
+   metadata explicitly, and is treated as inert routing data.
 1. Pressing `a` at `AwaitingIntegration` first opens a binary destination choice. The
    selected `integration_approach` and `Integrating` transition are persisted atomically
    so restart recovery cannot switch destinations. `Integrating` then serializes local

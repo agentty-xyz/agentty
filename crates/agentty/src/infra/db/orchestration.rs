@@ -41,9 +41,9 @@ pub struct SessionOrchestrationRow {
 pub struct SessionOrchestrationTaskRow {
     /// Serialized acceptance criteria checked during verification.
     pub acceptance_criteria: String,
-    /// Serialized changed paths outside the task's declared areas.
+    /// Serialized changed paths outside the task's expected planning areas.
     pub area_violations: String,
-    /// Whether the latest child diff stayed within its declared areas.
+    /// Whether the latest child diff stayed within its expected planning areas.
     pub areas_compliant: Option<bool>,
     /// Number of child sessions created for this task so far.
     pub attempt_count: i64,
@@ -264,6 +264,7 @@ pub trait OrchestrationRepository: Send + Sync {
         id: i64,
         prompt: &str,
         acceptance_criteria: &str,
+        touched_areas: &str,
     ) -> Result<bool, DbError>;
 
     /// Returns previously verified tasks to fan-in before a follow-up wave.
@@ -317,11 +318,11 @@ pub trait OrchestrationRepository: Send + Sync {
         result_summary: &str,
     ) -> Result<(), DbError>;
 
-    /// Records mechanically computed touched-area compliance evidence.
+    /// Records a mechanically computed touched-area planning comparison.
     async fn update_orchestration_task_area_compliance(
         &self,
         id: i64,
-        areas_compliant: bool,
+        areas_compliant: Option<bool>,
         area_violations: &str,
     ) -> Result<(), DbError>;
 }
@@ -1063,6 +1064,7 @@ WHERE id = ?
         id: i64,
         prompt: &str,
         acceptance_criteria: &str,
+        touched_areas: &str,
     ) -> Result<bool, DbError> {
         let now = self.now();
         let result = sqlx::query!(
@@ -1074,6 +1076,7 @@ SET acceptance_criteria = ?,
     continuation_generation = continuation_generation + 1,
     continuation_prompt = ?,
     status = 'ContinuationPending',
+    touched_areas = ?,
     result_summary = NULL,
     verification_verdict = NULL,
     verification_reason = NULL,
@@ -1085,6 +1088,7 @@ WHERE id = ?
 ",
             acceptance_criteria,
             prompt,
+            touched_areas,
             now,
             id
         )
@@ -1458,7 +1462,7 @@ WHERE id = ?
     async fn update_orchestration_task_area_compliance(
         &self,
         id: i64,
-        areas_compliant: bool,
+        areas_compliant: Option<bool>,
         area_violations: &str,
     ) -> Result<(), DbError> {
         let now = self.now();
@@ -2463,12 +2467,18 @@ mod tests {
                 task_id,
                 "Add the missing edge case",
                 r#"["The edge case is tested"]"#,
+                r#"["docs/"]"#,
             )
             .await
             .expect("failed to queue continuation");
         let duplicate_queue = database
             .orchestrations()
-            .queue_orchestration_continuation(task_id, "Duplicate", r#"["Duplicate"]"#)
+            .queue_orchestration_continuation(
+                task_id,
+                "Duplicate",
+                r#"["Duplicate"]"#,
+                r#"["ignored/"]"#,
+            )
             .await
             .expect("failed to inspect duplicate continuation");
         let detached = database
@@ -2483,20 +2493,16 @@ mod tests {
             .expect("failed to inspect duplicate detach");
         let (task, child, controller) =
             load_detached_campaign_state(&database, orchestration_id).await;
+        let continuation_prompt = task.continuation_prompt.as_deref();
 
         // Assert
-        assert!(queued);
-        assert!(!duplicate_queue);
-        assert!(surfaced);
-        assert!(detached);
-        assert!(!duplicate_detach);
+        assert!(queued && surfaced && detached);
+        assert!(!duplicate_queue && !duplicate_detach);
         assert_eq!(task.status, OrchestrationTaskStatus::Detached.to_string());
         assert_eq!(task.child_session_id, None);
         assert_eq!(task.continuation_generation, 1);
-        assert_eq!(
-            task.continuation_prompt.as_deref(),
-            Some("Add the missing edge case")
-        );
+        assert_eq!(continuation_prompt, Some("Add the missing edge case"));
+        assert_eq!(task.touched_areas, r#"["docs/"]"#);
         assert_eq!(child.role.as_deref(), Some("Worker"));
         assert_eq!(controller.status, "Review");
         assert_eq!(controller.questions.as_deref(), Some(""));

@@ -305,8 +305,8 @@ impl AgentResponse {
 
     /// Returns up to [`MAX_SUBTASKS`] proposed subtasks in response order.
     ///
-    /// Callers must still reject plans whose subtasks overlap or whose keys
-    /// collide; this only bounds how much of a runaway plan is considered.
+    /// Callers must still reject plans whose keys collide; this only bounds how
+    /// much of a runaway plan is considered.
     pub fn subtask_items(&self) -> Vec<SubtaskItem> {
         self.subtasks.iter().take(MAX_SUBTASKS).cloned().collect()
     }
@@ -532,9 +532,8 @@ mod tests {
     }
 
     #[test]
-    /// Ensures `touched_areas` defaults to an empty list so a malformed
-    /// subtask still parses and can be rejected by plan validation instead of
-    /// failing the whole turn.
+    /// Ensures optional `touched_areas` planning guidance defaults to an empty
+    /// list instead of failing the whole turn.
     fn test_subtask_item_defaults_touched_areas() {
         // Arrange
         let raw = r#"{"prompt":"Do the work","task_key":"task-1","title":"Work"}"#;
@@ -553,10 +552,12 @@ mod tests {
     fn test_subtasks_field_description_reports_the_subtask_cap() {
         // Arrange, Act
         let description = subtasks_field_description();
+        let normalized_description = description.split_whitespace().collect::<Vec<_>>().join(" ");
 
         // Assert
         assert!(description.contains(&format!("at most {MAX_SUBTASKS} items")));
-        assert!(description.contains("without wildcard patterns"));
+        assert!(normalized_description.contains("without wildcard patterns"));
+        assert!(description.contains("Areas may overlap"));
         assert!(!description.contains("{{"));
     }
 
@@ -589,7 +590,7 @@ mod tests {
         assert_eq!(rendered, "Emit at most {{ max_items items.");
     }
 
-    /// Builds one deterministic subtask with a file-disjoint touched area.
+    /// Builds one deterministic subtask with a touched-area planning hint.
     fn test_subtask(index: usize) -> SubtaskItem {
         SubtaskItem {
             acceptance_criteria: vec![format!("Work item {index} is complete")],

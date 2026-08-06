@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration_task\nSET acceptance_criteria = ?,\n    area_violations = '[]',\n    areas_compliant = NULL,\n    continuation_generation = continuation_generation + 1,\n    continuation_prompt = ?,\n    status = 'ContinuationPending',\n    touched_areas = ?,\n    result_summary = NULL,\n    verification_verdict = NULL,\n    verification_reason = NULL,\n    last_error = NULL,\n    updated_at = ?\nWHERE id = ?\n  AND child_session_id IS NOT NULL\n  AND status IN ('Ready', 'AwaitingIntegration', 'IntegrationFailed')\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "ef44cd4ee46c658f594399d7ceb6df8718e40128860dfec838a657cc8d15e3ba"
+}

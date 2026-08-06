@@ -377,9 +377,9 @@ an available `Stacked` option are marked `[Preview]`:
   base branch at launch time. From a draft session view, `Ctrl+V`, `Ctrl+Shift+V`, or
   `Alt+V` opens the draft composer and pastes one clipboard image into the next staged
   draft.
-- `Orchestrator` turns a broad goal into a file-disjoint plan, waits for approval, runs
-  multiple managed worker sessions, verifies their results, and integrates the approved
-  work. The controller reads the repository but never owns branch changes.
+- `Orchestrator` turns a broad goal into an independent-task plan, waits for approval,
+  runs multiple managed worker sessions, verifies their results, and integrates the
+  approved work. The controller reads the repository but never owns branch changes.
 - `Stacked` creates a draft below the selected parent session, with its future branch
   based on the parent session branch. Only one stacking level is available.
 
@@ -405,9 +405,10 @@ Use an orchestrator when a goal contains at least two independent pieces of work
    the decomposition or acceptance criteria. Controller clarifications and Agentty's
    plan or follow-up routing questions provide two or three selectable options with the
    recommended choice first; free-text answers remain available. A valid plan contains
-   between two and eight tasks. Every task has a stable key, standalone prompt, concrete
-   acceptance criteria, and literal repository-relative touched areas. Wildcards and
-   overlapping areas are rejected.
+   between two and eight tasks. Every task has a stable key, standalone prompt, and
+   concrete acceptance criteria. Optional literal repository-relative touched areas are
+   best-effort planning references: they may overlap and do not prevent a worker from
+   changing other files needed to complete its task. Wildcards remain invalid.
 1. Review the persisted plan on the campaign monitor above the controller chat. Before
    pressing `a` to approve, confirm the tasks and acceptance criteria. The number of
    simultaneous workers comes from the global **Orchestrator Parallelism** setting.
@@ -433,14 +434,16 @@ Use an orchestrator when a goal contains at least two independent pieces of work
    follow-up.
 1. After every task settles, Agentty sends one hidden, durable verification envelope to
    the controller. It contains each task's acceptance criteria, branch, bounded summary,
-   campaign goal, diffstat, token totals, merge order, and a mechanical touched-area
-   check computed from the child's changed-file list. Out-of-scope paths appear on the
-   campaign monitor and in the envelope. The controller can run targeted read-only Git
-   inspection, reports only cross-task synthesis and risks, and records an explicit pass
-   or flag for every ready task. This verification response is the campaign's single
-   controller report. Only explicit passes enter integration; flagged or missing
-   verdicts remain parked for correction. The controller reuses a task key to continue
-   the same live child when a correction is required.
+   campaign goal, diffstat, token totals, merge order, and a mechanical comparison
+   between expected and changed paths. Additional paths appear on the campaign monitor
+   and in the envelope as review context, not an automatic verification failure. The
+   comparison remains **not checked** when no expected areas were provided, even if the
+   child changed files. The controller can run targeted read-only Git inspection,
+   reports only cross-task synthesis and risks, and records an explicit pass or flag for
+   every ready task. This verification response is the campaign's single controller
+   report. Only explicit passes enter integration; flagged or missing verdicts remain
+   parked for correction. The controller reuses a task key to continue the same live
+   child when a correction is required.
 1. At **AwaitingIntegration**, press `a`, then choose **Local merges** or **Review
    requests**. Agentty applies local merges or creates forge review requests in plan
    order and records failures on the campaign monitor. A published review-request task
@@ -453,17 +456,19 @@ Use an orchestrator when a goal contains at least two independent pieces of work
    recorded as an **Integration failed** task, leaving the controller active for
    follow-up. Detached workers remain ordinary sessions.
 
-Multi-turn feedback is routed by scope. Reusing a settled task's exact key and touched
-areas continues its existing worker, branch, and conversation and returns it to
-verification. Previously passed but not yet integrated siblings return to **Ready** so
-the next settlement verifies one coherent campaign snapshot instead of stalling behind
-old integration state. This supports review-first workflows: after review workers settle
-and the controller summarizes their findings, describe the implementation follow-up in
-the orchestrator chat. The controller routes those instructions to the same completed
-workers, which keep their branches and conversation context. A new task key is treated
-as new scope and parks the campaign on the approval board before that worker starts.
-Once the controller is `Done`, a new goal or further feedback starts a new orchestrator
-campaign.
+Multi-turn feedback is routed by task identity. Reusing a settled task's exact key
+continues its existing worker, branch, and conversation and returns it to verification,
+even when the follow-up expects different files. Any touched-area references emitted for
+the continuation replace the previous references and are included in the resumed worker
+prompt and next comparison. Previously passed but not yet integrated siblings return to
+**Ready** so the next settlement verifies one coherent campaign snapshot instead of
+stalling behind old integration state. This supports review-first workflows: after
+review workers settle and the controller summarizes their findings, describe the
+implementation follow-up in the orchestrator chat. The controller routes those
+instructions to the same completed workers, which keep their branches and conversation
+context. A new task key is treated as new scope and parks the campaign on the approval
+board before that worker starts. Once the controller is `Done`, a new goal or further
+feedback starts a new orchestrator campaign.
 
 Press `c` on a draft or running controller to cancel it. Draft controllers can be
 canceled before their first goal is submitted. For running controllers, the confirmation

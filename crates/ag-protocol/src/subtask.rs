@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Each subtask is executed unattended by its own child session in its own
 /// worktree, branched from the same base branch as its siblings. Children never
-/// coordinate with each other while running, so a subtask is only well-formed
-/// when its prompt is self-contained and its `touched_areas` do not overlap any
-/// sibling's.
+/// coordinate with each other while running, so each prompt must be
+/// self-contained. `touched_areas` provides best-effort planning context rather
+/// than an exclusive ownership boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[schemars(
     title = "SubtaskItem",
@@ -51,15 +51,15 @@ pub struct SubtaskItem {
         description = "Short human-readable title describing what this subtask delivers."
     )]
     pub title: String,
-    /// Literal repository-relative paths or directories this subtask expects
-    /// to change.
+    /// Best-effort repository-relative paths or directories this subtask is
+    /// expected to change.
     #[serde(default)]
     #[schemars(
         title = "touched_areas",
-        description = "Literal repository-relative file or directory paths this subtask expects \
-                       to modify. Wildcard patterns are not supported. These sets must not \
-                       overlap between subtasks in the same plan. Defaults to an empty list when \
-                       omitted, which is rejected as an unplanned subtask."
+        description = "Best-effort repository-relative file or directory paths this subtask is \
+                       expected to modify. Wildcard patterns are not supported. Paths may overlap \
+                       between subtasks and workers may modify additional files when needed to \
+                       satisfy the task. Defaults to an empty list when omitted."
     )]
     pub touched_areas: Vec<String>,
 }
