@@ -7,6 +7,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.14.2] - 2026-08-05
+
+### Changed
+
+- agentty: treat orchestration touched areas as non-exclusive planning hints and use
+  changed-path comparisons as verification context instead of integration gates.
+- agentty: keep review-request campaign tasks active until their child sessions merge,
+  complete, or report a closed review request.
+
+### Fixed
+
+- agentty: keep draft orchestrators cancelable after worktree creation and before their
+  first goal submission.
+- agentty: allow review-ready managed workers to open their worktrees through an
+  explicit confirmation flow.
+- git: make command execution cancellable and bounded, retry index locks without
+  blocking, honor configured remotes, and preserve hook execution during squash merges.
+- forge: paginate GitHub review snapshots and redact credentials embedded in remote
+  URLs.
+- clipboard: fall back from Wayland to X11 when initializing Linux clipboard support.
+- release: bump workspace crate metadata and lockfile package versions to `0.14.2`.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.14.1] - 2026-08-04
 
 ### Added
