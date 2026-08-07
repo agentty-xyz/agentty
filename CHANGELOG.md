@@ -24,6 +24,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   recover only interrupted review generation with bounded persistence backoff, while
   persisting diff-preparation failures so storage or Git failures cannot strand
   orchestrated workers.
+- agentty: keep intermediate Codex commentary and blank completion fallbacks out of
+  completed focused reviews, using the latest valid terminal answer instead.
 
 ### Contributors
 

@@ -115,7 +115,8 @@ The shortcuts available in each state are listed in
 When a session enters **Review**, Agentty starts focused review in the background. While
 it is running, **AgentReview** keeps the review-oriented shortcuts available; pressing
 `r` starts session sync immediately and cancels pending focused-review output so stale
-review text cannot reappear after the rebase begins.
+review text cannot reappear after the rebase begins. Provider progress and commentary
+remain transient; only the terminal focused-review answer is stored and rendered.
 
 ### Typical Transitions
 

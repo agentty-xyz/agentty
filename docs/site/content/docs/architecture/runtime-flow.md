@@ -684,7 +684,10 @@ Title generation, focused review, commit-message generation, and conflict assist
 submit owned `OneShotRequest` values through `OneShotClient`. Its production
 implementation owns provider routing, CLI/app-server selection, protocol repair, runtime
 cleanup, and usage aggregation; app workflow tests inject `MockOneShotClient` without
-constructing provider commands.
+constructing provider commands. Codex app-server turns ignore `commentary` assistant
+items when selecting completed output and prefer a nonblank terminal agent message
+carried by the matching `turn/completed` payload. A blank completion fallback cannot
+replace valid final output received earlier in the turn.
 
 ## Sync, Merge, and Rebase Flows
 

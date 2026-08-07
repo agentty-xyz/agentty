@@ -221,6 +221,41 @@ pub(super) fn extract_agent_message(response_value: &Value) -> Option<ExtractedA
     }
 
     let item = response_value.get("params")?.get("item")?;
+    extract_completed_assistant_item(item)
+}
+
+/// Extracts the final assistant message carried by a matching
+/// `turn/completed` notification.
+///
+/// Current Codex app-server versions include the terminal agent message in
+/// `params.turn.items` as a completion fallback. Reading that canonical item
+/// prevents an earlier `commentary` item from becoming the completed turn
+/// response when no separate final `item/completed` notification was sent.
+/// Turn matching accepts the same nested and flat id aliases as completion
+/// parsing.
+pub(super) fn extract_turn_completed_agent_message(
+    response_value: &Value,
+    expected_turn_id: Option<&str>,
+) -> Option<ExtractedAgentMessage> {
+    if response_value.get("method").and_then(Value::as_str) != Some("turn/completed") {
+        return None;
+    }
+    let expected_turn_id = expected_turn_id?;
+    let turn_id = extract_turn_id_from_turn_completed_notification(response_value)?;
+    if turn_id != expected_turn_id {
+        return None;
+    }
+    let turn = response_value.get("params")?.get("turn")?;
+
+    turn.get("items")?
+        .as_array()?
+        .iter()
+        .rev()
+        .find_map(extract_completed_assistant_item)
+}
+
+/// Extracts terminal assistant text from one Codex thread item.
+fn extract_completed_assistant_item(item: &Value) -> Option<ExtractedAgentMessage> {
     let phase = item
         .get("phase")
         .and_then(Value::as_str)
@@ -229,12 +264,12 @@ pub(super) fn extract_agent_message(response_value: &Value) -> Option<ExtractedA
     if !is_completed_assistant_message_item_type(&item_type) {
         return None;
     }
-    if is_codex_thought_phase(phase.as_deref()) {
+    if is_codex_intermediate_phase(phase.as_deref()) {
         return None;
     }
 
     if let Some(item_text) = item.get("text").and_then(Value::as_str) {
-        if agent::is_codex_completion_status_message(item_text) {
+        if item_text.trim().is_empty() || agent::is_codex_completion_status_message(item_text) {
             return None;
         }
 
@@ -247,7 +282,11 @@ pub(super) fn extract_agent_message(response_value: &Value) -> Option<ExtractedA
     let content = item.get("content")?.as_array()?;
     let mut parts = Vec::new();
     for content_item in content {
-        if let Some(text) = content_item.get("text").and_then(Value::as_str) {
+        if let Some(text) = content_item
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+        {
             parts.push(text.to_string());
         }
     }
@@ -273,16 +312,17 @@ pub(super) fn is_completed_assistant_message_item_type(item_type: &str) -> bool 
     )
 }
 
-/// Returns whether one Codex assistant item `phase` denotes thought/planning
-/// text instead of final assistant output.
-pub(super) fn is_codex_thought_phase(phase: Option<&str>) -> bool {
+/// Returns whether one Codex assistant item `phase` denotes intermediate text
+/// instead of final assistant output.
+pub(super) fn is_codex_intermediate_phase(phase: Option<&str>) -> bool {
     let Some(phase_value) = phase else {
         return false;
     };
 
     let normalized_phase = phase_value.trim();
 
-    normalized_phase.eq_ignore_ascii_case("thinking")
+    normalized_phase.eq_ignore_ascii_case("commentary")
+        || normalized_phase.eq_ignore_ascii_case("thinking")
         || normalized_phase.eq_ignore_ascii_case("plan")
         || normalized_phase.eq_ignore_ascii_case("reasoning")
         || normalized_phase.eq_ignore_ascii_case("thought")
@@ -714,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_agent_message_ignores_thought_phase_status_and_unsupported_items() {
+    fn extract_agent_message_ignores_intermediate_blank_status_and_unsupported_items() {
         // Arrange
         let thought_response = serde_json::json!({
             "method": "item/completed",
@@ -723,6 +763,39 @@ mod tests {
                     "type": "assistant_message",
                     "phase": "Thinking",
                     "text": "private thought"
+                }
+            }
+        });
+        let commentary_response = serde_json::json!({
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "type": "agentMessage",
+                    "phase": "commentary",
+                    "text": "I'll inspect the current code."
+                }
+            }
+        });
+        let blank_text_response = serde_json::json!({
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "  \n "
+                }
+            }
+        });
+        let blank_content_response = serde_json::json!({
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "content": [
+                        {"text": "   "},
+                        {"type": "output_text"}
+                    ]
                 }
             }
         });
@@ -747,11 +820,17 @@ mod tests {
 
         // Act
         let thought_message = extract_agent_message(&thought_response);
+        let commentary_message = extract_agent_message(&commentary_response);
+        let blank_text_message = extract_agent_message(&blank_text_response);
+        let blank_content_message = extract_agent_message(&blank_content_response);
         let status_message = extract_agent_message(&status_response);
         let unsupported_message = extract_agent_message(&unsupported_response);
 
         // Assert
         assert_eq!(thought_message, None);
+        assert_eq!(commentary_message, None);
+        assert_eq!(blank_text_message, None);
+        assert_eq!(blank_content_message, None);
         assert_eq!(status_message, None);
         assert_eq!(unsupported_message, None);
     }
@@ -763,17 +842,93 @@ mod tests {
         let assistant_message_supported =
             is_completed_assistant_message_item_type("assistantmessage");
         let command_unsupported = is_completed_assistant_message_item_type("command_execution");
-        let thought_phase = is_codex_thought_phase(Some(" reasoning "));
-        let final_phase = is_codex_thought_phase(Some("final"));
-        let missing_phase = is_codex_thought_phase(None);
+        let commentary_phase = is_codex_intermediate_phase(Some(" commentary "));
+        let thought_phase = is_codex_intermediate_phase(Some(" reasoning "));
+        let final_phase = is_codex_intermediate_phase(Some("final_answer"));
+        let missing_phase = is_codex_intermediate_phase(None);
 
         // Assert
         assert!(agent_message_supported);
         assert!(assistant_message_supported);
         assert!(!command_unsupported);
+        assert!(commentary_phase);
         assert!(thought_phase);
         assert!(!final_phase);
         assert!(!missing_phase);
+    }
+
+    #[test]
+    fn extract_turn_completed_agent_message_uses_matching_terminal_item() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "turnId": "turn-123",
+                "turn": {
+                    "status": "completed",
+                    "items": [
+                        {
+                            "type": "agentMessage",
+                            "phase": "commentary",
+                            "text": "I'll inspect the current code."
+                        },
+                        {
+                            "type": "agentMessage",
+                            "phase": "final_answer",
+                            "text": "Final review result."
+                        }
+                    ]
+                }
+            }
+        });
+
+        // Act
+        let matching_message =
+            extract_turn_completed_agent_message(&response_value, Some("turn-123"));
+        let other_turn_message =
+            extract_turn_completed_agent_message(&response_value, Some("turn-other"));
+        let missing_turn_message = extract_turn_completed_agent_message(&response_value, None);
+        let non_completion_message = extract_turn_completed_agent_message(
+            &serde_json::json!({"method": "turn/started"}),
+            Some("turn-123"),
+        );
+
+        // Assert
+        assert_eq!(
+            matching_message,
+            Some(ExtractedAgentMessage {
+                message: "Final review result.".to_string(),
+                phase: Some("final_answer".to_string()),
+            })
+        );
+        assert_eq!(other_turn_message, None);
+        assert_eq!(missing_turn_message, None);
+        assert_eq!(non_completion_message, None);
+    }
+
+    #[test]
+    fn extract_turn_completed_agent_message_rejects_commentary_only_turn() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "turn": {
+                    "id": "turn-123",
+                    "status": "completed",
+                    "items": [{
+                        "type": "agentMessage",
+                        "phase": "commentary",
+                        "text": "I'll inspect the current code."
+                    }]
+                }
+            }
+        });
+
+        // Act
+        let message = extract_turn_completed_agent_message(&response_value, Some("turn-123"));
+
+        // Assert
+        assert_eq!(message, None);
     }
 
     #[test]
