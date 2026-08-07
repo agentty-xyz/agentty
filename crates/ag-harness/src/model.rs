@@ -23,6 +23,7 @@ pub trait Model: Send + Sync {
 pub struct ModelRequest {
     prompt: String,
     schema: OutputSchema,
+    session_id: Option<String>,
 }
 
 impl ModelRequest {
@@ -31,7 +32,20 @@ impl ModelRequest {
         Self {
             prompt: prompt.into(),
             schema,
+            session_id: None,
         }
+    }
+
+    /// Associates the request with the persisted harness session that owns it.
+    ///
+    /// Instrumented model adapters attach this value to the model-call span as
+    /// `gen_ai.conversation.id`. The value is never used as a metric
+    /// attribute.
+    #[must_use]
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
+
+        self
     }
 
     /// Returns the request prompt.
@@ -42,6 +56,11 @@ impl ModelRequest {
     /// Returns the schema that the response must match.
     pub fn schema(&self) -> &OutputSchema {
         &self.schema
+    }
+
+    /// Returns the persisted harness session identifier, when supplied.
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
     }
 }
 
@@ -157,6 +176,19 @@ mod tests {
 
         // Assert
         assert_eq!(response.output(), &value);
+    }
+
+    #[test]
+    fn request_exposes_session_id() {
+        // Arrange
+        let schema =
+            OutputSchema::new(json!({ "type": "object" })).expect("schema should be valid");
+
+        // Act
+        let request = ModelRequest::new("hello", schema).with_session_id("session-42");
+
+        // Assert
+        assert_eq!(request.session_id(), Some("session-42"));
     }
 
     #[test]

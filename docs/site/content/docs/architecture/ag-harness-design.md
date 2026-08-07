@@ -132,6 +132,58 @@ Configurations that cannot satisfy the contract, such as Qwen thinking mode, ret
 explicit unsupported-configuration error rather than silently falling back to
 unstructured text.
 
+## Telemetry
+
+- **Traces** - one GenAI call span with child spans for schema compilation, every HTTP
+  attempt, and response parsing and validation.
+- **Correlation** - `gen_ai.conversation.id` links the call span to its harness session.
+- **Retries** - transient failures retry up to twice with bounded jitter and
+  `Retry-After` support.
+- **Metrics** - operation duration and token usage, labeled only by provider and model.
+- **Logs** - existing `tracing` events export with their active trace context.
+- **Ownership** - model adapters instrument calls; binaries configure exporters and
+  flush providers on exit.
+- **Privacy** - prompt, response, and schema content are not recorded.
+
+```mermaid
+flowchart LR
+    C["GenAI call span"] --> S["Schema compile span"]
+    C --> H["HTTP attempt spans"]
+    C --> P["Parse validate span"]
+    C --> M["Duration and token metrics"]
+    C --> L["Contextual logs"]
+    C --> O["OTLP collector"]
+    M --> O
+    L --> O
+    O --> T["Tempo traces"]
+    O --> R["Prometheus metrics"]
+    O --> K["Loki logs"]
+```
+
+### View telemetry locally
+
+- Start the Grafana OpenTelemetry stack:
+
+  ```bash
+  podman run --rm -it -p 3000:3000 -p 4318:4318 \
+    docker.io/grafana/otel-lgtm:latest
+  ```
+
+- Run the Qwen example with OTLP export enabled:
+
+  ```bash
+  export AG_HARNESS_EXTERNAL_OTEL=1
+  export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+  export DASHSCOPE_API_KEY=your-key
+  export DASHSCOPE_BASE_URL=your-qwen-base-url
+  export AG_HARNESS_SESSION_ID=session-123 # Optional
+
+  cargo run -p ag-harness --example qwen
+  ```
+
+- Open `http://127.0.0.1:3000` (`admin`/`admin`): Tempo shows traces, Prometheus shows
+  metrics, and Loki shows logs.
+
 ## Permissions
 
 All tools are denied by default. The session policy explicitly allows tools and, for

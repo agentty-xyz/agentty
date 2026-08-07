@@ -6,6 +6,7 @@
 mod model;
 mod qwen;
 mod schema_contract;
+mod telemetry;
 
 pub use model::{Model, ModelError, ModelRequest, ModelResponse};
 pub use qwen::{Qwen, QwenConfig};
