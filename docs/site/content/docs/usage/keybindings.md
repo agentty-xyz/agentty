@@ -177,9 +177,10 @@ State-specific differences:
 - **AgentReview** keeps the review shortcuts, including `r`. Pressing `r` starts session
   sync immediately and cancels the pending focused review so stale review output cannot
   appear after the rebase begins.
-- **InProgress** sessions use `Enter` to queue a follow-up message and keep `r`
-  available to queue session sync behind the running turn. Each `Ctrl+c` retracts the
-  newest queued message; when the queue is empty, `Ctrl+c` stops the active turn.
+- **InProgress** sessions use `Enter` to queue a follow-up message, keep `r` available
+  to queue session sync, and keep `p` available to queue review-request creation behind
+  the running turn. Each `Ctrl+c` retracts the newest queued message; when the queue is
+  empty, `Ctrl+c` stops the active turn.
 - **Rebasing** sessions use `Enter` to queue a follow-up message behind the active
   session sync. Slash commands and branch actions remain unavailable until sync
   finishes.

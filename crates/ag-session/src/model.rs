@@ -435,7 +435,7 @@ pub struct Session {
     pub published_upstream_ref: Option<String>,
     /// Structured clarification questions waiting for answers.
     pub questions: Vec<QuestionItem>,
-    /// Chat messages waiting behind the active turn or rebase.
+    /// Chat messages waiting behind the active turn or queued branch action.
     pub queued_messages: Vec<String>,
     /// Persisted review-request linkage, when present.
     pub review_request: Option<ReviewRequest>,

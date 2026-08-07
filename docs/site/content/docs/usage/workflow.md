@@ -98,7 +98,7 @@ to the assist agent.
 | Status          | Meaning                                                          |
 | --------------- | ---------------------------------------------------------------- |
 | **Draft**       | Created but not started; draft sessions can stage prompts first. |
-| **InProgress**  | Agent is working; `r` queues sync behind the running turn.       |
+| **InProgress**  | Agent is working; `r` and `p` queue branch actions.              |
 | **Review**      | Agent finished; changes are ready for review.                    |
 | **AgentReview** | Focused review is generating; `r` cancels it before syncing.     |
 | **Question**    | Agent requested clarification before continuing.                 |
@@ -230,6 +230,16 @@ the single queued rebase instead of adding duplicates. Session sync reserves
 branch-publish ownership before it queues or starts, and retains that ownership through
 its post-rebase push. A completed turn or subsequent sync therefore cannot start a
 competing published-branch auto-push.
+
+Pressing `p` during a running turn opens the usual branch-name popup and queues
+review-request creation on that same worker. The session remains **InProgress** and
+shows a queued review-request row until the active turn finishes. Publishing then runs
+before any remaining queued chat messages, and the row changes to
+`Publishing review request...`. Like queued sync, the queued publish reserves branch
+ownership before the current turn reaches auto-push, so the completed turn cannot race
+the requested review creation. If another branch operation already owns that lock, the
+handler queues immediately without waiting and the worker serializes review-request
+creation behind the operation in progress.
 
 Session output keeps workflow feedback in execution order. Commit feedback appears
 before its sync result, post-sync auto-push progress appears after that result, and
@@ -491,16 +501,17 @@ can retry without reporting a false terminal cancellation.
 
 ## Branch Publish Flow
 
-<a id="usage-review-request-flow"></a> In **Review** and **AgentReview**, `p` opens a
-publish popup for the linked forge review request:
+<a id="usage-review-request-flow"></a> In **Review**, **AgentReview**, and
+**InProgress**, `p` opens a publish popup for the linked forge review request:
 
 - Leave the field empty to keep the default branch target, or type a custom remote
   branch name. After the first publish, the popup is locked to that same remote branch.
 - Agentty publishes with `git push --force-with-lease`, then creates or refreshes the
   linked review request. After confirmation, the popup closes and publishing continues
-  in the background while session chat remains interactive. Inline progress is replaced
-  only after the forge URL is ready, including across intermediate session refreshes. It
-  becomes a one-line `[Review Request] Created PR URL` or
+  on the session worker while session chat remains interactive. During **InProgress**,
+  the action waits behind the active turn and ahead of remaining queued chat. Inline
+  progress is replaced only after the forge URL is ready, including across intermediate
+  session refreshes. It becomes a one-line `[Review Request] Created PR URL` or
   `[Review Request] Created MR URL` transcript notice recorded at that point in session
   history, or failure details when the task finishes; `p` stays hidden while that
   publish is active. Later turns do not move or reconstruct the creation notice. GitHub

@@ -15,7 +15,7 @@ use ag_git::GitClient;
 use ag_protocol::AgentResponse;
 #[cfg(test)]
 use ag_protocol::AgentResponseSummary;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -24,11 +24,15 @@ use super::merge::{
 };
 use super::task::SessionTranscriptMessageAppend;
 use super::{SessionTaskService, isolation, session_folder, turn};
+use crate::app::branch_publish::{
+    BranchPublishTaskContext, BranchPublishTaskSession, review_request_from_publish_result,
+    run_branch_publish_action,
+};
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::AgentSelection;
-use crate::domain::session::{SessionId, SessionStats, Status};
+use crate::domain::session::{PublishBranchAction, ReviewRequest, SessionId, SessionStats, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, OperationRepository, SessionOperationRow};
@@ -38,7 +42,18 @@ use crate::infra::process;
 
 const RESTART_FAILURE_REASON: &str = "Interrupted by app restart";
 const CANCEL_BEFORE_EXECUTION_REASON: &str = "Session canceled before execution";
+const CREATE_REVIEW_REQUEST_OPERATION_KIND: &str = "create_review_request";
 const REBASE_OPERATION_KIND: &str = "rebase";
+const SKIPPED_CREATE_REVIEW_REQUEST_REASON: &str =
+    "Review-request creation was canceled or already finished before execution";
+
+/// Shared completion slot used by programmatic review-request callers.
+///
+/// The runtime retains a clone while handing the command to the worker so an
+/// enqueue failure can still answer the caller instead of dropping the
+/// response channel with an ambiguous runtime-unavailable error.
+pub(super) type ReviewRequestResponse =
+    Arc<Mutex<Option<oneshot::Sender<Result<ReviewRequest, ag_session::SessionError>>>>>;
 
 /// Per-turn data captured at enqueue time that travels alongside the channel
 /// turn but is consumed only after turn completion.
@@ -65,6 +80,19 @@ pub(super) struct TurnMetadata {
 /// `StartPrompt`, `StartPromptAppServer`) with a single provider-agnostic
 /// variant. The underlying channel adapter handles transport-specific details.
 pub(super) enum SessionCommand {
+    /// Publishes the session branch and creates or refreshes its forge review
+    /// request after earlier work on this worker has completed.
+    CreateReviewRequest {
+        /// Session snapshot captured when the action was accepted.
+        branch_publish_session: BranchPublishTaskSession,
+        /// Persisted operation identifier.
+        operation_id: String,
+        /// Optional user-selected remote branch name.
+        remote_branch_name: Option<String>,
+        /// Optional programmatic caller waiting for the resulting review
+        /// request.
+        response: Option<ReviewRequestResponse>,
+    },
     /// Runs the session branch rebase workflow through this worker so
     /// conflict-resolution prompts reuse the active provider conversation.
     Rebase {
@@ -92,13 +120,16 @@ impl SessionCommand {
     /// Returns the persisted operation identifier for this command.
     fn operation_id(&self) -> &str {
         match self {
-            Self::Rebase { operation_id, .. } | Self::Run { operation_id, .. } => operation_id,
+            Self::CreateReviewRequest { operation_id, .. }
+            | Self::Rebase { operation_id, .. }
+            | Self::Run { operation_id, .. } => operation_id,
         }
     }
 
     /// Returns the operation kind persisted in the operations table.
     fn kind(&self) -> &'static str {
         match self {
+            Self::CreateReviewRequest { .. } => CREATE_REVIEW_REQUEST_OPERATION_KIND,
             Self::Rebase { .. } => REBASE_OPERATION_KIND,
             Self::Run {
                 request_kind: AgentRequestKind::SessionStart,
@@ -127,6 +158,21 @@ pub(super) fn has_unfinished_rebase_operation(
 ) -> bool {
     operations.iter().any(|operation| {
         operation.session_id == session_id && operation.kind == REBASE_OPERATION_KIND
+    })
+}
+
+/// Returns whether the session has a queued or running branch operation that
+/// must run before automatic post-turn publishing.
+pub(super) fn has_unfinished_branch_operation(
+    operations: &[SessionOperationRow],
+    session_id: &str,
+) -> bool {
+    operations.iter().any(|operation| {
+        operation.session_id == session_id
+            && matches!(
+                operation.kind.as_str(),
+                CREATE_REVIEW_REQUEST_OPERATION_KIND | REBASE_OPERATION_KIND
+            )
     })
 }
 
@@ -665,7 +711,7 @@ impl SessionWorkerService {
     ) -> Result<(), SessionError> {
         let sender = self.workers.get(session_id).cloned().ok_or_else(|| {
             SessionError::Workflow(
-                "Cannot queue session sync because the active session worker is unavailable"
+                "Cannot queue session action because the active session worker is unavailable"
                     .to_string(),
             )
         })?;
@@ -841,16 +887,21 @@ impl SessionWorkerService {
         command: SessionCommand,
     ) -> Option<Result<(), SessionError>> {
         let operation_id = command.operation_id().to_string();
-        if Self::should_skip_worker_command(context, &operation_id).await {
-            return None;
-        }
-        // Best-effort: operation tracking metadata is non-critical.
-        let _ = context
-            .db
-            .operations()
-            .mark_session_operation_running(&operation_id)
-            .await;
-        if Self::should_skip_worker_command(context, &operation_id).await {
+        let should_skip = if Self::should_skip_worker_command(context, &operation_id).await {
+            true
+        } else {
+            // Best-effort: operation tracking metadata is non-critical.
+            let _ = context
+                .db
+                .operations()
+                .mark_session_operation_running(&operation_id)
+                .await;
+
+            Self::should_skip_worker_command(context, &operation_id).await
+        };
+        if should_skip {
+            Self::complete_skipped_review_request_response(&command);
+
             return None;
         }
 
@@ -875,6 +926,22 @@ impl SessionWorkerService {
         }
 
         Some(result)
+    }
+
+    /// Answers a programmatic review-request caller when its queued command
+    /// is canceled or otherwise finished before worker execution begins.
+    fn complete_skipped_review_request_response(command: &SessionCommand) {
+        if let SessionCommand::CreateReviewRequest {
+            response: Some(response),
+            ..
+        } = command
+            && let Ok(mut response) = response.lock()
+            && let Some(response_tx) = response.take()
+        {
+            let _ = response_tx.send(Err(ag_session::SessionError::Operation(
+                SKIPPED_CREATE_REVIEW_REQUEST_REASON.to_string(),
+            )));
+        }
     }
 
     /// Pops queued prompts and dispatches them as follow-up `SessionResume`
@@ -960,6 +1027,20 @@ impl SessionWorkerService {
         command: SessionCommand,
     ) -> Result<(), SessionError> {
         match command {
+            SessionCommand::CreateReviewRequest {
+                branch_publish_session,
+                remote_branch_name,
+                response,
+                ..
+            } => {
+                Self::run_create_review_request_command(
+                    context,
+                    branch_publish_session,
+                    remote_branch_name,
+                    response,
+                )
+                .await
+            }
             SessionCommand::Rebase { base_branch, .. } => {
                 Self::run_rebase_command(context, Arc::clone(one_shot_client), base_branch).await
             }
@@ -981,6 +1062,57 @@ impl SessionWorkerService {
                 .await
             }
         }
+    }
+
+    /// Publishes one review request inside the serialized session worker.
+    ///
+    /// The live status is applied at execution time so an action accepted
+    /// during `InProgress` observes the completed turn's review-ready state
+    /// instead of the enqueue-time snapshot.
+    async fn run_create_review_request_command(
+        context: &SessionWorkerContext,
+        mut branch_publish_session: BranchPublishTaskSession,
+        remote_branch_name: Option<String>,
+        response: Option<ReviewRequestResponse>,
+    ) -> Result<(), SessionError> {
+        branch_publish_session.status = context.current_status();
+        let _ = context
+            .app_event_tx
+            .send(AppEvent::BranchPublishActionStarted {
+                session_id: context.session_id.clone(),
+            });
+        let result = run_branch_publish_action(
+            PublishBranchAction::PublishPullRequest,
+            BranchPublishTaskContext {
+                branch_operation_lock: Arc::clone(&context.branch_operation_lock),
+                session: branch_publish_session,
+            },
+            context.db.clone(),
+            Arc::clone(&context.clock),
+            Arc::clone(&context.git_client),
+            Arc::clone(&context.review_request_client),
+            remote_branch_name,
+        )
+        .await;
+        let response_result = review_request_from_publish_result(&result)
+            .map_err(ag_session::SessionError::Operation);
+        let command_result = review_request_from_publish_result(&result)
+            .map(|_| ())
+            .map_err(SessionError::Workflow);
+        let _ = context
+            .app_event_tx
+            .send(AppEvent::BranchPublishActionCompleted {
+                result: Box::new(result),
+                session_id: context.session_id.clone(),
+            });
+        if let Some(response) = response
+            && let Ok(mut response) = response.lock()
+            && let Some(response_tx) = response.take()
+        {
+            let _ = response_tx.send(response_result);
+        }
+
+        command_result
     }
 
     /// Runs the session rebase command inside this worker's serialized queue.
@@ -1123,6 +1255,49 @@ impl SessionManager {
         self.worker_service_mut()
             .enqueue_session_command_idempotently(services, runtime, command)
             .await
+    }
+
+    /// Persists and queues review-request creation on one session worker.
+    ///
+    /// Running sessions must already own a worker so stale status cannot
+    /// create a concurrent executor. Review-ready sessions lazily create a
+    /// worker and execute the action immediately.
+    ///
+    /// # Errors
+    /// Returns an error when operation persistence or worker delivery fails.
+    pub(crate) async fn enqueue_review_request_creation(
+        &mut self,
+        services: &AppServices,
+        branch_publish_session: BranchPublishTaskSession,
+        remote_branch_name: Option<String>,
+        response_tx: Option<oneshot::Sender<Result<ReviewRequest, ag_session::SessionError>>>,
+    ) -> Result<(), SessionError> {
+        let session_id = branch_publish_session.id.clone();
+        let status = branch_publish_session.status;
+        let response = response_tx.map(|response_tx| Arc::new(Mutex::new(Some(response_tx))));
+        let command = SessionCommand::CreateReviewRequest {
+            branch_publish_session,
+            operation_id: Uuid::new_v4().to_string(),
+            remote_branch_name,
+            response: response.clone(),
+        };
+        let result = if status == Status::InProgress {
+            self.worker_service_mut()
+                .enqueue_existing_session_command(services, &session_id, command)
+                .await
+        } else {
+            self.enqueue_session_command(services, &session_id, command)
+                .await
+        };
+        if let Err(error) = &result
+            && let Some(response) = response
+            && let Ok(mut response) = response.lock()
+            && let Some(response_tx) = response.take()
+        {
+            let _ = response_tx.send(Err(ag_session::SessionError::Operation(error.to_string())));
+        }
+
+        result
     }
 
     /// Drops the in-memory worker sender for a session.
@@ -1460,6 +1635,19 @@ mod tests {
     /// operation labels.
     fn test_session_command_kind_values() {
         // Arrange
+        let review_request_command = SessionCommand::CreateReviewRequest {
+            branch_publish_session: BranchPublishTaskSession {
+                base_branch: "main".to_string(),
+                folder: PathBuf::new(),
+                id: "sess1".into(),
+                published_upstream_ref: None,
+                review_request: None,
+                status: Status::Review,
+            },
+            operation_id: "op-review-request".to_string(),
+            remote_branch_name: None,
+            response: None,
+        };
         let start_command = SessionCommand::Run {
             operation_id: "op-start".to_string(),
             request_kind: AgentRequestKind::SessionStart,
@@ -1504,14 +1692,159 @@ mod tests {
         };
 
         // Act
+        let review_request_kind = review_request_command.kind();
         let start_kind = start_command.kind();
         let resume_kind = resume_command.kind();
         let account_read_kind = account_read_command.kind();
 
         // Assert
+        assert_eq!(review_request_kind, "create_review_request");
         assert_eq!(start_kind, "start_prompt");
         assert_eq!(resume_kind, "reply");
         assert_eq!(account_read_kind, "account_read");
+    }
+
+    #[test]
+    fn test_unfinished_branch_operation_includes_review_request_creation() {
+        // Arrange
+        let operations = vec![SessionOperationRow {
+            cancel_requested: false,
+            finished_at: None,
+            heartbeat_at: None,
+            id: "op-review-request".to_string(),
+            kind: CREATE_REVIEW_REQUEST_OPERATION_KIND.to_string(),
+            last_error: None,
+            queued_at: 0,
+            session_id: "sess1".to_string(),
+            started_at: None,
+            status: "queued".to_string(),
+        }];
+
+        // Act
+        let has_branch_operation = has_unfinished_branch_operation(&operations, "sess1");
+        let other_session_has_branch_operation =
+            has_unfinished_branch_operation(&operations, "sess2");
+
+        // Assert
+        assert!(has_branch_operation);
+        assert!(!other_session_has_branch_operation);
+    }
+
+    #[tokio::test]
+    async fn test_create_review_request_command_waits_for_live_review_status() {
+        // Arrange
+        let (mut context, _db, _queue, _base_dir) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::Done).await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        context.app_event_tx = app_event_tx;
+        let (response_tx, response_rx) = oneshot::channel();
+        let command = SessionCommand::CreateReviewRequest {
+            branch_publish_session: BranchPublishTaskSession {
+                base_branch: "main".to_string(),
+                folder: context.folder.clone(),
+                id: context.session_id.clone(),
+                published_upstream_ref: None,
+                review_request: None,
+                status: Status::InProgress,
+            },
+            operation_id: "op-review-request".to_string(),
+            remote_branch_name: None,
+            response: Some(Arc::new(Mutex::new(Some(response_tx)))),
+        };
+
+        // Act
+        let result = SessionWorkerService::execute_session_command(
+            &context,
+            &auto_commit_one_shot_client(),
+            command,
+        )
+        .await;
+        let response = response_rx
+            .await
+            .expect("review-request response should be delivered");
+        let started_event = app_event_rx
+            .recv()
+            .await
+            .expect("publish-start event should be emitted");
+        let completed_event = app_event_rx
+            .recv()
+            .await
+            .expect("publish-complete event should be emitted");
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(SessionError::Workflow(message))
+                if message == "Session must be in review to publish the review request."
+        ));
+        assert_eq!(
+            response,
+            Err(ag_session::SessionError::Operation(
+                "Session must be in review to publish the review request.".to_string()
+            ))
+        );
+        assert!(matches!(
+            started_event,
+            AppEvent::BranchPublishActionStarted { session_id } if session_id == "sess1"
+        ));
+        assert!(matches!(
+            completed_event,
+            AppEvent::BranchPublishActionCompleted { result, session_id }
+                if result.is_err() && session_id == "sess1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_skipped_review_request_command_answers_programmatic_caller() {
+        // Arrange
+        let (context, db, _queue, _base_dir) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::Review).await;
+        db.operations()
+            .insert_session_operation(
+                "op-review-request",
+                &context.session_id,
+                CREATE_REVIEW_REQUEST_OPERATION_KIND,
+            )
+            .await
+            .expect("review-request operation should be inserted");
+        db.operations()
+            .request_cancel_for_session_operations(&context.session_id)
+            .await
+            .expect("review-request operation should be canceled");
+        let (response_tx, response_rx) = oneshot::channel();
+        let command = SessionCommand::CreateReviewRequest {
+            branch_publish_session: BranchPublishTaskSession {
+                base_branch: "main".to_string(),
+                folder: context.folder.clone(),
+                id: context.session_id.clone(),
+                published_upstream_ref: None,
+                review_request: None,
+                status: Status::Review,
+            },
+            operation_id: "op-review-request".to_string(),
+            remote_branch_name: None,
+            response: Some(Arc::new(Mutex::new(Some(response_tx)))),
+        };
+
+        // Act
+        let command_result = SessionWorkerService::process_session_command(
+            &context,
+            &auto_commit_one_shot_client(),
+            command,
+        )
+        .await;
+        let response = response_rx
+            .await
+            .expect("skipped review-request response should be delivered");
+
+        // Assert
+        assert!(command_result.is_none());
+        assert_eq!(
+            response,
+            Err(ag_session::SessionError::Operation(
+                SKIPPED_CREATE_REVIEW_REQUEST_REASON.to_string()
+            ))
+        );
     }
 
     #[tokio::test]

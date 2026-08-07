@@ -149,6 +149,25 @@ pub(crate) enum BranchPublishTaskSuccess {
 pub(crate) type BranchPublishTaskResult =
     Result<BranchPublishTaskSuccess, BranchPublishTaskFailure>;
 
+/// Extracts the review request created by a completed publish action.
+///
+/// # Errors
+/// Returns the user-facing publish failure, or an invariant error when a
+/// plain branch-push result is supplied for review-request creation.
+pub(crate) fn review_request_from_publish_result(
+    result: &BranchPublishTaskResult,
+) -> Result<ReviewRequest, String> {
+    match result {
+        Ok(BranchPublishTaskSuccess::PullRequestPublished { review_request, .. }) => {
+            Ok(review_request.clone())
+        }
+        Ok(BranchPublishTaskSuccess::Pushed { .. }) => {
+            Err("Review-request publishing completed without a review request".to_string())
+        }
+        Err(BranchPublishTaskFailure { message, .. }) => Err(message.clone()),
+    }
+}
+
 /// Forge-specific metadata used to describe one review-request creation path
 /// after a branch push.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -165,6 +184,12 @@ pub(crate) fn branch_publish_loading_label(publish_branch_action: PublishBranchA
         PublishBranchAction::Push => "Pushing branch...".to_string(),
         PublishBranchAction::PublishPullRequest => "Publishing review request...".to_string(),
     }
+}
+
+/// Returns the inline label shown while review-request creation waits behind
+/// an active session turn.
+pub(crate) fn review_request_queued_label() -> String {
+    "Review request queued; publishing after the current turn finishes...".to_string()
 }
 
 /// Returns the inline success title for a completed branch-publish action.

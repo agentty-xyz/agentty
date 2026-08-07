@@ -13,12 +13,11 @@ use ag_session::{
     SessionRole, SessionService, SessionSettings, SessionStatus,
 };
 use async_trait::async_trait;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
-use crate::app::branch_publish::{
-    BranchPublishTaskFailure, BranchPublishTaskResult, BranchPublishTaskSuccess,
-    branch_publish_loading_label, run_branch_publish_action,
-};
+#[cfg(test)]
+use crate::app::branch_publish::{BranchPublishTaskSuccess, review_request_from_publish_result};
+use crate::app::branch_publish::{branch_publish_loading_label, review_request_queued_label};
 use crate::app::orchestration::{OrchestrationApprovalOutcome, child_session_is_stopped};
 use crate::app::session::{
     SessionCreationKind, SessionCreationSettings, migrate_session_off_retired_model,
@@ -227,14 +226,16 @@ impl App {
                 response_tx,
                 session_id,
             } => {
-                self.start_api_review_request_publish(session_id, access, response_tx);
+                self.start_api_review_request_publish(session_id, access, response_tx)
+                    .await;
             }
         }
     }
 
-    /// Starts review-request publishing on the detached branch-publish
-    /// workflow and leaves the foreground command loop available.
-    fn start_api_review_request_publish(
+    /// Queues review-request publishing on the session worker and leaves the
+    /// foreground command loop available while the API caller awaits the
+    /// worker result.
+    async fn start_api_review_request_publish(
         &mut self,
         session_id: SessionId,
         access: SessionRuntimeAccess,
@@ -262,26 +263,36 @@ impl App {
 
             return;
         };
-        let clock = self.services.clock();
-        let db = self.services.db().clone();
-        let event_sender = self.services.event_sender();
-        let git_client = self.services.git_client();
-        let review_request_client = self.services.review_request_client();
-        let publish_future = run_branch_publish_action(
-            PublishBranchAction::PublishPullRequest,
-            branch_publish_context,
-            db,
-            clock,
-            git_client,
-            review_request_client,
-            None,
-        );
-
-        self.sessions.start_branch_publish(
-            &session_id,
-            branch_publish_loading_label(PublishBranchAction::PublishPullRequest),
-        );
-        spawn_api_review_request_publish(publish_future, event_sender, response_tx, session_id);
+        let is_queued =
+            branch_publish_context.session.status == crate::domain::session::Status::InProgress;
+        let branch_operation_lock = Arc::clone(&branch_publish_context.branch_operation_lock);
+        // Reserve an idle branch before persistence. An existing owner
+        // already serializes worker execution, so the runtime actor never waits here.
+        let _branch_operation_guard = branch_operation_lock.try_lock_owned().ok();
+        let enqueue_result = self
+            .sessions
+            .enqueue_review_request_creation(
+                &self.services,
+                branch_publish_context.session,
+                None,
+                Some(response_tx),
+            )
+            .await;
+        let loading_label = if is_queued {
+            review_request_queued_label()
+        } else {
+            branch_publish_loading_label(PublishBranchAction::PublishPullRequest)
+        };
+        self.sessions
+            .start_branch_publish(&session_id, loading_label);
+        if let Err(error) = enqueue_result {
+            self.sessions.finish_branch_publish(
+                &session_id,
+                crate::domain::transient_message::TransientMessageBody::Markdown(format!(
+                    "**Review request publish failed**\n\n{error}"
+                )),
+            );
+        }
     }
 
     /// Creates one API-requested session, validating project relationships and
@@ -927,42 +938,6 @@ struct InheritedCreationSettings {
     settings: SessionCreationSettings,
 }
 
-/// Spawns one review-request publish future and routes its result to both the
-/// app reducer and the original API caller.
-fn spawn_api_review_request_publish(
-    publish_future: impl Future<Output = BranchPublishTaskResult> + Send + 'static,
-    event_sender: mpsc::UnboundedSender<AppEvent>,
-    response_tx: oneshot::Sender<Result<ReviewRequest, ApiSessionError>>,
-    session_id: SessionId,
-) {
-    tokio::spawn(async move {
-        let result = publish_future.await;
-        let response_result = api_review_request_result(&result);
-        let _ = event_sender.send(AppEvent::BranchPublishActionCompleted {
-            result: Box::new(result),
-            session_id,
-        });
-        let _ = response_tx.send(response_result);
-    });
-}
-
-/// Converts one branch-publish task result into the public API result.
-fn api_review_request_result(
-    result: &BranchPublishTaskResult,
-) -> Result<ReviewRequest, ApiSessionError> {
-    match result {
-        Ok(BranchPublishTaskSuccess::PullRequestPublished { review_request, .. }) => {
-            Ok(review_request.clone())
-        }
-        Ok(BranchPublishTaskSuccess::Pushed { .. }) => Err(ApiSessionError::Operation(
-            "Review-request publishing completed without a review request".to_string(),
-        )),
-        Err(BranchPublishTaskFailure { message, .. }) => {
-            Err(ApiSessionError::Operation(message.clone()))
-        }
-    }
-}
-
 /// Combines a rejected question answer with a subsequent persistence failure.
 fn question_restore_error(
     send_error: &ApiSessionError,
@@ -1542,84 +1517,16 @@ mod tests {
         });
 
         // Act
-        let published_review_request = api_review_request_result(&published_result);
-        let pushed_error = api_review_request_result(&pushed_result)
+        let published_review_request = review_request_from_publish_result(&published_result);
+        let pushed_error = review_request_from_publish_result(&pushed_result)
             .expect_err("a plain branch-push result should not satisfy the API request");
 
         // Assert
         assert_eq!(published_review_request, Ok(review_request));
         assert_eq!(
             pushed_error,
-            ApiSessionError::Operation(
-                "Review-request publishing completed without a review request".to_string()
-            )
+            "Review-request publishing completed without a review request".to_string()
         );
-    }
-
-    #[tokio::test]
-    async fn api_review_request_publish_runs_detached_from_its_caller() {
-        // Arrange
-        let publish_started = Arc::new(tokio::sync::Notify::new());
-        let publish_release = Arc::new(tokio::sync::Notify::new());
-        let publish_future = {
-            let publish_started = Arc::clone(&publish_started);
-            let publish_release = Arc::clone(&publish_release);
-
-            async move {
-                publish_started.notify_one();
-                publish_release.notified().await;
-
-                Err(BranchPublishTaskFailure::failed(
-                    PublishBranchAction::PublishPullRequest,
-                    "simulated publish failure".to_string(),
-                ))
-            }
-        };
-        let (event_sender, mut event_receiver) = mpsc::unbounded_channel();
-        let (response_tx, mut response_rx) = oneshot::channel();
-
-        // Act
-        spawn_api_review_request_publish(
-            publish_future,
-            event_sender,
-            response_tx,
-            SessionId::from("session-1"),
-        );
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            publish_started.notified(),
-        )
-        .await
-        .expect("publish task should start");
-        let pending_response = response_rx.try_recv();
-        publish_release.notify_one();
-        let response = tokio::time::timeout(std::time::Duration::from_secs(1), response_rx)
-            .await
-            .expect("publish response should arrive")
-            .expect("publish response sender should stay available");
-        let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_receiver.recv())
-            .await
-            .expect("publish event should arrive")
-            .expect("publish event sender should stay available");
-
-        // Assert
-        assert!(matches!(
-            pending_response,
-            Err(oneshot::error::TryRecvError::Empty)
-        ));
-        assert_eq!(
-            response,
-            Err(ApiSessionError::Operation(
-                "simulated publish failure".to_string()
-            ))
-        );
-        assert!(matches!(
-            event,
-            AppEvent::BranchPublishActionCompleted {
-                result,
-                session_id,
-            } if result.is_err() && session_id == "session-1"
-        ));
     }
 
     #[test]
@@ -1976,7 +1883,8 @@ mod tests {
             session_id.clone(),
             SessionRuntimeAccess::User,
             publish_tx,
-        );
+        )
+        .await;
         let publish_error = publish_rx
             .await
             .expect("publish result should be returned")
@@ -1996,6 +1904,96 @@ mod tests {
                     if message.contains("managed by an orchestration campaign")
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn review_request_queue_rejects_stale_in_progress_session_without_worker() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let project_id = app.active_project_id();
+        let session_id = request_session_creation(
+            &mut app,
+            CreateSessionRequest {
+                inherit_from_session_id: None,
+                mode: CreateSessionMode::Regular,
+                project_id,
+            },
+        )
+        .await
+        .expect("regular session should be created");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &session_id,
+            SessionStatus::InProgress,
+        );
+
+        // Act
+        let result = request_review_request(&mut app, session_id).await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(ApiSessionError::Operation(message))
+                if message.contains("active session worker is unavailable")
+        ));
+    }
+
+    #[tokio::test]
+    async fn review_request_runtime_handler_does_not_wait_for_branch_operation() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let session_id = SessionId::from(
+            app.create_session()
+                .await
+                .expect("regular session should be created"),
+        );
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &session_id,
+            SessionStatus::Done,
+        );
+        let branch_operation_lock = Arc::clone(
+            &app.sessions
+                .session_handles_or_err(&session_id)
+                .expect("expected session handles")
+                .branch_operation_lock,
+        );
+        let existing_operation_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
+        let (response_tx, mut response_rx) = oneshot::channel();
+
+        // Act
+        let start_result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            app.start_api_review_request_publish(
+                session_id.clone(),
+                SessionRuntimeAccess::User,
+                response_tx,
+            ),
+        )
+        .await;
+        let response_before_unlock = response_rx.try_recv();
+        drop(existing_operation_guard);
+        let response_after_unlock = response_rx
+            .await
+            .expect("review-request result should be delivered after the lock is released");
+
+        // Assert
+        assert!(
+            start_result.is_ok(),
+            "runtime command handling should not wait for the branch operation"
+        );
+        assert!(matches!(
+            response_before_unlock,
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(
+            matches!(
+                &response_after_unlock,
+                Err(ApiSessionError::Operation(message))
+                    if message == "Session must be in review to publish the review request."
+            ),
+            "unexpected review-request response: {response_after_unlock:?}"
+        );
     }
 
     #[tokio::test]

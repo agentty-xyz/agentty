@@ -15,7 +15,8 @@ use ag_git::{GitClient, GitError, RealGitClient};
 #[cfg(test)]
 use app::branch_publish::detected_forge_kind_from_git_push_error;
 use app::branch_publish::{
-    BranchPublishTaskContext, BranchPublishTaskSession, run_branch_publish_action,
+    BranchPublishTaskContext, BranchPublishTaskSession, review_request_queued_label,
+    run_branch_publish_action,
 };
 #[cfg(test)]
 use app::branch_publish::{BranchPublishTaskFailure, branch_push_failure, push_session_branch};
@@ -1568,7 +1569,7 @@ impl App {
     }
 
     /// Starts the session-view branch-publish action flow for one session.
-    pub(crate) fn start_publish_branch_action(
+    pub(crate) async fn start_publish_branch_action(
         &mut self,
         restore_view: ConfirmationViewMode,
         session_id: &str,
@@ -1586,6 +1587,44 @@ impl App {
 
             return;
         };
+
+        if publish_branch_action == PublishBranchAction::PublishPullRequest {
+            let is_queued = branch_publish_context.session.status == Status::InProgress;
+            let branch_operation_lock = Arc::clone(&branch_publish_context.branch_operation_lock);
+            // Reserve an idle branch before persistence. An existing owner
+            // already serializes worker execution, so the UI never waits here.
+            let _branch_operation_guard = branch_operation_lock.try_lock_owned().ok();
+            let enqueue_result = self
+                .sessions
+                .enqueue_review_request_creation(
+                    &self.services,
+                    branch_publish_context.session,
+                    remote_branch_name,
+                    None,
+                )
+                .await;
+            let loading_label = if is_queued {
+                review_request_queued_label()
+            } else {
+                Self::branch_publish_loading_label(publish_branch_action)
+            };
+            if let Err(error) = enqueue_result {
+                self.sessions
+                    .start_branch_publish(session_id, loading_label);
+                self.sessions.finish_branch_publish(
+                    session_id,
+                    TransientMessageBody::Markdown(format!(
+                        "**Review request publish failed**\n\n{error}"
+                    )),
+                );
+            } else {
+                self.sessions
+                    .start_branch_publish(session_id, loading_label);
+            }
+            self.mode = restore_view.into_view_mode();
+
+            return;
+        }
 
         let loading_label = Self::branch_publish_loading_label(publish_branch_action);
         let clock = self.services.clock();

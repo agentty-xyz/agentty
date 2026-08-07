@@ -334,6 +334,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::SessionDiffStatsUpdated { .. } => "SessionDiffStatsUpdated",
         AppEvent::SessionTitleGenerationFinished { .. } => "SessionTitleGenerationFinished",
         AppEvent::BranchPublishActionCompleted { .. } => "BranchPublishActionCompleted",
+        AppEvent::BranchPublishActionStarted { .. } => "BranchPublishActionStarted",
         AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
         AppEvent::ReviewPreparationFailed { .. } => "ReviewPreparationFailed",
         AppEvent::FocusedReviewPersistenceRetry { .. } => "FocusedReviewPersistenceRetry",
@@ -439,6 +440,20 @@ mod tests {
 
         // Assert
         assert_eq!(label, "SessionOrchestrationProgressUpdated");
+    }
+
+    #[test]
+    fn app_event_label_names_branch_publish_starts() {
+        // Arrange
+        let event = AppEvent::BranchPublishActionStarted {
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "BranchPublishActionStarted");
     }
 
     #[tokio::test]

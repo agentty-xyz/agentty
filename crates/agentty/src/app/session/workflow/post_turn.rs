@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use super::task::SessionTranscriptMessageAppend;
-use super::worker::{SessionWorkerContext, TurnMetadata, has_unfinished_rebase_operation};
+use super::worker::{SessionWorkerContext, TurnMetadata, has_unfinished_branch_operation};
 use super::{SessionTaskService, StatusTransition, published_branch};
 use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
@@ -108,7 +108,7 @@ impl PostTurnContext {
 
     /// Returns whether session sync is already queued or running on this
     /// worker, failing closed when persisted operation state cannot be read.
-    async fn has_unfinished_rebase_operation(&self) -> bool {
+    async fn has_unfinished_branch_operation(&self) -> bool {
         let unfinished_operations = match self
             .db
             .operations()
@@ -127,7 +127,7 @@ impl PostTurnContext {
             }
         };
 
-        has_unfinished_rebase_operation(&unfinished_operations, self.session_id.as_str())
+        has_unfinished_branch_operation(&unfinished_operations, self.session_id.as_str())
     }
 }
 
@@ -591,7 +591,7 @@ async fn start_published_branch_auto_push(
     let branch_operation_guard = Arc::clone(&context.branch_operation_lock)
         .lock_owned()
         .await;
-    if context.has_unfinished_rebase_operation().await {
+    if context.has_unfinished_branch_operation().await {
         return;
     }
 
@@ -799,7 +799,7 @@ mod tests {
         };
 
         // Act
-        let should_skip_auto_push = context.has_unfinished_rebase_operation().await;
+        let should_skip_auto_push = context.has_unfinished_branch_operation().await;
 
         // Assert
         assert!(
