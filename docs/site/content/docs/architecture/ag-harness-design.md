@@ -42,8 +42,9 @@ agentty/
 ```
 
 The current foundation lives entirely in `ag-harness`: the provider-neutral `Model`
-contract requires an `OutputSchema` on every `ModelRequest` and returns validated JSON
-in `ModelResponse`. `Qwen` is its first adapter.
+contract owns telemetry and structured-output validation for every request.
+Provider-specific adapters implement `ModelBackend` to supply model identity and raw
+assistant output. `Qwen` is the first adapter.
 
 ## Session management
 
@@ -120,8 +121,9 @@ sequenceDiagram
 The model contract requires provider-neutral structured output:
 
 - The caller supplies the expected JSON shape as a provider-independent schema.
-- Each adapter uses the strongest structured-output mechanism its provider supports,
-  then the harness parses and validates the returned JSON against the caller's schema.
+- Each adapter uses the strongest structured-output mechanism its provider supports and
+  returns raw assistant text. The shared `Model` lifecycle parses and validates the
+  returned JSON against the caller's schema.
 - Provider-specific request fields remain inside the adapter. For Qwen, the adapter uses
   JSON Object mode and performs schema validation in the harness because Qwen guarantees
   valid JSON, not schema conformance.
@@ -137,14 +139,15 @@ unstructured text.
 - **Metric** - records one duration observation per call, including Qwen/model
   breakdowns.
 - **Labels** - provider and model only.
-- **Ownership** - model adapters record duration; binaries configure and flush the OTLP
-  metrics exporter.
+- **Ownership** - the shared `Model` lifecycle records duration for every
+  `ModelBackend`, including failed and cancelled requests; binaries configure and flush
+  the OTLP metrics exporter.
 - **Lifecycle** - histogram state is cumulative and process-local; the one-shot example
   verifies export rather than cross-run totals.
 
 ```mermaid
 flowchart LR
-    C["Qwen model call"] --> M["Duration histogram"]
+    C["Model lifecycle"] --> M["Duration histogram"]
     M --> O["OTLP collector"]
     O --> P["Prometheus"]
     P --> G["Grafana"]

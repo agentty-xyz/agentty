@@ -351,9 +351,10 @@ fn test_review_request_campaign_waits_for_worker_merge() -> E2eResult {
                         "controller_waiting",
                         "Controller remains active while review request is open",
                     )
-                    .press_key("q")
+                    .compose(&common::return_to_session_list())
                     .press_key("j")
-                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 3000)
+                    .compose(&common::open_selected_session_view())
                     .wait_for_text("Managed by controller-0001", 5000)
                     .press_key("?")
                     .wait_for_stable_frame(300, 5000)

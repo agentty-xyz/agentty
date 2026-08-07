@@ -1167,8 +1167,8 @@ mod tests {
             [
                 Duration::from_millis(250),
                 Duration::from_millis(500),
-                Duration::from_millis(1_000),
-                Duration::from_millis(1_000),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
             ]
         );
     }
