@@ -311,6 +311,7 @@ impl SessionWorkerRebaseAssistClient {
     async fn run_assist_turn(&self, prompt: String) -> Result<(), SessionError> {
         let turn_cancel_token = self.fresh_turn_cancel_token()?;
         let reasoning_level = turn::load_session_reasoning_level(&self.db, &self.session_id).await;
+        let permission_mode = turn::load_session_permission_mode(&self.db, &self.session_id).await;
         let speed_mode = turn::load_session_speed_mode(&self.db, &self.session_id).await;
         let provider_conversation_id = self
             .db
@@ -336,6 +337,7 @@ impl SessionWorkerRebaseAssistClient {
             folder: self.folder.clone(),
             main_checkout_root: self.main_checkout_root.clone(),
             model: self.session_agent.model().provider_model_str().to_string(),
+            permission_mode,
             personality: ag_agent::PersonalityPrompt::default(),
             prompt: TurnPrompt::from_agent_data(prompt),
             reasoning_level,
@@ -1384,7 +1386,7 @@ async fn append_drained_prompt_to_transcript(context: &SessionWorkerContext, pro
 mod tests {
     use std::sync::Arc;
 
-    use ag_agent::{MockAgentChannel, MockOneShotClient};
+    use ag_agent::{MockAgentChannel, MockOneShotClient, PermissionMode};
     use ag_git::{MockGitClient, RebaseStepResult};
     use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
     use mockall::Sequence;
@@ -1464,6 +1466,33 @@ mod tests {
             .expect("failed to insert session");
 
         project_id
+    }
+
+    /// Inserts one in-progress read-only researcher for worker-flow tests.
+    async fn insert_in_progress_research_session(db: &AppRepositories) {
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session_with_agent(PersistedSessionCreation {
+                agent: "antigravity",
+                base_branch: "main",
+                id: "sess1",
+                is_draft: false,
+                model: "gemini-3.6-flash",
+                orchestration_task_id: None,
+                parent_session_id: None,
+                personality_id: None,
+                project_id,
+                reasoning_level: ReasoningLevel::default(),
+                role: Some("OrchestrationResearcher"),
+                speed_mode: SpeedMode::Normal,
+                status: "InProgress",
+            })
+            .await
+            .expect("failed to insert research session");
     }
 
     /// Seeds one unfinished operation and its owning session for recovery
@@ -2072,11 +2101,14 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
-        insert_in_progress_test_session(&db).await;
+        insert_in_progress_research_session(&db).await;
 
         let mut mock_channel = MockAgentChannel::new();
         mock_channel
             .expect_run_turn()
+            .withf(|_session_id, request, _events| {
+                request.permission_mode == PermissionMode::ReadOnly
+            })
             .returning(|_session_id, _req, _events| {
                 Box::pin(async {
                     tokio::time::sleep(std::time::Duration::from_hours(1)).await;
@@ -2948,6 +2980,7 @@ mod tests {
             folder: context.folder.clone(),
             main_checkout_root: None,
             model: "gemini-3.6-flash".to_string(),
+            permission_mode: ag_agent::PermissionMode::AutoEdit,
             personality: ag_agent::PersonalityPrompt::default(),
             prompt: "test".into(),
             reasoning_level: ReasoningLevel::default(),
@@ -3023,6 +3056,7 @@ mod tests {
             folder: context.folder.clone(),
             main_checkout_root: None,
             model: "gemini-3.6-flash".to_string(),
+            permission_mode: ag_agent::PermissionMode::AutoEdit,
             personality: ag_agent::PersonalityPrompt::default(),
             prompt: "test".into(),
             reasoning_level: ReasoningLevel::default(),

@@ -23,6 +23,7 @@ use super::{
 use crate::app_server::{AppServerClient, AppServerTurnRequest};
 use crate::channel::AgentRequestKind;
 use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::model::permission::PermissionMode;
 use crate::model::session::{SessionDiffState, SessionStats};
 
 /// Input payload for one isolated prompt that prefers structured protocol
@@ -168,6 +169,7 @@ async fn submit_one_shot_with_app_server_client(
         live_transcript: None,
         main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
+        permission_mode: PermissionMode::AutoEdit,
         personality: crate::channel::PersonalityPrompt::default(),
         prompt: ag_protocol::TurnPrompt::from_agent_data(request.prompt.clone()),
         request_kind: request.request_kind.clone(),
@@ -319,6 +321,7 @@ async fn attempt_one_shot_app_server_repair(
         live_transcript: None,
         main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
+        permission_mode: PermissionMode::AutoEdit,
         personality: crate::channel::PersonalityPrompt::default(),
         prompt: ag_protocol::TurnPrompt::from_agent_data(repair_prompt),
         request_kind: request.request_kind,
@@ -369,6 +372,7 @@ async fn execute_one_shot_command(
         main_checkout_root: None,
         replay_transcript: None,
         model: request.model.provider_model_str(),
+        permission_mode: PermissionMode::AutoEdit,
         personality_prompt: None,
         prompt,
         reasoning_level: request.reasoning_level,

@@ -67,6 +67,9 @@ pub enum ViewSessionState {
     /// Coordinator-owned worker is available for transcript and diff
     /// inspection only.
     Managed,
+    /// Temporary research child exposes transcript and discarded-diff
+    /// evidence but no ownership-transfer or worktree-open actions.
+    ManagedResearch,
     /// Campaign controller keeps chat plus deterministic plan and integration
     /// board actions while owning no branch changes.
     Orchestrator,
@@ -202,7 +205,9 @@ impl ViewActionSet {
         let can_show_diff = can_show_review
             || matches!(
                 state.session_state,
-                ViewSessionState::Merged | ViewSessionState::Managed
+                ViewSessionState::Merged
+                    | ViewSessionState::Managed
+                    | ViewSessionState::ManagedResearch
             );
 
         Self {
@@ -230,6 +235,9 @@ impl ViewActionSet {
 /// Maps one session snapshot into the shared view-mode shortcut state used by
 /// both runtime handlers and footer rendering.
 pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
+    if session.role == crate::domain::session::SessionRole::OrchestrationResearcher {
+        return ViewSessionState::ManagedResearch;
+    }
     if session.is_managed() {
         return ViewSessionState::Managed;
     }
@@ -1920,16 +1928,22 @@ mod tests {
             .role(SessionRole::OrchestrationWorker)
             .status(Status::Review)
             .build();
+        let researcher = SessionFixtureBuilder::new()
+            .role(SessionRole::OrchestrationResearcher)
+            .status(Status::Review)
+            .build();
 
         // Act
         let state = session_view_state(&session);
         let orchestrator_state = session_view_state(&orchestrator);
         let managed_state = session_view_state(&managed);
+        let researcher_state = session_view_state(&researcher);
 
         // Assert
         assert_eq!(state, ViewSessionState::AgentReview);
         assert_eq!(orchestrator_state, ViewSessionState::Orchestrator);
         assert_eq!(managed_state, ViewSessionState::Managed);
+        assert_eq!(researcher_state, ViewSessionState::ManagedResearch);
     }
 
     #[test]
@@ -1952,6 +1966,11 @@ mod tests {
             .iter()
             .map(|action| action.key)
             .collect::<Vec<_>>();
+        state.session_state = ViewSessionState::ManagedResearch;
+        let research_keys = view_actions(state)
+            .iter()
+            .map(|action| action.key)
+            .collect::<Vec<_>>();
         state.session_state = ViewSessionState::Orchestrator;
         state.reply_to_session = ViewActionAvailability::Enabled;
         let controller_keys = view_actions(state)
@@ -1964,6 +1983,9 @@ mod tests {
         assert!(managed_keys.contains(&"D"));
         assert!(!managed_keys.contains(&"o"));
         assert!(!managed_keys.contains(&"Enter"));
+        assert!(research_keys.contains(&"d"));
+        assert!(!research_keys.contains(&"D"));
+        assert!(!research_keys.contains(&"o"));
         assert!(controller_keys.contains(&"a"));
         assert!(controller_keys.contains(&"Enter"));
         assert!(!controller_keys.contains(&"m"));

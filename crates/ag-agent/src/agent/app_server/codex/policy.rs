@@ -41,6 +41,23 @@ const AUTO_EDIT_POLICY: PermissionModePolicy = PermissionModePolicy {
     web_search_mode: "live",
 };
 
+/// Codex app-server policy for temporary repository research.
+///
+/// The read-only sandbox denies filesystem writes and command network access.
+/// Any legacy or modern pre-action request is rejected rather than expanding
+/// the turn's permissions.
+const READ_ONLY_POLICY: PermissionModePolicy = PermissionModePolicy {
+    approval_policy: "never",
+    legacy_pre_action_decision: "denied",
+    legacy_pre_action_rejection_decision: "denied",
+    pre_action_decision: "reject",
+    pre_action_rejection_decision: "reject",
+    thread_sandbox_mode: "read-only",
+    turn_network_access: false,
+    turn_sandbox_type: "readOnly",
+    web_search_mode: "live",
+};
+
 /// Repository metadata directory that remains editable during Codex turns.
 ///
 /// Codex protects this path by default even when it lives under the writable
@@ -113,18 +130,25 @@ pub(super) fn auto_compact_input_token_threshold(model: &str) -> u64 {
 }
 
 /// Returns the app-server approval policy used for one permission mode.
-pub(super) fn approval_policy() -> &'static str {
-    permission_mode_policy(PermissionMode::default()).approval_policy
+pub(super) fn approval_policy(permission_mode: PermissionMode) -> &'static str {
+    permission_mode_policy(permission_mode).approval_policy
 }
 
 /// Returns the thread-level sandbox mode used for one permission mode.
-pub(super) fn thread_sandbox_mode() -> &'static str {
-    permission_mode_policy(PermissionMode::default()).thread_sandbox_mode
+pub(super) fn thread_sandbox_mode(permission_mode: PermissionMode) -> &'static str {
+    permission_mode_policy(permission_mode).thread_sandbox_mode
 }
 
 /// Returns the turn-level sandbox policy object for one session worktree.
-pub(super) fn turn_sandbox_policy(session_folder: &Path) -> Value {
-    let policy = permission_mode_policy(PermissionMode::default());
+pub(super) fn turn_sandbox_policy(permission_mode: PermissionMode, session_folder: &Path) -> Value {
+    let policy = permission_mode_policy(permission_mode);
+    if permission_mode.is_read_only() {
+        return serde_json::json!({
+            "type": policy.turn_sandbox_type,
+            "networkAccess": policy.turn_network_access,
+        });
+    }
+
     let writable_root = session_folder
         .join(EDITABLE_WORKTREE_METADATA_PATH)
         .to_string_lossy()
@@ -141,16 +165,19 @@ pub(super) fn turn_sandbox_policy(session_folder: &Path) -> Value {
 ///
 /// This keeps overrides minimal while enabling live `web_search` and applying
 /// the selected Codex reasoning effort.
-pub(super) fn thread_config(reasoning_level: ReasoningLevel) -> Value {
+pub(super) fn thread_config(
+    permission_mode: PermissionMode,
+    reasoning_level: ReasoningLevel,
+) -> Value {
     serde_json::json!({
-        "web_search": web_search_mode(),
+        "web_search": web_search_mode(permission_mode),
         "model_reasoning_effort": reasoning_level.codex(),
     })
 }
 
 /// Returns the `web_search` mode for one permission mode.
-pub(super) fn web_search_mode() -> &'static str {
-    permission_mode_policy(PermissionMode::default()).web_search_mode
+pub(super) fn web_search_mode(permission_mode: PermissionMode) -> &'static str {
+    permission_mode_policy(permission_mode).web_search_mode
 }
 
 /// Builds a JSON-RPC response for known approval-like server requests.
@@ -162,6 +189,7 @@ pub(super) fn web_search_mode() -> &'static str {
 /// include a request id.
 pub(super) fn build_server_request_response(
     response_value: &Value,
+    permission_mode: PermissionMode,
     session_folder: &Path,
 ) -> Option<Value> {
     let method = response_value.get("method")?.as_str()?;
@@ -196,7 +224,12 @@ pub(super) fn build_server_request_response(
     }
 
     let approval_kind = PreActionApprovalKind::from_method(method)?;
-    let decision = scoped_pre_action_decision(response_value, session_folder, &approval_kind);
+    let decision = scoped_pre_action_decision(
+        response_value,
+        permission_mode,
+        session_folder,
+        &approval_kind,
+    );
 
     Some(serde_json::json!({
         "id": request_id,
@@ -214,18 +247,22 @@ pub(super) fn build_server_request_response(
 /// declared path stays inside the session worktree.
 fn scoped_pre_action_decision(
     response_value: &Value,
+    permission_mode: PermissionMode,
     session_folder: &Path,
     approval_kind: &PreActionApprovalKind,
 ) -> &'static str {
+    if permission_mode.is_read_only() {
+        return pre_action_rejection_decision(permission_mode, approval_kind);
+    }
     if approval_kind.is_command() {
-        return pre_action_approval_decision(approval_kind);
+        return pre_action_approval_decision(permission_mode, approval_kind);
     }
 
     if approval_request_paths_are_session_local(response_value, session_folder) {
-        return pre_action_approval_decision(approval_kind);
+        return pre_action_approval_decision(permission_mode, approval_kind);
     }
 
-    pre_action_rejection_decision(approval_kind)
+    pre_action_rejection_decision(permission_mode, approval_kind)
 }
 
 /// Returns whether every declared file path remains under `session_folder`.
@@ -294,8 +331,11 @@ fn normalize_session_relative_path(session_folder: &Path, relative_path: &Path) 
 }
 
 /// Returns the modern pre-action approval decision for one permission mode.
-fn pre_action_approval_decision(approval_kind: &PreActionApprovalKind) -> &'static str {
-    let policy = permission_mode_policy(PermissionMode::default());
+fn pre_action_approval_decision(
+    permission_mode: PermissionMode,
+    approval_kind: &PreActionApprovalKind,
+) -> &'static str {
+    let policy = permission_mode_policy(permission_mode);
     if approval_kind.is_legacy() {
         return policy.legacy_pre_action_decision;
     }
@@ -304,8 +344,11 @@ fn pre_action_approval_decision(approval_kind: &PreActionApprovalKind) -> &'stat
 }
 
 /// Returns the pre-action rejection decision for one permission mode.
-fn pre_action_rejection_decision(approval_kind: &PreActionApprovalKind) -> &'static str {
-    let policy = permission_mode_policy(PermissionMode::default());
+fn pre_action_rejection_decision(
+    permission_mode: PermissionMode,
+    approval_kind: &PreActionApprovalKind,
+) -> &'static str {
+    let policy = permission_mode_policy(permission_mode);
     if approval_kind.is_legacy() {
         return policy.legacy_pre_action_rejection_decision;
     }
@@ -317,5 +360,6 @@ fn pre_action_rejection_decision(approval_kind: &PreActionApprovalKind) -> &'sta
 fn permission_mode_policy(permission_mode: PermissionMode) -> &'static PermissionModePolicy {
     match permission_mode {
         PermissionMode::AutoEdit => &AUTO_EDIT_POLICY,
+        PermissionMode::ReadOnly => &READ_ONLY_POLICY,
     }
 }

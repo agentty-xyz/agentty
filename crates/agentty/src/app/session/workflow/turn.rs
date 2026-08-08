@@ -18,7 +18,8 @@ use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel};
-use crate::domain::session::{SessionId, Status};
+use crate::domain::permission::PermissionMode;
+use crate::domain::session::{SessionId, SessionRole, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -184,6 +185,7 @@ pub(super) async fn run_channel_turn(
     };
 
     let session_project_id = load_session_project_id(&context.db, &context.session_id).await;
+    let permission_mode = load_session_permission_mode(&context.db, &context.session_id).await;
     let reasoning_level = load_session_reasoning_level(&context.db, &context.session_id).await;
     let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
     let continuation = load_turn_continuation(context, replay_transcript).await;
@@ -209,6 +211,7 @@ pub(super) async fn run_channel_turn(
             .model()
             .provider_model_str()
             .to_string(),
+        permission_mode,
         personality,
         prompt: agent_prompt,
         reasoning_level,
@@ -224,14 +227,16 @@ pub(super) async fn run_channel_turn(
         Arc::clone(&context.child_pid),
     ));
 
-    spawn_turn_title_generation(
-        context,
-        Arc::clone(&one_shot_client),
-        session_project_id,
-        &prompt.text,
-        turn_metadata.session_agent,
-    )
-    .await;
+    if should_spawn_turn_title_generation(permission_mode) {
+        spawn_turn_title_generation(
+            context,
+            Arc::clone(&one_shot_client),
+            session_project_id,
+            &prompt.text,
+            turn_metadata.session_agent,
+        )
+        .await;
+    }
 
     let turn_result = run_turn_with_cancellation(context, turn_cancel_token, req, event_tx).await;
     SessionManager::cleanup_prompt_attachment_paths(
@@ -283,6 +288,35 @@ async fn load_turn_continuation(
         provider_conversation_id,
         replay_transcript,
     )
+}
+
+/// Returns the provider permission mode enforced for one persisted session.
+pub(super) async fn load_session_permission_mode(
+    db: &AppRepositories,
+    session_id: &str,
+) -> PermissionMode {
+    permission_mode_for_role(load_session_role(db, session_id).await)
+}
+
+/// Returns the persisted role controlling one session's execution policy.
+pub(super) async fn load_session_role(db: &AppRepositories, session_id: &str) -> SessionRole {
+    db.sessions()
+        .load_session(session_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|row| row.role)
+        .and_then(|role| role.parse::<SessionRole>().ok())
+        .unwrap_or_default()
+}
+
+/// Maps temporary researchers to enforced read-only provider execution.
+fn permission_mode_for_role(role: SessionRole) -> PermissionMode {
+    if role == SessionRole::OrchestrationResearcher {
+        return PermissionMode::ReadOnly;
+    }
+
+    PermissionMode::AutoEdit
 }
 
 /// Personality prompt plus the state persisted after a successful turn.
@@ -691,6 +725,11 @@ async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: S
     .await;
 }
 
+/// Returns whether the session may launch a write-capable title utility turn.
+fn should_spawn_turn_title_generation(permission_mode: PermissionMode) -> bool {
+    !permission_mode.is_read_only()
+}
+
 /// Spawns title generation while a session still has its provisional title.
 async fn spawn_turn_title_generation(
     context: &SessionWorkerContext,
@@ -752,6 +791,62 @@ fn normalize_thinking_stream_text(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::db::PersistedSessionCreation;
+
+    #[tokio::test]
+    async fn persisted_research_role_selects_read_only_permission_mode() {
+        // Arrange
+        let repositories = AppRepositories::in_memory().await;
+        let project_id = repositories
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        repositories
+            .sessions()
+            .insert_session("worker", "gpt-5.6-sol", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert worker session");
+        repositories
+            .sessions()
+            .insert_session_with_agent(PersistedSessionCreation {
+                agent: "codex",
+                base_branch: "main",
+                id: "researcher",
+                is_draft: false,
+                model: "gpt-5.6-sol",
+                orchestration_task_id: None,
+                parent_session_id: None,
+                personality_id: None,
+                project_id,
+                reasoning_level: ReasoningLevel::default(),
+                role: Some("OrchestrationResearcher"),
+                speed_mode: crate::domain::agent::SpeedMode::Normal,
+                status: "InProgress",
+            })
+            .await
+            .expect("failed to insert research session");
+
+        // Act
+        let worker_mode = load_session_permission_mode(&repositories, "worker").await;
+        let research_mode = load_session_permission_mode(&repositories, "researcher").await;
+
+        // Assert
+        assert_eq!(worker_mode, PermissionMode::AutoEdit);
+        assert_eq!(research_mode, PermissionMode::ReadOnly);
+    }
+
+    #[test]
+    fn title_generation_is_disabled_for_read_only_research() {
+        // Arrange
+        let permission_modes = [PermissionMode::AutoEdit, PermissionMode::ReadOnly];
+
+        // Act
+        let title_generation = permission_modes.map(should_spawn_turn_title_generation);
+
+        // Assert
+        assert_eq!(title_generation, [true, false]);
+    }
 
     #[tokio::test]
     async fn title_reasoning_level_defaults_without_project() {

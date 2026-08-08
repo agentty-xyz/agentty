@@ -6188,6 +6188,20 @@ fn test_session_branch_uses_first_8_chars() {
     assert_eq!(branch, "wt/a1b2c3d4");
 }
 
+#[test]
+fn orchestration_research_creation_uses_managed_read_only_role_and_task_link() {
+    // Arrange
+    let creation_kind = SessionCreationKind::OrchestrationResearch { task_id: 42 };
+
+    // Act
+    let role = creation_kind.role();
+    let task_id = creation_kind.orchestration_task_id();
+
+    // Assert
+    assert_eq!(role, SessionRole::OrchestrationResearcher);
+    assert_eq!(task_id, Some(42));
+}
+
 #[tokio::test]
 async fn test_refresh_session_branch_names_runs_detection_concurrently() {
     // Arrange

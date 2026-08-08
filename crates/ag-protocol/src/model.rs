@@ -554,6 +554,7 @@ mod tests {
             serde_json::from_str::<SubtaskItem>(raw).expect("subtask should parse without areas");
 
         // Assert
+        assert_eq!(subtask.kind, crate::SubtaskKind::Implementation);
         assert_eq!(subtask.touched_areas, [] as [std::string::String; 0]);
     }
 
@@ -617,6 +618,7 @@ mod tests {
     fn test_subtask(index: usize) -> SubtaskItem {
         SubtaskItem {
             acceptance_criteria: vec![format!("Work item {index} is complete")],
+            kind: crate::SubtaskKind::Implementation,
             prompt: format!("Complete work item {index}"),
             task_key: format!("task-{index}"),
             title: format!("Work item {index}"),

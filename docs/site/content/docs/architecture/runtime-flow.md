@@ -236,14 +236,15 @@ restricted to the active project while `SessionRuntime` owns a single active-pro
 `SessionManager`, and can copy the agent, model, reasoning, personality, and base-branch
 snapshot from another session in that project without changing defaults for later
 ordinary sessions. The adapter deliberately contains no orchestrator policy.
-`app/orchestration.rs` owns that sequencing: it persists proposed task rows before
-approval, reads child status, summary, and token totals in one SQLite task snapshot
-during reconciliation, and uses the session API mailbox only for child creation,
-mutation, and a durable roll-up submission. The terminal runtime injects the
-reconciliation schedule, keeping direct timer APIs out of the coordinator. The database
-link from task to child makes restart re-linking independent of branch-name parsing.
-Session-list refreshes load controller progress and child adjacency in one project-wide
-orchestration query instead of issuing queries for each saved session.
+`app/orchestration.rs` owns that sequencing: it persists typed implementation or
+research task rows before approval, reads child status, report or summary, and token
+totals in one SQLite task snapshot during reconciliation, and uses the session API
+mailbox only for child creation, mutation, cleanup, and a durable roll-up submission.
+The terminal runtime injects the reconciliation schedule, keeping direct timer APIs out
+of the coordinator. The database link from task to child makes restart re-linking
+independent of branch-name parsing. Session-list refreshes load controller progress and
+child adjacency in one project-wide orchestration query instead of issuing queries for
+each saved session.
 
 ```mermaid
 flowchart LR
@@ -295,20 +296,24 @@ flowchart LR
 1. `AppEvent::AgentResponseReceived` carries the reducer projection so the active
    session updates without a forced reload. If persistence fails, the worker appends a
    recovery error and falls back to a durable-state reload.
-1. For orchestrator turns, validated independent subtasks, acceptance criteria, and
-   optional touched-area planning references are stored in `session_orchestration_task`
-   before `AwaitingApproval`. Area references may overlap and do not constrain worker
-   changes. The board owns plan approval; no synthetic clarification question represents
-   approval. The campaign snapshots its worker cap from the global **Orchestrator
-   Parallelism** setting. Approval moves proposed tasks to `Planned`, and the
-   coordinator creates `OrchestrationWorker` sessions up to that cap. Those workers
-   retain branch ownership but reject user-path mutations. Controller clarification
-   prompts and deterministic plan or follow-up routing guards provide selectable options
-   rather than requiring free-text recovery. A transaction claims
-   `relayed_question_task_id` only when the controller has no question of its own, then
-   mirrors that task's questions onto the controller. Answers resolve that exact task
-   identity and route back through the privileged coordinator handle; other waiting
-   children remain queued until the relay is cleared.
+1. For orchestrator turns, validated independent subtasks, their execution kind,
+   acceptance criteria, and optional implementation touched-area planning references are
+   stored in `session_orchestration_task` before `AwaitingApproval`. Research and
+   implementation are separate waves. Area references may overlap and do not constrain
+   worker changes. The board owns plan approval; no synthetic clarification question
+   represents approval. A research-only wave may atomically pass that gate when the
+   global **Auto-approve Research** setting is enabled. The campaign snapshots its child
+   cap from **Orchestrator Parallelism**. Approval moves proposed tasks to `Planned`,
+   and the coordinator creates `OrchestrationWorker` or `OrchestrationResearcher`
+   sessions up to that cap. Implementation workers retain branch ownership; research
+   children skip auto-commit while still recording whether their temporary worktree
+   changed. Both reject user-path mutations. Controller clarification prompts and
+   deterministic plan or follow-up routing guards provide selectable options rather than
+   requiring free-text recovery. A transaction claims `relayed_question_task_id` only
+   when the controller has no question of its own, then mirrors that task's questions
+   onto the controller. Answers resolve that exact task identity and route back through
+   the privileged coordinator handle; other waiting children remain queued until the
+   relay is cleared.
 1. Reconciliation treats persisted child state as truth and writes live task snapshots
    to the campaign board, never to transient chat output. Interrupted creation and
    prompt-delivery failures increment a durable infrastructure retry counter and retry
@@ -326,7 +331,12 @@ flowchart LR
    preparation failures persist `Failed` immediately. Each completed remediation
    re-enters focused review, including work continued after controller verification. A
    failed review or unresolved suggestions at the cap settle with explicit evidence for
-   controller verification instead of blocking fan-in.
+   controller verification instead of blocking fan-in. A research child bypasses focused
+   review: turn finalization archives its observed diff, then reconciliation captures
+   its latest full assistant answer into a bounded `research_report`, cancels the
+   managed child to reclaim its worktree and branch, and settles the task as `Reported`.
+   Any observed diff becomes durable inspection evidence plus a discard warning and is
+   never eligible for integration.
 1. Once every task settles, the campaign claims `Verifying`, increments its verification
    generation, and submits one hidden, idempotent coordinator operation keyed by that
    generation. Its structured envelope carries the campaign goal, criteria, branch,
@@ -336,18 +346,22 @@ flowchart LR
    pass/fail gate; tasks without area references persist an unchecked result even when
    their diff contains changed files. The controller emits typed per-task verdicts;
    persistence admits only explicit passes to `AwaitingIntegration`, while flags or
-   missing verdicts remain parked. Re-emitting a settled task key queues a visible
-   continuation on the same child regardless of changed area references. The
-   continuation transaction replaces the persisted area references, clears prior
-   comparison evidence, and the coordinator includes the new references in the resumed
-   worker prompt. It also resets the task's review iteration plus other unintegrated
-   passes to `Ready` and returns the campaign to `Running`; newly keyed work is
-   persisted as `Proposed` and parks on `AwaitingApproval`. Every controller turn
-   receives a bounded, agent-only JSON snapshot with task keys for routing and touched
-   areas for planning context, allowing review findings to reach completed workers
-   without relying on remembered plan details. The snapshot omits instruction-bearing
-   titles and criteria, marks truncated metadata explicitly, and is treated as inert
-   routing data.
+   missing verdicts remain parked. Research tasks instead contribute the bounded full
+   report inside an inert-data boundary and remain `Reported`; only a pass verdict makes
+   that status integration-settled. The same controller verification turn can propose a
+   following implementation wave, which returns the campaign to `AwaitingApproval`.
+   Re-emitting a settled implementation task key queues a visible continuation on the
+   same child regardless of changed area references. The continuation transaction
+   replaces the persisted area references, clears prior comparison evidence, and the
+   coordinator includes the new references in the resumed worker prompt. It also resets
+   the task's review iteration plus other unintegrated passes to `Ready` and returns the
+   campaign to `Running`; newly keyed work is persisted as `Proposed` and parks on
+   `AwaitingApproval`. Every controller turn receives a bounded, agent-only JSON
+   snapshot with task keys for routing and touched areas for planning context, allowing
+   review findings to reach completed workers without relying on remembered plan
+   details. Re-emitting a reported research key clears the prior report and starts a new
+   temporary child. The snapshot omits instruction-bearing titles and criteria, marks
+   truncated metadata explicitly, and is treated as inert routing data.
 1. Pressing `a` at `AwaitingIntegration` first opens a binary destination choice. The
    selected `integration_approach` and `Integrating` transition are persisted atomically
    so restart recovery cannot switch destinations. `Integrating` then serializes local
@@ -376,7 +390,9 @@ flowchart LR
    validation did not run, avoiding repeated identical notices across later turns.
    Installed-hook failures continue through normal commit error handling. The session
    title is synced from the commit text. Orchestrator controllers skip diff refresh,
-   commit, publish, sync, and merge work; only their worker sessions own branch changes.
+   commit, publish, sync, and merge work. Research children refresh diff evidence but
+   skip commit and every branch-integration action; only implementation workers own
+   branch changes.
 1. If the session already tracks a published upstream branch and no chat message or sync
    operation is queued, a per-session branch-operation guard transfers to the detached
    auto-push until it finishes. Every sync request holds the same guard through status
@@ -493,13 +509,13 @@ flowchart TD
 with prompt payloads owned by `ag-protocol` and re-exported through
 `domain/turn_prompt.rs`):
 
-| Type               | Purpose                                           |
-| ------------------ | ------------------------------------------------- |
-| `TurnRequest`      | Turn inputs, execution settings, and personality. |
-| `TurnContinuation` | Fresh, replay, or provider-resume context.        |
-| `TurnEvent`        | Thought, completion, failure, or PID event.       |
-| `TurnResult`       | Assistant output, usage, and provider id.         |
-| `AgentRequestKind` | Start, resume, account-read, or utility intent.   |
+| Type               | Purpose                                                  |
+| ------------------ | -------------------------------------------------------- |
+| `TurnRequest`      | Turn inputs, permission mode, settings, and personality. |
+| `TurnContinuation` | Fresh, replay, or provider-resume context.               |
+| `TurnEvent`        | Thought, completion, failure, or PID event.              |
+| `TurnResult`       | Assistant output, usage, and provider id.                |
+| `AgentRequestKind` | Start, resume, account-read, or utility intent.          |
 
 <a id="architecture-provider-conversation-id-flow"></a> App-server providers return a
 `provider_conversation_id` in `TurnResult`. Post-turn application persists it, along
@@ -532,15 +548,22 @@ descendants it spawned.
   transcript noise.
 - Merge and `sync main` workflows require a clean target checkout before changing
   base-branch state.
-- Provider permission policies are scoped per transport: Codex turns run with a
-  non-interactive approval policy and workspace-write sandbox. The Codex turn policy
-  explicitly reopens the worktree-local `.agents/` directory that Codex otherwise
+- Provider permission policies are scoped per `TurnRequest`. Ordinary Codex turns run
+  with a non-interactive approval policy and workspace-write sandbox. The Codex turn
+  policy explicitly reopens the worktree-local `.agents/` directory that Codex otherwise
   protects while leaving `.git` and `.codex/` read-only. Agentty immediately declines
   MCP elicitations and grants no additional permission requests so an app-server request
   cannot leave the turn waiting for interactive input. Codex tool input requests receive
   an empty answer set for the same reason. Claude turns receive session-scoped settings
   that deny writes to the known main checkout, Gemini ACP requests prefer one-shot allow
   options, and CLI-backed providers run from the session worktree process directory.
+  Researcher requests instead carry `PermissionMode::ReadOnly` through CLI and
+  app-server launch boundaries. Codex selects `readOnly` sandbox payloads and rejects
+  command or file-change approvals; Claude exposes only inspection tools in plan mode;
+  Gemini starts with sandboxed plan approval and cancels ACP permission requests; and
+  Antigravity starts in sandboxed plan mode without its permission-bypass flag. The
+  persistent runtime identity includes the permission mode, preventing an auto-edit
+  process from being reused for research.
 
 ## Agent Interaction Protocol Flow
 

@@ -13,6 +13,8 @@ use super::prompt::{CliPromptAccessRootMode, append_cli_prompt_access_directorie
 /// prompts without an interactive permission grant.
 const CLAUDE_ALLOWED_TOOLS: &str =
     "Bash,Edit,MultiEdit,Write,WebSearch,WebFetch,EnterPlanMode,ExitPlanMode";
+/// Lists the non-mutating Claude tools available to research sessions.
+const CLAUDE_READ_ONLY_TOOLS: &str = "Read,Glob,Grep,WebSearch,WebFetch";
 
 /// Backend implementation for the Claude CLI.
 ///
@@ -38,6 +40,7 @@ impl AgentBackend for ClaudeBackend {
             folder,
             main_checkout_root,
             model,
+            permission_mode,
             request_kind,
             prompt: _prompt,
             replay_transcript: _replay_transcript,
@@ -59,8 +62,24 @@ impl AgentBackend for ClaudeBackend {
         );
 
         command.arg("-p");
-        command.arg("--allowedTools").arg(CLAUDE_ALLOWED_TOOLS);
-        append_claude_workspace_settings(&mut command, folder, main_checkout_root, speed_mode);
+        if permission_mode.is_read_only() {
+            command
+                .arg("--tools")
+                .arg(CLAUDE_READ_ONLY_TOOLS)
+                .arg("--allowedTools")
+                .arg(CLAUDE_READ_ONLY_TOOLS)
+                .arg("--permission-mode")
+                .arg("plan");
+        } else {
+            command.arg("--allowedTools").arg(CLAUDE_ALLOWED_TOOLS);
+        }
+        append_claude_workspace_settings(
+            &mut command,
+            folder,
+            main_checkout_root,
+            permission_mode,
+            speed_mode,
+        );
         command.arg("--input-format").arg("text");
         command.arg("--strict-mcp-config");
         command.arg("--verbose");
@@ -87,6 +106,7 @@ fn append_claude_workspace_settings(
     command: &mut Command,
     workspace_folder: &Path,
     main_checkout_root: Option<&Path>,
+    permission_mode: crate::model::permission::PermissionMode,
     speed_mode: crate::model::session::SpeedMode,
 ) {
     let mut deny_rules = Vec::new();
@@ -97,18 +117,37 @@ fn append_claude_workspace_settings(
         deny_write_paths.push(main_checkout_root.to_string_lossy().into_owned());
     }
 
+    let allow_write_paths = if permission_mode.is_read_only() {
+        deny_rules.push(format!(
+            "Edit({}/**)",
+            claude_absolute_permission_path(workspace_folder)
+        ));
+        deny_write_paths.push(workspace_folder.to_string_lossy().into_owned());
+        Vec::new()
+    } else {
+        vec![workspace_folder.to_string_lossy().into_owned()]
+    };
+    let mut sandbox = serde_json::json!({
+        "enabled": true,
+        "filesystem": {
+            "allowWrite": allow_write_paths,
+            "denyWrite": deny_write_paths,
+        }
+    });
+    if permission_mode.is_read_only() {
+        sandbox["network"] = serde_json::json!({
+            "allowedDomains": [],
+            "allowLocalBinding": false,
+            "allowUnixSockets": []
+        });
+        sandbox["allowUnsandboxedCommands"] = serde_json::json!(false);
+    }
     let settings = serde_json::json!({
         "fastMode": speed_mode.claude_fast_mode(),
         "permissions": {
             "deny": deny_rules,
         },
-        "sandbox": {
-            "enabled": true,
-            "filesystem": {
-                "allowWrite": [workspace_folder.to_string_lossy().into_owned()],
-                "denyWrite": deny_write_paths,
-            }
-        }
+        "sandbox": sandbox
     });
 
     command.arg("--settings").arg(settings.to_string());
@@ -190,6 +229,7 @@ mod tests {
                 main_checkout_root: Some(main_checkout_root.as_path()),
                 replay_transcript: None,
                 model: "claude-sonnet-5",
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Plan prompt",
                 reasoning_level: ReasoningLevel::default(),
@@ -239,6 +279,72 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        assert!(settings.pointer("/sandbox/network").is_none());
+    }
+
+    #[test]
+    /// Verifies Claude research turns expose only non-mutating tools and a
+    /// read-only sandbox.
+    fn test_claude_read_only_mode_uses_plan_tools_and_denies_writes() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let main_checkout_root = temp_directory.path().join("main");
+        let backend = ClaudeBackend;
+
+        // Act
+        let command = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[],
+                folder: temp_directory.path(),
+                main_checkout_root: Some(main_checkout_root.as_path()),
+                replay_transcript: None,
+                model: "claude-sonnet-5",
+                permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+                personality_prompt: None,
+                prompt: "Inspect the architecture",
+                reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
+            },
+        )
+        .expect("command should build");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let flag_value = |flag: &str| {
+            let position = args
+                .iter()
+                .position(|argument| argument == flag)
+                .expect("flag should be present");
+
+            args[position + 1].as_str()
+        };
+        let settings = settings_argument(&command);
+
+        // Assert
+        assert_eq!(flag_value("--tools"), CLAUDE_READ_ONLY_TOOLS);
+        assert_eq!(flag_value("--allowedTools"), CLAUDE_READ_ONLY_TOOLS);
+        assert_eq!(flag_value("--permission-mode"), "plan");
+        assert!(!CLAUDE_READ_ONLY_TOOLS.contains("Bash"));
+        assert!(!CLAUDE_READ_ONLY_TOOLS.contains("Write"));
+        assert_eq!(
+            settings.pointer("/sandbox/filesystem/allowWrite"),
+            Some(&serde_json::json!([]))
+        );
+        assert_eq!(
+            settings
+                .pointer("/sandbox/network/allowLocalBinding")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            settings
+                .pointer("/sandbox/allowUnsandboxedCommands")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
     }
 
     #[test]
@@ -258,6 +364,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "claude-opus-5",
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Respond quickly",
                 reasoning_level: ReasoningLevel::default(),
@@ -292,6 +399,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "claude-opus-5",
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Use Opus",
                 reasoning_level: ReasoningLevel::default(),
@@ -327,6 +435,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "claude-opus-5",
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Use Opus",
                 reasoning_level: ReasoningLevel::default(),
@@ -370,6 +479,7 @@ mod tests {
                     main_checkout_root: None,
                     replay_transcript: None,
                     model: "claude-sonnet-5",
+                    permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                     personality_prompt: None,
                     prompt: "Do work",
                     reasoning_level,
@@ -423,6 +533,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "claude-sonnet-5",
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Inspect [Image #1] and [Image #2]",
                 reasoning_level: ReasoningLevel::default(),
@@ -461,6 +572,7 @@ mod tests {
                     main_checkout_root: None,
                     replay_transcript: None,
                     model: "claude-sonnet-5",
+                    permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                     personality_prompt: None,
                     prompt: "Plan prompt",
                     reasoning_level: ReasoningLevel::default(),
@@ -497,6 +609,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "claude-sonnet-5",
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Generate title",
                 reasoning_level: ReasoningLevel::default(),
@@ -514,6 +627,7 @@ mod tests {
                     main_checkout_root: None,
                     replay_transcript: None,
                     model: "claude-sonnet-5",
+                    permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                     personality_prompt: None,
                     prompt: "Generate title",
                     reasoning_level: ReasoningLevel::default(),
@@ -554,6 +668,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "claude-sonnet-5",
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Return protocol response",
                 reasoning_level: ReasoningLevel::default(),
@@ -571,6 +686,7 @@ mod tests {
                     main_checkout_root: None,
                     replay_transcript: None,
                     model: "claude-sonnet-5",
+                    permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                     personality_prompt: None,
                     prompt: "Return protocol response",
                     reasoning_level: ReasoningLevel::default(),

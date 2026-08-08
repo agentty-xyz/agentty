@@ -138,6 +138,13 @@ agentty --help       # Show supported command-line options
 agentty --version    # Show the installed Agentty version
 ```
 
+From the **Sessions** tab, create an `Orchestrator` session for broad goals. It can run
+temporary read-only research waves to map architecture, review risks, or answer design
+questions before proposing implementation workers. Research reports are verified by the
+controller. Agentty selects each provider's native read-only or plan policy, denies
+mutation permission requests, and archives any unexpected temporary diff for inspection
+before discarding it without integration.
+
 ## Documentation
 
 Documentation for installation and workflows is available at

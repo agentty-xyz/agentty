@@ -347,6 +347,7 @@ mod tests {
             folder,
             main_checkout_root: None,
             model: "test-model",
+            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt,
             reasoning_level: ReasoningLevel::default(),

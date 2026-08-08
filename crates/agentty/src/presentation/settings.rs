@@ -11,6 +11,7 @@ use crate::domain::theme::ColorTheme;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SettingsView {
     pub(crate) available_model_selections: Vec<AgentSelection>,
+    pub(crate) auto_approve_orchestration_research: bool,
     pub(crate) default_fast_reasoning_level: ReasoningLevel,
     pub(crate) default_fast_selection: AgentSelection,
     pub(crate) default_review_reasoning_level: ReasoningLevel,
@@ -27,6 +28,7 @@ pub(crate) struct SettingsView {
 /// One persistence operation requested by the settings screen.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SettingsOperation {
+    AutoApproveOrchestrationResearch(bool),
     DefaultFastSelection {
         reasoning_level: ReasoningLevel,
         selection: AgentSelection,
@@ -665,6 +667,9 @@ fn settings_operation_for_primary_selector(
     value: SettingSelectorValue,
 ) -> Option<SettingsOperation> {
     match (row, value) {
+        (SettingRow::AutoApproveOrchestrationResearch, SettingSelectorValue::Bool(value)) => {
+            Some(SettingsOperation::AutoApproveOrchestrationResearch(value))
+        }
         (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
             Some(SettingsOperation::IncludeCoauthoredByAgentty(value))
         }
@@ -686,6 +691,7 @@ enum SettingControl {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingRow {
+    AutoApproveOrchestrationResearch,
     DefaultSmartModel,
     DefaultFastModel,
     DefaultReviewModel,
@@ -696,16 +702,21 @@ enum SettingRow {
 }
 
 impl SettingRow {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Theme,
         Self::OrchestrationParallelism,
+        Self::AutoApproveOrchestrationResearch,
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
         Self::IncludeCoauthoredByAgentty,
         Self::LaunchConfiguration,
     ];
-    const GLOBAL: [Self; 2] = [Self::Theme, Self::OrchestrationParallelism];
+    const GLOBAL: [Self; 3] = [
+        Self::Theme,
+        Self::OrchestrationParallelism,
+        Self::AutoApproveOrchestrationResearch,
+    ];
     const PROJECT: [Self; 5] = [
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
@@ -731,6 +742,7 @@ impl SettingRow {
 
     fn label(self) -> &'static str {
         match self {
+            Self::AutoApproveOrchestrationResearch => "Auto-approve Research",
             Self::DefaultSmartModel => "Default Smart Model",
             Self::DefaultFastModel => "Default Fast Model",
             Self::DefaultReviewModel => "Default Review Model",
@@ -872,6 +884,9 @@ struct SettingSelectorOption {
 impl SettingSelectorOption {
     fn is_current_for(&self, view: &SettingsView, row: SettingRow) -> bool {
         match (row, self.value) {
+            (SettingRow::AutoApproveOrchestrationResearch, SettingSelectorValue::Bool(value)) => {
+                view.auto_approve_orchestration_research == value
+            }
             (SettingRow::DefaultSmartModel, SettingSelectorValue::LastUsedModel) => {
                 view.use_last_used_model_as_default
             }
@@ -957,6 +972,9 @@ fn move_launch_configuration_list_editor_selection(
 
 fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<SettingSelectorOption> {
     match row {
+        SettingRow::AutoApproveOrchestrationResearch | SettingRow::IncludeCoauthoredByAgentty => {
+            bool_selector_options()
+        }
         SettingRow::DefaultSmartModel => {
             let mut options = model_selector_options(view);
             options.push(SettingSelectorOption {
@@ -969,16 +987,6 @@ fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<Setting
         SettingRow::DefaultFastModel | SettingRow::DefaultReviewModel => {
             model_selector_options(view)
         }
-        SettingRow::IncludeCoauthoredByAgentty => vec![
-            SettingSelectorOption {
-                label: bool_setting_display(false),
-                value: SettingSelectorValue::Bool(false),
-            },
-            SettingSelectorOption {
-                label: bool_setting_display(true),
-                value: SettingSelectorValue::Bool(true),
-            },
-        ],
         SettingRow::LaunchConfiguration => Vec::new(),
         SettingRow::OrchestrationParallelism => (1..=MAX_ORCHESTRATION_PARALLELISM)
             .map(|value| SettingSelectorOption {
@@ -995,6 +1003,16 @@ fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<Setting
             })
             .collect(),
     }
+}
+
+fn bool_selector_options() -> Vec<SettingSelectorOption> {
+    [false, true]
+        .into_iter()
+        .map(|value| SettingSelectorOption {
+            label: bool_setting_display(value),
+            value: SettingSelectorValue::Bool(value),
+        })
+        .collect()
 }
 
 fn model_selector_options(view: &SettingsView) -> Vec<SettingSelectorOption> {
@@ -1017,6 +1035,9 @@ fn reasoning_selector_option_labels() -> Vec<String> {
 
 fn display_value_for_row(view: &SettingsView, row: SettingRow) -> String {
     match row {
+        SettingRow::AutoApproveOrchestrationResearch => {
+            bool_setting_display(view.auto_approve_orchestration_research)
+        }
         SettingRow::DefaultSmartModel if view.use_last_used_model_as_default => {
             format!(
                 "Last used model as default [{}]",
@@ -1116,6 +1137,7 @@ mod tests {
                 AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
                 AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
             ],
+            auto_approve_orchestration_research: true,
             default_fast_reasoning_level: ReasoningLevel::Low,
             default_fast_selection: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             default_review_reasoning_level: ReasoningLevel::XHigh,
@@ -1304,7 +1326,7 @@ mod tests {
         let empty_view = test_settings_view("");
         let mut selector_state = SettingsPresentationState::default();
         let mut editor_state = SettingsPresentationState::default();
-        select_row(&mut editor_state, &empty_view, 6);
+        select_row(&mut editor_state, &empty_view, 7);
 
         // Act
         let opened_selector = selector_state.apply(&empty_view, SettingsAction::Activate);
@@ -1328,7 +1350,7 @@ mod tests {
         // Arrange
         let view = test_settings_view("cargo test");
         let mut state = SettingsPresentationState::default();
-        select_row(&mut state, &view, 6);
+        select_row(&mut state, &view, 7);
         let _ = state.apply(&view, SettingsAction::Activate);
 
         // Act
@@ -1350,11 +1372,11 @@ mod tests {
         // Arrange
         let one_command_view = test_settings_view("cargo test");
         let mut one_command_state = SettingsPresentationState::default();
-        select_row(&mut one_command_state, &one_command_view, 6);
+        select_row(&mut one_command_state, &one_command_view, 7);
         let _ = one_command_state.apply(&one_command_view, SettingsAction::Activate);
         let two_command_view = test_settings_view("cargo test\nnpm run dev");
         let mut two_command_state = SettingsPresentationState::default();
-        select_row(&mut two_command_state, &two_command_view, 6);
+        select_row(&mut two_command_state, &two_command_view, 7);
         let _ = two_command_state.apply(&two_command_view, SettingsAction::Activate);
         let _ = two_command_state.apply(&two_command_view, SettingsAction::Next);
 
@@ -1420,7 +1442,7 @@ mod tests {
         // Act
         let operations = [
             (
-                2,
+                3,
                 SettingsOperation::DefaultSmartSelection {
                     reasoning_level: view.default_smart_reasoning_level,
                     selection: view.default_smart_selection,
@@ -1428,14 +1450,14 @@ mod tests {
                 },
             ),
             (
-                3,
+                4,
                 SettingsOperation::DefaultFastSelection {
                     reasoning_level: view.default_fast_reasoning_level,
                     selection: view.default_fast_selection,
                 },
             ),
             (
-                4,
+                5,
                 SettingsOperation::DefaultReviewSelection {
                     reasoning_level: view.default_review_reasoning_level,
                     selection: view.default_review_selection,
@@ -1528,6 +1550,8 @@ mod tests {
         let launch_options = selector_options_for_row(&view, SettingRow::LaunchConfiguration);
         let parallelism_options =
             selector_options_for_row(&view, SettingRow::OrchestrationParallelism);
+        let research_options =
+            selector_options_for_row(&view, SettingRow::AutoApproveOrchestrationResearch);
 
         // Assert
         assert_eq!(editor.selected_index, 1);
@@ -1546,11 +1570,28 @@ mod tests {
         );
         assert!(parallelism_options[2].is_current_for(&view, SettingRow::OrchestrationParallelism));
         assert_eq!(
+            research_options
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Disabled", "Enabled"]
+        );
+        assert!(
+            research_options[1].is_current_for(&view, SettingRow::AutoApproveOrchestrationResearch)
+        );
+        assert_eq!(
             settings_operation_for_primary_selector(
                 SettingRow::OrchestrationParallelism,
                 SettingSelectorValue::Parallelism(4),
             ),
             Some(SettingsOperation::OrchestrationParallelism(4))
+        );
+        assert_eq!(
+            settings_operation_for_primary_selector(
+                SettingRow::AutoApproveOrchestrationResearch,
+                SettingSelectorValue::Bool(false),
+            ),
+            Some(SettingsOperation::AutoApproveOrchestrationResearch(false))
         );
     }
 
@@ -1559,7 +1600,7 @@ mod tests {
         // Arrange
         let view = test_settings_view("");
         let mut model_state = SettingsPresentationState::default();
-        select_row(&mut model_state, &view, 2);
+        select_row(&mut model_state, &view, 3);
         let _ = model_state.apply(&view, SettingsAction::Activate);
         let model_footer_hint = model_state.footer_hint();
         let mut theme_state = SettingsPresentationState::default();

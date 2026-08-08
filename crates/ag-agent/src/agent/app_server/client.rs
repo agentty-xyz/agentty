@@ -271,6 +271,7 @@ mod tests {
             live_transcript: None,
             main_checkout_root: None,
             model: "test-model".to_string(),
+            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
             persisted_instruction_conversation_id: None,
             personality: crate::channel::PersonalityPrompt::default(),
             prompt: TurnPrompt::from_text("Hello".to_string()),

@@ -20,6 +20,7 @@ use crate::agent;
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport::{self, extract_json_error_message, response_id_matches};
 use crate::model::agent::AgentKind;
+use crate::model::permission::PermissionMode;
 
 /// Mutable runtime state required while a Gemini ACP process is active.
 pub(super) struct GeminiRuntimeState {
@@ -27,6 +28,8 @@ pub(super) struct GeminiRuntimeState {
     pub(super) folder: PathBuf,
     /// Selected Gemini model identifier.
     pub(super) model: String,
+    /// Provider permission policy enforced for this runtime.
+    pub(super) permission_mode: PermissionMode,
     /// Whether startup restored provider-native context.
     pub(super) restored_context: bool,
     /// Active provider-native session identifier.
@@ -35,10 +38,11 @@ pub(super) struct GeminiRuntimeState {
 
 impl GeminiRuntimeState {
     /// Creates runtime state for one pending Gemini bootstrap.
-    pub(super) fn new(folder: PathBuf, model: String) -> Self {
+    pub(super) fn new(folder: PathBuf, model: String, permission_mode: PermissionMode) -> Self {
         Self {
             folder,
             model,
+            permission_mode,
             restored_context: false,
             session_id: String::new(),
         }
@@ -64,6 +68,7 @@ pub(super) async fn start_runtime(
             main_checkout_root: request.main_checkout_root.as_deref(),
             replay_transcript: None,
             model: &request.model,
+            permission_mode: request.permission_mode,
             personality_prompt: None,
             prompt: "",
             reasoning_level: request.reasoning_level,
@@ -73,6 +78,23 @@ pub(super) async fn start_runtime(
         .map_err(|error| {
             AppServerError::Provider(format!("Failed to build `gemini --acp` command: {error}"))
         })?;
+
+    start_runtime_with_built_command(command, request).await
+}
+
+/// Starts one pre-built Gemini ACP command and bootstraps the session runtime
+/// around its stdio streams.
+pub(super) async fn start_runtime_with_built_command(
+    command: std::process::Command,
+    request: &AppServerTurnRequest,
+) -> Result<
+    (
+        app_server_transport::AppServerRuntimeChild,
+        AppServerStdioTransport,
+        GeminiRuntimeState,
+    ),
+    AppServerError,
+> {
     let (mut child, stdin, stdout) =
         app_server_transport::spawn_runtime_command(command, "gemini --acp")?;
     let mut transport = AppServerStdioTransport::new(
@@ -81,7 +103,11 @@ pub(super) async fn start_runtime(
         "Gemini ACP stdin is unavailable",
         "Failed reading Gemini ACP stdout",
     );
-    let mut state = GeminiRuntimeState::new(request.folder.clone(), request.model.clone());
+    let mut state = GeminiRuntimeState::new(
+        request.folder.clone(),
+        request.model.clone(),
+        request.permission_mode,
+    );
 
     match bootstrap_runtime_session(&mut transport, state.folder.as_path()).await {
         Ok(session_id) => {
@@ -257,6 +283,7 @@ pub(super) fn parse_session_new_response(response_value: &Value) -> Result<Strin
 pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     session_id: &str,
+    permission_mode: PermissionMode,
     prompt: impl Into<TurnPrompt>,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
 ) -> Result<(String, u64, u64), AppServerError> {
@@ -288,7 +315,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
             };
 
             if let Some(permission_response) =
-                policy::build_permission_response(&response_value, session_id)
+                policy::build_permission_response(&response_value, session_id, permission_mode)
             {
                 transport.write_json_line(permission_response).await?;
 
@@ -438,5 +465,185 @@ pub(super) fn prompt_image_mime_type(local_image_path: &Path) -> &'static str {
         "jpg" | "jpeg" => "image/jpeg",
         "webp" => "image/webp",
         _ => "image/png",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    use agent_client_protocol::schema::v1::CLIENT_METHOD_NAMES;
+    use mockall::Sequence;
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport;
+    use crate::model::agent::{AgentModel, ReasoningLevel};
+    use crate::model::session::SpeedMode;
+
+    fn turn_request(folder: PathBuf, permission_mode: PermissionMode) -> AppServerTurnRequest {
+        AppServerTurnRequest {
+            folder,
+            live_transcript: None,
+            main_checkout_root: None,
+            model: AgentModel::Gemini31Pro.as_str().to_string(),
+            permission_mode,
+            persisted_instruction_conversation_id: None,
+            personality: crate::channel::PersonalityPrompt::default(),
+            prompt: TurnPrompt::from("Inspect the architecture"),
+            provider_conversation_id: None,
+            reasoning_level: ReasoningLevel::High,
+            replay_transcript: None,
+            request_kind: crate::channel::AgentRequestKind::SessionStart,
+            session_id: "session-1".to_string(),
+            speed_mode: SpeedMode::Normal,
+        }
+    }
+
+    #[tokio::test]
+    async fn start_runtime_reports_spawn_error_for_missing_folder() {
+        // Arrange
+        let runtime_parent = tempdir().expect("create runtime parent");
+        let request = turn_request(
+            runtime_parent.path().join("missing-runtime"),
+            PermissionMode::ReadOnly,
+        );
+
+        // Act
+        let result = start_runtime(&request).await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(error) if error.to_string().contains("Failed to spawn `gemini --acp`")
+        ));
+    }
+
+    #[tokio::test]
+    async fn start_runtime_with_built_command_constructs_state_before_bootstrap() {
+        // Arrange
+        let folder = tempdir().expect("create runtime folder");
+        let request = turn_request(folder.path().to_path_buf(), PermissionMode::ReadOnly);
+
+        // Act
+        let result =
+            start_runtime_with_built_command(std::process::Command::new("cat"), &request).await;
+
+        // Assert
+        let error = result
+            .err()
+            .expect("an echoing runtime should not return a usable session id");
+        assert!(
+            error.to_string().contains("initialize"),
+            "unexpected bootstrap error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_turn_cancels_permission_request_before_completing() {
+        // Arrange
+        let prompt_request_id = Arc::new(Mutex::new(None));
+        let mut transport = MockAppServerRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|payload| {
+                payload.get("method").and_then(Value::as_str)
+                    == Some(AGENT_METHOD_NAMES.session_prompt)
+            })
+            .returning({
+                let prompt_request_id = Arc::clone(&prompt_request_id);
+
+                move |payload| {
+                    *prompt_request_id
+                        .lock()
+                        .expect("prompt request id lock should remain usable") = payload
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(|| {
+                Box::pin(async {
+                    Ok(Some(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": "permission-1",
+                            "method": CLIENT_METHOD_NAMES.session_request_permission,
+                            "params": {
+                                "sessionId": "session-1",
+                                "toolCall": {"toolCallId": "tool-1"},
+                                "options": [{
+                                    "optionId": "allow-once",
+                                    "name": "Allow once",
+                                    "kind": "allow_once"
+                                }]
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|payload| {
+                payload.get("id") == Some(&Value::String("permission-1".to_string()))
+                    && payload.pointer("/result/outcome/outcome")
+                        == Some(&Value::String("cancelled".to_string()))
+            })
+            .return_once(|_| Box::pin(async { Ok(()) }));
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(move || {
+                let response_id = prompt_request_id
+                    .lock()
+                    .expect("prompt request id lock should remain usable")
+                    .clone()
+                    .expect("prompt request id should be captured");
+
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": response_id,
+                            "result": {
+                                "response": "Research complete",
+                                "usage": {"inputTokens": 7, "outputTokens": 3}
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+        let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = run_turn_with_runtime(
+            &mut transport,
+            "session-1",
+            PermissionMode::ReadOnly,
+            "Inspect the architecture",
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            result.expect("turn should complete after denying mutation"),
+            ("Research complete".to_string(), 7, 3)
+        );
     }
 }

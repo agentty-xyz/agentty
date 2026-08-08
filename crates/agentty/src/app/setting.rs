@@ -5,7 +5,8 @@ use crate::domain::agent::{
     self, AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
 };
 use crate::domain::setting::{
-    DEFAULT_ORCHESTRATION_PARALLELISM, MAX_ORCHESTRATION_PARALLELISM, SettingName,
+    DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH, DEFAULT_ORCHESTRATION_PARALLELISM,
+    MAX_ORCHESTRATION_PARALLELISM, SettingName,
 };
 use crate::domain::theme::ColorTheme;
 use crate::infra::db::AppRepositories;
@@ -138,6 +139,8 @@ pub(crate) async fn load_default_smart_agent_selection_from_repositories(
 
 /// Manages user-configurable application settings.
 pub struct SettingsManager {
+    /// Whether temporary research-only orchestration waves start immediately.
+    pub auto_approve_orchestration_research: bool,
     /// Default reasoning level used by fast-path workflows.
     pub default_fast_reasoning_level: ReasoningLevel,
     /// Default agent/model selection used by fast-path workflows.
@@ -247,8 +250,11 @@ impl SettingsManager {
         let theme = load_theme_setting_from_repositories(&repositories).await;
         let orchestration_parallelism =
             load_orchestration_parallelism_setting_from_repositories(&repositories).await;
+        let auto_approve_orchestration_research =
+            load_auto_approve_orchestration_research_setting_from_repositories(&repositories).await;
 
         Self {
+            auto_approve_orchestration_research,
             default_fast_reasoning_level,
             default_fast_selection: default_fast_agent,
             default_review_reasoning_level,
@@ -281,6 +287,7 @@ impl SettingsManager {
                 .into_iter()
                 .map(ModelSelectorOption::selection)
                 .collect(),
+            auto_approve_orchestration_research: self.auto_approve_orchestration_research,
             default_fast_reasoning_level: self.default_fast_reasoning_level,
             default_fast_selection: self.default_fast_selection,
             default_review_reasoning_level: self.default_review_reasoning_level,
@@ -298,6 +305,11 @@ impl SettingsManager {
     /// Applies and persists one value change requested by the settings screen.
     pub(crate) async fn apply_operation(&mut self, operation: SettingsOperation) {
         match operation {
+            SettingsOperation::AutoApproveOrchestrationResearch(value) => {
+                self.auto_approve_orchestration_research = value;
+                self.persist_auto_approve_orchestration_research_setting()
+                    .await;
+            }
             SettingsOperation::DefaultFastSelection {
                 reasoning_level,
                 selection,
@@ -353,6 +365,17 @@ impl SettingsManager {
                 SettingName::LaunchConfiguration,
                 &self.launch_configuration,
             )
+            .await;
+    }
+
+    /// Persists whether research-only orchestration waves start immediately.
+    async fn persist_auto_approve_orchestration_research_setting(&self) {
+        let value = self.auto_approve_orchestration_research.to_string();
+
+        let _ = self
+            .repositories
+            .settings()
+            .upsert_setting(SettingName::AutoApproveOrchestrationResearch, &value)
             .await;
     }
 
@@ -726,6 +749,18 @@ async fn load_orchestration_parallelism_setting_from_repositories(
         .clamp(1, MAX_ORCHESTRATION_PARALLELISM)
 }
 
+async fn load_auto_approve_orchestration_research_setting_from_repositories(
+    repositories: &AppRepositories,
+) -> bool {
+    repositories
+        .settings()
+        .get_setting(SettingName::AutoApproveOrchestrationResearch)
+        .await
+        .unwrap_or(None)
+        .and_then(|setting_value| setting_value.parse::<bool>().ok())
+        .unwrap_or(DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -806,6 +841,8 @@ mod tests {
                         .into_iter()
                         .map(ModelSelectorOption::selection)
                         .collect(),
+                    auto_approve_orchestration_research:
+                        DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH,
                     default_fast_reasoning_level: ReasoningLevel::Low,
                     default_fast_selection: default_selection,
                     default_review_reasoning_level: ReasoningLevel::XHigh,
@@ -1347,6 +1384,12 @@ mod tests {
             .upsert_setting(SettingName::OrchestrationParallelism, "5")
             .await
             .expect("failed to persist orchestration parallelism");
+        services
+            .db()
+            .settings()
+            .upsert_setting(SettingName::AutoApproveOrchestrationResearch, "false")
+            .await
+            .expect("failed to persist research auto-approval");
 
         // Act
         let manager = settings_manager(&services, project_id).await;
@@ -1373,6 +1416,7 @@ mod tests {
             ReasoningLevel::XHigh
         );
         assert_eq!(settings.orchestration_parallelism, 5);
+        assert!(!settings.auto_approve_orchestration_research);
         assert_eq!(settings.theme, ColorTheme::Green);
         assert!(!settings.include_coauthored_by_agentty);
         assert!(settings.use_last_used_model_as_default);
@@ -1720,7 +1764,7 @@ mod tests {
                 .presentation
                 .snapshot(&manager.view)
                 .selected_row_index,
-            Some(6)
+            Some(7)
         );
     }
 
@@ -1745,14 +1789,16 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows.len(), 7);
+        assert_eq!(rows.len(), 8);
         assert_eq!(rows[0].0, "Theme");
         assert_eq!(rows[1].0, "Orchestrator Parallelism");
-        assert_eq!(rows[2].0, "Default Smart Model");
-        assert_eq!(rows[3].0, "Default Fast Model");
-        assert_eq!(rows[4].0, "Default Review Model");
-        assert_eq!(rows[5].0, "Coauthored by Agentty");
-        assert_eq!(rows[6].0, "Launch Configurations");
+        assert_eq!(rows[2].0, "Auto-approve Research");
+        assert_eq!(rows[2].1, "Enabled");
+        assert_eq!(rows[3].0, "Default Smart Model");
+        assert_eq!(rows[4].0, "Default Fast Model");
+        assert_eq!(rows[5].0, "Default Review Model");
+        assert_eq!(rows[6].0, "Coauthored by Agentty");
+        assert_eq!(rows[7].0, "Launch Configurations");
     }
 
     #[test]
@@ -1765,9 +1811,10 @@ mod tests {
         let project_rows = manager.project_settings_rows();
 
         // Assert
-        assert_eq!(global_rows.len(), 2);
+        assert_eq!(global_rows.len(), 3);
         assert_eq!(global_rows[0].0, "Theme");
         assert_eq!(global_rows[1].0, "Orchestrator Parallelism");
+        assert_eq!(global_rows[2].0, "Auto-approve Research");
         assert_eq!(project_rows.len(), 5);
         assert_eq!(project_rows[0].0, "Default Smart Model");
         assert_eq!(project_rows[1].0, "Default Fast Model");
@@ -1780,7 +1827,7 @@ mod tests {
     fn footer_hint_returns_launch_configuration_input_hint_when_input_is_active() {
         // Arrange
         let mut manager = new_settings_manager();
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
 
@@ -1865,7 +1912,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "(none)");
+        assert_eq!(rows[7].1, "(none)");
     }
 
     #[test]
@@ -1878,7 +1925,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "http://localhost:5173");
+        assert_eq!(rows[7].1, "http://localhost:5173");
     }
 
     #[test]
@@ -1892,7 +1939,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "cargo test (+2 more)");
+        assert_eq!(rows[7].1, "cargo test (+2 more)");
     }
 
     #[test]
@@ -1905,7 +1952,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, "Last used model as default [high]");
+        assert_eq!(rows[3].1, "Last used model as default [high]");
     }
 
     #[test]
@@ -1919,7 +1966,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, "antigravity/gemini-3.1-pro-preview [high]");
+        assert_eq!(rows[3].1, "antigravity/gemini-3.1-pro-preview [high]");
     }
 
     #[test]
@@ -1938,7 +1985,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, "gemini/gemini-3.1-pro-preview [high]");
+        assert_eq!(rows[3].1, "gemini/gemini-3.1-pro-preview [high]");
     }
 
     #[test]
@@ -1952,7 +1999,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[3].1, "codex/gpt-5.6-sol [low]");
+        assert_eq!(rows[4].1, "codex/gpt-5.6-sol [low]");
     }
 
     #[test]
@@ -1966,7 +2013,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[4].1, "claude/claude-opus-5 [xhigh]");
+        assert_eq!(rows[5].1, "claude/claude-opus-5 [xhigh]");
     }
 
     #[test]
@@ -1979,7 +2026,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[5].1, "Disabled");
+        assert_eq!(rows[6].1, "Disabled");
     }
 
     #[test]
@@ -2000,7 +2047,7 @@ mod tests {
         // Arrange
         let mut manager = new_settings_manager();
         manager.fixture_view_mut().launch_configuration = "nvim .".to_string();
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
 
         // Act
         manager.handle_enter();
@@ -2017,7 +2064,7 @@ mod tests {
     fn next_and_previous_do_not_move_selection_while_launch_configuration_editor_is_open() {
         // Arrange
         let mut manager = new_settings_manager();
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
 
         // Act
@@ -2030,7 +2077,7 @@ mod tests {
                 .presentation
                 .snapshot(&manager.view)
                 .selected_row_index,
-            Some(6)
+            Some(7)
         );
         assert!(manager.is_launch_configuration_list_editor_open());
     }
@@ -2039,7 +2086,7 @@ mod tests {
     fn navigation_actions_do_not_request_launch_configuration_persistence() {
         // Arrange
         let mut manager = new_settings_manager();
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
 
         // Act
@@ -2078,7 +2125,7 @@ mod tests {
         // Arrange
         let mut manager = new_settings_manager();
         manager.fixture_view_mut().launch_configuration = "old command".to_string();
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
         manager.apply_launch_configuration_input_command(InputCommand::Insert('n'));
@@ -2100,7 +2147,7 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = settings_manager(&services, project_id).await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.start_adding_launch_configuration();
 
@@ -2133,7 +2180,7 @@ mod tests {
             "cargo test\nnpm run dev",
         )
         .await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.next_launch_configuration_list_editor_item();
         manager.start_editing_selected_launch_configuration();
@@ -2174,7 +2221,7 @@ mod tests {
             "cargo test\nnpm run dev",
         )
         .await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.start_editing_selected_launch_configuration();
 
@@ -2208,7 +2255,7 @@ mod tests {
             "cargo test\nnpm run dev\nlazygit",
         )
         .await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
         manager.next_launch_configuration_list_editor_item();
 
@@ -2241,7 +2288,7 @@ mod tests {
             "cargo test\nnpm run dev\nlazygit",
         )
         .await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 7);
         manager.handle_enter();
 
         // Act
@@ -2272,7 +2319,7 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = settings_manager(&services, project_id).await;
-        select_row(&mut manager, 5);
+        select_row(&mut manager, 6);
 
         // Act
         manager.handle_enter();
@@ -2359,6 +2406,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn selector_dropdown_persists_research_auto_approval() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = settings_manager(&services, project_id).await;
+        select_row(&mut manager, 2);
+
+        // Act
+        manager.handle_enter();
+        manager.next_selector_dropdown_option();
+        manager.select_selector_dropdown_option().await;
+
+        // Assert
+        assert!(!manager.settings().auto_approve_orchestration_research);
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_setting(SettingName::AutoApproveOrchestrationResearch)
+                .await
+                .expect("failed to load research auto-approval"),
+            Some("false".to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn launch_configuration_editor_apis_are_noops_without_open_editor() {
         // Arrange
         let (services, project_id) = test_services().await;
@@ -2423,7 +2495,7 @@ mod tests {
             .await
             .expect("failed to persist smart selector fixture");
         let mut manager = settings_manager(&services, project_id).await;
-        select_row(&mut manager, 2);
+        select_row(&mut manager, 3);
 
         // Act
         manager.handle_enter();

@@ -8,10 +8,25 @@ use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
 use agentty::test_support::persist_project_reasoning_levels_for_test;
 use testty::assertion;
+use testty::journey::Journey;
 use testty::region::Region;
+use testty::step::Step;
 
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
+
+const DEFAULT_SMART_MODEL_ROW_OFFSET: usize = 3;
+const LAUNCH_CONFIGURATIONS_ROW_OFFSET: usize = 7;
+
+/// Moves from the initial Theme row to a known settings row.
+fn move_to_settings_row(name: &str, row_offset: usize) -> Journey {
+    let mut journey = Journey::new(format!("move_to_{name}"));
+    for _ in 0..row_offset {
+        journey = journey.step(Step::press_key("j"));
+    }
+
+    journey
+}
 
 /// Adds a Gemini CLI stub so the settings page exposes a real Gemini-owned
 /// model option.
@@ -146,6 +161,7 @@ fn settings_tab_shows_content() {
                 assertion::assert_text_in_region(frame, "Theme", &full);
                 assertion::assert_text_in_region(frame, "Agentty Default", &full);
                 assertion::assert_text_in_region(frame, "Orchestrator Parallelism", &full);
+                assertion::assert_text_in_region(frame, "Auto-approve Research", &full);
             },
         )
         .expect("feature test failed");
@@ -190,6 +206,9 @@ fn settings_jk_navigation() {
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
@@ -200,7 +219,7 @@ fn settings_jk_navigation() {
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
-                    .capture_labeled("moved_down", "Selection moved down four rows")
+                    .capture_labeled("moved_down", "Selection moved down five rows")
                     .press_key("k")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
@@ -269,8 +288,10 @@ fn settings_dropdown_selects_value() {
                     .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
-                    .press_key("j")
-                    .press_key("j")
+                    .compose(&move_to_settings_row(
+                        "default_smart_model",
+                        DEFAULT_SMART_MODEL_ROW_OFFSET,
+                    ))
                     .wait_for_stable_frame(200, 3000)
                     .capture_labeled("before_edit", "Smart model and reasoning before selection")
                     .press_key("Enter")
@@ -343,8 +364,10 @@ fn settings_model_selector_uses_two_steps() {
                     .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
-                    .press_key("j")
-                    .press_key("j")
+                    .compose(&move_to_settings_row(
+                        "default_smart_model",
+                        DEFAULT_SMART_MODEL_ROW_OFFSET,
+                    ))
                     .wait_for_stable_frame(200, 3000)
                     .capture_labeled(
                         "model_rows",
@@ -408,12 +431,10 @@ fn settings_launch_configurations_list_editor() {
                     .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(1500)
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
+                    .compose(&move_to_settings_row(
+                        "launch_configurations",
+                        LAUNCH_CONFIGURATIONS_ROW_OFFSET,
+                    ))
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
@@ -515,12 +536,10 @@ fn test_input_undo_redo() {
                     .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Issues"))
                     .compose(&common::switch_to_tab("Settings"))
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
+                    .compose(&move_to_settings_row(
+                        "launch_configurations",
+                        LAUNCH_CONFIGURATIONS_ROW_OFFSET,
+                    ))
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("a")

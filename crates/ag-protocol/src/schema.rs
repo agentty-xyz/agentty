@@ -362,6 +362,7 @@ mod tests {
             Some(subtasks_field_description().as_str())
         );
         assert!(subtask_properties.contains_key("prompt"));
+        assert!(subtask_properties.contains_key("kind"));
         assert!(subtask_properties.contains_key("task_key"));
         assert!(subtask_properties.contains_key("title"));
         assert!(subtask_properties.contains_key("touched_areas"));

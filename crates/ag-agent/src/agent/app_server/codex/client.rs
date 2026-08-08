@@ -80,7 +80,9 @@ pub(crate) struct CodexSessionRuntime {
 
 impl RuntimeClientRuntime for CodexSessionRuntime {
     fn matches_request(&self, request: &AppServerTurnRequest) -> bool {
-        self.state.folder == request.folder && self.state.model == request.model
+        self.state.folder == request.folder
+            && self.state.model == request.model
+            && self.state.permission_mode == request.permission_mode
     }
 
     fn pid(&self) -> Option<u32> {
@@ -129,7 +131,11 @@ mod tests {
         let folder = std::env::temp_dir().join(format!(
             "agentty-codex-runtime-state-{thread_id}-{latest_input_tokens}"
         ));
-        let mut state = CodexRuntimeState::new(folder, AgentModel::Gpt56Sol.as_str().to_string());
+        let mut state = CodexRuntimeState::new(
+            folder,
+            AgentModel::Gpt56Sol.as_str().to_string(),
+            crate::model::permission::PermissionMode::AutoEdit,
+        );
         state.thread_id = thread_id.to_string();
         state.latest_input_tokens = latest_input_tokens;
 
@@ -167,6 +173,38 @@ mod tests {
             state: build_runtime_state(thread_id, 0),
             transport,
         }
+    }
+
+    #[tokio::test]
+    async fn runtime_reuse_requires_matching_permission_mode() {
+        // Arrange
+        let mut runtime = build_stopped_session_runtime("thread-permission");
+        let mut request = AppServerTurnRequest {
+            folder: runtime.state.folder.clone(),
+            live_transcript: None,
+            main_checkout_root: None,
+            model: runtime.state.model.clone(),
+            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            persisted_instruction_conversation_id: None,
+            personality: crate::channel::PersonalityPrompt::default(),
+            prompt: TurnPrompt::from("Continue"),
+            provider_conversation_id: Some("thread-permission".to_string()),
+            reasoning_level: ReasoningLevel::default(),
+            replay_transcript: None,
+            request_kind: crate::channel::AgentRequestKind::SessionResume,
+            session_id: "session-1".to_string(),
+            speed_mode: SpeedMode::default(),
+        };
+
+        // Act
+        let auto_edit_matches = runtime.matches_request(&request);
+        request.permission_mode = crate::model::permission::PermissionMode::ReadOnly;
+        let read_only_matches = runtime.matches_request(&request);
+        runtime.shutdown_runtime().await;
+
+        // Assert
+        assert!(auto_edit_matches);
+        assert!(!read_only_matches);
     }
 
     #[tokio::test]
@@ -316,6 +354,7 @@ mod tests {
             &mut transport,
             folder.path(),
             AgentModel::Gpt56Sol.as_str(),
+            crate::model::permission::PermissionMode::AutoEdit,
             ReasoningLevel::default(),
             SpeedMode::default(),
         )
@@ -407,6 +446,7 @@ mod tests {
             folder.path(),
             AgentModel::Gpt56Sol.as_str(),
             Some("thread-existing"),
+            crate::model::permission::PermissionMode::AutoEdit,
             ReasoningLevel::default(),
             SpeedMode::default(),
         )
@@ -501,6 +541,7 @@ mod tests {
             lifecycle::CodexTurnEventLoopInput {
                 folder: folder.path(),
                 model: AgentModel::Gpt56Sol.as_str(),
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 prompt: "Implement the task".into(),
                 reasoning_level: ReasoningLevel::default(),
                 speed_mode: SpeedMode::default(),
@@ -538,6 +579,7 @@ mod tests {
             lifecycle::CodexTurnEventLoopInput {
                 folder: folder.path(),
                 model: AgentModel::Gpt56Sol.as_str(),
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 prompt: "Review the current diff".into(),
                 reasoning_level: ReasoningLevel::default(),
                 speed_mode: SpeedMode::default(),
@@ -1133,9 +1175,12 @@ mod tests {
         let session_folder = Path::new("/tmp/session");
 
         // Act
-        let approval_response =
-            policy::build_server_request_response(&response_value, session_folder)
-                .expect("approval response should be generated");
+        let approval_response = policy::build_server_request_response(
+            &response_value,
+            crate::model::permission::PermissionMode::AutoEdit,
+            session_folder,
+        )
+        .expect("approval response should be generated");
 
         // Assert
         assert_eq!(
@@ -1160,6 +1205,7 @@ mod tests {
         let payload = lifecycle::build_thread_start_payload(
             folder.path(),
             AgentModel::Gpt56Sol.as_str(),
+            crate::model::permission::PermissionMode::AutoEdit,
             ReasoningLevel::default(),
             SpeedMode::default(),
             "thread-start-1",
@@ -1190,9 +1236,12 @@ mod tests {
         let session_folder = Path::new("/tmp/session");
 
         // Act
-        let approval_response =
-            policy::build_server_request_response(&response_value, session_folder)
-                .expect("approval response should be generated");
+        let approval_response = policy::build_server_request_response(
+            &response_value,
+            crate::model::permission::PermissionMode::AutoEdit,
+            session_folder,
+        )
+        .expect("approval response should be generated");
 
         // Assert
         assert_eq!(
@@ -1219,9 +1268,12 @@ mod tests {
         let session_folder = Path::new("/tmp/session");
 
         // Act
-        let approval_response =
-            policy::build_server_request_response(&response_value, session_folder)
-                .expect("approval response should be generated");
+        let approval_response = policy::build_server_request_response(
+            &response_value,
+            crate::model::permission::PermissionMode::AutoEdit,
+            session_folder,
+        )
+        .expect("approval response should be generated");
 
         // Assert
         assert_eq!(
@@ -1248,8 +1300,12 @@ mod tests {
         let session_folder = Path::new("/tmp/session");
 
         // Act
-        let response = policy::build_server_request_response(&response_value, session_folder)
-            .expect("permission response should be generated");
+        let response = policy::build_server_request_response(
+            &response_value,
+            crate::model::permission::PermissionMode::AutoEdit,
+            session_folder,
+        )
+        .expect("permission response should be generated");
 
         // Assert
         assert_eq!(
@@ -1277,8 +1333,12 @@ mod tests {
         let session_folder = Path::new("/tmp/session");
 
         // Act
-        let response = policy::build_server_request_response(&response_value, session_folder)
-            .expect("elicitation response should be generated");
+        let response = policy::build_server_request_response(
+            &response_value,
+            crate::model::permission::PermissionMode::AutoEdit,
+            session_folder,
+        )
+        .expect("elicitation response should be generated");
 
         // Assert
         assert_eq!(
@@ -1318,15 +1378,16 @@ mod tests {
         let folder = tempdir().expect("temporary folder should be created");
 
         // Act
-        let payload = lifecycle::build_turn_start_payload(
-            folder.path(),
-            AgentModel::Gpt56Sol.as_str(),
-            ReasoningLevel::default(),
-            SpeedMode::default(),
-            "thread-123",
-            "Implement the task",
-            "turn-start-1",
-        );
+        let payload = lifecycle::build_turn_start_payload(&lifecycle::CodexTurnStartPayloadInput {
+            folder: folder.path(),
+            model: AgentModel::Gpt56Sol.as_str(),
+            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            prompt: "Implement the task".into(),
+            reasoning_level: ReasoningLevel::default(),
+            speed_mode: SpeedMode::default(),
+            thread_id: "thread-123",
+            turn_start_id: "turn-start-1",
+        });
 
         // Assert
         assert_eq!(
