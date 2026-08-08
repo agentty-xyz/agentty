@@ -5,27 +5,28 @@ typed, and independent of Agentty UI or orchestration concerns.
 
 ## Boundaries
 
-- `Model` owns the shared request lifecycle, telemetry, and structured-output
-  validation.
-- Provider adapters implement `ModelBackend` and own authentication, capability checks,
-  payload translation, and raw generation.
-- API-family modules may share wire handling across providers, but their types remain
-  private.
+- `Model` is the object-safe application boundary; `ModelClient` implements it and owns
+  the shared request lifecycle, telemetry, and structured-output validation.
+- Private provider modules own public configuration and provider-specific capability
+  policy.
+- API-family modules own shared authentication, payload translation, wire handling, and
+  raw generation, but their runtime types remain private.
 - Network access stays behind an injectable client boundary.
 
 ## Invariants
 
 - Every request requires an output schema and every response is validated locally.
-- Unsupported provider capabilities return explicit errors; adapters must not silently
+- Unsupported provider capabilities return explicit errors; backends must not silently
   weaken the shared contract.
+- Provider metadata is validated and retained when a `ModelClient` is constructed.
 - Response bodies and diagnostics remain bounded.
-- Request-duration telemetry applies uniformly to every `ModelBackend`.
+- Request-duration telemetry applies uniformly to every `ModelClient` request.
 
 ## Change Routing
 
 - Put neutral lifecycle and contract changes in the model and schema modules.
 - Put reusable API-protocol behavior in its API-family module.
-- Keep provider-specific behavior under the provider module and in each adapter.
+- Keep provider-specific configuration and policy under the provider module.
 - Add focused tests for lifecycle, transport, schema, and provider behavior.
 
 ## Documentation

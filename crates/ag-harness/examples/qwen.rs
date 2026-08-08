@@ -3,7 +3,7 @@
 
 use std::io::{self, Write};
 
-use ag_harness::{Model, ModelRequest, OutputSchema, Qwen, QwenConfig};
+use ag_harness::{ModelClient, ModelRequest, OutputSchema, QwenConfig};
 use serde_json::json;
 
 #[path = "support/telemetry.rs"]
@@ -17,12 +17,18 @@ async fn main() -> Result<(), DynError> {
 }
 
 async fn run() -> Result<(), DynError> {
-    let model = Qwen::new(QwenConfig {
+    let config = QwenConfig {
         api_key: std::env::var("DASHSCOPE_API_KEY")?,
         base_url: std::env::var("DASHSCOPE_BASE_URL")?,
         model: "qwen-plus".to_string(),
-    });
-    let schema = OutputSchema::new(json!({
+    };
+
+    request_greeting(config).await
+}
+
+async fn request_greeting(config: QwenConfig) -> Result<(), DynError> {
+    let client = ModelClient::qwen(config)?;
+    let schema = json!({
         "type": "object",
         "properties": {
             "message": {
@@ -32,8 +38,9 @@ async fn run() -> Result<(), DynError> {
         },
         "required": ["message"],
         "additionalProperties": false
-    }))?;
-    let response = model
+    });
+    let schema = OutputSchema::new(schema)?;
+    let response = client
         .complete(ModelRequest::new(
             "Return a JSON greeting with the message set to hello.",
             schema,
@@ -69,6 +76,24 @@ mod tests {
                 Err(error.into())
             }
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_greeting_rejects_invalid_model() {
+        // Arrange
+        let config = QwenConfig {
+            api_key: "test-key".to_string(),
+            base_url: "https://example.com".to_string(),
+            model: "  ".to_string(),
+        };
+
+        // Act
+        let error = request_greeting(config)
+            .await
+            .expect_err("invalid model configuration should fail");
+
+        // Assert
+        assert_eq!(error.to_string(), "model identifier must not be empty");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

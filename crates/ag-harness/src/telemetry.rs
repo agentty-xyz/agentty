@@ -19,20 +19,22 @@ pub(crate) struct RequestDuration<'a> {
 
 impl<'a> RequestDuration<'a> {
     /// Starts timing one model request.
-    pub(crate) fn start(metadata: ModelMetadata<'a>) -> Self {
-        let metric = global::meter("ag-harness")
-            .f64_histogram("gen_ai.client.operation.duration")
-            .with_description("GenAI operation duration.")
-            .with_unit("s")
-            .with_boundaries(DURATION_BOUNDARIES_SECONDS.to_vec())
-            .build();
-
+    pub(crate) fn start(metadata: &'a ModelMetadata) -> Self {
         Self {
-            metric,
+            metric: Self::duration_histogram(),
             model: metadata.model(),
             provider: metadata.provider(),
             started_at: Instant::now(),
         }
+    }
+
+    fn duration_histogram() -> Histogram<f64> {
+        global::meter("ag-harness")
+            .f64_histogram("gen_ai.client.operation.duration")
+            .with_description("GenAI operation duration.")
+            .with_unit("s")
+            .with_boundaries(DURATION_BOUNDARIES_SECONDS.to_vec())
+            .build()
     }
 }
 

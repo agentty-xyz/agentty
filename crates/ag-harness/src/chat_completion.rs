@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::schema_contract;
+use crate::{model, schema_contract};
 
 pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
 const JSON_STRING_MAX_EXPANSION: usize = 6;
@@ -17,6 +17,130 @@ const REQUEST_TIMEOUT: Duration = Duration::from_mins(1);
 pub(crate) const SUCCESS_BODY_LIMIT_BYTES: usize = schema_contract::RESPONSE_CONTENT_LIMIT_BYTES
     * JSON_STRING_MAX_EXPANSION
     + RESPONSE_ENVELOPE_LIMIT_BYTES;
+pub(crate) const STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
+    "Return only one JSON object. The object must validate against this JSON Schema. ",
+    "Do not include Markdown fences or any other text.\n\nJSON Schema:\n",
+);
+
+/// Provider policy applied by the shared JSON Object backend.
+#[derive(Clone, Copy)]
+pub(crate) struct JsonObjectProviderPolicy {
+    pub(crate) display_name: &'static str,
+    pub(crate) telemetry_name: &'static str,
+    pub(crate) unsupported_schema_reason: &'static str,
+}
+
+/// Shared JSON Object backend for OpenAI-compatible Chat Completions APIs.
+pub(crate) struct JsonObjectBackend {
+    api_key: String,
+    base_url: String,
+    client: Arc<dyn ChatCompletionClient>,
+    model: String,
+    policy: JsonObjectProviderPolicy,
+}
+
+impl JsonObjectBackend {
+    /// Creates a JSON Object backend with the production HTTP client.
+    pub(crate) fn new(
+        api_key: String,
+        base_url: String,
+        model: String,
+        policy: JsonObjectProviderPolicy,
+    ) -> Self {
+        Self::with_client(api_key, base_url, model, policy, default_client())
+    }
+
+    /// Returns the backend's telemetry identity.
+    pub(crate) fn identity(&self) -> (&'static str, &str) {
+        (self.policy.telemetry_name, &self.model)
+    }
+
+    /// Generates raw JSON Object output through the shared wire lifecycle.
+    pub(crate) async fn generate(
+        &self,
+        request: &model::ModelRequest,
+    ) -> Result<String, model::ModelError> {
+        if !request.schema().has_object_root() {
+            return Err(model::ModelError::UnsupportedOutputSchema {
+                reason: self.policy.unsupported_schema_reason.to_string(),
+            });
+        }
+        let messages = vec![
+            JsonObjectMessage {
+                content: format!(
+                    "{STRUCTURED_OUTPUT_INSTRUCTION}{}",
+                    request.schema().value()
+                ),
+                role: "system",
+            },
+            JsonObjectMessage {
+                content: request.prompt().to_string(),
+                role: "user",
+            },
+        ];
+        let payload = JsonObjectRequest {
+            messages,
+            model: &self.model,
+            response_format: JsonObjectResponseFormat {
+                kind: "json_object",
+            },
+        };
+        let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
+        let completion = self
+            .client
+            .complete(ChatCompletionRequest::new(
+                &self.api_key,
+                endpoint(&self.base_url),
+                payload,
+            ))
+            .await
+            .map_err(|error| self.map_completion_error(error))?
+            .ok_or(model::ModelError::InvalidResponse)?;
+        let (finish_reason, content) = completion.into_parts();
+        if finish_reason != "stop" {
+            return Err(model::ModelError::IncompleteResponse {
+                reason: schema_contract::bounded_diagnostic(finish_reason),
+            });
+        }
+        let text = content.ok_or(model::ModelError::InvalidResponse)?;
+
+        Ok(text)
+    }
+
+    /// Creates a JSON Object backend with an injected transport client.
+    pub(crate) fn with_client(
+        api_key: String,
+        base_url: String,
+        model: String,
+        policy: JsonObjectProviderPolicy,
+        client: Arc<dyn ChatCompletionClient>,
+    ) -> Self {
+        Self {
+            api_key,
+            base_url,
+            client,
+            model,
+            policy,
+        }
+    }
+
+    fn map_completion_error(&self, error: ChatCompletionError) -> model::ModelError {
+        match error {
+            ChatCompletionError::Http {
+                body,
+                source,
+                status,
+            } => model::ModelError::request(ProviderHttpError {
+                body,
+                provider: self.policy.display_name,
+                source,
+                status,
+            }),
+            ChatCompletionError::ResponseBodyTooLarge => model::ModelError::ResponseBodyTooLarge,
+            error => model::ModelError::request(error),
+        }
+    }
+}
 
 /// One provider-authenticated request using the Chat Completions wire API.
 pub(crate) struct ChatCompletionRequest<'a> {
@@ -221,6 +345,35 @@ impl ChatCompletionError {
     fn transport(error: impl Error + Send + Sync + 'static) -> Self {
         Self::Transport(Box::new(error))
     }
+}
+
+#[derive(Debug, Error)]
+#[error("{provider} returned HTTP {status}: {body}")]
+struct ProviderHttpError {
+    body: String,
+    provider: &'static str,
+    #[source]
+    source: reqwest::Error,
+    status: reqwest::StatusCode,
+}
+
+#[derive(Serialize)]
+struct JsonObjectRequest<'a> {
+    messages: Vec<JsonObjectMessage>,
+    model: &'a str,
+    response_format: JsonObjectResponseFormat,
+}
+
+#[derive(Serialize)]
+struct JsonObjectMessage {
+    content: String,
+    role: &'static str,
+}
+
+#[derive(Serialize)]
+struct JsonObjectResponseFormat {
+    #[serde(rename = "type")]
+    kind: &'static str,
 }
 
 #[derive(Deserialize)]

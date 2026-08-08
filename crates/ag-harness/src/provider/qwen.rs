@@ -1,18 +1,12 @@
-use std::sync::Arc;
+use crate::chat_completion;
 
-use async_trait::async_trait;
-use serde::Serialize;
-use thiserror::Error;
-
-use crate::{chat_completion, model, schema_contract};
-
-const PROVIDER_NAME: &str = "alibaba_cloud";
-const STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
-    "Return only one JSON object. The object must validate against this JSON Schema. ",
-    "Do not include Markdown fences or any other text.\n\nJSON Schema:\n",
-);
-const UNSUPPORTED_SCHEMA_REASON: &str =
-    "Qwen JSON Object mode requires an explicit object root schema";
+pub(crate) const PROVIDER_NAME: &str = "alibaba_cloud";
+pub(crate) const POLICY: chat_completion::JsonObjectProviderPolicy =
+    chat_completion::JsonObjectProviderPolicy {
+        display_name: "Qwen",
+        telemetry_name: PROVIDER_NAME,
+        unsupported_schema_reason: "Qwen JSON Object mode requires an explicit object root schema",
+    };
 
 /// Configuration for a Qwen model served through Alibaba Cloud Model Studio's
 /// OpenAI-compatible API.
@@ -25,140 +19,22 @@ pub struct QwenConfig {
     pub model: String,
 }
 
-/// Qwen implementation of the provider-neutral [`model::ModelBackend`]
-/// strategy.
-pub struct Qwen {
-    client: Arc<dyn chat_completion::ChatCompletionClient>,
-    config: QwenConfig,
-}
-
-impl Qwen {
-    /// Creates a Qwen model adapter.
-    pub fn new(config: QwenConfig) -> Self {
-        Self::with_client(config, chat_completion::default_client())
-    }
-
-    fn with_client(
-        config: QwenConfig,
-        client: Arc<dyn chat_completion::ChatCompletionClient>,
-    ) -> Self {
-        Self { client, config }
-    }
-
-    fn map_completion_error(error: chat_completion::ChatCompletionError) -> model::ModelError {
-        match error {
-            chat_completion::ChatCompletionError::Http {
-                body,
-                source,
-                status,
-            } => model::ModelError::request(QwenHttpError {
-                body,
-                source,
-                status,
-            }),
-            chat_completion::ChatCompletionError::ResponseBodyTooLarge => {
-                model::ModelError::ResponseBodyTooLarge
-            }
-            error => model::ModelError::request(error),
-        }
-    }
-}
-
-#[async_trait]
-impl model::ModelBackend for Qwen {
-    fn metadata(&self) -> model::ModelMetadata<'_> {
-        model::ModelMetadata::new(PROVIDER_NAME, &self.config.model)
-    }
-
-    async fn generate(&self, request: &model::ModelRequest) -> Result<String, model::ModelError> {
-        if !request.schema().has_object_root() {
-            return Err(model::ModelError::UnsupportedOutputSchema {
-                reason: UNSUPPORTED_SCHEMA_REASON.to_string(),
-            });
-        }
-        let messages = vec![
-            QwenMessage {
-                content: format!(
-                    "{STRUCTURED_OUTPUT_INSTRUCTION}{}",
-                    request.schema().value()
-                ),
-                role: "system",
-            },
-            QwenMessage {
-                content: request.prompt().to_string(),
-                role: "user",
-            },
-        ];
-        let payload = QwenRequest {
-            messages,
-            model: &self.config.model,
-            response_format: QwenResponseFormat {
-                kind: "json_object",
-            },
-        };
-        let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
-        let completion = self
-            .client
-            .complete(chat_completion::ChatCompletionRequest::new(
-                &self.config.api_key,
-                chat_completion::endpoint(&self.config.base_url),
-                payload,
-            ))
-            .await
-            .map_err(Self::map_completion_error)?
-            .ok_or(model::ModelError::InvalidResponse)?;
-        let (finish_reason, content) = completion.into_parts();
-        if finish_reason != "stop" {
-            return Err(model::ModelError::IncompleteResponse {
-                reason: schema_contract::bounded_diagnostic(finish_reason),
-            });
-        }
-        let text = content.ok_or(model::ModelError::InvalidResponse)?;
-
-        Ok(text)
-    }
-}
-
-#[derive(Debug, Error)]
-#[error("Qwen returned HTTP {status}: {body}")]
-struct QwenHttpError {
-    body: String,
-    #[source]
-    source: reqwest::Error,
-    status: reqwest::StatusCode,
-}
-
-#[derive(Serialize)]
-struct QwenRequest<'a> {
-    messages: Vec<QwenMessage>,
-    model: &'a str,
-    response_format: QwenResponseFormat,
-}
-
-#[derive(Serialize)]
-struct QwenMessage {
-    content: String,
-    role: &'static str,
-}
-
-#[derive(Serialize)]
-struct QwenResponseFormat {
-    #[serde(rename = "type")]
-    kind: &'static str,
-}
-
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
     use serde_json::json;
     use wiremock::matchers::{bearer_token, body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::Model;
     use crate::chat_completion::{
         ChatCompletion, ChatCompletionClient, ChatCompletionError, ChatCompletionRequest,
-        ERROR_BODY_LIMIT_BYTES, RESPONSE_ENVELOPE_LIMIT_BYTES, SUCCESS_BODY_LIMIT_BYTES,
+        ERROR_BODY_LIMIT_BYTES, JsonObjectBackend, RESPONSE_ENVELOPE_LIMIT_BYTES,
+        STRUCTURED_OUTPUT_INSTRUCTION, SUCCESS_BODY_LIMIT_BYTES,
     };
+    use crate::{model, schema_contract};
 
     struct StubClient;
 
@@ -212,12 +88,31 @@ mod tests {
         .expect("schema should be valid")
     }
 
-    fn qwen(server: &MockServer) -> Qwen {
-        Qwen::new(QwenConfig {
+    fn qwen(server: &MockServer) -> model::ModelClient {
+        model::ModelClient::qwen(QwenConfig {
             api_key: "test-key".to_string(),
             base_url: format!("{}/", server.uri()),
             model: "qwen-plus".to_string(),
         })
+        .expect("fixture configuration should be valid")
+    }
+
+    #[test]
+    fn rejects_empty_model_during_construction() {
+        // Arrange
+        let config = QwenConfig {
+            api_key: "test-key".to_string(),
+            base_url: "https://example.com".to_string(),
+            model: "  ".to_string(),
+        };
+
+        // Act
+        let error = model::ModelClient::qwen(config)
+            .err()
+            .expect("empty model configuration should be rejected");
+
+        // Assert
+        assert_eq!(error, model::ModelMetadataError::EmptyModel);
     }
 
     async fn mount_structured_response(
@@ -276,23 +171,22 @@ mod tests {
     #[tokio::test]
     async fn completes_through_injected_client() {
         // Arrange
-        let model = Qwen::with_client(
-            QwenConfig {
-                api_key: "stub-key".to_string(),
-                base_url: "https://stub.example/v1/".to_string(),
-                model: "qwen-stub".to_string(),
-            },
+        let model = JsonObjectBackend::with_client(
+            "stub-key".to_string(),
+            "https://stub.example/v1/".to_string(),
+            "qwen-stub".to_string(),
+            POLICY,
             Arc::new(StubClient),
         );
 
         // Act
-        let response = model
-            .complete(request("extract the name"))
+        let output = model
+            .generate(&request("extract the name"))
             .await
             .expect("stubbed Qwen request should succeed");
 
         // Assert
-        assert_eq!(response.output(), &json!({ "name": "Ada" }));
+        assert_eq!(output, r#"{"name":"Ada"}"#);
     }
 
     #[tokio::test]
@@ -488,7 +382,7 @@ mod tests {
         assert!(errors.into_iter().all(|error| matches!(
             error,
             model::ModelError::UnsupportedOutputSchema { reason }
-                if reason == UNSUPPORTED_SCHEMA_REASON
+                if reason == "Qwen JSON Object mode requires an explicit object root schema"
         )));
         assert!(
             server

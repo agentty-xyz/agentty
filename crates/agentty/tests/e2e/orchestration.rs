@@ -640,6 +640,7 @@ fn test_managed_worker_review_open_action() -> E2eResult {
                         "Review-ready managed worker exposes worktree open",
                     )
                     .press_key("q")
+                    .wait_for_stable_frame(300, 5000)
                     .press_key("o")
                     .wait_for_text("Open Managed Worktree", 5000)
                     .capture_labeled(
