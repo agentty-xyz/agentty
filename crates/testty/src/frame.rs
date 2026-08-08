@@ -343,7 +343,8 @@ impl TerminalFrame {
     /// column that produced byte `i`. An extra sentinel entry at
     /// `byte_to_col[text.len()]` holds the column immediately after the last
     /// cell, enabling end-of-match span calculations. Trailing whitespace is
-    /// trimmed to match [`Self::row_text`] behavior.
+    /// trimmed to match [`Self::row_text`] behavior. Empty non-continuation
+    /// cells contribute one space so text searches preserve visible columns.
     fn row_text_with_column_map(&self, row: u16) -> (String, Vec<u16>) {
         let screen = self.parser.screen();
         let cols = self.cols();
@@ -351,9 +352,15 @@ impl TerminalFrame {
         let mut byte_to_col = Vec::with_capacity(usize::from(cols) + 1);
 
         for col in 0..cols {
-            let contents = screen.cell(row, col).map_or("", |cell| cell.contents());
+            let cell = screen.cell(row, col);
+            if cell.is_some_and(vt100::Cell::is_wide_continuation) {
+                continue;
+            }
+
+            let contents = cell.map_or("", |cell| cell.contents());
             if contents.is_empty() {
-                // Wide-char continuation cells produce no bytes.
+                text.push(' ');
+                byte_to_col.push(col);
                 continue;
             }
 
@@ -511,6 +518,22 @@ mod tests {
     }
 
     #[test]
+    fn find_text_preserves_blank_cells_after_terminal_clear() {
+        // Arrange — clear the terminal, then paint separate text runs while
+        // leaving untouched cells between them.
+        let data = b"\x1b[2J\x1b[1;1HNo\x1b[1;4Hdraft\x1b[1;10Hmessages";
+        let frame = TerminalFrame::new(40, 2, data);
+
+        // Act
+        let matches = frame.find_text("No draft messages");
+
+        // Assert
+        assert_eq!(frame.row_text(0), "No draft messages");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rect, Region::new(0, 0, 17, 1));
+    }
+
+    #[test]
     fn find_text_with_empty_needle_returns_empty() {
         // Arrange
         let data = b"foo bar";
@@ -537,6 +560,21 @@ mod tests {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].rect.col, 5);
         assert_eq!(matches[0].rect.width, 2);
+    }
+
+    #[test]
+    fn find_text_locates_text_after_wide_character() {
+        // Arrange — the wide glyph occupies two terminal cells, including a
+        // continuation cell that must not add text or shift later matches.
+        let data = "あ ok".as_bytes();
+        let frame = TerminalFrame::new(80, 24, data);
+
+        // Act
+        let matches = frame.find_text("ok");
+
+        // Assert
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rect, Region::new(3, 0, 2, 1));
     }
 
     #[test]

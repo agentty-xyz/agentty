@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use ratatui::Frame;
 use ratatui::widgets::TableState;
@@ -16,11 +16,31 @@ pub(crate) struct PresentationState {
     assigned_issue_table_state: RefCell<TableState>,
     project_table_state: RefCell<TableState>,
     render_cache_store: RenderCacheStore,
+    /// Base page from the last successful draw. It is compared before each
+    /// draw to invalidate the terminal buffer when routing selects another
+    /// page.
+    rendered_surface: Cell<Option<ui::router::SurfaceKind>>,
     requested_review_table_state: RefCell<TableState>,
     session_table_state: RefCell<TableState>,
 }
 
 impl PresentationState {
+    /// Returns whether the terminal must be cleared before painting `snapshot`.
+    pub(crate) fn terminal_clear_needed(&self, snapshot: &AppViewSnapshot<'_>) -> bool {
+        let current_surface = ui::router::surface_kind_for_mode(snapshot.mode);
+
+        self.rendered_surface
+            .get()
+            .is_some_and(|rendered_surface| rendered_surface != current_surface)
+    }
+
+    /// Records the base page painted by a successful terminal draw.
+    pub(crate) fn record_rendered_surface(&self, snapshot: &AppViewSnapshot<'_>) {
+        let rendered_surface = ui::router::surface_kind_for_mode(snapshot.mode);
+
+        self.rendered_surface.set(Some(rendered_surface));
+    }
+
     /// Renders one immutable application snapshot through the single runtime
     /// presentation boundary.
     pub(crate) fn render(&self, snapshot: &AppViewSnapshot<'_>, frame: &mut Frame) {
