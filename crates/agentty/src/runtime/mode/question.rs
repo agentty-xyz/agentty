@@ -1684,7 +1684,7 @@ mod tests {
         // Assert
         let session = &app.sessions.sessions()[0];
         assert_eq!(session.status, Status::Review);
-        assert!(session.questions.is_empty());
+        assert_eq!(session.questions, [] as [ag_protocol::QuestionItem; 0]);
         assert_eq!(
             *app.sessions
                 .session_handles()

@@ -1937,7 +1937,7 @@ mod tests {
         let entries = prompt_history_entries(output);
 
         // Assert
-        assert!(entries.is_empty());
+        assert_eq!(entries, [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -2239,7 +2239,7 @@ mod tests {
         let diff = load_view_session_diff(&app, &context).await;
 
         // Assert
-        assert!(diff.is_empty());
+        assert_eq!(diff, "");
     }
 
     #[tokio::test]
@@ -2275,7 +2275,7 @@ mod tests {
 
         // Assert
         assert_eq!(diff, archived_diff);
-        assert!(missing_diff.is_empty());
+        assert_eq!(missing_diff, "");
     }
 
     #[tokio::test]

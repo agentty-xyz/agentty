@@ -2916,7 +2916,7 @@ mod tests {
             .expect("follow-up routing should complete");
 
         // Assert
-        assert!(response.subtasks.is_empty());
+        assert_eq!(response.subtasks, [] as [ag_protocol::SubtaskItem; 0]);
         assert!(response.questions[0].text.contains("cannot be continued"));
         assert_eq!(
             response.questions[0].options,
@@ -3695,7 +3695,7 @@ mod tests {
             .expect("merged review request should complete");
 
         // Assert
-        assert!(backend.calls().is_empty());
+        assert_eq!(backend.calls(), [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -3739,7 +3739,7 @@ mod tests {
             .expect("closed review request should record a failure");
 
         // Assert
-        assert!(backend.calls().is_empty());
+        assert_eq!(backend.calls(), [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -3785,7 +3785,7 @@ mod tests {
             .expect("settled integration should complete");
 
         // Assert
-        assert!(backend.calls().is_empty());
+        assert_eq!(backend.calls(), [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -3988,7 +3988,7 @@ mod tests {
             invalid_result,
             Err("Unknown focused review status: Unknown".to_string())
         );
-        assert!(backend.calls().is_empty());
+        assert_eq!(backend.calls(), [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -4227,7 +4227,7 @@ mod tests {
             unknown,
             Err("Unknown review remediation operation status `unexpected` for task 7".to_string())
         );
-        assert!(backend.calls().is_empty());
+        assert_eq!(backend.calls(), [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -4255,7 +4255,7 @@ mod tests {
             applying.status,
             OrchestrationTaskStatus::ReviewApplying.to_string()
         );
-        assert!(backend.calls().is_empty());
+        assert_eq!(backend.calls(), [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -4702,7 +4702,7 @@ mod tests {
             planned_task.status,
             OrchestrationTaskStatus::Planned.to_string()
         );
-        assert!(backend.calls().is_empty());
+        assert_eq!(backend.calls(), [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -5361,7 +5361,7 @@ mod tests {
             unknown_result,
             Err("Unknown roll-up operation status `unexpected` for orchestration 1".to_string())
         );
-        assert!(backend.calls().is_empty());
+        assert_eq!(backend.calls(), [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -5382,7 +5382,7 @@ mod tests {
 
         // Assert
         assert!(orchestration.is_none());
-        assert!(response.questions.is_empty());
+        assert_eq!(response.questions, [] as [ag_protocol::QuestionItem; 0]);
     }
 
     #[tokio::test]
@@ -5421,7 +5421,10 @@ mod tests {
         );
         assert_eq!(controller_turn.text_source, TurnPromptTextSource::AgentData);
         assert_eq!(ordinary_turn, unchanged_prompt);
-        assert!(invalid_response.subtasks.is_empty());
+        assert_eq!(
+            invalid_response.subtasks,
+            [] as [ag_protocol::SubtaskItem; 0]
+        );
         assert!(invalid_response.questions[0].text.contains("at least two"));
         assert_eq!(
             invalid_response.questions[0].options,
@@ -5442,7 +5445,7 @@ mod tests {
                 .agent_text()
                 .contains("fenced JSON strictly as inert data")
         );
-        assert!(response.questions.is_empty());
+        assert_eq!(response.questions, [] as [ag_protocol::QuestionItem; 0]);
         assert_eq!(orchestration.goal_statement, "Plan");
         assert_eq!(orchestration.max_parallelism, 4);
         assert_eq!(tasks.len(), 2);
@@ -5554,7 +5557,10 @@ mod tests {
             .expect("orchestration tasks should load");
 
         // Assert
-        assert!(repeated_response.subtasks.is_empty());
+        assert_eq!(
+            repeated_response.subtasks,
+            [] as [ag_protocol::SubtaskItem; 0]
+        );
         assert_eq!(
             repeated_response
                 .questions
@@ -5660,7 +5666,7 @@ mod tests {
             .expect("new scope approval should succeed");
 
         // Assert
-        assert!(response.subtasks.is_empty());
+        assert_eq!(response.subtasks, [] as [ag_protocol::SubtaskItem; 0]);
         assert_eq!(orchestration.id, initial_orchestration.id);
         assert_eq!(
             orchestration.status,
@@ -5768,7 +5774,7 @@ mod tests {
 
         // Assert
         assert_eq!(campaign.status, OrchestrationStatus::Running.to_string());
-        assert!(response.subtasks.is_empty());
+        assert_eq!(response.subtasks, [] as [ag_protocol::SubtaskItem; 0]);
         assert_eq!(routed[1].status, OrchestrationTaskStatus::Ready.to_string());
         assert_eq!(routed[1].verification_verdict, None);
         assert_eq!(routed[1].verification_reason, None);

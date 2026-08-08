@@ -2089,7 +2089,10 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "Review ");
-            assert!(attachment_state.attachments.is_empty());
+            assert_eq!(
+                attachment_state.attachments,
+                [] as [crate::domain::composer::PromptAttachment; 0]
+            );
         }
     }
 
@@ -2109,10 +2112,19 @@ mod tests {
 
         // Assert
         assert!(matches!(app.mode, AppMode::List));
-        assert!(inserted_attachments.is_empty());
+        assert_eq!(
+            inserted_attachments,
+            [] as [crate::domain::composer::PromptAttachment; 0]
+        );
         assert!(prompt.is_empty());
-        assert!(archived_attachments.is_empty());
-        assert!(cleanup_attachments.is_empty());
+        assert_eq!(
+            archived_attachments,
+            [] as [crate::domain::composer::PromptAttachment; 0]
+        );
+        assert_eq!(
+            cleanup_attachments,
+            [] as [crate::domain::composer::PromptAttachment; 0]
+        );
     }
 
     /// Verifies unavailable clipboard backends surface as inline paste errors
@@ -2152,7 +2164,10 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "Review ");
-            assert!(attachment_state.attachments.is_empty());
+            assert_eq!(
+                attachment_state.attachments,
+                [] as [crate::domain::composer::PromptAttachment; 0]
+            );
         }
     }
 
@@ -2179,8 +2194,11 @@ mod tests {
             ..
         } = &app.mode
         {
-            assert!(input.text().is_empty());
-            assert!(attachment_state.attachments.is_empty());
+            assert_eq!(input.text(), "");
+            assert_eq!(
+                attachment_state.attachments,
+                [] as [crate::domain::composer::PromptAttachment; 0]
+            );
             assert_eq!(attachment_state.next_attachment_number, 1);
         }
     }
@@ -2213,8 +2231,11 @@ mod tests {
             ..
         } = &app.mode
         {
-            assert!(input.text().is_empty());
-            assert!(attachment_state.attachments.is_empty());
+            assert_eq!(input.text(), "");
+            assert_eq!(
+                attachment_state.attachments,
+                [] as [crate::domain::composer::PromptAttachment; 0]
+            );
             assert_eq!(attachment_state.next_attachment_number, 1);
         }
     }
@@ -2232,7 +2253,10 @@ mod tests {
 
         // Assert
         assert_eq!(prompt.text, "Review ");
-        assert!(prompt.attachments.is_empty());
+        assert_eq!(
+            prompt.attachments,
+            [] as [ag_protocol::TurnPromptAttachment; 0]
+        );
         assert_eq!(archived_attachments.len(), 1);
         assert_eq!(archived_attachments[0].local_image_path, image_path);
         assert_eq!(archived_attachments[0].placeholder, "[Image #1]");
@@ -2717,7 +2741,10 @@ mod tests {
 
         // Assert
         assert_eq!(prompt.text, "normal prompt");
-        assert!(prompt.attachments.is_empty());
+        assert_eq!(
+            prompt.attachments,
+            [] as [ag_protocol::TurnPromptAttachment; 0]
+        );
     }
 
     #[tokio::test]
@@ -3080,7 +3107,10 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "Review ");
-            assert!(attachment_state.attachments.is_empty());
+            assert_eq!(
+                attachment_state.attachments,
+                [] as [crate::domain::composer::PromptAttachment; 0]
+            );
             assert_eq!(attachment_state.next_attachment_number, 2);
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
@@ -3115,7 +3145,10 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "Review ");
-            assert!(attachment_state.attachments.is_empty());
+            assert_eq!(
+                attachment_state.attachments,
+                [] as [crate::domain::composer::PromptAttachment; 0]
+            );
             assert_eq!(attachment_state.next_attachment_number, 2);
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
@@ -3186,7 +3219,10 @@ mod tests {
 
         // Assert
         assert_eq!(prompt.text, "[Image #1]");
-        assert!(prompt.attachments.is_empty());
+        assert_eq!(
+            prompt.attachments,
+            [] as [ag_protocol::TurnPromptAttachment; 0]
+        );
     }
 
     #[tokio::test]
@@ -3541,7 +3577,10 @@ mod tests {
 
         // Assert
         assert_eq!(prompt.text, completed_mention);
-        assert!(prompt.attachments.is_empty());
+        assert_eq!(
+            prompt.attachments,
+            [] as [ag_protocol::TurnPromptAttachment; 0]
+        );
     }
 
     /// Verifies stale at-mention selections are clamped to the filtered entry
@@ -3763,7 +3802,7 @@ mod tests {
             app.sessions.sessions()[0].status,
             crate::domain::session::Status::Draft
         );
-        assert!(app.sessions.sessions()[0].prompt.is_empty());
+        assert_eq!(app.sessions.sessions()[0].prompt, "");
     }
 
     #[tokio::test]
@@ -3813,7 +3852,10 @@ mod tests {
         // Assert
         assert!(matches!(app.mode, AppMode::View { .. }));
         assert_eq!(app.sessions.sessions()[0].prompt, "Review ");
-        assert!(app.sessions.sessions()[0].draft_attachments.is_empty());
+        assert_eq!(
+            app.sessions.sessions()[0].draft_attachments,
+            [] as [ag_protocol::TurnPromptAttachment; 0]
+        );
     }
 
     #[tokio::test]
@@ -3861,7 +3903,10 @@ mod tests {
             app.sessions.sessions()[0].title.as_deref(),
             Some("Review [Image #1]")
         );
-        assert!(app.sessions.sessions()[0].draft_attachments.is_empty());
+        assert_eq!(
+            app.sessions.sessions()[0].draft_attachments,
+            [] as [ag_protocol::TurnPromptAttachment; 0]
+        );
     }
 
     #[tokio::test]

@@ -854,7 +854,7 @@ mod tests {
         assert_eq!(settings.width, 1200);
         assert_eq!(settings.height, 600);
         assert_eq!(settings.font_size, 14);
-        assert!(settings.theme.is_empty());
+        assert_eq!(settings.theme, "");
         assert_eq!(settings.framerate, 0);
         assert_eq!(settings.padding, 0);
     }

@@ -2216,7 +2216,7 @@ mod tests {
 
         // Assert
         assert!(threads.is_empty());
-        assert!(comments.is_empty());
+        assert_eq!(comments, [] as [crate::model::ReviewComment; 0]);
     }
 
     #[test]

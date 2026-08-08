@@ -1299,7 +1299,10 @@ mod tests {
         attachment_state.remember_current_revision(&input);
 
         // Assert
-        assert!(attachment_state.attachments[0].valid_locations.is_empty());
+        assert_eq!(
+            attachment_state.attachments[0].valid_locations,
+            [] as [crate::domain::composer::AttachmentRevision; 0]
+        );
     }
 
     #[test]
@@ -1334,7 +1337,10 @@ mod tests {
 
         // Assert
         assert_eq!(attachment_state.attachments.len(), 1);
-        assert!(attachment_state.archived_attachments.is_empty());
+        assert_eq!(
+            attachment_state.archived_attachments,
+            [] as [crate::domain::composer::PromptAttachment; 0]
+        );
         assert_eq!(attachment_state.next_attachment_number, 2);
     }
 
@@ -1358,10 +1364,16 @@ mod tests {
         attachment_state.sync_after_edit(&input, insert_start, insert_start, input.cursor);
 
         // Assert
-        assert!(attachment_state.attachments.is_empty());
+        assert_eq!(
+            attachment_state.attachments,
+            [] as [crate::domain::composer::PromptAttachment; 0]
+        );
         assert_eq!(attachment_state.archived_attachments.len(), 1);
         let submission = drain_prompt_submission(&mut attachment_state, &mut input);
-        assert!(submission.attachments.is_empty());
+        assert_eq!(
+            submission.attachments,
+            [] as [crate::domain::composer::PromptAttachment; 0]
+        );
         assert_eq!(submission.text, placeholder);
     }
 
@@ -1388,7 +1400,10 @@ mod tests {
         let unreachable = attachment_state.prune_unreachable(&input);
 
         // Assert
-        assert!(attachment_state.archived_attachments.is_empty());
+        assert_eq!(
+            attachment_state.archived_attachments,
+            [] as [crate::domain::composer::PromptAttachment; 0]
+        );
         assert_eq!(unreachable.len(), 1);
         assert_eq!(
             unreachable[0].local_image_path,
@@ -1754,7 +1769,10 @@ mod tests {
 
         // Assert
         assert_eq!(composer.input.text(), "Review  now");
-        assert!(composer.attachment_state.attachments.is_empty());
+        assert_eq!(
+            composer.attachment_state.attachments,
+            [] as [crate::domain::composer::PromptAttachment; 0]
+        );
         assert_eq!(composer.attachment_state.archived_attachments.len(), 1);
         assert_eq!(composer.attachment_state.next_attachment_number, 2);
     }
@@ -1824,7 +1842,10 @@ mod tests {
 
         // Assert
         assert_eq!(submission.text, "Notify user@example.com and @!");
-        assert!(submission.attachments.is_empty());
+        assert_eq!(
+            submission.attachments,
+            [] as [crate::domain::composer::PromptAttachment; 0]
+        );
     }
 
     #[test]

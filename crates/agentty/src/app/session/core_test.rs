@@ -1601,7 +1601,7 @@ async fn test_create_session() {
     // Assert — blank session
     assert_eq!(app.sessions.sessions().len(), 1);
     assert_eq!(app.sessions.sessions()[0].id, session_id);
-    assert!(app.sessions.sessions()[0].prompt.is_empty());
+    assert_eq!(app.sessions.sessions()[0].prompt, "");
     assert_eq!(app.sessions.sessions()[0].title, None);
     assert_eq!(app.sessions.sessions()[0].display_title(), "No title");
     assert!(!app.sessions.sessions()[0].is_draft_session());
@@ -2042,7 +2042,10 @@ async fn test_stage_draft_message_persists_bundle_without_starting_session() {
         app.sessions.sessions()[0].title,
         Some("First draft".to_string())
     );
-    assert!(app.sessions.sessions()[0].draft_attachments.is_empty());
+    assert_eq!(
+        app.sessions.sessions()[0].draft_attachments,
+        [] as [ag_protocol::TurnPromptAttachment; 0]
+    );
     let db_sessions = app
         .services
         .db()
@@ -2263,7 +2266,10 @@ async fn test_start_staged_session_launches_bundle_and_clears_staged_drafts() {
         app.sessions.sessions()[0].prompt,
         "First draft\n\nSecond draft"
     );
-    assert!(app.sessions.sessions()[0].draft_attachments.is_empty());
+    assert_eq!(
+        app.sessions.sessions()[0].draft_attachments,
+        [] as [ag_protocol::TurnPromptAttachment; 0]
+    );
     assert!(app.sessions.sessions()[0].folder.exists());
     assert!(
         app.sessions.sessions()[0]
@@ -2681,7 +2687,10 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
         }
     );
     assert!(!app.review_cache.contains_key(&session_id));
-    assert!(focused_reviews.is_empty());
+    assert_eq!(
+        focused_reviews,
+        [] as [crate::infra::db::SessionFocusedReviewRow; 0]
+    );
 }
 
 /// Builds one actionable inline review thread for session-resolution tests.
@@ -2896,7 +2905,7 @@ async fn test_enqueue_message_rejects_empty_payload() {
         .iter()
         .find(|session| session.id == session_id)
         .expect("session present");
-    assert!(session.queued_messages.is_empty());
+    assert_eq!(session.queued_messages, [] as [std::string::String; 0]);
 }
 
 #[tokio::test]
@@ -5528,7 +5537,10 @@ async fn test_sync_main_pushes_local_commits_to_remote() {
     assert_eq!(outcome.pushed_commits, Some(0));
     assert_eq!(outcome.pulled_commit_titles, vec!["remote fix".to_string()]);
     assert_eq!(outcome.pushed_commit_titles, vec!["local work".to_string()]);
-    assert!(outcome.resolved_conflict_files.is_empty());
+    assert_eq!(
+        outcome.resolved_conflict_files,
+        [] as [std::string::String; 0]
+    );
 }
 
 #[tokio::test]

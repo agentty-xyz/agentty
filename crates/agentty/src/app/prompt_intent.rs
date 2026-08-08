@@ -985,7 +985,10 @@ mod tests {
                 .text
                 .contains("```text\n- Fix the typo in `README.md`.\n```")
         );
-        assert!(prompt.attachments.is_empty());
+        assert_eq!(
+            prompt.attachments,
+            [] as [ag_protocol::TurnPromptAttachment; 0]
+        );
         assert_eq!(prompt.text_source, TurnPromptTextSource::UserPrompt);
     }
 
@@ -1039,7 +1042,10 @@ mod tests {
         assert!(prompt.text.contains(
             "Anchor status: outdated; inspect the current file instead of trusting the line anchor"
         ));
-        assert!(prompt.attachments.is_empty());
+        assert_eq!(
+            prompt.attachments,
+            [] as [ag_protocol::TurnPromptAttachment; 0]
+        );
         assert_eq!(prompt.text_source, TurnPromptTextSource::UserPrompt);
     }
 
@@ -1183,7 +1189,10 @@ mod tests {
                 session_id: session_id.clone(),
             }
         );
-        assert!(app.sessions.sessions()[0].queued_messages.is_empty());
+        assert_eq!(
+            app.sessions.sessions()[0].queued_messages,
+            [] as [std::string::String; 0]
+        );
     }
 
     #[tokio::test]
@@ -1266,7 +1275,10 @@ mod tests {
             .await;
 
         // Assert
-        assert!(personalities.is_empty());
+        assert_eq!(
+            personalities,
+            [] as [crate::domain::personality::PersonalitySummary; 0]
+        );
         assert!(app.sessions.sessions().is_empty());
     }
 

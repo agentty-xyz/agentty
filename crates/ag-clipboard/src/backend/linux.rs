@@ -222,7 +222,10 @@ mod tests {
 
         // Assert
         assert_eq!(text.expect("fixture text should load"), "");
-        assert!(files.expect("fixture files should load").is_empty());
+        assert_eq!(
+            files.expect("fixture files should load"),
+            [] as [std::path::PathBuf; 0]
+        );
         assert_eq!(
             image.expect("fixture image should load"),
             crate::RgbaImageData {

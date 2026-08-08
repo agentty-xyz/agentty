@@ -496,7 +496,10 @@ mod tests {
         // Assert
         assert_eq!(deserialized, response);
         assert!(serialized.contains(r#""task_key":"task-1""#));
-        assert!(AgentResponse::plain("no plan").subtask_items().is_empty());
+        assert_eq!(
+            AgentResponse::plain("no plan").subtask_items(),
+            [] as [crate::subtask::SubtaskItem; 0]
+        );
     }
 
     #[test]
@@ -543,7 +546,7 @@ mod tests {
             serde_json::from_str::<SubtaskItem>(raw).expect("subtask should parse without areas");
 
         // Assert
-        assert!(subtask.touched_areas.is_empty());
+        assert_eq!(subtask.touched_areas, [] as [std::string::String; 0]);
     }
 
     #[test]

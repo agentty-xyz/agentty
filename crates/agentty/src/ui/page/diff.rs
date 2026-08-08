@@ -1169,7 +1169,7 @@ mod tests {
         }
 
         // Assert
-        assert!(buffer_text(terminal.backend().buffer()).trim().is_empty());
+        assert_eq!(buffer_text(terminal.backend().buffer()).trim(), "");
     }
 
     #[test]

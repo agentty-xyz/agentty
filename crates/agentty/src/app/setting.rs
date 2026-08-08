@@ -2380,7 +2380,7 @@ mod tests {
         manager.move_selected_launch_configuration_up().await;
 
         // Assert
-        assert!(manager.settings().launch_configuration.is_empty());
+        assert_eq!(manager.settings().launch_configuration, "");
         assert!(!manager.is_selector_dropdown_open());
         assert_eq!(
             services

@@ -553,7 +553,7 @@ mod tests {
 
         // Assert
         assert!(transcript.is_empty());
-        assert!(replay_text.is_empty());
+        assert_eq!(replay_text, "");
     }
 
     #[test]

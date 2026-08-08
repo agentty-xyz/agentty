@@ -1081,6 +1081,9 @@ mod tests {
         let available_agent_kinds = available_agent_kinds_from_path(Some(path_value.as_os_str()));
 
         // Assert
-        assert!(available_agent_kinds.is_empty());
+        assert_eq!(
+            available_agent_kinds,
+            [] as [crate::model::agent::AgentKind; 0]
+        );
     }
 }

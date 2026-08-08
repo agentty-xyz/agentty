@@ -437,7 +437,7 @@ mod tests {
         // Assert
         assert_eq!(month_row.chars().count(), 26);
         assert!(month_row.contains("Dec"));
-        assert!(!month_row.trim().is_empty());
+        assert_ne!(month_row.trim(), "");
     }
 
     #[test]

@@ -382,7 +382,10 @@ async fn session_git_status_targets_skip_unmaterialized_drafts() {
     let targets_after_materialization = App::session_git_status_targets(&app.sessions);
 
     // Assert
-    assert!(targets_before_materialization.is_empty());
+    assert_eq!(
+        targets_before_materialization,
+        [] as [crate::app::sync::SessionGitStatusTarget; 0]
+    );
     assert_eq!(
         targets_after_materialization,
         vec![sync::SessionGitStatusTarget {
@@ -4215,7 +4218,10 @@ async fn apply_app_events_agent_response_updates_questions_and_token_usage() {
     .await;
 
     // Assert
-    assert!(app.sessions.sessions()[0].questions.is_empty());
+    assert_eq!(
+        app.sessions.sessions()[0].questions,
+        [] as [ag_protocol::QuestionItem; 0]
+    );
     assert_eq!(app.sessions.sessions()[0].stats.input_tokens, 18);
     assert_eq!(app.sessions.sessions()[0].stats.output_tokens, 29);
 }
@@ -4929,7 +4935,10 @@ async fn load_project_items_uses_persisted_rows_without_home_scan() {
     .await;
 
     // Assert
-    assert!(project_items.is_empty());
+    assert_eq!(
+        project_items,
+        [] as [crate::domain::project::ProjectListItem; 0]
+    );
     assert!(
         database
             .projects()
@@ -5645,12 +5654,7 @@ async fn auto_start_reviews_clears_cache_on_in_progress_transition() {
 
     // Assert
     assert!(!app.review_cache.contains_key(session_id));
-    assert!(
-        app.sessions.sessions()[0]
-            .transient_messages
-            .messages()
-            .is_empty()
-    );
+    assert_eq!(app.sessions.sessions()[0].transient_messages.messages(), []);
 }
 
 #[tokio::test]

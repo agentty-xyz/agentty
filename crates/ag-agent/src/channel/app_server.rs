@@ -348,7 +348,7 @@ mod tests {
         // Assert
         assert!(result.is_ok());
         let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
-        assert!(!events.is_empty());
+        assert_ne!(events, [] as [crate::channel::contract::TurnEvent; 0]);
         assert!(
             events
                 .iter()
@@ -389,7 +389,7 @@ mod tests {
         // Assert
         assert!(result.is_ok());
         let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
-        assert!(!events.is_empty());
+        assert_ne!(events, [] as [crate::channel::contract::TurnEvent; 0]);
         assert!(
             events
                 .iter()
@@ -430,7 +430,7 @@ mod tests {
         // Assert
         assert!(result.is_ok());
         let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
-        assert!(!events.is_empty());
+        assert_ne!(events, [] as [crate::channel::contract::TurnEvent; 0]);
         assert!(
             events
                 .iter()

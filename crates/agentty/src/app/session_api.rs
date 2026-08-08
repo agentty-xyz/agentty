@@ -2914,9 +2914,12 @@ mod tests {
             ApiSessionError::Operation("Session has no questions to answer".to_string())
         );
         assert_eq!(resumed_turn_kind, AgentRequestKind::SessionResume);
-        assert!(queued_messages_before_transition.is_empty());
-        assert!(session.questions.is_empty());
-        assert!(session.queued_messages.is_empty());
+        assert_eq!(
+            queued_messages_before_transition,
+            [] as [std::string::String; 0]
+        );
+        assert_eq!(session.questions, [] as [ag_protocol::QuestionItem; 0]);
+        assert_eq!(session.queued_messages, [] as [std::string::String; 0]);
         assert_eq!(clarification_answer_count(&session), 1);
     }
 
@@ -3008,7 +3011,7 @@ mod tests {
 
         // Assert
         assert_eq!(resumed_turn_kind, AgentRequestKind::SessionResume);
-        assert!(controller.questions.is_empty());
+        assert_eq!(controller.questions, [] as [ag_protocol::QuestionItem; 0]);
     }
 
     #[tokio::test]
@@ -3119,7 +3122,7 @@ mod tests {
             ))
         );
         assert_eq!(session.questions, [QuestionItem::new("Current question?")]);
-        assert!(session.messages.is_empty());
+        assert_eq!(session.messages, [] as [ag_session::SessionMessage; 0]);
     }
 
     #[tokio::test]

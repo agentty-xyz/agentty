@@ -762,7 +762,7 @@ mod tests {
         let entries = TaskService::join_at_mention_entries(load_handle, &"session-id".into()).await;
 
         // Assert
-        assert!(entries.is_empty());
+        assert_eq!(entries, [] as [crate::domain::file_entry::FileEntry; 0]);
     }
 
     #[test]

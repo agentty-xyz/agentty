@@ -1153,8 +1153,8 @@ mod tests {
             .find(|session| session.id == session_id)
             .expect("missing reloaded session");
         assert_eq!(session_replay_text(session), "");
-        assert!(session.prompt.is_empty());
-        assert!(session.questions.is_empty());
+        assert_eq!(session.prompt, "");
+        assert_eq!(session.questions, [] as [ag_protocol::QuestionItem; 0]);
         assert!(session.summary.is_none());
 
         let handle = handles.get(session_id).expect("missing runtime handle");
@@ -1984,9 +1984,9 @@ WHERE id = ?
         let items = result.expect("expected Some");
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].text, "Need target?");
-        assert!(items[0].options.is_empty());
+        assert_eq!(items[0].options, [] as [std::string::String; 0]);
         assert_eq!(items[1].text, "Need tests?");
-        assert!(items[1].options.is_empty());
+        assert_eq!(items[1].options, [] as [std::string::String; 0]);
     }
 
     #[test]
