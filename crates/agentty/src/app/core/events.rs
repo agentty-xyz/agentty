@@ -494,10 +494,6 @@ impl AppEventBatch {
                 project_id,
                 result,
             }),
-            AppEvent::AtMentionEntriesLoaded {
-                entries,
-                session_id,
-            } => self.collect_at_mention_entries_loaded(session_id, entries),
             AppEvent::GitStatusUpdated {
                 generation,
                 session_statuses,
@@ -507,30 +503,35 @@ impl AppEventBatch {
                 latest_available_version,
             } => self.collect_version_availability_updated(latest_available_version),
             AppEvent::AgentCliVersionsUpdated { agent_clis } => {
-                self.collect_agent_cli_versions_updated(agent_clis);
+                self.agent_cli_updates = Some(agent_clis);
             }
             AppEvent::UpdateStatusChanged { update_status } => {
-                self.collect_update_status_changed(update_status);
+                self.update_status = Some(update_status);
             }
-            AppEvent::SessionModelUpdated {
-                session_id,
-                session_agent,
-            } => self.collect_session_model_updated(session_id, session_agent),
             AppEvent::SessionPersonalityUpdated {
                 personality_id,
                 session_id,
-            } => self.collect_session_personality_updated(session_id, personality_id),
+            } => {
+                self.session_personality_updates
+                    .insert(session_id, personality_id);
+            }
             AppEvent::SessionReasoningLevelUpdated {
                 reasoning_level,
                 session_id,
-            } => self.collect_session_reasoning_level_updated(session_id, reasoning_level),
+            } => {
+                self.session_reasoning_level_updates
+                    .insert(session_id, reasoning_level);
+            }
             AppEvent::SessionSpeedModeUpdated {
                 session_id,
                 speed_mode,
-            } => self.collect_session_speed_mode_updated(session_id, speed_mode),
-            AppEvent::RefreshSessions => self.collect_refresh_sessions(),
-            AppEvent::RefreshProjects => self.collect_refresh_projects(),
-            AppEvent::RefreshGitStatus => self.collect_refresh_git_status(),
+            } => {
+                self.session_speed_mode_updates
+                    .insert(session_id, speed_mode);
+            }
+            AppEvent::RefreshSessions => self.should_reload_sessions = true,
+            AppEvent::RefreshProjects => self.should_reload_projects = true,
+            AppEvent::RefreshGitStatus => self.should_refresh_git_status = true,
             AppEvent::RequestedReviewsLoaded {
                 generation,
                 project_id,
@@ -545,7 +546,29 @@ impl AppEventBatch {
             } => self.collect_requested_review_comment_snapshot_loaded(
                 display_id, generation, project_id, result, web_url,
             ),
-            event => self.collect_runtime_event(event),
+            event @ (AppEvent::AtMentionEntriesLoaded { .. }
+            | AppEvent::DiffPreviewLoaded { .. }
+            | AppEvent::SessionModelUpdated { .. }
+            | AppEvent::SessionReviewCommentSnapshotLoaded { .. }
+            | AppEvent::SessionProgressUpdated { .. }
+            | AppEvent::SyncMainCompleted { .. }
+            | AppEvent::SyncMainConflictResolutionStarted { .. }
+            | AppEvent::SessionDiffStatsUpdated { .. }
+            | AppEvent::SessionTitleGenerationFinished { .. }
+            | AppEvent::BranchPublishActionCompleted { .. }
+            | AppEvent::BranchPublishActionStarted { .. }
+            | AppEvent::ReviewPrepared { .. }
+            | AppEvent::ReviewPreparationFailed { .. }
+            | AppEvent::FocusedReviewPersistenceRetry { .. }
+            | AppEvent::SessionUpdated { .. }
+            | AppEvent::AgentResponseReceived { .. }
+            | AppEvent::StackedParentTurnCompleted { .. }
+            | AppEvent::StackedParentSyncCompleted { .. }
+            | AppEvent::StackedParentMergeCompleted { .. }
+            | AppEvent::SessionWorkflowNoticeUpdated { .. }
+            | AppEvent::SessionOrchestrationProgressUpdated { .. }
+            | AppEvent::PublishedBranchSyncUpdated { .. }
+            | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_runtime_event(event),
         }
     }
 
@@ -553,6 +576,18 @@ impl AppEventBatch {
     /// refresh events have been handled.
     fn collect_runtime_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::AtMentionEntriesLoaded {
+                entries,
+                session_id,
+            } => {
+                self.at_mention_entries_updates.insert(session_id, entries);
+            }
+            AppEvent::SessionModelUpdated {
+                session_id,
+                session_agent,
+            } => {
+                self.session_model_updates.insert(session_id, session_agent);
+            }
             AppEvent::DiffPreviewLoaded {
                 path,
                 request_id,
@@ -567,13 +602,17 @@ impl AppEventBatch {
             AppEvent::SessionProgressUpdated {
                 progress_message,
                 session_id,
-            } => self.collect_session_progress_updated(session_id, progress_message),
+            } => {
+                self.session_progress_updates
+                    .insert(session_id, progress_message);
+            }
             AppEvent::SessionReviewCommentSnapshotLoaded { result, session_id } => {
-                self.collect_session_review_comment_snapshot_loaded(session_id, result);
+                self.session_review_comment_snapshots
+                    .insert(session_id, result);
             }
             AppEvent::SyncMainCompleted { result } => self.collect_sync_main_completed(result),
             AppEvent::SyncMainConflictResolutionStarted { conflicted_files } => {
-                self.collect_sync_main_conflict_resolution_started(conflicted_files);
+                self.sync_main_conflicted_files = Some(conflicted_files);
             }
             AppEvent::SessionDiffStatsUpdated {
                 diff_stats,
@@ -586,8 +625,45 @@ impl AppEventBatch {
                 generation,
                 session_id,
             } => {
-                self.collect_session_title_generation_finished(session_id, generation);
+                self.session_title_generation_finished
+                    .insert(session_id, generation);
             }
+            event @ (AppEvent::BranchPublishActionCompleted { .. }
+            | AppEvent::BranchPublishActionStarted { .. }
+            | AppEvent::ReviewPrepared { .. }
+            | AppEvent::ReviewPreparationFailed { .. }
+            | AppEvent::FocusedReviewPersistenceRetry { .. }
+            | AppEvent::SessionUpdated { .. }
+            | AppEvent::AgentResponseReceived { .. }
+            | AppEvent::StackedParentTurnCompleted { .. }
+            | AppEvent::StackedParentSyncCompleted { .. }
+            | AppEvent::StackedParentMergeCompleted { .. }
+            | AppEvent::SessionWorkflowNoticeUpdated { .. }
+            | AppEvent::SessionOrchestrationProgressUpdated { .. }
+            | AppEvent::PublishedBranchSyncUpdated { .. }
+            | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_workflow_event(event),
+            AppEvent::AssignedIssuesLoaded { .. }
+            | AppEvent::IssueDetailLoaded { .. }
+            | AppEvent::GitStatusUpdated { .. }
+            | AppEvent::VersionAvailabilityUpdated { .. }
+            | AppEvent::AgentCliVersionsUpdated { .. }
+            | AppEvent::UpdateStatusChanged { .. }
+            | AppEvent::SessionPersonalityUpdated { .. }
+            | AppEvent::SessionReasoningLevelUpdated { .. }
+            | AppEvent::SessionSpeedModeUpdated { .. }
+            | AppEvent::RefreshSessions
+            | AppEvent::RefreshProjects
+            | AppEvent::RefreshGitStatus
+            | AppEvent::RequestedReviewsLoaded { .. }
+            | AppEvent::RequestedReviewCommentSnapshotLoaded { .. } => {
+                unreachable!("top-level app event should be collected before runtime events")
+            }
+        }
+    }
+
+    /// Collects workflow completion and follow-up events into the batch.
+    fn collect_workflow_event(&mut self, event: AppEvent) {
+        match event {
             AppEvent::BranchPublishActionCompleted { result, session_id } => {
                 self.collect_branch_publish_action_completed(*result, session_id);
             }
@@ -616,14 +692,14 @@ impl AppEventBatch {
                 turn_applied_state,
             } => self.collect_agent_response_received(session_id, turn_applied_state),
             AppEvent::StackedParentTurnCompleted { session_id } => {
-                self.collect_stacked_parent_turn_completed(session_id);
+                self.stacked_parent_turns_completed.insert(session_id);
             }
             AppEvent::StackedParentSyncCompleted { session_id } => {
-                self.collect_stacked_parent_sync_completed(session_id);
+                self.stacked_parent_syncs_completed.insert(session_id);
             }
-            AppEvent::StackedParentMergeCompleted { child_session_ids } => {
-                self.collect_stacked_parent_merge_completed(child_session_ids);
-            }
+            AppEvent::StackedParentMergeCompleted { child_session_ids } => self
+                .stacked_parent_merge_child_rebases
+                .extend(child_session_ids),
             AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
                 self.collect_session_workflow_notice_updated(session_id, notice);
             }
@@ -650,28 +726,32 @@ impl AppEventBatch {
                 result,
                 session_id,
             } => self.collect_review_request_status_updated(generation, result, session_id),
-            _ => unreachable!("top-level app event should be collected before runtime events"),
+            AppEvent::AssignedIssuesLoaded { .. }
+            | AppEvent::IssueDetailLoaded { .. }
+            | AppEvent::AtMentionEntriesLoaded { .. }
+            | AppEvent::DiffPreviewLoaded { .. }
+            | AppEvent::GitStatusUpdated { .. }
+            | AppEvent::VersionAvailabilityUpdated { .. }
+            | AppEvent::AgentCliVersionsUpdated { .. }
+            | AppEvent::UpdateStatusChanged { .. }
+            | AppEvent::SessionModelUpdated { .. }
+            | AppEvent::SessionPersonalityUpdated { .. }
+            | AppEvent::SessionReasoningLevelUpdated { .. }
+            | AppEvent::SessionSpeedModeUpdated { .. }
+            | AppEvent::RefreshSessions
+            | AppEvent::RefreshProjects
+            | AppEvent::RefreshGitStatus
+            | AppEvent::RequestedReviewsLoaded { .. }
+            | AppEvent::RequestedReviewCommentSnapshotLoaded { .. }
+            | AppEvent::SessionReviewCommentSnapshotLoaded { .. }
+            | AppEvent::SessionProgressUpdated { .. }
+            | AppEvent::SyncMainCompleted { .. }
+            | AppEvent::SyncMainConflictResolutionStarted { .. }
+            | AppEvent::SessionDiffStatsUpdated { .. }
+            | AppEvent::SessionTitleGenerationFinished { .. } => {
+                unreachable!("top-level app event should be collected before runtime events")
+            }
         }
-    }
-
-    /// Keeps the latest loaded review-comment snapshot for one session.
-    fn collect_session_review_comment_snapshot_loaded(
-        &mut self,
-        session_id: SessionId,
-        result: Result<ag_forge::ReviewCommentSnapshot, String>,
-    ) {
-        self.session_review_comment_snapshots
-            .insert(session_id, result);
-    }
-
-    /// Keeps the latest completed title-generation task for one session.
-    fn collect_session_title_generation_finished(
-        &mut self,
-        session_id: SessionId,
-        generation: u64,
-    ) {
-        self.session_title_generation_finished
-            .insert(session_id, generation);
     }
 
     /// Keeps the freshest assigned-issue result when one batch contains
@@ -729,45 +809,6 @@ impl AppEventBatch {
             });
     }
 
-    /// Stores a session agent/model update for reducer application.
-    fn collect_session_model_updated(
-        &mut self,
-        session_id: SessionId,
-        session_agent: crate::domain::agent::AgentSelection,
-    ) {
-        self.session_model_updates.insert(session_id, session_agent);
-    }
-
-    /// Stores a session personality update for reducer application.
-    fn collect_session_personality_updated(
-        &mut self,
-        session_id: SessionId,
-        personality_id: Option<String>,
-    ) {
-        self.session_personality_updates
-            .insert(session_id, personality_id);
-    }
-
-    /// Stores a session reasoning-level update for reducer application.
-    fn collect_session_reasoning_level_updated(
-        &mut self,
-        session_id: SessionId,
-        reasoning_level: crate::domain::agent::ReasoningLevel,
-    ) {
-        self.session_reasoning_level_updates
-            .insert(session_id, reasoning_level);
-    }
-
-    /// Stores a session speed-mode update for reducer application.
-    fn collect_session_speed_mode_updated(
-        &mut self,
-        session_id: SessionId,
-        speed_mode: crate::domain::agent::SpeedMode,
-    ) {
-        self.session_speed_mode_updates
-            .insert(session_id, speed_mode);
-    }
-
     /// Stores a workflow notice update and marks its session as touched.
     fn collect_session_workflow_notice_updated(&mut self, session_id: SessionId, notice: String) {
         self.session_ids.insert(session_id.clone());
@@ -775,51 +816,6 @@ impl AppEventBatch {
             .entry(session_id)
             .or_default()
             .push(notice);
-    }
-
-    /// Stores loaded at-mention entries for one session.
-    fn collect_at_mention_entries_loaded(
-        &mut self,
-        session_id: SessionId,
-        entries: Vec<FileEntry>,
-    ) {
-        self.at_mention_entries_updates.insert(session_id, entries);
-    }
-
-    /// Stores one pending status-bar update.
-    fn collect_update_status_changed(&mut self, update_status: UpdateStatus) {
-        self.update_status = Some(update_status);
-    }
-
-    /// Stores completed agent CLI version rows for reducer application.
-    fn collect_agent_cli_versions_updated(&mut self, agent_clis: Vec<AgentCliInfo>) {
-        self.agent_cli_updates = Some(agent_clis);
-    }
-
-    /// Stores an active session progress message update for reducer
-    /// application.
-    fn collect_session_progress_updated(
-        &mut self,
-        session_id: SessionId,
-        progress_message: Option<String>,
-    ) {
-        self.session_progress_updates
-            .insert(session_id, progress_message);
-    }
-
-    /// Marks the next reducer application as a session-list refresh.
-    fn collect_refresh_sessions(&mut self) {
-        self.should_reload_sessions = true;
-    }
-
-    /// Marks the next reducer application as a project-list refresh.
-    fn collect_refresh_projects(&mut self) {
-        self.should_reload_projects = true;
-    }
-
-    /// Marks git status polling for restart.
-    fn collect_refresh_git_status(&mut self) {
-        self.should_refresh_git_status = true;
     }
 
     /// Stores the latest git status event for this reducer batch.
@@ -856,11 +852,6 @@ impl AppEventBatch {
         }
 
         self.sync_main_result = Some(result);
-    }
-
-    /// Stores the latest conflicted-file list for an in-progress sync batch.
-    fn collect_sync_main_conflict_resolution_started(&mut self, conflicted_files: Vec<String>) {
-        self.sync_main_conflicted_files = Some(conflicted_files);
     }
 
     /// Stores one branch-publish action result for this reducer batch.
@@ -981,23 +972,6 @@ impl AppEventBatch {
                 vacant_entry.insert(turn_applied_state);
             }
         }
-    }
-
-    /// Stores one completed parent turn for stacked-child auto-sync fan-out.
-    fn collect_stacked_parent_turn_completed(&mut self, session_id: SessionId) {
-        self.stacked_parent_turns_completed.insert(session_id);
-    }
-
-    /// Stores one completed parent sync for stacked-child auto-sync fan-out.
-    fn collect_stacked_parent_sync_completed(&mut self, session_id: SessionId) {
-        self.stacked_parent_syncs_completed.insert(session_id);
-    }
-
-    /// Stores child sessions that need post-merge deterministic restack
-    /// rebases after their parent link has been cleared in persistence.
-    fn collect_stacked_parent_merge_completed(&mut self, child_session_ids: Vec<SessionId>) {
-        self.stacked_parent_merge_child_rebases
-            .extend(child_session_ids);
     }
 }
 
@@ -2700,6 +2674,8 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::AssertUnwindSafe;
+
     use ag_forge::{
         ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
     };
@@ -3014,6 +2990,36 @@ mod tests {
         // Assert
         assert!(event_batch.should_reload_projects);
         assert!(!event_batch.should_reload_sessions);
+    }
+
+    #[test]
+    fn collect_runtime_event_rejects_top_level_event() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        let panic_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            event_batch.collect_runtime_event(AppEvent::RefreshSessions);
+        }));
+
+        // Assert
+        assert!(panic_result.is_err());
+    }
+
+    #[test]
+    fn collect_workflow_event_rejects_runtime_event() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        let panic_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            event_batch.collect_workflow_event(AppEvent::SyncMainConflictResolutionStarted {
+                conflicted_files: Vec::new(),
+            });
+        }));
+
+        // Assert
+        assert!(panic_result.is_err());
     }
 
     #[test]
