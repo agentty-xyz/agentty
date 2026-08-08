@@ -36,8 +36,10 @@ agentty/
 ```
 
 The current foundation lives entirely in `ag-harness`: the provider-neutral `Model`
-contract accepts a text `ModelRequest` and returns a text `ModelResponse`. `Qwen` is its
-first adapter and uses the OpenAI-compatible Chat Completions API.
+contract owns the shared request lifecycle, including telemetry and structured-output
+validation. Provider adapters implement `ModelBackend` to supply model identity and raw
+generation. `Qwen` is the first adapter and uses the OpenAI-compatible Chat Completions
+API.
 
 ## Session management
 
@@ -115,8 +117,9 @@ The next model-contract iteration evolves the current text-only response into
 provider-neutral structured output:
 
 - The caller supplies the expected JSON shape as a provider-independent schema.
-- Each adapter uses the strongest structured-output mechanism its provider supports,
-  then the harness parses and validates the returned JSON against the caller's schema.
+- Each adapter uses the strongest structured-output mechanism its provider supports and
+  returns raw assistant text. The shared `Model` lifecycle parses and validates the
+  returned JSON against the caller's schema.
 - Provider-specific request fields remain inside the adapter. For Qwen, the adapter uses
   JSON Object mode and performs schema validation in the harness because Qwen guarantees
   valid JSON, not schema conformance.
@@ -132,6 +135,8 @@ unstructured text.
 - External OTLP metrics export is enabled when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 - The harness records only `gen_ai.client.operation.duration`, labeled by provider and
   model.
+- The shared `Model` lifecycle records the metric for every `ModelBackend`, including
+  failed and cancelled requests.
 - Application binaries configure the metric exporter and flush it on exit.
 - Histogram state is cumulative and process-local; the one-shot example verifies export
   rather than cross-run totals.

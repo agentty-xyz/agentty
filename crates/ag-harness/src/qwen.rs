@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{model, schema_contract, telemetry};
+use crate::{model, schema_contract};
 
 const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
 const JSON_STRING_MAX_EXPANSION: usize = 6;
@@ -32,9 +32,8 @@ pub struct QwenConfig {
     pub model: String,
 }
 
-/// Qwen implementation of the provider-neutral [`model::Model`] contract.
-///
-/// Calls record a duration metric without prompt or response content.
+/// Qwen implementation of the provider-neutral [`model::ModelBackend`]
+/// strategy.
 pub struct Qwen {
     client: reqwest::Client,
     config: QwenConfig,
@@ -116,13 +115,12 @@ impl Qwen {
 }
 
 #[async_trait]
-impl model::Model for Qwen {
-    async fn complete(
-        &self,
-        request: model::ModelRequest,
-    ) -> Result<model::ModelResponse, model::ModelError> {
-        let _duration = telemetry::RequestDuration::start(PROVIDER_NAME, &self.config.model);
+impl model::ModelBackend for Qwen {
+    fn metadata(&self) -> model::ModelMetadata<'_> {
+        model::ModelMetadata::new(PROVIDER_NAME, &self.config.model)
+    }
 
+    async fn generate(&self, request: &model::ModelRequest) -> Result<String, model::ModelError> {
         if !request.schema().has_object_root() {
             return Err(model::ModelError::UnsupportedOutputSchema {
                 reason: UNSUPPORTED_SCHEMA_REASON.to_string(),
@@ -191,11 +189,7 @@ impl model::Model for Qwen {
             .content
             .ok_or(model::ModelError::InvalidResponse)?;
 
-        request
-            .schema()
-            .parse_and_validate(&text)
-            .map(model::ModelResponse::new)
-            .map_err(model::ModelError::from)
+        Ok(text)
     }
 }
 

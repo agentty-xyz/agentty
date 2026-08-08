@@ -8,6 +8,6 @@ mod qwen;
 mod schema_contract;
 mod telemetry;
 
-pub use model::{Model, ModelError, ModelRequest, ModelResponse};
+pub use model::{Model, ModelBackend, ModelError, ModelMetadata, ModelRequest, ModelResponse};
 pub use qwen::{Qwen, QwenConfig};
 pub use schema_contract::{OutputSchema, OutputSchemaError};

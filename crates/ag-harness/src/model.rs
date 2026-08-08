@@ -5,10 +5,21 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::schema_contract::{OutputSchema, OutputValidationError};
+use crate::telemetry;
 
-/// A model backend that completes provider-neutral requests.
+mod private {
+    pub trait Sealed {}
+
+    impl<T> Sealed for T where T: super::ModelBackend + ?Sized {}
+}
+
+/// Provider-neutral model behavior available to applications.
+///
+/// Implement [`ModelBackend`] to receive this behavior automatically. The
+/// shared implementation records telemetry and validates structured output for
+/// every provider.
 #[async_trait]
-pub trait Model: Send + Sync {
+pub trait Model: private::Sealed + Send + Sync {
     /// Completes one model request.
     ///
     /// # Errors
@@ -16,6 +27,62 @@ pub trait Model: Send + Sync {
     /// Returns [`ModelError`] when the provider request fails or its response
     /// cannot be converted to the provider-neutral response.
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError>;
+}
+
+#[async_trait]
+impl<T> Model for T
+where
+    T: ModelBackend + ?Sized,
+{
+    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        let _duration = telemetry::RequestDuration::start(self.metadata());
+        let output = self.generate(&request).await?;
+
+        request
+            .schema()
+            .parse_and_validate(&output)
+            .map(ModelResponse::new)
+            .map_err(ModelError::from)
+    }
+}
+
+/// Provider strategy used by the shared [`Model`] request lifecycle.
+#[async_trait]
+pub trait ModelBackend: Send + Sync {
+    /// Returns stable identity attributes for model telemetry.
+    fn metadata(&self) -> ModelMetadata<'_>;
+
+    /// Generates raw structured-output text for one provider-neutral request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError`] when the provider cannot satisfy the request or
+    /// its response cannot be converted to assistant text.
+    async fn generate(&self, request: &ModelRequest) -> Result<String, ModelError>;
+}
+
+/// Stable provider and model identity used by shared model behavior.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ModelMetadata<'a> {
+    model: &'a str,
+    provider: &'static str,
+}
+
+impl<'a> ModelMetadata<'a> {
+    /// Creates metadata for one provider model.
+    pub fn new(provider: &'static str, model: &'a str) -> Self {
+        Self { model, provider }
+    }
+
+    /// Returns the model identifier sent to the provider.
+    pub fn model(&self) -> &'a str {
+        self.model
+    }
+
+    /// Returns the provider identifier used by telemetry.
+    pub fn provider(&self) -> &'static str {
+        self.provider
+    }
 }
 
 /// Provider-neutral input for one model request.
@@ -52,14 +119,13 @@ pub struct ModelResponse {
 }
 
 impl ModelResponse {
-    /// Creates a response from parsed JSON that passed the caller's schema.
-    pub fn new(output: Value) -> Self {
-        Self { output }
-    }
-
     /// Returns the parsed, schema-validated output.
     pub fn output(&self) -> &Value {
         &self.output
+    }
+
+    fn new(output: Value) -> Self {
+        Self { output }
     }
 }
 
@@ -108,7 +174,8 @@ pub enum ModelError {
 }
 
 impl ModelError {
-    pub(crate) fn request(error: impl Error + Send + Sync + 'static) -> Self {
+    /// Wraps a provider transport or response-decoding failure.
+    pub fn request(error: impl Error + Send + Sync + 'static) -> Self {
         Self::Request(Box::new(error))
     }
 }
@@ -132,6 +199,130 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    enum StubOutcome {
+        Failure,
+        Output(&'static str),
+    }
+
+    struct StubBackend {
+        model: &'static str,
+        outcome: StubOutcome,
+        provider: &'static str,
+    }
+
+    #[async_trait]
+    impl ModelBackend for StubBackend {
+        fn metadata(&self) -> ModelMetadata<'_> {
+            ModelMetadata::new(self.provider, self.model)
+        }
+
+        async fn generate(&self, request: &ModelRequest) -> Result<String, ModelError> {
+            assert_eq!(request.prompt(), "hello");
+
+            match self.outcome {
+                StubOutcome::Failure => Err(ModelError::request(io::Error::other("offline"))),
+                StubOutcome::Output(output) => Ok(output.to_string()),
+            }
+        }
+    }
+
+    fn object_schema() -> OutputSchema {
+        OutputSchema::new(json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" }
+            },
+            "required": ["name"],
+            "additionalProperties": false
+        }))
+        .expect("schema should be valid")
+    }
+
+    fn backend(outcome: StubOutcome) -> StubBackend {
+        StubBackend {
+            model: "stub-large",
+            outcome,
+            provider: "stub_provider",
+        }
+    }
+
+    #[tokio::test]
+    async fn completes_request_through_shared_model_flow() {
+        // Arrange
+        let model = backend(StubOutcome::Output(r#"{"name":"Ada"}"#));
+
+        // Act
+        let response = model
+            .complete(ModelRequest::new("hello", object_schema()))
+            .await
+            .expect("valid backend output should succeed");
+
+        // Assert
+        assert_eq!(response.output(), &json!({ "name": "Ada" }));
+    }
+
+    #[test]
+    fn metadata_exposes_provider_and_model() {
+        // Arrange
+        let model = backend(StubOutcome::Output(r#"{"name":"Ada"}"#));
+
+        // Act
+        let metadata = model.metadata();
+
+        // Assert
+        assert_eq!(metadata.provider(), "stub_provider");
+        assert_eq!(metadata.model(), "stub-large");
+        assert_eq!(metadata, ModelMetadata::new("stub_provider", "stub-large"));
+    }
+
+    #[tokio::test]
+    async fn shared_model_flow_returns_provider_failure() {
+        // Arrange
+        let model = backend(StubOutcome::Failure);
+
+        // Act
+        let error = model
+            .complete(ModelRequest::new("hello", object_schema()))
+            .await
+            .expect_err("provider failure should be returned");
+
+        // Assert
+        assert_eq!(error.to_string(), "model request failed: offline");
+    }
+
+    #[tokio::test]
+    async fn shared_model_flow_rejects_invalid_json() {
+        // Arrange
+        let model = backend(StubOutcome::Output("not JSON"));
+
+        // Act
+        let error = model
+            .complete(ModelRequest::new("hello", object_schema()))
+            .await
+            .expect_err("invalid JSON should fail");
+
+        // Assert
+        assert!(matches!(error, ModelError::InvalidJson { .. }));
+    }
+
+    #[tokio::test]
+    async fn shared_model_flow_rejects_schema_violation() {
+        // Arrange
+        let model = backend(StubOutcome::Output(r#"{"name":42}"#));
+
+        // Act
+        let error = model
+            .complete(ModelRequest::new("hello", object_schema()))
+            .await
+            .expect_err("schema violation should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            ModelError::SchemaViolation { path, .. } if path == "/name"
+        ));
+    }
 
     #[test]
     fn request_contains_prompt_and_schema() {
