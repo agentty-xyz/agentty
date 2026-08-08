@@ -14,7 +14,9 @@ use crate::domain::session::Session;
 use crate::presentation::app_mode::{ReviewCommentAction, ReviewCommentActionSelection};
 use crate::presentation::{help_action, review_comment as review_comment_selection};
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
-use crate::ui::diff_util::{DiffLine, DiffLineKind};
+use crate::ui::diff_util::DiffLine;
+#[cfg(test)]
+use crate::ui::diff_util::DiffLineKind;
 use crate::ui::{Component, Page, diff_util, help_format, markdown, review_comment_format, style};
 
 const CODE_CONTEXT_RADIUS: usize = 3;
@@ -26,10 +28,19 @@ pub struct ReviewCommentPage<'a> {
     comment_snapshot: Option<&'a ReviewCommentSnapshot>,
     diff: &'a str,
     is_loading_comments: bool,
-    markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    render_caches: ReviewCommentRenderCaches<'a>,
     scroll_offset: u16,
     selected_comment_index: usize,
     session: &'a Session,
+}
+
+/// Shared bounded caches used to derive review-comment detail rows.
+#[derive(Clone, Copy)]
+pub struct ReviewCommentRenderCaches<'a> {
+    /// Parsed-diff cache shared with the main diff page.
+    pub diff_layout: &'a crate::ui::page::diff::DiffLayoutCache,
+    /// Styled Markdown cache shared with other text surfaces.
+    pub markdown: &'a markdown::MarkdownRenderCache,
 }
 
 /// Borrowed inputs needed to construct one review-comment page renderer.
@@ -45,8 +56,8 @@ pub struct ReviewCommentPageInput<'a> {
     pub diff: &'a str,
     /// Whether the forge comment request is still running.
     pub is_loading_comments: bool,
-    /// Shared cache used for styled Markdown and embedded HTML comment bodies.
-    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Shared bounded caches used by paint and scroll metrics.
+    pub render_caches: ReviewCommentRenderCaches<'a>,
     /// Vertical offset inside the selected comment detail panel.
     pub scroll_offset: u16,
     /// Selected general comment or inline thread index.
@@ -64,7 +75,7 @@ impl<'a> ReviewCommentPage<'a> {
             comment_snapshot,
             diff,
             is_loading_comments,
-            markdown_render_cache,
+            render_caches,
             scroll_offset,
             selected_comment_index,
             session,
@@ -76,7 +87,7 @@ impl<'a> ReviewCommentPage<'a> {
             comment_snapshot,
             diff,
             is_loading_comments,
-            markdown_render_cache,
+            render_caches,
             scroll_offset,
             selected_comment_index,
             session,
@@ -145,8 +156,8 @@ impl<'a> ReviewCommentPage<'a> {
             self.comment_error,
             self.is_loading_comments,
             self.diff,
+            self.render_caches,
             self.selected_comment_index,
-            self.markdown_render_cache,
             content_width,
         );
         let viewport_height = area.height.saturating_sub(2);
@@ -199,9 +210,9 @@ pub(crate) fn review_comment_view_max_scroll_offset(
     comment_error: Option<&str>,
     is_loading_comments: bool,
     diff: &str,
+    render_caches: ReviewCommentRenderCaches<'_>,
     selected_comment_index: usize,
     area: Rect,
-    markdown_render_cache: &markdown::MarkdownRenderCache,
 ) -> u16 {
     let detail_area = diff_util::diff_page_areas(area).diff_area;
     let viewport_height = detail_area.height.saturating_sub(2);
@@ -214,8 +225,8 @@ pub(crate) fn review_comment_view_max_scroll_offset(
         comment_error,
         is_loading_comments,
         diff,
+        render_caches,
         selected_comment_index,
-        markdown_render_cache,
         content_width,
     )
     .len();
@@ -338,8 +349,8 @@ fn comment_detail_lines(
     comment_error: Option<&str>,
     is_loading_comments: bool,
     diff: &str,
+    render_caches: ReviewCommentRenderCaches<'_>,
     selected_comment_index: usize,
-    markdown_render_cache: &markdown::MarkdownRenderCache,
     width: usize,
 ) -> Vec<Line<'static>> {
     let Some(rows) = rows else {
@@ -358,10 +369,16 @@ fn comment_detail_lines(
 
     match entry {
         review_comment_selection::ReviewCommentEntry::General(comment) => {
-            general_comment_detail_lines(comment, markdown_render_cache, width)
+            general_comment_detail_lines(comment, render_caches.markdown, width)
         }
         review_comment_selection::ReviewCommentEntry::Thread(thread) => {
-            thread_comment_detail_lines(thread, diff, markdown_render_cache, width)
+            thread_comment_detail_lines(
+                thread,
+                diff,
+                render_caches.diff_layout,
+                render_caches.markdown,
+                width,
+            )
         }
     }
 }
@@ -398,6 +415,7 @@ fn general_comment_detail_lines(
 fn thread_comment_detail_lines(
     thread: &ReviewCommentThread,
     diff: &str,
+    diff_layout_cache: &crate::ui::page::diff::DiffLayoutCache,
     markdown_render_cache: &markdown::MarkdownRenderCache,
     width: usize,
 ) -> Vec<Line<'static>> {
@@ -411,7 +429,7 @@ fn thread_comment_detail_lines(
         Line::default(),
         section_line("Code context"),
     ];
-    lines.extend(code_context_lines(thread, diff, width));
+    lines.extend(code_context_lines(thread, diff, diff_layout_cache, width));
     lines.extend([Line::default(), section_line("Conversation")]);
     review_comment_format::append_comment_bodies(
         &mut lines,
@@ -427,6 +445,7 @@ fn thread_comment_detail_lines(
 fn code_context_lines(
     thread: &ReviewCommentThread,
     diff: &str,
+    diff_layout_cache: &crate::ui::page::diff::DiffLayoutCache,
     width: usize,
 ) -> Vec<Line<'static>> {
     if thread.is_outdated == Some(true) {
@@ -439,8 +458,8 @@ fn code_context_lines(
         )];
     }
 
-    let parsed_lines = diff_util::parse_diff_lines(diff);
-    let file_lines = diff_file_lines(&parsed_lines, &thread.path);
+    let parsed_content = diff_layout_cache.content(diff);
+    let file_lines = parsed_content.file_lines(&thread.path);
     if file_lines.is_empty() {
         return vec![muted_line(
             "No current diff context is available for this file.",
@@ -475,31 +494,6 @@ fn code_context_lines(
             code_context_line(line, is_anchor, gutter_width, width)
         })
         .collect()
-}
-
-/// Returns diff body lines belonging to `path`, excluding diff metadata.
-fn diff_file_lines<'a>(parsed_lines: &'a [DiffLine<'a>], path: &str) -> Vec<DiffLine<'a>> {
-    let mut is_selected_file = false;
-    let mut lines = Vec::new();
-
-    for line in parsed_lines {
-        if line.kind == DiffLineKind::FileHeader && line.content.starts_with("diff --git") {
-            is_selected_file = diff_util::diff_header_paths(line.content)
-                .is_some_and(|(old_path, new_path)| old_path == path || new_path == path);
-
-            continue;
-        }
-        if is_selected_file
-            && matches!(
-                line.kind,
-                DiffLineKind::Addition | DiffLineKind::Deletion | DiffLineKind::Context
-            )
-        {
-            lines.push(*line);
-        }
-    }
-
-    lines
 }
 
 /// Returns whether one diff row belongs to an inclusive thread anchor range.
@@ -716,6 +710,7 @@ mod tests {
         let session = SessionFixtureBuilder::new()
             .title(Some("Review comments session".to_string()))
             .build();
+        let diff_layout_cache = crate::ui::page::diff::DiffLayoutCache::default();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let backend = TestBackend::new(terminal_size.0, terminal_size.1);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -728,7 +723,10 @@ mod tests {
                     comment_snapshot: snapshot,
                     diff: SAMPLE_DIFF,
                     is_loading_comments,
-                    markdown_render_cache: &markdown_render_cache,
+                    render_caches: ReviewCommentRenderCaches {
+                        diff_layout: &diff_layout_cache,
+                        markdown: &markdown_render_cache,
+                    },
                     scroll_offset,
                     selected_comment_index,
                     session: &session,
@@ -895,6 +893,7 @@ mod tests {
     fn test_review_comment_view_max_scroll_offset_reflects_detail_overflow() {
         // Arrange
         let snapshot = comment_snapshot();
+        let diff_layout_cache = crate::ui::page::diff::DiffLayoutCache::default();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
 
         // Act
@@ -903,9 +902,12 @@ mod tests {
             None,
             false,
             SAMPLE_DIFF,
+            ReviewCommentRenderCaches {
+                diff_layout: &diff_layout_cache,
+                markdown: &markdown_render_cache,
+            },
             0,
             Rect::new(0, 0, 80, 10),
-            &markdown_render_cache,
         );
 
         // Assert
@@ -916,9 +918,10 @@ mod tests {
     fn test_code_context_lines_include_and_highlight_attached_new_line() {
         // Arrange
         let thread = inline_thread(2);
+        let diff_layout_cache = crate::ui::page::diff::DiffLayoutCache::default();
 
         // Act
-        let lines = code_context_lines(&thread, SAMPLE_DIFF, 80);
+        let lines = code_context_lines(&thread, SAMPLE_DIFF, &diff_layout_cache, 80);
 
         // Assert
         let attached_line = lines
@@ -935,13 +938,49 @@ mod tests {
     }
 
     #[test]
+    fn test_code_context_lines_repeat_inline_derivation_with_one_shared_cache() {
+        // Arrange
+        let thread = inline_thread(2);
+        let diff_layout_cache = crate::ui::page::diff::DiffLayoutCache::default();
+        let diff = concat!(
+            "diff --git a/src/unrelated.rs b/src/unrelated.rs\n",
+            "@@ -1 +1 @@\n",
+            "-unrelated old\n",
+            "+unrelated new\n",
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -1,3 +1,4 @@\n",
+            " fn main() {\n",
+            "+    println!(\"hello\");\n",
+            " }\n",
+        );
+
+        // Act
+        let first_lines = code_context_lines(&thread, diff, &diff_layout_cache, 80);
+        let repeated_lines = code_context_lines(&thread, diff, &diff_layout_cache, 80);
+
+        // Assert
+        assert_eq!(first_lines, repeated_lines);
+        assert!(
+            repeated_lines
+                .iter()
+                .all(|line| !line.to_string().contains("unrelated"))
+        );
+        assert!(
+            repeated_lines
+                .iter()
+                .any(|line| line.to_string().contains("println!"))
+        );
+    }
+
+    #[test]
     fn test_code_context_lines_highlight_every_line_in_multiline_anchor_range() {
         // Arrange
         let mut thread = inline_thread(2);
         thread.start_line = Some(1);
+        let diff_layout_cache = crate::ui::page::diff::DiffLayoutCache::default();
 
         // Act
-        let lines = code_context_lines(&thread, SAMPLE_DIFF, 80);
+        let lines = code_context_lines(&thread, SAMPLE_DIFF, &diff_layout_cache, 80);
 
         // Assert
         let start_line = lines
@@ -1019,9 +1058,10 @@ mod tests {
     fn test_code_context_lines_explain_file_level_anchor_without_synthetic_code() {
         // Arrange
         let thread = file_thread();
+        let diff_layout_cache = crate::ui::page::diff::DiffLayoutCache::default();
 
         // Act
-        let lines = code_context_lines(&thread, SAMPLE_DIFF, 80);
+        let lines = code_context_lines(&thread, SAMPLE_DIFF, &diff_layout_cache, 80);
 
         // Assert
         assert_eq!(
@@ -1041,9 +1081,10 @@ mod tests {
         // Arrange
         let mut thread = inline_thread(2);
         thread.is_outdated = Some(true);
+        let diff_layout_cache = crate::ui::page::diff::DiffLayoutCache::default();
 
         // Act
-        let lines = code_context_lines(&thread, SAMPLE_DIFF, 80);
+        let lines = code_context_lines(&thread, SAMPLE_DIFF, &diff_layout_cache, 80);
 
         // Assert
         assert_eq!(
@@ -1068,12 +1109,16 @@ mod tests {
         let outside_thread = inline_thread(99);
         let mut missing_anchor_thread = inline_thread(2);
         missing_anchor_thread.line = None;
+        let diff_layout_cache = crate::ui::page::diff::DiffLayoutCache::default();
 
         // Act
-        let old_lines = code_context_lines(&old_thread, SAMPLE_DIFF, 80);
-        let missing_file_lines = code_context_lines(&missing_file_thread, SAMPLE_DIFF, 80);
-        let outside_lines = code_context_lines(&outside_thread, SAMPLE_DIFF, 80);
-        let missing_anchor_lines = code_context_lines(&missing_anchor_thread, SAMPLE_DIFF, 80);
+        let old_lines = code_context_lines(&old_thread, SAMPLE_DIFF, &diff_layout_cache, 80);
+        let missing_file_lines =
+            code_context_lines(&missing_file_thread, SAMPLE_DIFF, &diff_layout_cache, 80);
+        let outside_lines =
+            code_context_lines(&outside_thread, SAMPLE_DIFF, &diff_layout_cache, 80);
+        let missing_anchor_lines =
+            code_context_lines(&missing_anchor_thread, SAMPLE_DIFF, &diff_layout_cache, 80);
         let file_side_matches = diff_line_matches_anchor(
             &DiffLine {
                 content: "file",
@@ -1119,6 +1164,7 @@ mod tests {
             threads: vec![inline_thread(2)],
         };
         let rows = review_comment_selection::grouped_review_comment_rows(&snapshot);
+        let diff_layout_cache = crate::ui::page::diff::DiffLayoutCache::default();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
 
         // Act
@@ -1127,8 +1173,11 @@ mod tests {
             None,
             false,
             SAMPLE_DIFF,
+            ReviewCommentRenderCaches {
+                diff_layout: &diff_layout_cache,
+                markdown: &markdown_render_cache,
+            },
             0,
-            &markdown_render_cache,
             80,
         );
         let text = lines

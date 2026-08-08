@@ -54,6 +54,121 @@ impl<'a> SessionListPage<'a> {
     }
 }
 
+/// Render-ready cells and exact display widths derived once per session row.
+struct PreparedSessionCells {
+    model_cell: Line<'static>,
+    model_width: usize,
+    status_cell: Cell<'static>,
+    status_width: usize,
+    timer_label: String,
+    timer_width: usize,
+}
+
+impl PreparedSessionCells {
+    /// Builds the model, status, and timer values shared by layout and paint.
+    fn new(
+        session: &Session,
+        _default_reasoning_level: ReasoningLevel,
+        wall_clock_unix_seconds: i64,
+    ) -> Self {
+        let reasoning_level = session.effective_reasoning_level();
+        let model_name = session.agent.model().as_str();
+        let model_width = model_name
+            .chars()
+            .count()
+            .saturating_add(reasoning_level.as_str().chars().count())
+            .saturating_add(3);
+        let model_cell = Line::from(vec![
+            Span::raw(model_name),
+            Span::raw(" ["),
+            Span::styled(
+                reasoning_level.as_str(),
+                Style::default().fg(reasoning_level_color(reasoning_level)),
+            ),
+            Span::raw("]"),
+        ]);
+
+        let status = session.status;
+        let status_label = session_list_status_label(session).into_owned();
+        let forge_indicator = session.forge_indicator();
+        let forge_indicator_width = if forge_indicator.is_empty() {
+            0
+        } else {
+            forge_indicator.chars().count().saturating_add(1)
+        };
+        let status_width = status_label
+            .chars()
+            .count()
+            .saturating_add(forge_indicator_width);
+        let status_cell = if forge_indicator.is_empty() {
+            Cell::from(status_label).style(Style::default().fg(style::status_color(status)))
+        } else {
+            let review_state = session.review_request.as_ref().map(|rr| rr.summary.state);
+            let indicator_color = style::forge_indicator_color(review_state);
+
+            Cell::from(Line::from(vec![
+                Span::styled(
+                    format!("{status_label} "),
+                    Style::default().fg(style::status_color(status)),
+                ),
+                Span::styled(forge_indicator, Style::default().fg(indicator_color)),
+            ]))
+        };
+
+        let timer_label = if session.has_in_progress_timer() {
+            format_duration_compact(session.in_progress_duration_seconds(wall_clock_unix_seconds))
+        } else {
+            String::new()
+        };
+        let timer_width = timer_label.chars().count();
+
+        Self {
+            model_cell,
+            model_width,
+            status_cell,
+            status_width,
+            timer_label,
+            timer_width,
+        }
+    }
+}
+
+/// Grouped table row carrying the session cells prepared for this frame.
+enum PreparedSessionRow<'a> {
+    GroupLabel(SessionGroup),
+    Session {
+        cells: PreparedSessionCells,
+        session: &'a Session,
+        tree_position: SessionTreePosition,
+    },
+}
+
+impl<'a> PreparedSessionRow<'a> {
+    /// Converts one grouped domain row into its render-ready representation.
+    fn new(
+        row: &GroupedSessionRow<'a>,
+        default_reasoning_level: ReasoningLevel,
+        wall_clock_unix_seconds: i64,
+    ) -> Self {
+        match row {
+            GroupedSessionRow::GroupLabel(group) => Self::GroupLabel(*group),
+            GroupedSessionRow::Session {
+                session,
+                tree_position,
+                ..
+            } => Self::Session {
+                cells: PreparedSessionCells::new(
+                    session,
+                    default_reasoning_level,
+                    wall_clock_unix_seconds,
+                ),
+                session,
+                tree_position: *tree_position,
+            },
+        }
+    }
+}
+
 impl Page for SessionListPage<'_> {
     /// Renders the grouped session table directly below the tab header plus
     /// the list footer.
@@ -73,11 +188,16 @@ impl Page for SessionListPage<'_> {
             .borders(Borders::ALL)
             .title("Sessions")
             .border_style(style::border_style());
+        let table_rows = prepared_session_rows(
+            self.sessions,
+            self.default_reasoning_level,
+            self.wall_clock_unix_seconds,
+        );
         let column_constraints = [
             Constraint::Fill(1),
-            model_column_width(self.sessions, self.default_reasoning_level),
-            status_column_width(self.sessions),
-            timer_column_width(self.sessions, self.wall_clock_unix_seconds),
+            model_column_width(&table_rows),
+            status_column_width(&table_rows),
+            timer_column_width(&table_rows),
         ];
         let title_column_width = first_table_column_width(
             block.inner(areas.main_area).width,
@@ -85,20 +205,13 @@ impl Page for SessionListPage<'_> {
             TABLE_COLUMN_SPACING,
             0,
         );
-        let table_rows = session_order::grouped_session_rows(self.sessions);
         let selected_session_id = selected_session_id(self.sessions, self.table_state.selected());
         let selected_row = selected_render_row(&table_rows, selected_session_id);
+        let is_empty = table_rows.is_empty();
         let rows = table_rows
-            .iter()
-            .map(|table_row| {
-                render_table_row(
-                    table_row,
-                    title_column_width,
-                    self.default_reasoning_level,
-                    self.wall_clock_unix_seconds,
-                )
-            })
-            .chain(table_rows.is_empty().then(render_empty_sessions_hint_row));
+            .into_iter()
+            .map(|table_row| render_table_row(table_row, title_column_width))
+            .chain(is_empty.then(render_empty_sessions_hint_row));
         let table = Table::new(rows, column_constraints)
             .column_spacing(TABLE_COLUMN_SPACING)
             .header(header)
@@ -175,37 +288,38 @@ fn selected_session_id(sessions: &[Session], selected_index: Option<usize>) -> O
 
 /// Maps selected session id to the grouped table row index.
 fn selected_render_row(
-    rows: &[GroupedSessionRow<'_>],
+    rows: &[PreparedSessionRow<'_>],
     selected_session_id: Option<&str>,
 ) -> Option<usize> {
     let selected_session_id = selected_session_id?;
 
     rows.iter().position(|row| match row {
-        GroupedSessionRow::GroupLabel(_) => false,
-        GroupedSessionRow::Session { session, .. } => session.id == selected_session_id,
+        PreparedSessionRow::GroupLabel(_) => false,
+        PreparedSessionRow::Session { session, .. } => session.id == selected_session_id,
     })
 }
 
-/// Converts one grouped row descriptor into a `ratatui` table row.
-fn render_table_row(
-    row: &GroupedSessionRow<'_>,
-    title_column_width: usize,
+/// Prepares every grouped row once so layout sizing and painting share values.
+fn prepared_session_rows(
+    sessions: &[Session],
     default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
-) -> Row<'static> {
+) -> Vec<PreparedSessionRow<'_>> {
+    session_order::grouped_session_rows(sessions)
+        .into_iter()
+        .map(|row| PreparedSessionRow::new(&row, default_reasoning_level, wall_clock_unix_seconds))
+        .collect()
+}
+
+/// Converts one grouped row descriptor into a `ratatui` table row.
+fn render_table_row(row: PreparedSessionRow<'_>, title_column_width: usize) -> Row<'static> {
     match row {
-        GroupedSessionRow::GroupLabel(group) => render_group_label_row(*group),
-        GroupedSessionRow::Session {
+        PreparedSessionRow::GroupLabel(group) => render_group_label_row(group),
+        PreparedSessionRow::Session {
+            cells,
             session,
             tree_position,
-            ..
-        } => render_session_row(
-            session,
-            *tree_position,
-            title_column_width,
-            default_reasoning_level,
-            wall_clock_unix_seconds,
-        ),
+        } => render_session_row(session, tree_position, cells, title_column_width),
     }
 }
 
@@ -237,11 +351,9 @@ fn render_empty_sessions_hint_row() -> Row<'static> {
 fn render_session_row(
     session: &Session,
     tree_position: SessionTreePosition,
+    cells: PreparedSessionCells,
     title_column_width: usize,
-    default_reasoning_level: ReasoningLevel,
-    wall_clock_unix_seconds: i64,
 ) -> Row<'static> {
-    let status = session.status;
     let title_spans = render_session_title(
         session,
         title_column_width.saturating_sub(tree_position_width(tree_position)),
@@ -252,35 +364,11 @@ fn render_session_row(
         title_line_spans.push(Span::styled(tree_label, tree_prefix_style()));
     }
     title_line_spans.extend(title_spans);
-    let timer_label = if session.has_in_progress_timer() {
-        format_duration_compact(session.in_progress_duration_seconds(wall_clock_unix_seconds))
-    } else {
-        String::new()
-    };
-    let forge_indicator = session.forge_indicator();
-    let status_label = session_list_status_label(session).into_owned();
-    let status_cell = if forge_indicator.is_empty() {
-        Cell::from(status_label).style(Style::default().fg(style::status_color(status)))
-    } else {
-        let review_state = session.review_request.as_ref().map(|rr| rr.summary.state);
-        let indicator_color = style::forge_indicator_color(review_state);
-
-        Cell::from(Line::from(vec![
-            Span::styled(
-                format!("{status_label} "),
-                Style::default().fg(style::status_color(status)),
-            ),
-            Span::styled(forge_indicator, Style::default().fg(indicator_color)),
-        ]))
-    };
     let cells = vec![
         Cell::from(Line::from(title_line_spans)),
-        Cell::from(session_model_and_reasoning_level_line(
-            session,
-            default_reasoning_level,
-        )),
-        status_cell,
-        Cell::from(timer_label),
+        Cell::from(cells.model_cell),
+        cells.status_cell,
+        Cell::from(cells.timer_label),
     ];
 
     Row::new(cells)
@@ -308,47 +396,15 @@ fn tree_prefix_style() -> Style {
     Style::default().fg(style::palette::text_muted())
 }
 
-/// Calculates the width of the model column from known session values.
-pub(crate) fn model_column_width(
-    sessions: &[Session],
-    default_reasoning_level: ReasoningLevel,
-) -> Constraint {
-    text_column_width(
+/// Calculates the model width from the same prepared cells used for paint.
+fn model_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
+    column_width(
         "Model",
-        sessions
-            .iter()
-            .map(|session| session_model_and_reasoning_level(session, default_reasoning_level)),
+        rows.iter().filter_map(|row| match row {
+            PreparedSessionRow::GroupLabel(_) => None,
+            PreparedSessionRow::Session { cells, .. } => Some(cells.model_width),
+        }),
     )
-}
-
-/// Formats model name together with the effective reasoning level label.
-fn session_model_and_reasoning_level(
-    session: &Session,
-    _default_reasoning_level: ReasoningLevel,
-) -> String {
-    let reasoning_level = session.effective_reasoning_level();
-
-    format!(
-        "{} [{}]",
-        session.agent.model().as_str(),
-        reasoning_level.as_str()
-    )
-}
-
-/// Builds a styled model column cell where the reasoning label is colorized.
-fn session_model_and_reasoning_level_line(
-    session: &Session,
-    _default_reasoning_level: ReasoningLevel,
-) -> Line<'static> {
-    let reasoning_level = session.effective_reasoning_level();
-    let color = reasoning_level_color(reasoning_level);
-
-    Line::from(vec![
-        Span::raw(session.agent.model().as_str()),
-        Span::raw(" ["),
-        Span::styled(reasoning_level.as_str(), Style::default().fg(color)),
-        Span::raw("]"),
-    ])
 }
 
 /// Returns the palette color for one reasoning effort level.
@@ -361,47 +417,27 @@ fn reasoning_level_color(reasoning_level: ReasoningLevel) -> Color {
     }
 }
 
-/// Calculates the width of the status column from every supported session
-/// status label plus the widest possible forge indicator suffix.
-fn status_column_width(sessions: &[Session]) -> Constraint {
-    let static_width = text_column_width(
-        "Status",
-        Status::ALL.iter().map(std::string::ToString::to_string),
-    );
+/// Calculates the status width from static labels and prepared painted cells.
+fn status_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
+    let static_widths = Status::ALL
+        .iter()
+        .map(|status| status.to_string().chars().count());
+    let session_widths = rows.iter().filter_map(|row| match row {
+        PreparedSessionRow::GroupLabel(_) => None,
+        PreparedSessionRow::Session { cells, .. } => Some(cells.status_width),
+    });
 
-    let session_width = text_column_width(
-        "Status",
-        sessions.iter().map(|session| {
-            let forge_indicator = session.forge_indicator();
-            let status_label = session_list_status_label(session);
-            if forge_indicator.is_empty() {
-                status_label.into_owned()
-            } else {
-                format!("{status_label} {forge_indicator}")
-            }
-        }),
-    );
-
-    match (static_width, session_width) {
-        (Constraint::Length(static_len), Constraint::Length(session_len)) => {
-            Constraint::Length(static_len.max(session_len))
-        }
-        _ => static_width,
-    }
+    column_width("Status", static_widths.chain(session_widths))
 }
 
-/// Calculates the width of the timer column from known session durations.
-fn timer_column_width(sessions: &[Session], wall_clock_unix_seconds: i64) -> Constraint {
-    text_column_width(
+/// Calculates the timer width from the same prepared labels used for paint.
+fn timer_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
+    column_width(
         "Timer",
-        sessions
-            .iter()
-            .filter(|session| session.has_in_progress_timer())
-            .map(|session| {
-                format_duration_compact(
-                    session.in_progress_duration_seconds(wall_clock_unix_seconds),
-                )
-            }),
+        rows.iter().filter_map(|row| match row {
+            PreparedSessionRow::GroupLabel(_) => None,
+            PreparedSessionRow::Session { cells, .. } => Some(cells.timer_width),
+        }),
     )
 }
 
@@ -437,13 +473,9 @@ fn size_color(size: SessionSize) -> Color {
     }
 }
 
-fn text_column_width<T>(header: &str, values: impl Iterator<Item = T>) -> Constraint
-where
-    T: AsRef<str>,
-{
-    let column_width = values
-        .map(|value| value.as_ref().chars().count())
-        .fold(header.chars().count(), usize::max);
+/// Converts the maximum prepared display width into a table constraint.
+fn column_width(header: &str, widths: impl Iterator<Item = usize>) -> Constraint {
+    let column_width = widths.fold(header.chars().count(), usize::max);
     let column_width = u16::try_from(column_width).unwrap_or(u16::MAX);
 
     Constraint::Length(column_width)
@@ -651,7 +683,7 @@ mod tests {
             crate::test_support::titled_session_fixture("merge-1", Status::Merging),
             crate::test_support::titled_session_fixture("active-2", Status::Draft),
         ];
-        let rows = session_order::grouped_session_rows(&sessions);
+        let rows = prepared_session_rows(&sessions, ReasoningLevel::default(), 0);
         let selected_session_id = selected_session_id(&sessions, Some(3));
 
         // Act
@@ -684,7 +716,12 @@ mod tests {
         let project_names = ["api", "very-long-project-name"];
 
         // Act
-        let width = text_column_width("Project", project_names.into_iter());
+        let width = column_width(
+            "Project",
+            project_names
+                .into_iter()
+                .map(|project_name| project_name.chars().count()),
+        );
 
         // Assert
         assert_eq!(width, Constraint::Length(expected_width));
@@ -710,9 +747,10 @@ mod tests {
         );
         medium_session.reasoning_level_override = Some(ReasoningLevel::Medium);
         let sessions = vec![default_session, medium_session];
+        let rows = prepared_session_rows(&sessions, ReasoningLevel::Low, 0);
 
         // Act
-        let width = model_column_width(&sessions, ReasoningLevel::Low);
+        let width = model_column_width(&rows);
 
         // Assert
         assert_eq!(width, Constraint::Length(expected_width));
@@ -934,9 +972,10 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
+        let rows = prepared_session_rows(&sessions, ReasoningLevel::High, 0);
 
         // Act
-        let width = status_column_width(&sessions);
+        let width = status_column_width(&rows);
         terminal
             .draw(|frame| {
                 SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::High, 0)
@@ -963,9 +1002,10 @@ mod tests {
         archived_session.in_progress_total_seconds = 3_661;
         let sessions = vec![active_session, archived_session];
         let expected_width = u16::try_from("1h1m1s".chars().count()).unwrap_or(u16::MAX);
+        let rows = prepared_session_rows(&sessions, ReasoningLevel::default(), 160);
 
         // Act
-        let width = timer_column_width(&sessions, 160);
+        let width = timer_column_width(&rows);
 
         // Assert
         assert_eq!(width, Constraint::Length(expected_width));

@@ -663,7 +663,10 @@ fn render_review_comments_surface(
         comment_snapshot: comment_snapshot.as_ref(),
         diff,
         is_loading_comments: *is_loading_comments,
-        markdown_render_cache: resources.markdown_render_cache,
+        render_caches: page::review_comment::ReviewCommentRenderCaches {
+            diff_layout: resources.diff_layout_cache,
+            markdown: resources.markdown_render_cache,
+        },
         scroll_offset: *scroll_offset,
         selected_comment_index: *selected_comment_index,
         session,

@@ -93,14 +93,14 @@ pub(crate) async fn handle_with_cache(
                 comment_error.as_deref(),
                 is_loading_comments,
                 &diff,
+                page::review_comment::ReviewCommentRenderCaches {
+                    diff_layout: render_cache_store.diff_layout_cache(),
+                    markdown: render_cache_store.markdown_render_cache(),
+                },
                 selected_comment_index,
                 content_area,
-                render_cache_store.markdown_render_cache(),
             );
-            scroll_offset = scroll_offset
-                .min(max_scroll_offset)
-                .saturating_add(1)
-                .min(max_scroll_offset);
+            scroll_offset = increment_scroll_offset(scroll_offset, max_scroll_offset);
         }
         KeyCode::Up => {
             scroll_offset = scroll_offset.saturating_sub(1);
@@ -120,6 +120,14 @@ pub(crate) async fn handle_with_cache(
     };
 
     EventResult::Continue
+}
+
+/// Advances one detail row while clamping stale and terminal offsets.
+fn increment_scroll_offset(scroll_offset: u16, max_scroll_offset: u16) -> u16 {
+    scroll_offset
+        .min(max_scroll_offset)
+        .saturating_add(1)
+        .min(max_scroll_offset)
 }
 
 /// Returns whether the review-comments page still belongs to a session that
