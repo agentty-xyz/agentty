@@ -2857,6 +2857,6 @@ main\torigin/main\tbehind 2\nwt/1234abcd\torigin/wt/1234abcd\tahead 3, behind \
         );
         assert_eq!(commit_count, "1");
         assert_eq!(head_message, "Initial commit");
-        assert!(status.is_empty());
+        assert_eq!(status, "");
     }
 }

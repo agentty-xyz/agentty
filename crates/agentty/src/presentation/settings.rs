@@ -1536,7 +1536,10 @@ mod tests {
             reasoning_selector_option_labels().len(),
             ReasoningLevel::ALL.len()
         );
-        assert!(launch_options.is_empty());
+        assert_eq!(
+            launch_options,
+            [] as [crate::presentation::settings::SettingSelectorOption; 0]
+        );
         assert_eq!(
             parallelism_options.len(),
             usize::from(MAX_ORCHESTRATION_PARALLELISM)

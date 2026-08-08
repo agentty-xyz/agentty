@@ -1256,7 +1256,7 @@ mod tests {
         );
         let spacer_row = panel_areas.spacer_area.y;
         let spacer_text = buffer_row_text(terminal.backend().buffer(), spacer_row, width);
-        assert!(spacer_text.trim().is_empty());
+        assert_eq!(spacer_text.trim(), "");
     }
 
     #[test]

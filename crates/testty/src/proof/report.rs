@@ -706,7 +706,7 @@ mod tests {
 
         // Assert — frame_bytes should contain ANSI escape sequences.
         let capture = &report.captures[0];
-        assert!(!capture.frame_bytes.is_empty());
+        assert_ne!(capture.frame_bytes, [] as [u8; 0]);
         assert!(capture.frame_bytes.len() > capture.frame_text.len());
     }
 }

@@ -657,7 +657,7 @@ mod tests {
             large,
             "---\nname: Reviewer\ndescription: Reviews code\n---\nprompt\n"
         );
-        assert!(empty.is_empty());
+        assert_eq!(empty, "");
         assert_eq!(invalid_start, "name: Reviewer\n");
         assert_eq!(
             missing_end,
@@ -849,8 +849,14 @@ mod tests {
             .await;
 
         // Assert
-        assert!(missing.is_empty());
-        assert!(malformed.is_empty());
+        assert_eq!(
+            missing,
+            [] as [crate::domain::personality::PersonalitySummary; 0]
+        );
+        assert_eq!(
+            malformed,
+            [] as [crate::domain::personality::PersonalitySummary; 0]
+        );
     }
 
     #[tokio::test]
@@ -882,8 +888,14 @@ mod tests {
             .await;
 
         // Assert
-        assert!(missing.is_empty());
-        assert!(unreadable.is_empty());
+        assert_eq!(
+            missing,
+            [] as [crate::domain::personality::PersonalitySummary; 0]
+        );
+        assert_eq!(
+            unreadable,
+            [] as [crate::domain::personality::PersonalitySummary; 0]
+        );
     }
 
     #[tokio::test]
@@ -945,7 +957,10 @@ mod tests {
         });
 
         // Assert
-        assert!(entries.is_empty());
+        assert_eq!(
+            entries,
+            [] as [crate::domain::personality::PersonalitySummary; 0]
+        );
         assert!(next_entry.is_none());
         assert!(!directory);
         assert!(!missing_directory);
@@ -987,8 +1002,14 @@ mod tests {
             .await;
 
         // Assert
-        assert!(outside_personalities.is_empty());
-        assert!(loop_personalities.is_empty());
+        assert_eq!(
+            outside_personalities,
+            [] as [crate::domain::personality::PersonalitySummary; 0]
+        );
+        assert_eq!(
+            loop_personalities,
+            [] as [crate::domain::personality::PersonalitySummary; 0]
+        );
     }
 
     #[cfg(unix)]
@@ -1024,6 +1045,9 @@ mod tests {
         let personalities = catalog.list_summaries(workspace.path().to_path_buf()).await;
 
         // Assert
-        assert!(personalities.is_empty());
+        assert_eq!(
+            personalities,
+            [] as [crate::domain::personality::PersonalitySummary; 0]
+        );
     }
 }

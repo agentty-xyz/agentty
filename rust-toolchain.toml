@@ -1,2 +1,3 @@
 [toolchain]
-channel = "nightly"
+# Keep local and CI lint and coverage behavior reproducible.
+channel = "nightly-2026-05-28"

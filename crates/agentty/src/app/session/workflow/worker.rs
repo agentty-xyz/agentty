@@ -4764,7 +4764,7 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, paths| {
-                assert!(paths.is_empty());
+                assert_eq!(paths, [] as [std::string::String; 0]);
                 Box::pin(async { Ok(Vec::new()) })
             });
         mock_git_client

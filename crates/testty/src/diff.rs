@@ -232,7 +232,7 @@ mod tests {
         // Assert
         assert!(diff.is_identical());
         assert!(diff.changed_regions().is_empty());
-        assert!(diff.summary().is_empty());
+        assert_eq!(diff.summary(), [] as [std::string::String; 0]);
     }
 
     #[test]

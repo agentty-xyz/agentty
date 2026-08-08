@@ -4032,9 +4032,12 @@ mod tests {
 
         // Assert
         assert!(matches!(error, SessionError::Fs(_)));
-        assert!(persisted_session.prompt.is_empty());
-        assert!(session_manager.sessions()[0].prompt.is_empty());
-        assert!(session_manager.sessions()[0].draft_attachments.is_empty());
+        assert_eq!(persisted_session.prompt, "");
+        assert_eq!(session_manager.sessions()[0].prompt, "");
+        assert_eq!(
+            session_manager.sessions()[0].draft_attachments,
+            [] as [ag_protocol::TurnPromptAttachment; 0]
+        );
     }
 
     #[tokio::test]
@@ -4569,7 +4572,7 @@ mod tests {
         // Assert
         assert!(!missing);
         assert!(accepted);
-        assert!(messages.is_empty());
+        assert_eq!(messages, [] as [db::SessionMessageRow; 0]);
     }
 
     #[tokio::test]

@@ -3175,7 +3175,10 @@ mod tests {
                 },
             )]))]
         );
-        assert!(reduction_plan.before_snapshot_effects.is_empty());
+        assert_eq!(
+            reduction_plan.before_snapshot_effects,
+            [] as [crate::app::core::events::AppEventEffect; 0]
+        );
         assert!(reduction_plan.changes_observable_state);
     }
 

@@ -2761,7 +2761,10 @@ mod tests {
             Some("Verify then apply")
         );
         assert_eq!(task.review_iteration, 1);
-        assert!(review_cache.is_empty());
+        assert_eq!(
+            review_cache,
+            [] as [crate::infra::db::session::SessionFocusedReviewRow; 0]
+        );
         assert_eq!(task.child_focused_review_status, None);
         assert_eq!(task.child_focused_review_text, None);
     }

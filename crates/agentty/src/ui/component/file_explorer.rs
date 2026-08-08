@@ -654,6 +654,6 @@ mod tests {
         let items = FileExplorer::file_tree_items(&parsed_lines);
 
         // Assert
-        assert!(items.is_empty());
+        assert_eq!(items, [] as [crate::ui::diff_util::FileTreeItem; 0]);
     }
 }

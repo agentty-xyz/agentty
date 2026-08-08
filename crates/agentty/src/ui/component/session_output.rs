@@ -2419,12 +2419,7 @@ mod tests {
         assert_eq!(prompt_line_index, 1);
         assert_eq!(context_line_index, prompt_line_index + 2);
         assert!(rendered_lines[prompt_line_index + 1].width() > 0);
-        assert!(
-            rendered_lines[prompt_line_index + 1]
-                .to_string()
-                .trim()
-                .is_empty()
-        );
+        assert_eq!(rendered_lines[prompt_line_index + 1].to_string().trim(), "");
         assert_eq!(response_line_index, context_line_index + 3);
         assert!(rendered_lines[context_line_index + 1].width() > 0);
         assert_eq!(rendered_lines[context_line_index + 2].width(), 0);

@@ -350,7 +350,7 @@ mod tests {
 
         // Assert
         assert!(retracted_message.is_some());
-        assert!(emptied_store.messages().is_empty());
+        assert_eq!(emptied_store.messages(), []);
         assert_eq!(emptied_store.fingerprint(), fresh_store.fingerprint());
     }
 }

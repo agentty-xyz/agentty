@@ -157,7 +157,7 @@ mod tests {
         let entries = list_files(temp_dir.path());
 
         // Assert
-        assert!(entries.is_empty());
+        assert_eq!(entries, [] as [crate::domain::file_entry::FileEntry; 0]);
     }
 
     #[test]
@@ -449,7 +449,7 @@ mod tests {
         let filtered = filter_entries(&entries, "xyz");
 
         // Assert
-        assert!(filtered.is_empty());
+        assert_eq!(filtered, [] as [&crate::domain::file_entry::FileEntry; 0]);
     }
 
     #[test]
@@ -576,7 +576,7 @@ mod tests {
         let filtered = filter_entries(&entries, "cb");
 
         // Assert
-        assert!(filtered.is_empty());
+        assert_eq!(filtered, [] as [&crate::domain::file_entry::FileEntry; 0]);
     }
 
     #[test]

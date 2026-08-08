@@ -1018,7 +1018,7 @@ mod tests {
         assert_eq!(state.model, model);
         assert_eq!(state.latest_input_tokens, 0);
         assert!(!state.restored_context);
-        assert!(state.thread_id.is_empty());
+        assert_eq!(state.thread_id, "");
     }
 
     #[test]

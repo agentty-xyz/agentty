@@ -22,10 +22,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust nightly toolchain
+      - name: Read pinned Rust toolchain
+        id: rust-toolchain
+        shell: bash
+        run: |
+          toolchain="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
+          if [[ -z "$toolchain" ]]; then
+            echo "Missing toolchain channel in rust-toolchain.toml" >&2
+            exit 1
+          fi
+          echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned Rust nightly toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          toolchain: nightly
+          toolchain: ${{ steps.rust-toolchain.outputs.toolchain }}
 
       - name: Authenticate with crates.io
         id: auth

@@ -911,7 +911,7 @@ mod tests {
         append_user_prompt(&mut lines, " \n\t", 80, None);
 
         // Assert
-        assert!(lines.is_empty());
+        assert_eq!(lines, [] as [ratatui::prelude::Line<'_>; 0]);
     }
 
     #[test]
@@ -947,7 +947,7 @@ mod tests {
         append_user_prompt(&mut lines, "\u{200b}", 80, None);
 
         // Assert
-        assert!(lines.is_empty());
+        assert_eq!(lines, [] as [ratatui::prelude::Line<'_>; 0]);
     }
 
     #[test]
@@ -959,7 +959,7 @@ mod tests {
         append_markdown_lines(&mut lines, "\u{200b}", 80, None);
 
         // Assert
-        assert!(lines.is_empty());
+        assert_eq!(lines, [] as [ratatui::prelude::Line<'_>; 0]);
     }
 
     #[test]

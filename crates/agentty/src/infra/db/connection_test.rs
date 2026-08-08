@@ -385,7 +385,7 @@ async fn test_append_session_message_writes_message_rows() {
         .await
         .expect("failed to load session detail")
         .expect("session detail should exist");
-    assert!(detail.prompt.is_empty());
+    assert_eq!(detail.prompt, "");
     assert_eq!(messages.len(), 3);
     assert_eq!(messages[0].position, 0);
     assert_eq!(messages[0].kind, SessionMessageKind::UserPrompt.as_str());
@@ -2913,7 +2913,10 @@ async fn test_update_session_focused_review_clears_persisted_review() {
         .expect("failed to load focused reviews");
 
     // Assert
-    assert!(focused_reviews.is_empty());
+    assert_eq!(
+        focused_reviews,
+        [] as [crate::infra::db::session::SessionFocusedReviewRow; 0]
+    );
 }
 
 #[tokio::test]

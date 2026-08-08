@@ -362,7 +362,10 @@ mod tests {
                 thread_id: "thread".to_string(),
             }]
         );
-        assert!(selections.is_empty());
+        assert_eq!(
+            selections,
+            [] as [crate::presentation::app_mode::ReviewCommentActionSelection; 0]
+        );
     }
 
     #[test]

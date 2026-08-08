@@ -162,6 +162,6 @@ mod tests {
         let dirs = find_migration_dirs(dir.path());
 
         // Assert
-        assert!(dirs.is_empty());
+        assert_eq!(dirs, Vec::<PathBuf>::new());
     }
 }
