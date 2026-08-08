@@ -372,13 +372,21 @@ mod tests {
     /// Ensures the dynamic `questions` field description renders from the
     /// checked-in prompt-schema template.
     fn test_questions_field_description_renders_template_limit() {
-        // Arrange, Act
+        // Arrange
+        let expected_limit = format!("Emit at most {MAX_QUESTIONS} items");
+
+        // Act
         let description = questions_field_description();
         let normalized_description = description.split_whitespace().collect::<Vec<_>>().join(" ");
 
         // Assert
-        assert!(normalized_description.contains("Emit at most 5 items"));
-        assert!(normalized_description.contains("Execute the agreed work"));
+        assert!(normalized_description.contains(&expected_limit));
+        assert!(normalized_description.contains("Emit an empty array when no input is required"));
+        assert!(normalized_description.contains("field defaults to an empty array when omitted"));
+        assert!(normalized_description.contains("genuinely ambiguous requirement"));
+        assert!(normalized_description.contains("Never request permission for agreed work"));
+        assert!(normalized_description.contains("ask for satisfaction or sign-off"));
+        assert!(normalized_description.contains("Execute agreed work"));
         assert!(!description.contains("{{ max_questions }}"));
     }
 
@@ -553,14 +561,26 @@ mod tests {
     /// Keeps the injected `subtasks` schema description in sync with the
     /// server-side cap the parser enforces.
     fn test_subtasks_field_description_reports_the_subtask_cap() {
-        // Arrange, Act
+        // Arrange
+        let expected_limit = format!("at most {MAX_SUBTASKS} items");
+
+        // Act
         let description = subtasks_field_description();
         let normalized_description = description.split_whitespace().collect::<Vec<_>>().join(" ");
 
         // Assert
-        assert!(description.contains(&format!("at most {MAX_SUBTASKS} items")));
-        assert!(normalized_description.contains("without wildcard patterns"));
+        assert!(description.contains(&expected_limit));
+        assert!(
+            normalized_description
+                .contains("Emit an empty array when no decomposition was requested")
+        );
+        assert!(normalized_description.contains("field defaults to an empty array when omitted"));
+        assert!(normalized_description.contains("Ordinary session and utility turns"));
+        assert!(normalized_description.contains("unattended in its own worktree"));
+        assert!(normalized_description.contains("independently completable"));
+        assert!(normalized_description.contains("without wildcards"));
         assert!(description.contains("Areas may overlap"));
+        assert!(normalized_description.contains("fewer than two independent subtasks"));
         assert!(!description.contains("{{"));
     }
 

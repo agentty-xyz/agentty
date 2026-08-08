@@ -215,13 +215,17 @@ mod tests {
             ProtocolSchemaInstructionMode::PromptSchema,
             Path::new(TEST_WORKSPACE_ROOT),
         );
+        let turn_prompt = result.expect("prompt rendering should succeed");
+        let normalized_prompt = turn_prompt
+            .text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
 
         // Assert
-        let turn_prompt = result.expect("prompt rendering should succeed");
         assert!(turn_prompt.text.contains("fix the bug"));
         assert!(turn_prompt.text.contains("Structured response protocol:"));
-        assert!(turn_prompt.text.contains("Anything outside that"));
-        assert!(turn_prompt.text.contains("root is read-only."));
+        assert!(normalized_prompt.contains("everything outside it is read-only"));
     }
 
     #[test]

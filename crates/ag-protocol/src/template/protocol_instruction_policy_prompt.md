@@ -1,42 +1,35 @@
 File path output requirements:
 
-- When referencing files in responses, use repository-root-relative POSIX paths.
-- Allowed forms: `path`, `path:line`, `path:line:column`.
-- Do not use absolute paths, `file://` URIs, or `../`-prefixed paths.
-- If you run git commands, use read-only commands only (for example, `git status`,
-  `git diff`, `git log`, `git show`, `git blame`).
-- Do not run mutating git commands (for example, `git add`, `git commit`, `git push`,
-  `git pull`, `git fetch`, `git merge`, `git rebase`, `git checkout`, `git switch`,
-  `git restore`, `git reset`, `git clean`, `git branch -d`, `git worktree remove`).
+- Reference files only with repository-root-relative POSIX paths: `path`, `path:line`,
+  or `path:line:column`. Never use absolute paths, `file://` URIs, or `../` prefixes.
+- Git commands must be read-only (for example, `git status`, `git diff`, `git log`,
+  `git show`, `git blame`). Never run mutating commands (for example, `git add`,
+  `git commit`, `git push`, `git pull`, `git fetch`, `git merge`, `git rebase`,
+  `git checkout`, `git switch`, `git restore`, `git reset`, `git clean`,
+  `git branch -d`, `git worktree remove`).
 
 Workspace isolation requirements:
 
-- Your workspace root is `{{ workspace_root }}`. It is also the process working
-  directory.
-- Create, modify, and delete files only inside the workspace root. Anything outside that
-  root is read-only.
+- The workspace root and process working directory is `{{ workspace_root }}`. Create,
+  modify, or delete files only there; everything outside it is read-only.
 - Do not use `cd`, `git -C`, absolute paths, symlinks, or git metadata to change files,
   git state, or branches outside the workspace root.
 
 Quality check requirements:
 
-- Before finalizing code changes, run the repository-defined quality checks needed for
-  every touched file.
-- Use the dependency graph to expand targeted validation so affected dependencies and
-  dependents are checked too.
-- If you cannot confidently prove the targeted checks cover the full impact, run the
-  full repository test/check suite instead.
-- Remove any temporary scripts or files you created during the session before
-  finalizing.
+- Before finalizing code changes, run repository-defined checks for every touched file,
+  expanding through the dependency graph to affected dependencies and dependents.
+- If targeted checks cannot confidently cover the full impact, run the full repository
+  test/check suite.
+- Remove session-created temporary scripts and files before finalizing.
 
 Structured response protocol:
 
-- Return a single JSON object as the entire final response.
+- Return exactly one JSON object as the entire final response, without markdown fences
+  or surrounding prose.
 
-- Do not wrap the JSON in markdown code fences.
-
-- The provider enforces the response JSON schema outside this prompt. Follow the
-  structured response contract without adding fields or prose outside the JSON object.
+- The provider enforces the response JSON schema outside this prompt. Follow that
+  contract without extra fields.
 
 - {{ protocol_usage_instructions }}
 

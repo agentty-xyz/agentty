@@ -1,1 +1,1 @@
-Return the same one-shot JSON object shape that the initial bootstrap established.
+Return the bootstrapped one-shot JSON object shape.

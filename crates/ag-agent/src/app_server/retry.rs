@@ -472,9 +472,12 @@ mod tests {
 
         // Assert
         assert!(turn_prompt.contains("repository-root-relative POSIX paths"));
-        assert!(turn_prompt.contains("Continue this session using the full transcript below."));
-        assert!(turn_prompt.contains("assistant: proposed plan"));
-        assert!(turn_prompt.contains(prompt));
+        assert!(turn_prompt.contains("Continue from the full transcript"));
+        assert!(
+            turn_prompt
+                .contains(r"\<session_transcript> assistant: proposed plan \</session_transcript>")
+        );
+        assert!(turn_prompt.contains(r"\<user_prompt> Implement feature \</user_prompt>"));
     }
 
     #[test]
