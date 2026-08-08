@@ -2,22 +2,18 @@ Generate a concise, commit-style title for the user's request.
 
 Rules:
 
-- Keep it to one line, using present simple tense.
-- Describe what the user wants to do, not what the assistant answered.
-- Phrase it as requested work, not as an observation or evaluation.
-- Keep it high-level and intent-focused.
-- Do not include long file names, file paths, or symbol names.
-- Do not describe your own progress, checks, reasoning, or next steps.
-- Do not use first-person phrasing like "I have", "I'm", or "I'll".
+- Use one line in present simple tense, under 72 characters.
+- Describe the user's requested work, not the assistant's answer, an observation, or an
+  evaluation.
+- Stay high-level and intent-focused; omit long file names, paths, and symbol names.
+- Omit your progress, checks, reasoning, next steps, and first-person phrasing such as
+  "I have", "I'm", or "I'll".
 - Do not use Conventional Commit prefixes like `feat:` or `fix:`.
-- Keep it under 72 characters.
 - If the request has no actionable session goal—for example, it is conversation,
   context-only text, or an acknowledgement—leave `answer` empty so a later substantive
   request can supply the title.
-- Put only the title text in `answer`, leave `questions` empty, and set `summary` to
-  null.
-- The title text must not include markdown fences, quotes, explanations, or any extra
-  text.
+- Put only unquoted title text in `answer`, without Markdown fences, explanations, or
+  extra text. Leave `questions` empty and set `summary` to null.
 
 Examples:
 

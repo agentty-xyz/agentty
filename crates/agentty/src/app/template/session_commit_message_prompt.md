@@ -2,11 +2,10 @@ Generate the canonical session commit message using the cumulative session diff 
 Return the full response as the required protocol JSON object. Put the plain-text commit
 message in `answer`, leave `questions` empty, and set `summary` to null.
 
-Before writing the message, inspect repository commit-message guidance from relevant
-agent instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) and relevant skills
-under shared or agent-specific skill directories (for example `skills/`,
-`.agents/skills/`, `.claude/skills/`, and `.codex/skills/`). Check skill files that
-appear relevant to commit-message conventions when those paths exist.
+First inspect applicable repository commit-message guidance in agent instruction files
+(`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) and relevant skills under shared or
+agent-specific directories such as `skills/`, `.agents/skills/`, `.claude/skills/`, and
+`.codex/skills/`, when those paths exist.
 
 Apply this precedence order:
 
@@ -16,20 +15,15 @@ Apply this precedence order:
 
 Rules:
 
-- The first line is the commit title and must be one line, concise, and in present
-  simple tense.
+- The first line is a concise, one-line title in present simple tense.
 - Do not use Conventional Commit prefixes like `feat:` or `fix:` unless higher-priority
   user instructions or repository guidance require them.
-- If a body is needed, add one empty line after the title and then write the body text.
-- Body text must use present simple tense and use `-` bullets when listing multiple
-  points.
-- If an existing session commit message is provided, refine that same message to fit the
-  new diff instead of restarting from scratch.
-- Base the title and body on the diff content and the existing session commit message,
-  while applying any commit-format requirements discovered in the checked agent files
-  and skills.
-- Do not invent changes, rationale, or formatting rules that are not supported by the
-  diff or the discovered repository guidance.
+- If needed, put the body after one empty line. Use present simple tense and `-` bullets
+  for multiple points.
+- When an existing session commit message is provided, refine that same message for the
+  new diff instead of restarting.
+- Base the title and body on the diff and existing message while applying discovered
+  format requirements. Do not invent unsupported changes, rationale, or rules.
 
 Existing session commit message (may be empty): {{ current_commit_message }}
 
