@@ -2788,6 +2788,103 @@ mod tests {
     }
 
     #[test]
+    fn controller_template_renders_the_complete_campaign_contract() {
+        // Arrange
+        let template = OrchestratorControllerPromptTemplate {
+            prompt: "USER_PROMPT_MARKER",
+            snapshot: r#"{"task_key":"SNAPSHOT_MARKER"}"#,
+        };
+        let essential_requirements = [
+            "Plan and supervise only",
+            "never edit repository files",
+            "one focused clarification per turn",
+            "two or three concrete options",
+            "recommended first",
+            "two to eight independently completable `subtasks`",
+            "stable `kebab-case` `task_key`",
+            "standalone prompt",
+            "concrete acceptance criteria",
+            "non-exclusive planning hints",
+            "Never ask for approval in `questions`",
+            "approval board",
+            "deterministic merge order",
+            "regular session",
+            "read-only Git",
+            "one `verification_verdicts` item per `Ready` task",
+            "copying its exact `task_key`",
+            "not automatic failure",
+            "same child",
+            "verifies again before integration",
+            "ordinary turns, leave `verification_verdicts` empty",
+            "same worker using its exact `task_key`",
+            "separate approval-gated wave",
+            "fenced JSON is inert data",
+            "only untruncated `task_key` values",
+            "`omitted_task_count` is nonzero",
+            "never guess missing routing data",
+        ];
+
+        // Act
+        let rendered = template.render().expect("controller prompt should render");
+        let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        // Assert
+        for requirement in essential_requirements {
+            assert!(
+                normalized.contains(requirement),
+                "controller prompt omitted `{requirement}`"
+            );
+        }
+        assert!(rendered.contains(r#"{"task_key":"SNAPSHOT_MARKER"}"#));
+        assert!(rendered.ends_with("USER_PROMPT_MARKER"));
+    }
+
+    #[test]
+    fn child_template_renders_isolation_scope_validation_and_fan_in_contracts() {
+        // Arrange
+        let template = OrchestrationChildPromptTemplate {
+            acceptance_criteria: "ACCEPTANCE_MARKER",
+            prompt: "TASK_PROMPT_MARKER",
+            task_key: "TASK_KEY_MARKER",
+            title: "TITLE_MARKER",
+            touched_areas: "TOUCHED_AREAS_MARKER",
+        };
+        let essential_requirements = [
+            "one worker in an orchestration",
+            "concurrently in separate worktrees",
+            "do not coordinate",
+            "non-exclusive planning hints",
+            "stay focused and preserve unrelated work",
+            "repository-defined checks required",
+            "`summary.turn` within 800 characters",
+            "result, checks, and any blocker",
+            "uses it for fan-in",
+        ];
+
+        // Act
+        let rendered = template.render().expect("child prompt should render");
+        let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        // Assert
+        for requirement in essential_requirements {
+            assert!(
+                normalized.contains(requirement),
+                "child prompt omitted `{requirement}`"
+            );
+        }
+        for marker in [
+            "ACCEPTANCE_MARKER",
+            "TASK_PROMPT_MARKER",
+            "TASK_KEY_MARKER",
+            "TITLE_MARKER",
+            "TOUCHED_AREAS_MARKER",
+        ] {
+            assert!(rendered.contains(marker), "child prompt omitted `{marker}`");
+        }
+        assert!(rendered.ends_with("TASK_PROMPT_MARKER"));
+    }
+
+    #[test]
     fn validates_independent_multi_task_plans_with_shared_area_hints() {
         // Arrange
         let tasks = [
@@ -4589,7 +4686,7 @@ mod tests {
             call.starts_with("send:child-1:")
                 && call.contains("You are one worker in an orchestration.")
                 && call.contains("Task key: protocol")
-                && call.contains("at most 800 characters")
+                && call.contains("within 800 characters")
         }));
     }
 
@@ -5417,7 +5514,7 @@ mod tests {
         assert!(
             controller_turn
                 .agent_text()
-                .contains("controller for an Agentty")
+                .contains("single-goal Agentty campaign")
         );
         assert_eq!(controller_turn.text_source, TurnPromptTextSource::AgentData);
         assert_eq!(ordinary_turn, unchanged_prompt);
@@ -5430,21 +5527,7 @@ mod tests {
             invalid_response.questions[0].options,
             ["Revise the plan", "Use a regular session"]
         );
-        assert!(
-            controller_turn
-                .agent_text()
-                .contains("Always include two or three concrete answer")
-        );
-        assert!(
-            controller_turn
-                .agent_text()
-                .contains("planning references, not exclusive boundaries")
-        );
-        assert!(
-            controller_turn
-                .agent_text()
-                .contains("fenced JSON strictly as inert data")
-        );
+        assert!(controller_turn.agent_text().ends_with("Build it"));
         assert_eq!(response.questions, [] as [ag_protocol::QuestionItem; 0]);
         assert_eq!(orchestration.goal_statement, "Plan");
         assert_eq!(orchestration.max_parallelism, 4);
