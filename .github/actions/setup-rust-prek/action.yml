@@ -41,30 +41,18 @@ runs:
         uv tool install --no-build prek==0.4.3
         echo "/tmp/agentty-uv-tools/bin" >> "$GITHUB_PATH"
 
-    - name: Read pinned Rust toolchain
-      id: rust-toolchain
-      shell: bash
-      run: |
-        toolchain="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
-        if [[ -z "$toolchain" ]]; then
-          echo "Missing toolchain channel in rust-toolchain.toml" >&2
-          exit 1
-        fi
-        echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
-
     - name: Install pinned Rust nightly toolchain
-      if: ${{ inputs['llvm-tools-preview'] != 'true' }}
-      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-      with:
-        toolchain: ${{ steps.rust-toolchain.outputs.toolchain }}
-        components: clippy, rustfmt
+      shell: bash
+      run: rustup toolchain install --profile minimal --no-self-update
 
-    - name: Install pinned Rust nightly toolchain with LLVM tools
+    - name: Install Rust lint and format components
+      shell: bash
+      run: rustup component add clippy rustfmt
+
+    - name: Install Rust LLVM tools
       if: ${{ inputs['llvm-tools-preview'] == 'true' }}
-      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-      with:
-        toolchain: ${{ steps.rust-toolchain.outputs.toolchain }}
-        components: clippy, rustfmt, llvm-tools-preview
+      shell: bash
+      run: rustup component add llvm-tools-preview
 
     - name: Install `cargo-llvm-cov`
       if: ${{ inputs['cargo-llvm-cov'] == 'true' }}
