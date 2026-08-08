@@ -24,6 +24,10 @@ use crate::domain::session::{
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
+use crate::domain::transient_message::{
+    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
+    TransientMessageSlot,
+};
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
@@ -2154,6 +2158,7 @@ async fn apply_branch_publish_action_update_persists_pull_request_notice() {
     app.sessions
         .session_handles_mut()
         .insert("session-1".into(), SessionHandles::new(Status::Review));
+    seed_completed_review_transient_message(&mut app);
     app.mode = AppMode::List;
     let review_request = crate::domain::session::ReviewRequest {
         last_refreshed_at: 55,
@@ -2176,12 +2181,7 @@ async fn apply_branch_publish_action_update_persists_pull_request_notice() {
 
     // Assert
     assert!(matches!(app.mode, AppMode::List));
-    assert!(
-        app.sessions.state().sessions()[0]
-            .transient_messages
-            .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
-            .is_none()
-    );
+    assert_review_message_reanchored_after_publish(&app);
     let transcript = app.sessions.state().sessions()[0]
         .transcript
         .as_ref()
@@ -2244,6 +2244,37 @@ async fn apply_branch_publish_action_update_persists_pull_request_notice() {
             .first()
             .and_then(|session| session.review_request.clone()),
         Some(review_request)
+    );
+}
+
+fn seed_completed_review_transient_message(app: &mut App) {
+    app.sessions.state_mut().sessions_mut()[0]
+        .transient_messages
+        .upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Markdown(
+                "## Review\n\nReview completed before publishing.".to_string(),
+            ),
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::Review,
+            turn_position: None,
+        });
+}
+
+fn assert_review_message_reanchored_after_publish(app: &App) {
+    let transient_messages = &app.sessions.state().sessions()[0].transient_messages;
+
+    assert!(
+        transient_messages
+            .get(TransientMessageSlot::BranchPublish)
+            .is_none()
+    );
+    assert_eq!(
+        transient_messages
+            .get(TransientMessageSlot::Review)
+            .expect("completed review should remain visible")
+            .anchor,
+        TransientMessageAnchor::AfterCompletedTurn
     );
 }
 

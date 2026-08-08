@@ -244,7 +244,10 @@ creation behind the operation in progress.
 
 Session output keeps workflow feedback in execution order. Commit feedback appears
 before its sync result, post-sync auto-push progress appears after that result, and
-focused-review progress remains at the tail while those branch operations finish.
+focused-review progress remains at the tail while those branch operations finish. If a
+focused review completes before a review request is published, the completed review
+stays above the later `[Review Request]` notice; a review that completes afterward stays
+below that notice.
 
 ### Focused Review
 

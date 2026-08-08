@@ -67,6 +67,10 @@ const PROMPT_FOCUS_DRAFT_TEXT: &str = "Draft kept while reading chat";
 /// decision and the instruction to honor it.
 const RESOLVED_DECISION_REVIEW_TEXT: &str = "Resolved session decision honored.";
 
+/// Review-request notice body used by the timeline-order regression.
+const REVIEW_REQUEST_TIMELINE_NOTICE_TEXT: &str =
+    "Created PR https://github.com/agentty-xyz/agentty/pull/42";
+
 /// Stable policy phrase the focused-review stub expects in the prompt.
 ///
 /// This intentionally matches only the durable concept instead of one full
@@ -852,8 +856,28 @@ fn seed_slow_successful_review_request_publish(
 ) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
     seed_review_worktree_with_diff(env)?;
+
+    seed_successful_review_request_publish(env, 3, 15)
+}
+
+/// Seeds a live focused review that completes before a delayed review-request
+/// publish, reproducing the cross-source transcript ordering boundary.
+fn seed_review_request_timeline(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_with_resolved_decision(env)?;
+
+    seed_successful_review_request_publish(env, 0, 0)
+}
+
+/// Configures the review-ready worktree and forge stubs for one successful
+/// review-request publish with deterministic command delays.
+fn seed_successful_review_request_publish(
+    env: &BuilderEnv,
+    push_delay_seconds: u64,
+    create_delay_seconds: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
     let session_worktree = env.agentty_root.join("wt").join("review-s");
     run_git(&session_worktree, &["branch", "-m", "wt/review-s"])?;
+    run_git(&session_worktree, &["branch", "main", "HEAD"])?;
 
     let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|path| path.join("git"))
@@ -863,7 +887,7 @@ fn seed_slow_successful_review_request_publish(
     let script = format!(
         r#"#!/bin/sh
 if [ "$1" = "push" ]; then
-  sleep 3
+  sleep {push_delay_seconds}
   exit 0
 fi
 exec '{}' "$@"
@@ -875,9 +899,7 @@ exec '{}' "$@"
     std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
 
     let gh_path = env.stub_bin.join("gh");
-    std::fs::write(
-        &gh_path,
-        r#"#!/bin/sh
+    let gh_script = r#"#!/bin/sh
 marker_path="${0}.created"
 case "$*" in
   *"auth status"*)
@@ -891,8 +913,7 @@ case "$*" in
     fi
     ;;
   *"pr create"*)
-    # Exceeds both 3 s scenario wait budgets plus the 5.5 s mid-flight pause.
-    sleep 15
+    sleep __CREATE_DELAY_SECONDS__
     touch "$marker_path"
     ;;
   *"pr view"*)
@@ -903,8 +924,12 @@ case "$*" in
     exit 1
     ;;
 esac
-"#,
-    )?;
+"#
+    .replace(
+        "__CREATE_DELAY_SECONDS__",
+        &create_delay_seconds.to_string(),
+    );
+    std::fs::write(&gh_path, gh_script)?;
     #[cfg(unix)]
     std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
 
@@ -5732,6 +5757,55 @@ fn review_request_publish_runs_in_background() -> E2eResult {
                     &full,
                 );
                 assertion::assert_text_in_region(frame, "q: back", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify a review-request notice created after focused review completion is
+/// rendered below that review instead of being regrouped above it.
+#[test]
+fn review_request_notice_follows_completed_review() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_timeline_order")
+        .with_git()
+        .with_terminal_size(120, 40)
+        .setup(seed_review_request_timeline)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("f")
+                    .wait_for_text(RESOLVED_DECISION_REVIEW_TEXT, 30000)
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 3000)
+                    .press_key("Enter")
+                    .wait_for_text(REVIEW_REQUEST_TIMELINE_NOTICE_TEXT, 10000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "review_request_timeline_order",
+                        "Review-request result follows the earlier focused review",
+                    )
+            },
+            |frame, _report| {
+                let review_finding = frame
+                    .find_text(RESOLVED_DECISION_REVIEW_TEXT)
+                    .into_iter()
+                    .next()
+                    .expect("completed focused review should render");
+                let review_request_notice = frame
+                    .find_text(REVIEW_REQUEST_TIMELINE_NOTICE_TEXT)
+                    .into_iter()
+                    .next()
+                    .expect("review-request notice should render");
+
+                assert!(
+                    review_finding.rect.row < review_request_notice.rect.row,
+                    "review-request notice should follow the earlier focused review"
+                );
             },
         )?;
 
