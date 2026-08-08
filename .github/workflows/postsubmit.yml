@@ -10,7 +10,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  E2E_IMAGE: ghcr.io/agentty-xyz/agentty-e2e@sha256:d348629b6c449d33f5285c9ef2b7ea0ac3c47fcf264b1ec7f3f4c58a6952a696
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -73,58 +72,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Rust and `prek`
-        uses: ./.github/actions/setup-rust-prek
+      - name: Generate and publish coverage
+        uses: ./.github/actions/run-coverage
         with:
-          cargo-llvm-cov: "true"
-          llvm-tools-preview: "true"
-
-      - name: Generate and check coverage report
-        run: prek run coverage --all-files --hook-stage manual
-
-      - name: SonarQube Scan
-        if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' }}
-        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-      - name: Summarize coverage
-        if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' }}
-        run: |
-          # Summarize LCOV totals in the GitHub Actions run summary.
-          awk '
-            BEGIN {
-              print "## Test coverage"
-              print ""
-              print "| Metric | Covered | Total | Coverage |"
-              print "| --- | ---: | ---: | ---: |"
-            }
-            /^LF:/ { lines += substr($0, 4) }
-            /^LH:/ { covered_lines += substr($0, 4) }
-            /^FNF:/ { functions += substr($0, 5) }
-            /^FNH:/ { covered_functions += substr($0, 5) }
-            /^BRF:/ { branches += substr($0, 5) }
-            /^BRH:/ { covered_branches += substr($0, 5) }
-            END {
-              report("Lines", covered_lines, lines)
-              report("Functions", covered_functions, functions)
-              if (branches > 0) {
-                report("Branches", covered_branches, branches)
-              }
-            }
-            function report(label, covered, total) {
-              coverage = total == 0 ? "n/a" : sprintf("%.2f%%", covered * 100 / total)
-              printf "| %s | %d | %d | %s |\n", label, covered, total, coverage
-            }
-          ' coverage.lcov >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload coverage report
-        if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' }}
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          fail_ci_if_error: true
-          files: coverage.lcov
-          use_oidc: true
+          sonar-token: ${{ secrets.SONAR_TOKEN }}
+          summarize: "true"
 
   e2e:
     runs-on: ubuntu-latest
@@ -135,15 +87,5 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Pull the pinned E2E image
-        run: podman pull "$E2E_IMAGE"
-
-      # The checkout is mounted read-only so `TESTTY_GIF_MODE=check` (set by
-      # the hook) verifies committed GIF hash sidecars without rewriting them.
       - name: Run end-to-end feature suite
-        run: >-
-          podman run --rm --platform linux/amd64
-          --mount type=bind,source="$PWD",target=/workspace,readonly=true
-          --env CARGO_TARGET_DIR=/tmp/target
-          "$E2E_IMAGE"
-          prek run test-agentty-e2e --all-files --hook-stage manual
+        uses: ./.github/actions/run-e2e

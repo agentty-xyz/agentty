@@ -1,0 +1,69 @@
+name: Run Agentty Coverage
+description: Generate, scan, summarize, and upload the workspace coverage report.
+
+inputs:
+  sonar-token:
+    description: SonarQube token used when the event is allowed to scan.
+    required: false
+  summarize:
+    description: Write LCOV totals to the GitHub Actions run summary.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Rust and `prek`
+      uses: ./.github/actions/setup-rust-prek
+      with:
+        cargo-llvm-cov: "true"
+        llvm-tools-preview: "true"
+
+    - name: Generate and check coverage report
+      shell: bash
+      run: prek run coverage --all-files --hook-stage manual
+
+    - name: SonarQube Scan
+      if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+      uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+      env:
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+
+    - name: Summarize coverage
+      if: ${{ inputs.summarize == 'true' && !cancelled() && hashFiles('coverage.lcov') != '' }}
+      shell: bash
+      run: |
+        # Summarize LCOV totals in the GitHub Actions run summary.
+        awk '
+          BEGIN {
+            print "## Test coverage"
+            print ""
+            print "| Metric | Covered | Total | Coverage |"
+            print "| --- | ---: | ---: | ---: |"
+          }
+          /^LF:/ { lines += substr($0, 4) }
+          /^LH:/ { covered_lines += substr($0, 4) }
+          /^FNF:/ { functions += substr($0, 5) }
+          /^FNH:/ { covered_functions += substr($0, 5) }
+          /^BRF:/ { branches += substr($0, 5) }
+          /^BRH:/ { covered_branches += substr($0, 5) }
+          END {
+            report("Lines", covered_lines, lines)
+            report("Functions", covered_functions, functions)
+            if (branches > 0) {
+              report("Branches", covered_branches, branches)
+            }
+          }
+          function report(label, covered, total) {
+            coverage = total == 0 ? "n/a" : sprintf("%.2f%%", covered * 100 / total)
+            printf "| %s | %d | %d | %s |\n", label, covered, total, coverage
+          }
+        ' coverage.lcov >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload coverage report
+      if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' }}
+      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+      with:
+        fail_ci_if_error: true
+        files: coverage.lcov
+        use_oidc: true

@@ -321,12 +321,13 @@ workflow's `packages: write` permission cannot authorize an unconnected package 
 itself. `container/e2e.Containerfile` carries the `org.opencontainers.image.source`
 label to preserve the repository association on subsequent publications.
 
-Copy the reported digest into every workflow `E2E_IMAGE` value and the
-`published_e2e_image` assignment above. After the pinned digest contains both platforms,
-the ARM64 recording branch can replace its native build with an explicit pull of that
-published image. Do not update the repository when either native test or either platform
-pull fails. Re-record every feature affected by a tool, browser, font, or rendering
-change and refresh its PNG poster before updating the digest and artifacts together.
+Copy the reported digest into the `image` default in
+`.github/actions/run-e2e/action.yml` and the `published_e2e_image` assignment above.
+After the pinned digest contains both platforms, the ARM64 recording branch can replace
+its native build with an explicit pull of that published image. Do not update the
+repository when either native test or either platform pull fails. Re-record every
+feature affected by a tool, browser, font, or rendering change and refresh its PNG
+poster before updating the digest and artifacts together.
 
 The following local flow remains available to maintainers with GHCR package-write
 permission. Use an explicit registry destination so a later single-image push cannot be

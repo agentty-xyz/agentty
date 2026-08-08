@@ -54,7 +54,6 @@ steps here.
    - Run the baseline repository validations from the `prek` hook catalog in
      `.pre-commit-config.yaml`:
      - `prek run --all-files`
-     - `prek run clippy --all-files --hook-stage manual`
      - `prek run test-workspace --all-files --hook-stage manual`
    - If validation fails, fix the underlying issue and rerun the failing hook before
      handoff.
