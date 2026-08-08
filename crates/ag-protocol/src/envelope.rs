@@ -244,6 +244,11 @@ mod tests {
         Path::new("/tmp/agentty-wt/session-1")
     }
 
+    /// Collapses rendered prompt whitespace for semantic assertions.
+    fn normalize_prompt(prompt: &str) -> String {
+        prompt.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
     #[test]
     /// Ensures session prompts include the critical protocol contract markers.
     fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
@@ -258,53 +263,71 @@ mod tests {
             test_workspace_root(),
         );
 
+        let normalized_prompt = normalize_prompt(&rendered_prompt);
+        let protocol_position = rendered_prompt
+            .find("Structured response protocol:")
+            .expect("protocol marker should be present");
+        let schema_position = rendered_prompt
+            .find("Authoritative JSON Schema:")
+            .expect("schema should be present");
+        let user_prompt_position = rendered_prompt
+            .rfind(prompt)
+            .expect("user prompt should be present");
+
         // Assert
         assert!(rendered_prompt.contains("File path output requirements:"));
         assert!(rendered_prompt.contains("Workspace isolation requirements:"));
-        assert!(rendered_prompt.contains("Your workspace root is `/tmp/agentty-wt/session-1`."));
-        assert!(rendered_prompt.contains("Anything outside that"));
-        assert!(rendered_prompt.contains("root is read-only."));
+        assert!(protocol_position < schema_position);
+        assert!(schema_position < user_prompt_position);
+        assert!(rendered_prompt.contains("`/tmp/agentty-wt/session-1`"));
+        assert!(normalized_prompt.contains("process working directory"));
+        assert!(normalized_prompt.contains("everything outside it is read-only"));
         assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
-        assert!(
-            rendered_prompt.contains("Allowed forms: `path`, `path:line`, `path:line:column`.")
-        );
-        assert!(rendered_prompt.contains("If you run git commands, use read-only commands only"));
-        assert!(rendered_prompt.contains("Do not run mutating git commands"));
+        assert!(rendered_prompt.contains("`path:line:column`"));
+        assert!(normalized_prompt.contains("absolute paths, `file://` URIs, or `../` prefixes"));
+        assert!(normalized_prompt.contains("Git commands must be read-only"));
+        assert!(normalized_prompt.contains("Never run mutating commands"));
+        assert!(rendered_prompt.contains("`git worktree remove`"));
+        assert!(rendered_prompt.contains("`cd`, `git -C`"));
         assert!(rendered_prompt.contains("Quality check requirements:"));
-        assert!(rendered_prompt.contains("repository-defined quality checks"));
-        let normalized_rendered_prompt = rendered_prompt.split_whitespace().collect::<Vec<_>>();
-        let normalized_rendered_prompt = normalized_rendered_prompt.join(" ");
-        assert!(normalized_rendered_prompt.contains("affected dependencies and dependents"));
-        assert!(rendered_prompt.contains("full repository test/check suite"));
-        assert!(rendered_prompt.contains("Remove any temporary scripts or files"));
+        assert!(rendered_prompt.contains("repository-defined checks"));
+        assert!(normalized_prompt.contains("affected dependencies and dependents"));
+        assert!(normalized_prompt.contains("full repository test/check suite"));
+        assert!(normalized_prompt.contains("session-created temporary scripts and files"));
         assert!(rendered_prompt.contains("Structured response protocol:"));
-        assert!(rendered_prompt.contains("Return a single JSON object"));
-        assert!(rendered_prompt.contains("Do not wrap the JSON in markdown code fences."));
-        assert!(rendered_prompt.contains("Follow this JSON Schema exactly."));
-        assert!(rendered_prompt.contains("Treat the JSON Schema titles and descriptions"));
+        assert!(normalized_prompt.contains("exactly one JSON object"));
+        assert!(normalized_prompt.contains("without markdown fences or surrounding prose"));
+        assert!(normalized_prompt.contains("Follow this JSON Schema exactly"));
+        assert!(normalized_prompt.contains("titles and descriptions are authoritative"));
         assert!(rendered_prompt.contains("Authoritative JSON Schema:"));
         assert!(
             rendered_prompt
                 .contains("______________________________________________________________________")
         );
         assert!(!rendered_prompt.contains("{# task separator #}"));
-        assert!(rendered_prompt.contains("For this session turn"));
+        assert!(rendered_prompt.contains("For this session turn:"));
         assert!(rendered_prompt.contains("```mermaid"));
-        assert!(rendered_prompt.contains("put the diagram only in `answer`"));
-        assert!(normalized_rendered_prompt.contains("start the opening fence at column 1"));
-        assert!(rendered_prompt.contains("Mermaid diagrams are recognized only in this fenced"));
-        assert!(rendered_prompt.contains("Do not emit Mermaid as plain text"));
-        assert!(rendered_prompt.contains("Supported mermaid syntax"));
-        assert!(normalized_rendered_prompt.contains("Do not create commits"));
-        assert!(normalized_rendered_prompt.contains("suggest creating commits"));
-        assert!(rendered_prompt.contains("summary"));
-        assert!(rendered_prompt.contains("turn"));
-        assert!(rendered_prompt.contains("session"));
+        assert!(normalized_prompt.contains("diagram only in `answer`"));
+        assert!(normalized_prompt.contains("opening fence starts in column 1"));
+        assert!(normalized_prompt.contains("exactly three backticks"));
+        assert!(
+            normalized_prompt.contains("Other fences, indented blocks, and plain-text Mermaid")
+        );
+        assert!(normalized_prompt.contains("`graph`/`flowchart` with `TD`, `TB`, or `LR`"));
+        assert!(normalized_prompt.contains("32 plain-ASCII characters"));
+        assert!(normalized_prompt.contains("at most 16 nodes and 24 edges"));
+        assert!(normalized_prompt.contains("at most 4 sequence participants"));
+        assert!(normalized_prompt.contains("double-width glyphs suppress the preview"));
+        assert!(normalized_prompt.contains("feedback edge as a separate return row"));
+        assert!(normalized_prompt.contains("fall back to plain fenced code"));
+        assert!(normalized_prompt.contains("Do not create commits; do not suggest creating them"));
+        assert!(normalized_prompt.contains("Leave `subtasks` empty unless"));
+        assert!(normalized_prompt.contains("Emit `review_comment_outcomes` only"));
+        assert!(normalized_prompt.contains("otherwise use an empty array"));
         assert!(rendered_prompt.contains("\"answer\""));
         assert!(rendered_prompt.contains("\"questions\""));
         assert!(rendered_prompt.contains("\"title\""));
         assert!(rendered_prompt.contains("\"description\""));
-        assert!(rendered_prompt.contains("summary"));
         assert!(rendered_prompt.ends_with(prompt));
     }
 
@@ -323,14 +346,15 @@ mod tests {
             test_workspace_root(),
         );
 
+        let normalized_prompt = normalize_prompt(&rendered_prompt);
+
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
         assert!(rendered_prompt.contains("Workspace isolation requirements:"));
-        assert!(rendered_prompt.contains("Your workspace root is `/tmp/agentty-wt/session-1`."));
-        assert!(rendered_prompt.contains("Anything outside that"));
-        assert!(rendered_prompt.contains("root is read-only."));
+        assert!(rendered_prompt.contains("`/tmp/agentty-wt/session-1`"));
+        assert!(normalized_prompt.contains("everything outside it is read-only"));
         assert!(rendered_prompt.contains("provider enforces the response JSON schema"));
-        assert!(rendered_prompt.contains("Return a single JSON object"));
+        assert!(normalized_prompt.contains("exactly one JSON object"));
         assert!(!rendered_prompt.contains("Follow this JSON Schema exactly."));
         assert!(!rendered_prompt.contains("Authoritative JSON Schema:"));
         assert!(rendered_prompt.ends_with(prompt));
@@ -381,6 +405,7 @@ mod tests {
                 .contains("______________________________________________________________________")
         );
         assert!(rendered_prompt.contains("For this one-shot utility prompt"));
+        assert!(!rendered_prompt.contains("For this session turn:"));
         assert!(!rendered_prompt.contains("mermaid"));
         assert!(rendered_prompt.contains(
             r#"{"answer":"...","questions":[],"review_comment_outcomes":[],"summary":null}"#
@@ -423,20 +448,16 @@ mod tests {
             ProtocolRequestProfile::SessionTurn,
             test_workspace_root(),
         );
-        let normalized_prompt = rendered_prompt
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
+        let normalized_prompt = normalize_prompt(&rendered_prompt);
 
         // Assert
         assert!(rendered_prompt.contains("Protocol refresh reminder:"));
-        assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
-        assert!(rendered_prompt.contains("If you run git commands, use read-only commands only."));
-        assert!(rendered_prompt.contains("Do not run mutating git commands."));
-        assert!(rendered_prompt.contains("inside the workspace root `/tmp/agentty-wt/session-1`"));
-        assert!(rendered_prompt.contains("anything outside that root is read-only"));
-        assert!(normalized_prompt.contains("Mermaid diagrams must remain in `answer`"));
-        assert!(normalized_prompt.contains("fences without the `mermaid` info string"));
+        assert!(rendered_prompt.contains("repository-root-relative POSIX"));
+        assert!(normalized_prompt.contains("only read-only git commands; never mutating ones"));
+        assert!(rendered_prompt.contains("inside `/tmp/agentty-wt/session-1`"));
+        assert!(normalized_prompt.contains("everything outside this workspace root is read-only"));
+        assert!(normalized_prompt.contains("Keep Mermaid in `answer`"));
+        assert!(normalized_prompt.contains("fences lacking the `mermaid` info string"));
         assert!(
             rendered_prompt
                 .contains("______________________________________________________________________")
@@ -460,6 +481,27 @@ mod tests {
         );
 
         // Assert
+        assert!(rendered_prompt.ends_with(prompt));
+    }
+
+    #[test]
+    /// Ensures utility refreshes retain their one-shot profile without
+    /// session-only field or Mermaid guidance.
+    fn test_prepend_protocol_refresh_reminder_uses_utility_profile() {
+        // Arrange
+        let prompt = "Generate another title";
+
+        // Act
+        let rendered_prompt = prepend_protocol_refresh_reminder(
+            prompt,
+            ProtocolRequestProfile::UtilityPrompt,
+            test_workspace_root(),
+        );
+
+        // Assert
+        assert!(rendered_prompt.contains("bootstrapped one-shot JSON object shape"));
+        assert!(!rendered_prompt.contains("`review_comment_outcomes`"));
+        assert!(!rendered_prompt.contains("```mermaid"));
         assert!(rendered_prompt.ends_with(prompt));
     }
 

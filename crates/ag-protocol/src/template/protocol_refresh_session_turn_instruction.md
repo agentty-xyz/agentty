@@ -1,4 +1,4 @@
-Keep session-turn output in one JSON object and continue using `answer`, `questions`,
-`review_comment_outcomes`, and `summary` exactly as bootstrapped. Mermaid diagrams must
-remain in `answer` as unindented ```` ```mermaid ```` fenced blocks; do not emit them as
-plain text, indented code blocks, or fences without the `mermaid` info string.
+Keep session-turn output in one JSON object using the bootstrapped `answer`,
+`questions`, `review_comment_outcomes`, and `summary` fields. Keep Mermaid in `answer`
+as unindented ```` ```mermaid ```` blocks, never as plain text, indented code, or fences
+lacking the `mermaid` info string.

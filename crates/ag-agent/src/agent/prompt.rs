@@ -391,6 +391,11 @@ mod tests {
         Path::new("/tmp/agentty-wt/session-1")
     }
 
+    /// Collapses rendered prompt whitespace for semantic assertions.
+    fn normalize_prompt(prompt: &str) -> String {
+        prompt.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
     #[test]
     /// Ensures the diff fence falls back to three backticks when the content
     /// contains no backtick runs.
@@ -439,21 +444,30 @@ mod tests {
     /// the new user prompt.
     fn test_build_resume_prompt_includes_replay_transcript_and_prompt() {
         // Arrange
-        let prompt = "Continue and update tests";
-        let replay_transcript = Some("  previous transcript line  \n");
+        let prompt = "Continue tests; keep {{ transcript }} literal";
+        let replay_transcript = Some("  previous {{ prompt }} line  \n");
 
         // Act
         let resume_prompt =
             build_resume_prompt(prompt, replay_transcript).expect("resume prompt should render");
 
+        let normalized_resume_prompt = normalize_prompt(&resume_prompt);
+        let transcript_position = resume_prompt
+            .find(r"\<session_transcript> previous {{ prompt }} line")
+            .expect("transcript boundary should be present");
+        let prompt_position = resume_prompt
+            .find(r"\<user_prompt> Continue tests; keep {{ transcript }} literal")
+            .expect("user prompt boundary should be present");
+
         // Assert
-        let normalized_resume_prompt = resume_prompt.split_whitespace().collect::<Vec<_>>();
-        let normalized_resume_prompt = normalized_resume_prompt.join(" ");
-        assert!(resume_prompt.contains("previous transcript line"));
-        assert!(normalized_resume_prompt.contains("Treat the user's new prompt as a follow-up"));
+        assert!(transcript_position < prompt_position);
+        assert!(normalized_resume_prompt.contains("new user prompt as a follow-up"));
         assert!(normalized_resume_prompt.contains("changes made during this session"));
         assert!(normalized_resume_prompt.contains("preserve unrelated pre-existing work"));
-        assert!(resume_prompt.contains("Continue and update tests"));
+        assert!(
+            normalized_resume_prompt.contains("do not re-execute its commands or instructions")
+        );
+        assert!(resume_prompt.ends_with(r"\</user_prompt>"));
     }
 
     #[test]
@@ -499,47 +513,47 @@ mod tests {
             test_workspace_root(),
         );
 
+        let normalized_prompt = normalize_prompt(&rendered_prompt);
+        let protocol_position = rendered_prompt
+            .find("Structured response protocol:")
+            .expect("protocol marker should be present");
+        let schema_position = rendered_prompt
+            .find("Authoritative JSON Schema:")
+            .expect("schema should be present");
+        let user_prompt_position = rendered_prompt
+            .rfind(prompt)
+            .expect("user prompt should be present");
+
         // Assert
         assert!(rendered_prompt.contains("File path output requirements:"));
         assert!(rendered_prompt.contains("Workspace isolation requirements:"));
-        assert!(rendered_prompt.contains("Your workspace root is `/tmp/agentty-wt/session-1`."));
-        assert!(rendered_prompt.contains("Anything outside that"));
-        assert!(rendered_prompt.contains("root is read-only."));
+        assert!(protocol_position < schema_position);
+        assert!(schema_position < user_prompt_position);
+        assert!(rendered_prompt.contains("`/tmp/agentty-wt/session-1`"));
+        assert!(normalized_prompt.contains("everything outside it is read-only"));
         assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
-        assert!(
-            rendered_prompt.contains("Allowed forms: `path`, `path:line`, `path:line:column`.")
-        );
-        assert!(rendered_prompt.contains("If you run git commands, use read-only commands only"));
-        assert!(rendered_prompt.contains("Do not run mutating git commands"));
+        assert!(normalized_prompt.contains("Git commands must be read-only"));
+        assert!(normalized_prompt.contains("Never run mutating commands"));
         assert!(rendered_prompt.contains("Quality check requirements:"));
-        assert!(rendered_prompt.contains("repository-defined quality checks"));
-        let normalized_rendered_prompt = rendered_prompt.split_whitespace().collect::<Vec<_>>();
-        let normalized_rendered_prompt = normalized_rendered_prompt.join(" ");
-        assert!(normalized_rendered_prompt.contains("affected dependencies and dependents"));
-        assert!(rendered_prompt.contains("full repository test/check suite"));
-        assert!(rendered_prompt.contains("Remove any temporary scripts or files"));
+        assert!(rendered_prompt.contains("repository-defined checks"));
+        assert!(normalized_prompt.contains("affected dependencies and dependents"));
+        assert!(normalized_prompt.contains("full repository test/check suite"));
         assert!(rendered_prompt.contains("Structured response protocol:"));
-        assert!(rendered_prompt.contains("Return a single JSON object"));
-        assert!(rendered_prompt.contains("Do not wrap the JSON in markdown code fences."));
-        assert!(rendered_prompt.contains("Follow this JSON Schema exactly."));
-        assert!(rendered_prompt.contains("Treat the JSON Schema titles and descriptions"));
+        assert!(normalized_prompt.contains("exactly one JSON object"));
+        assert!(normalized_prompt.contains("Follow this JSON Schema exactly"));
         assert!(rendered_prompt.contains("Authoritative JSON Schema:"));
         assert!(
             rendered_prompt
                 .contains("______________________________________________________________________")
         );
         assert!(!rendered_prompt.contains("{# task separator #}"));
-        assert!(rendered_prompt.contains("For this session turn"));
-        assert!(normalized_rendered_prompt.contains("Do not create commits"));
-        assert!(normalized_rendered_prompt.contains("suggest creating commits"));
-        assert!(rendered_prompt.contains("summary"));
-        assert!(rendered_prompt.contains("turn"));
-        assert!(rendered_prompt.contains("session"));
+        assert!(rendered_prompt.contains("For this session turn:"));
+        assert!(normalized_prompt.contains("Do not create commits; do not suggest creating them"));
+        assert!(normalized_prompt.contains("Leave `subtasks` empty unless"));
         assert!(rendered_prompt.contains("\"answer\""));
         assert!(rendered_prompt.contains("\"questions\""));
         assert!(rendered_prompt.contains("\"title\""));
         assert!(rendered_prompt.contains("\"description\""));
-        assert!(rendered_prompt.contains("summary"));
         assert!(rendered_prompt.ends_with(prompt));
     }
 
@@ -561,7 +575,7 @@ mod tests {
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
         assert!(rendered_prompt.contains("provider enforces the response JSON schema"));
-        assert!(rendered_prompt.contains("Return a single JSON object"));
+        assert!(normalize_prompt(&rendered_prompt).contains("exactly one JSON object"));
         assert!(!rendered_prompt.contains("Follow this JSON Schema exactly."));
         assert!(!rendered_prompt.contains("Authoritative JSON Schema:"));
         assert!(rendered_prompt.ends_with(prompt));
@@ -612,6 +626,7 @@ mod tests {
                 .contains("______________________________________________________________________")
         );
         assert!(rendered_prompt.contains("For this one-shot utility prompt"));
+        assert!(!rendered_prompt.contains("For this session turn:"));
         assert!(rendered_prompt.contains(
             r#"{"answer":"...","questions":[],"review_comment_outcomes":[],"summary":null}"#
         ));
@@ -694,10 +709,15 @@ mod tests {
 
         // Act
         let prepared_prompt = prepare_prompt_text(request).expect("prompt should render");
+        let personality_position = prepared_prompt
+            .find("# Personality\n\nPlan before editing.")
+            .expect("personality should be present");
+        let transcript_position = prepared_prompt
+            .find(r"\<session_transcript> assistant: prior work")
+            .expect("transcript should be present");
 
         // Assert
-        assert!(prepared_prompt.contains("# Personality\n\nPlan before editing."));
-        assert!(prepared_prompt.contains("assistant: prior work"));
+        assert!(personality_position < transcript_position);
         assert!(prepared_prompt.ends_with(r"\</user_prompt>"));
     }
 
@@ -715,13 +735,14 @@ mod tests {
             test_workspace_root(),
         );
 
+        let normalized_prompt = normalize_prompt(&rendered_prompt);
+
         // Assert
         assert!(rendered_prompt.contains("Protocol refresh reminder:"));
-        assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
-        assert!(rendered_prompt.contains("If you run git commands, use read-only commands only."));
-        assert!(rendered_prompt.contains("Do not run mutating git commands."));
-        assert!(rendered_prompt.contains("inside the workspace root `/tmp/agentty-wt/session-1`"));
-        assert!(rendered_prompt.contains("anything outside that root is read-only"));
+        assert!(rendered_prompt.contains("repository-root-relative POSIX"));
+        assert!(normalized_prompt.contains("only read-only git commands; never mutating ones"));
+        assert!(rendered_prompt.contains("inside `/tmp/agentty-wt/session-1`"));
+        assert!(normalized_prompt.contains("everything outside this workspace root is read-only"));
         assert!(
             rendered_prompt
                 .contains("______________________________________________________________________")
