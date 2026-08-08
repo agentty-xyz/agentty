@@ -3549,14 +3549,32 @@ mod tests {
             RebaseAssistWorkspace::SessionWorktree,
         )
         .expect("rebase assist prompt should render");
+        let main_checkout_prompt = SessionManager::rebase_assist_prompt(
+            base_branch,
+            &conflicted_files,
+            RebaseAssistWorkspace::MainCheckout,
+        )
+        .expect("main-checkout rebase assist prompt should render");
 
         // Assert
         assert!(prompt.contains("rebasing onto `main`"));
         assert!(prompt.contains("- src/lib.rs"));
         assert!(prompt.contains("- README.md"));
         assert!(prompt.contains("session's isolated git worktree"));
+        assert!(main_checkout_prompt.contains("user's main repository checkout"));
+        assert!(main_checkout_prompt.contains("change only the conflicted files"));
+        assert!(prompt.contains("Remove every conflict marker"));
+        assert!(prompt.contains("inspect the commits involved"));
+        assert!(prompt.contains("understand their intent"));
+        assert!(prompt.contains("intended behavior from both sides"));
+        assert!(prompt.contains("Limit git inspection to read-only commands"));
+        assert!(prompt.contains("Never run mutating commands"));
+        assert!(prompt.contains("do not create commits"));
         assert!(prompt.contains("repository-defined quality checks"));
-        assert!(prompt.contains("affected dependencies or dependents"));
+        assert!(prompt.contains("affected"));
+        assert!(prompt.contains("dependencies or dependents"));
+        assert!(prompt.contains("full repository\n  test/check suite"));
+        assert!(prompt.contains("Return the required protocol JSON object"));
     }
 
     #[test]
