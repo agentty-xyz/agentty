@@ -1744,16 +1744,16 @@ case "$input" in
   *"Generate a concise, commit-style title"*)
     result='{\"answer\":\"Coordinate parallel work\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":null}'
     ;;
-  *"You are the controller for an Agentty orchestration"*"Implement the protocol review suggestions"*)
+  *"The user or coordinator message follows:"*"Implement the protocol review suggestions"*)
     result='{\"answer\":\"I will continue the protocol worker with the review findings.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol findings on the same worker branch.\",\"touched_areas\":[\"crates/ag-protocol/\"],\"acceptance_criteria\":[\"Protocol review findings are implemented and checked\"]}],\"summary\":null}'
     ;;
   *"Orchestration verification gate"*)
     result='{\"answer\":\"All workers finished. Review and merge protocol before UI.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Orchestration finished.\",\"turn\":\"Rolled up both worker results.\"},\"verification_verdicts\":[{\"reason\":\"Protocol criteria pass\",\"task_key\":\"protocol\",\"verdict\":\"pass\"},{\"reason\":\"UI criteria pass\",\"task_key\":\"ui\",\"verdict\":\"pass\"}]}'
     ;;
-  *"You are the controller for an Agentty orchestration"*"Continue protocol beyond its expected areas"*)
+  *"The user or coordinator message follows:"*"Continue protocol beyond its expected areas"*)
     result='{\"answer\":\"I will route that feedback to the existing worker.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Continue protocol beyond its expected areas.\",\"touched_areas\":[\"docs/\"],\"acceptance_criteria\":[\"Apply the requested feedback\"]}],\"summary\":null}'
     ;;
-  *"You are the controller for an Agentty orchestration"*)
+  *"The user or coordinator message follows:"*"Build protocol and UI in parallel"*)
     result='{\"answer\":\"I propose independent protocol and UI workers, merged in that order.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol slice.\",\"touched_areas\":[\"crates/shared/\"],\"acceptance_criteria\":[\"Protocol worker completes\"]},{\"task_key\":\"ui\",\"title\":\"UI worker\",\"prompt\":\"Implement the UI slice.\",\"touched_areas\":[\"crates/shared/\"],\"acceptance_criteria\":[\"UI worker completes\"]}],\"summary\":null}'
     ;;
   *"Implement the protocol findings on the same worker branch"*)
