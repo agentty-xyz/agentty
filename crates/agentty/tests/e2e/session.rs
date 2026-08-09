@@ -5391,11 +5391,12 @@ fn session_active_loader_uses_tachyonfx_glyph() -> E2eResult {
 }
 
 /// Verify that overflowing session output shows a scrollbar in the panel's
-/// rightmost column.
+/// rightmost column and returning to the list clears the chat page.
 #[test]
 fn session_output_scrollbar_is_visible() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_output_scrollbar")
+        .with_git()
         .with_terminal_size(80, 20)
         .setup(seed_session_with_scrollable_output)
         .zola(
@@ -5424,12 +5425,18 @@ fn session_output_scrollbar_is_visible() -> E2eResult {
                         "session_output_scrollbar_bottom",
                         "Scrollbar thumb at the bottom of long session output",
                     )
+                    .compose(&common::return_to_session_list())
+                    .capture_labeled(
+                        "session_list_after_scrollbar",
+                        "Session list after leaving scrolled session output",
+                    )
             },
             |_frame, report| {
-                assert_eq!(report.captures.len(), 2);
+                assert_eq!(report.captures.len(), 3);
 
                 let top_frame = common::frame_from_capture(&report.captures[0]);
                 let bottom_frame = common::frame_from_capture(&report.captures[1]);
+                let list_frame = common::frame_from_capture(&report.captures[2]);
                 let (top_scrollbar_rows, top_thumb_rows) =
                     session_output_scrollbar_rows(&top_frame);
                 let (bottom_scrollbar_rows, bottom_thumb_rows) =
@@ -5453,6 +5460,13 @@ fn session_output_scrollbar_is_visible() -> E2eResult {
                 assert!(
                     top_thumb_rows.last() < bottom_thumb_rows.first(),
                     "expected the scrollbar thumb to move from top to bottom"
+                );
+                assert!(
+                    list_frame
+                        .text_in_region(&Region::full(list_frame.cols(), list_frame.rows()))
+                        .chars()
+                        .all(|character| character != '█'),
+                    "expected no stale scrollbar thumb after returning to the session list"
                 );
             },
         )?;
