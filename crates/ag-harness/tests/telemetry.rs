@@ -1,52 +1,72 @@
 //! Integration coverage for the `ag-harness` request-duration metric.
 #![cfg(test)]
 
-use std::{future, io};
+use std::sync::Arc;
+use std::time::Duration;
 
-use ag_harness::{Model, ModelBackend, ModelError, ModelMetadata, ModelRequest, OutputSchema};
-use async_trait::async_trait;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
 use serde_json::json;
+use tokio::sync::Notify;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-#[derive(Clone, Copy)]
-enum StubOutcome {
-    Failure,
-    Pending,
-    Success,
+struct PendingResponse {
+    started: Arc<Notify>,
 }
 
-struct StubBackend {
-    model: &'static str,
-    outcome: StubOutcome,
-}
+impl Respond for PendingResponse {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        self.started.notify_one();
 
-#[async_trait]
-impl ModelBackend for StubBackend {
-    fn metadata(&self) -> ModelMetadata<'_> {
-        ModelMetadata::new("stub_provider", self.model)
-    }
-
-    async fn generate(&self, _request: &ModelRequest) -> Result<String, ModelError> {
-        match self.outcome {
-            StubOutcome::Failure => Err(ModelError::request(io::Error::other("offline"))),
-            StubOutcome::Pending => future::pending().await,
-            StubOutcome::Success => Ok(r#"{"name":"Ada"}"#.to_string()),
-        }
+        ResponseTemplate::new(200)
+            .set_delay(Duration::from_secs(10))
+            .set_body_json(json!({
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": r#"{"name":"Ada"}"#}
+                }]
+            }))
     }
 }
 
-fn schema() -> OutputSchema {
-    OutputSchema::new(json!({
-        "type": "object",
-        "properties": {
-            "name": { "type": "string" }
-        },
-        "required": ["name"],
-        "additionalProperties": false
-    }))
-    .expect("fixture schema should be valid")
+fn client(server: &MockServer, model: &str) -> ag_harness::ModelClient {
+    ag_harness::ModelClient::qwen(ag_harness::QwenConfig {
+        api_key: "test-key".to_string(),
+        base_url: server.uri(),
+        model: model.to_string(),
+    })
+    .expect("fixture configuration should be valid")
+}
+
+fn request(prompt: &str) -> ag_harness::ModelRequest {
+    ag_harness::ModelRequest::new(
+        prompt,
+        ag_harness::OutputSchema::new(json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" }
+            },
+            "required": ["name"],
+            "additionalProperties": false
+        }))
+        .expect("fixture schema should be valid"),
+    )
+}
+
+async fn mount_success_response(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": r#"{"name":"Ada"}"#}
+            }]
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
 }
 
 fn metric_attributes(
@@ -61,45 +81,76 @@ fn metric_attributes(
     attributes
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn records_only_request_duration_after_provider_installation() {
-    // Arrange
-    StubBackend {
-        model: "before-installation",
-        outcome: StubOutcome::Success,
+async fn wait_for_provider(
+    started: &Notify,
+    request_task: &mut tokio::task::JoinHandle<
+        Result<ag_harness::ModelResponse, ag_harness::ModelError>,
+    >,
+) -> Result<(), String> {
+    tokio::select! {
+        () = started.notified() => Ok(()),
+        result = request_task => {
+            Err(format!("pending request completed before cancellation: {result:?}"))
+        }
+        () = tokio::time::sleep(Duration::from_secs(5)) => {
+            Err("pending request did not reach the provider before the timeout".to_string())
+        }
     }
-    .complete(ModelRequest::new("before provider installation", schema()))
-    .await
-    .expect("request before provider installation should succeed");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn records_request_duration_after_late_provider_installation_for_all_outcomes() {
+    // Arrange
+    let unconfigured_server = MockServer::start().await;
+    mount_success_response(&unconfigured_server).await;
+
+    // Act
+    client(&unconfigured_server, "before-installation")
+        .complete(request("request before telemetry installation"))
+        .await
+        .expect("request before telemetry installation should succeed");
+
+    // Arrange
     let exporter = InMemoryMetricExporter::default();
     let meter_provider = SdkMeterProvider::builder()
         .with_periodic_exporter(exporter.clone())
         .build();
     global::set_meter_provider(meter_provider.clone());
+    let success_server = MockServer::start().await;
+    mount_success_response(&success_server).await;
+    let failure_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("offline"))
+        .expect(1)
+        .mount(&failure_server)
+        .await;
+    let pending_server = MockServer::start().await;
+    let pending_started = Arc::new(Notify::new());
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(PendingResponse {
+            started: Arc::clone(&pending_started),
+        })
+        .expect(1)
+        .mount(&pending_server)
+        .await;
 
     // Act
-    StubBackend {
-        model: "successful",
-        outcome: StubOutcome::Success,
-    }
-    .complete(ModelRequest::new("after provider installation", schema()))
-    .await
-    .expect("instrumented request should succeed");
-    let failure = StubBackend {
-        model: "failed",
-        outcome: StubOutcome::Failure,
-    }
-    .complete(ModelRequest::new("failing request", schema()))
-    .await
-    .expect_err("instrumented provider failure should be returned");
-    let pending_request = tokio::spawn(
-        StubBackend {
-            model: "cancelled",
-            outcome: StubOutcome::Pending,
-        }
-        .complete(ModelRequest::new("cancelled request", schema())),
-    );
-    tokio::task::yield_now().await;
+    client(&success_server, "successful")
+        .complete(request("successful request"))
+        .await
+        .expect("instrumented request should succeed");
+    let failure = client(&failure_server, "failed")
+        .complete(request("failing request"))
+        .await
+        .expect_err("instrumented provider failure should be returned");
+    let pending_client = client(&pending_server, "cancelled");
+    let mut pending_request =
+        tokio::spawn(async move { pending_client.complete(request("cancelled request")).await });
+    wait_for_provider(&pending_started, &mut pending_request)
+        .await
+        .expect("pending request should reach the provider");
     pending_request.abort();
     let cancellation = pending_request
         .await
@@ -109,7 +160,7 @@ async fn records_only_request_duration_after_provider_installation() {
         .expect("duration metric should flush");
 
     // Assert
-    assert!(matches!(failure, ModelError::Request(_)));
+    assert!(matches!(failure, ag_harness::ModelError::Request(_)));
     assert!(cancellation.is_cancelled());
     let resource_metrics = exporter
         .get_finished_metrics()
@@ -137,15 +188,15 @@ async fn records_only_request_duration_after_provider_installation() {
                 attributes,
                 [
                     vec![
-                        ("gen_ai.provider.name", "stub_provider".to_string()),
+                        ("gen_ai.provider.name", "alibaba_cloud".to_string()),
                         ("gen_ai.request.model", "cancelled".to_string()),
                     ],
                     vec![
-                        ("gen_ai.provider.name", "stub_provider".to_string()),
+                        ("gen_ai.provider.name", "alibaba_cloud".to_string()),
                         ("gen_ai.request.model", "failed".to_string()),
                     ],
                     vec![
-                        ("gen_ai.provider.name", "stub_provider".to_string()),
+                        ("gen_ai.provider.name", "alibaba_cloud".to_string()),
                         ("gen_ai.request.model", "successful".to_string()),
                     ],
                 ]

@@ -4,22 +4,16 @@ use async_trait::async_trait;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::provider::{self, KimiConfig, QwenConfig};
 use crate::schema_contract::{OutputSchema, OutputValidationError};
-use crate::telemetry;
+use crate::{chat_completion, telemetry};
 
-mod private {
-    pub trait Sealed {}
-
-    impl<T> Sealed for T where T: super::ModelBackend + ?Sized {}
-}
-
-/// Provider-neutral model behavior available to applications.
+/// Object-safe boundary for provider-neutral model requests.
 ///
-/// Implement [`ModelBackend`] to receive this behavior automatically. The
-/// shared implementation records telemetry and validates structured output for
-/// every provider.
+/// [`ModelClient`] implements this trait so applications can select supported
+/// providers dynamically without exposing provider backends or raw generation.
 #[async_trait]
-pub trait Model: private::Sealed + Send + Sync {
+pub trait Model: Send + Sync {
     /// Completes one model request.
     ///
     /// # Errors
@@ -29,14 +23,63 @@ pub trait Model: private::Sealed + Send + Sync {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError>;
 }
 
-#[async_trait]
-impl<T> Model for T
-where
-    T: ModelBackend + ?Sized,
-{
-    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+/// Application-facing client for provider-neutral model requests.
+///
+/// Provider request execution remains private so every request passes through
+/// [`ModelClient::complete`], which owns telemetry and structured-output
+/// validation.
+pub struct ModelClient {
+    backend: chat_completion::JsonObjectBackend,
+    metadata: ModelMetadata,
+}
+
+impl ModelClient {
+    /// Creates a client backed by Moonshot AI's Kimi API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelMetadataError`] when the configured model identifier is
+    /// empty or contains only whitespace.
+    pub fn kimi(config: KimiConfig) -> Result<Self, ModelMetadataError> {
+        Self::chat_completion(
+            config.api_key,
+            config.base_url,
+            config.model,
+            provider::KIMI_POLICY,
+        )
+    }
+
+    /// Creates a client backed by Alibaba Cloud Model Studio's Qwen API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelMetadataError`] when the configured model identifier is
+    /// empty or contains only whitespace.
+    pub fn qwen(config: QwenConfig) -> Result<Self, ModelMetadataError> {
+        Self::chat_completion(
+            config.api_key,
+            config.base_url,
+            config.model,
+            provider::QWEN_POLICY,
+        )
+    }
+
+    /// Returns the validated provider and model identity retained by the
+    /// client.
+    pub fn metadata(&self) -> &ModelMetadata {
+        &self.metadata
+    }
+
+    /// Completes one model request through the shared telemetry and
+    /// structured-output lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError`] when the provider request fails or its response
+    /// cannot be converted to the provider-neutral response.
+    pub async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
         let _duration = telemetry::RequestDuration::start(self.metadata());
-        let output = self.generate(&request).await?;
+        let output = self.backend.generate(&request).await?;
 
         request
             .schema()
@@ -44,45 +87,77 @@ where
             .map(ModelResponse::new)
             .map_err(ModelError::from)
     }
+
+    fn chat_completion(
+        api_key: String,
+        base_url: String,
+        model: String,
+        policy: chat_completion::JsonObjectProviderPolicy,
+    ) -> Result<Self, ModelMetadataError> {
+        let backend = chat_completion::JsonObjectBackend::new(api_key, base_url, model, policy);
+        let (provider, model) = backend.identity();
+        let metadata = ModelMetadata::new(provider, model)?;
+
+        Ok(Self { backend, metadata })
+    }
 }
 
-/// Provider strategy used by the shared [`Model`] request lifecycle.
 #[async_trait]
-pub trait ModelBackend: Send + Sync {
-    /// Returns stable identity attributes for model telemetry.
-    fn metadata(&self) -> ModelMetadata<'_>;
-
-    /// Generates raw structured-output text for one provider-neutral request.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ModelError`] when the provider cannot satisfy the request or
-    /// its response cannot be converted to assistant text.
-    async fn generate(&self, request: &ModelRequest) -> Result<String, ModelError>;
+impl Model for ModelClient {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        ModelClient::complete(self, request).await
+    }
 }
 
-/// Stable provider and model identity used by shared model behavior.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ModelMetadata<'a> {
-    model: &'a str,
+/// Validated provider and model identity used by the shared client lifecycle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelMetadata {
+    model: String,
     provider: &'static str,
 }
 
-impl<'a> ModelMetadata<'a> {
+impl ModelMetadata {
     /// Creates metadata for one provider model.
-    pub fn new(provider: &'static str, model: &'a str) -> Self {
-        Self { model, provider }
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelMetadataError`] when `provider` or `model` is empty or
+    /// contains only whitespace.
+    pub fn new(
+        provider: &'static str,
+        model: impl Into<String>,
+    ) -> Result<Self, ModelMetadataError> {
+        if provider.trim().is_empty() {
+            return Err(ModelMetadataError::EmptyProvider);
+        }
+        let model = model.into();
+        if model.trim().is_empty() {
+            return Err(ModelMetadataError::EmptyModel);
+        }
+
+        Ok(Self { model, provider })
     }
 
     /// Returns the model identifier sent to the provider.
-    pub fn model(&self) -> &'a str {
-        self.model
+    pub fn model(&self) -> &str {
+        &self.model
     }
 
     /// Returns the provider identifier used by telemetry.
     pub fn provider(&self) -> &'static str {
         self.provider
     }
+}
+
+/// Invalid identity attributes supplied by a model provider.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum ModelMetadataError {
+    /// The provider identifier is empty or contains only whitespace.
+    #[error("model provider must not be empty")]
+    EmptyProvider,
+    /// The model identifier is empty or contains only whitespace.
+    #[error("model identifier must not be empty")]
+    EmptyModel,
 }
 
 /// Provider-neutral input for one model request.
@@ -200,128 +275,71 @@ mod tests {
 
     use super::*;
 
-    enum StubOutcome {
-        Failure,
-        Output(&'static str),
-    }
+    #[test]
+    fn client_exposes_provider_and_model() {
+        // Arrange
+        let client = ModelClient::qwen(QwenConfig {
+            api_key: "test-key".to_string(),
+            base_url: "https://example.com".to_string(),
+            model: "qwen-plus".to_string(),
+        })
+        .expect("fixture configuration should be valid");
 
-    struct StubBackend {
-        model: &'static str,
-        outcome: StubOutcome,
-        provider: &'static str,
-    }
+        // Act
+        let metadata = client.metadata();
 
-    #[async_trait]
-    impl ModelBackend for StubBackend {
-        fn metadata(&self) -> ModelMetadata<'_> {
-            ModelMetadata::new(self.provider, self.model)
-        }
-
-        async fn generate(&self, request: &ModelRequest) -> Result<String, ModelError> {
-            assert_eq!(request.prompt(), "hello");
-
-            match self.outcome {
-                StubOutcome::Failure => Err(ModelError::request(io::Error::other("offline"))),
-                StubOutcome::Output(output) => Ok(output.to_string()),
-            }
-        }
-    }
-
-    fn object_schema() -> OutputSchema {
-        OutputSchema::new(json!({
-            "type": "object",
-            "properties": {
-                "name": { "type": "string" }
-            },
-            "required": ["name"],
-            "additionalProperties": false
-        }))
-        .expect("schema should be valid")
-    }
-
-    fn backend(outcome: StubOutcome) -> StubBackend {
-        StubBackend {
-            model: "stub-large",
-            outcome,
-            provider: "stub_provider",
-        }
+        // Assert
+        assert_eq!(metadata.provider(), "alibaba_cloud");
+        assert_eq!(metadata.model(), "qwen-plus");
+        assert_eq!(
+            metadata,
+            &ModelMetadata::new("alibaba_cloud", "qwen-plus").expect("metadata should be valid")
+        );
     }
 
     #[tokio::test]
-    async fn completes_request_through_shared_model_flow() {
+    async fn client_supports_dynamic_model_dispatch() {
         // Arrange
-        let model = backend(StubOutcome::Output(r#"{"name":"Ada"}"#));
+        let model: Box<dyn Model> = Box::new(
+            ModelClient::qwen(QwenConfig {
+                api_key: "test-key".to_string(),
+                base_url: "https://example.com".to_string(),
+                model: "qwen-plus".to_string(),
+            })
+            .expect("fixture configuration should be valid"),
+        );
+        let schema = OutputSchema::new(json!({ "type": "array" })).expect("schema should be valid");
 
         // Act
-        let response = model
-            .complete(ModelRequest::new("hello", object_schema()))
+        let error = model
+            .complete(ModelRequest::new("return a list", schema))
             .await
-            .expect("valid backend output should succeed");
+            .expect_err("Qwen should reject a non-object schema");
 
         // Assert
-        assert_eq!(response.output(), &json!({ "name": "Ada" }));
+        assert!(matches!(error, ModelError::UnsupportedOutputSchema { .. }));
     }
 
     #[test]
-    fn metadata_exposes_provider_and_model() {
-        // Arrange
-        let model = backend(StubOutcome::Output(r#"{"name":"Ada"}"#));
-
-        // Act
-        let metadata = model.metadata();
+    fn metadata_rejects_empty_provider() {
+        // Arrange and Act
+        let error =
+            ModelMetadata::new("  ", "stub-large").expect_err("empty provider should be rejected");
 
         // Assert
-        assert_eq!(metadata.provider(), "stub_provider");
-        assert_eq!(metadata.model(), "stub-large");
-        assert_eq!(metadata, ModelMetadata::new("stub_provider", "stub-large"));
+        assert_eq!(error, ModelMetadataError::EmptyProvider);
+        assert_eq!(error.to_string(), "model provider must not be empty");
     }
 
-    #[tokio::test]
-    async fn shared_model_flow_returns_provider_failure() {
-        // Arrange
-        let model = backend(StubOutcome::Failure);
-
-        // Act
-        let error = model
-            .complete(ModelRequest::new("hello", object_schema()))
-            .await
-            .expect_err("provider failure should be returned");
+    #[test]
+    fn metadata_rejects_empty_model() {
+        // Arrange and Act
+        let error =
+            ModelMetadata::new("stub_provider", "  ").expect_err("empty model should be rejected");
 
         // Assert
-        assert_eq!(error.to_string(), "model request failed: offline");
-    }
-
-    #[tokio::test]
-    async fn shared_model_flow_rejects_invalid_json() {
-        // Arrange
-        let model = backend(StubOutcome::Output("not JSON"));
-
-        // Act
-        let error = model
-            .complete(ModelRequest::new("hello", object_schema()))
-            .await
-            .expect_err("invalid JSON should fail");
-
-        // Assert
-        assert!(matches!(error, ModelError::InvalidJson { .. }));
-    }
-
-    #[tokio::test]
-    async fn shared_model_flow_rejects_schema_violation() {
-        // Arrange
-        let model = backend(StubOutcome::Output(r#"{"name":42}"#));
-
-        // Act
-        let error = model
-            .complete(ModelRequest::new("hello", object_schema()))
-            .await
-            .expect_err("schema violation should fail");
-
-        // Assert
-        assert!(matches!(
-            error,
-            ModelError::SchemaViolation { path, .. } if path == "/name"
-        ));
+        assert_eq!(error, ModelMetadataError::EmptyModel);
+        assert_eq!(error.to_string(), "model identifier must not be empty");
     }
 
     #[test]

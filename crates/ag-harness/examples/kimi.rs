@@ -3,7 +3,7 @@
 
 use std::io::{self, Write};
 
-use ag_harness::{Kimi, KimiConfig, Model, ModelRequest, OutputSchema};
+use ag_harness::{KimiConfig, ModelClient, ModelRequest, OutputSchema};
 
 #[path = "support/telemetry.rs"]
 mod telemetry;
@@ -28,11 +28,17 @@ async fn main() -> Result<(), DynError> {
 }
 
 async fn run() -> Result<(), DynError> {
-    let model = Kimi::new(KimiConfig {
+    let config = KimiConfig {
         api_key: std::env::var("KIMI_API_KEY")?,
         base_url: std::env::var("KIMI_BASE_URL")?,
         model: std::env::var("KIMI_MODEL")?,
-    });
+    };
+
+    request_greeting(config).await
+}
+
+async fn request_greeting(config: KimiConfig) -> Result<(), DynError> {
+    let model = ModelClient::kimi(config)?;
     let schema = OutputSchema::new(serde_json::from_str(GREETING_SCHEMA)?)?;
     let response = model
         .complete(ModelRequest::new(
@@ -71,6 +77,24 @@ mod tests {
                 Err(error.into())
             }
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_greeting_rejects_invalid_model() {
+        // Arrange
+        let config = KimiConfig {
+            api_key: "test-key".to_string(),
+            base_url: "https://example.com".to_string(),
+            model: "  ".to_string(),
+        };
+
+        // Act
+        let error = request_greeting(config)
+            .await
+            .expect_err("invalid model configuration should fail");
+
+        // Assert
+        assert_eq!(error.to_string(), "model identifier must not be empty");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

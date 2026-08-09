@@ -11,19 +11,23 @@ exposes provider-neutral model calls while preserving provider-specific capabili
 
 ```mermaid
 flowchart LR
-    A[Application] --> M[Model lifecycle]
-    M --> Q[Qwen backend]
-    M --> K[Kimi backend]
-    Q --> C[Chat Completions]
-    K --> C
+    A[Application] --> T[Model trait]
+    T --> M[ModelClient lifecycle]
+    M --> Q[Qwen policy]
+    M --> K[Kimi policy]
+    Q --> J[JSON Object backend]
+    K --> J
+    J --> C[Chat Completions]
 ```
 
 ## Model Boundary
 
-`Model` owns request-duration telemetry and validates every response against the
-request's `OutputSchema`. Provider adapters implement `ModelBackend` to supply stable
-identity and raw assistant output. Provider payloads, authentication, HTTP types, and
-capability rules remain private.
+The object-safe `Model` trait lets applications store supported clients behind
+`dyn Model`. `ModelClient` implements that boundary, owns request-duration telemetry,
+and validates every response against the request's `OutputSchema`. Provider request
+execution remains private so applications cannot bypass this lifecycle. `ModelClient`
+validates and retains the provider and model identity during construction, before any
+request starts.
 
 Provider-owned adapters and compatibility rules live under the private `provider`
 module. API-family clients remain separate so multiple providers can reuse a wire
@@ -32,14 +36,12 @@ protocol without sharing provider policy.
 Qwen and Kimi share Chat Completions request execution and bounded response decoding.
 Both providers request JSON Object output, include the requested `OutputSchema` in the
 system instruction, and rely on shared local schema validation before returning a
-successful response.
-
-Schemas without an explicit object root and unsupported configurations fail explicitly
-rather than falling back to unstructured output.
+successful response. Schemas without an explicit object root and unsupported
+configurations fail explicitly rather than falling back to unstructured output.
 
 ## Telemetry
 
-The shared `Model` lifecycle records `gen_ai.client.operation.duration` for every
+The shared `ModelClient` lifecycle records `gen_ai.client.operation.duration` for every
 backend request, including failures and cancellations. Application binaries own
 OpenTelemetry SDK setup, export, and shutdown. The Qwen and Kimi examples configure
 OTLP/HTTP metrics through the standard `OTEL_EXPORTER_OTLP_ENDPOINT` and

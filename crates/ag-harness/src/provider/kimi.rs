@@ -1,18 +1,12 @@
-use std::sync::Arc;
+use crate::chat_completion;
 
-use async_trait::async_trait;
-use serde::Serialize;
-use thiserror::Error;
-
-use crate::{chat_completion, model, schema_contract};
-
-const PROVIDER_NAME: &str = "moonshot_ai";
-const STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
-    "Return only one JSON object. The object must validate against this JSON Schema. ",
-    "Do not include Markdown fences or any other text.\n\nJSON Schema:\n",
-);
-const UNSUPPORTED_SCHEMA_REASON: &str =
-    "Kimi JSON Object mode requires an explicit object root schema";
+pub(crate) const PROVIDER_NAME: &str = "moonshot_ai";
+pub(crate) const POLICY: chat_completion::JsonObjectProviderPolicy =
+    chat_completion::JsonObjectProviderPolicy {
+        display_name: "Kimi",
+        telemetry_name: PROVIDER_NAME,
+        unsupported_schema_reason: "Kimi JSON Object mode requires an explicit object root schema",
+    };
 
 /// Configuration for a Kimi model served through Moonshot AI's
 /// OpenAI-compatible API.
@@ -25,128 +19,6 @@ pub struct KimiConfig {
     pub model: String,
 }
 
-/// Kimi implementation of the provider-neutral [`model::ModelBackend`]
-/// strategy.
-pub struct Kimi {
-    client: Arc<dyn chat_completion::ChatCompletionClient>,
-    config: KimiConfig,
-}
-
-impl Kimi {
-    /// Creates a Kimi model adapter.
-    pub fn new(config: KimiConfig) -> Self {
-        Self::with_client(config, chat_completion::default_client())
-    }
-
-    fn with_client(
-        config: KimiConfig,
-        client: Arc<dyn chat_completion::ChatCompletionClient>,
-    ) -> Self {
-        Self { client, config }
-    }
-
-    fn map_completion_error(error: chat_completion::ChatCompletionError) -> model::ModelError {
-        match error {
-            chat_completion::ChatCompletionError::Http {
-                body,
-                source,
-                status,
-            } => model::ModelError::request(KimiHttpError {
-                body,
-                source,
-                status,
-            }),
-            chat_completion::ChatCompletionError::ResponseBodyTooLarge => {
-                model::ModelError::ResponseBodyTooLarge
-            }
-            error => model::ModelError::request(error),
-        }
-    }
-}
-
-#[async_trait]
-impl model::ModelBackend for Kimi {
-    fn metadata(&self) -> model::ModelMetadata<'_> {
-        model::ModelMetadata::new(PROVIDER_NAME, &self.config.model)
-    }
-
-    async fn generate(&self, request: &model::ModelRequest) -> Result<String, model::ModelError> {
-        if !request.schema().has_object_root() {
-            return Err(model::ModelError::UnsupportedOutputSchema {
-                reason: UNSUPPORTED_SCHEMA_REASON.to_string(),
-            });
-        }
-        let messages = vec![
-            KimiMessage {
-                content: format!(
-                    "{STRUCTURED_OUTPUT_INSTRUCTION}{}",
-                    request.schema().value()
-                ),
-                role: "system",
-            },
-            KimiMessage {
-                content: request.prompt().to_string(),
-                role: "user",
-            },
-        ];
-        let payload = KimiRequest {
-            messages,
-            model: &self.config.model,
-            response_format: KimiResponseFormat {
-                kind: "json_object",
-            },
-        };
-        let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
-        let completion = self
-            .client
-            .complete(chat_completion::ChatCompletionRequest::new(
-                &self.config.api_key,
-                chat_completion::endpoint(&self.config.base_url),
-                payload,
-            ))
-            .await
-            .map_err(Self::map_completion_error)?
-            .ok_or(model::ModelError::InvalidResponse)?;
-        let (finish_reason, content) = completion.into_parts();
-        if finish_reason != "stop" {
-            return Err(model::ModelError::IncompleteResponse {
-                reason: schema_contract::bounded_diagnostic(finish_reason),
-            });
-        }
-        let text = content.ok_or(model::ModelError::InvalidResponse)?;
-
-        Ok(text)
-    }
-}
-
-#[derive(Debug, Error)]
-#[error("Kimi returned HTTP {status}: {body}")]
-struct KimiHttpError {
-    body: String,
-    #[source]
-    source: reqwest::Error,
-    status: reqwest::StatusCode,
-}
-
-#[derive(Serialize)]
-struct KimiRequest<'a> {
-    messages: Vec<KimiMessage>,
-    model: &'a str,
-    response_format: KimiResponseFormat,
-}
-
-#[derive(Serialize)]
-struct KimiMessage {
-    content: String,
-    role: &'static str,
-}
-
-#[derive(Serialize)]
-struct KimiResponseFormat {
-    #[serde(rename = "type")]
-    kind: &'static str,
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
@@ -154,10 +26,11 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::Model;
     use crate::chat_completion::{
-        ERROR_BODY_LIMIT_BYTES, RESPONSE_ENVELOPE_LIMIT_BYTES, SUCCESS_BODY_LIMIT_BYTES,
+        ERROR_BODY_LIMIT_BYTES, RESPONSE_ENVELOPE_LIMIT_BYTES, STRUCTURED_OUTPUT_INSTRUCTION,
+        SUCCESS_BODY_LIMIT_BYTES,
     };
+    use crate::{model, schema_contract};
 
     fn person_schema_value() -> Value {
         json!({
@@ -190,29 +63,49 @@ mod tests {
         .expect("schema should be valid")
     }
 
-    fn kimi(server: &MockServer) -> Kimi {
-        Kimi::new(KimiConfig {
+    fn kimi(server: &MockServer) -> model::ModelClient {
+        model::ModelClient::kimi(KimiConfig {
             api_key: "test-key".to_string(),
             base_url: format!("{}/", server.uri()),
             model: "kimi-k2.6".to_string(),
         })
+        .expect("fixture configuration should be valid")
     }
 
     #[test]
     fn metadata_exposes_provider_and_model() {
         // Arrange
-        let model = Kimi::new(KimiConfig {
+        let model = model::ModelClient::kimi(KimiConfig {
             api_key: "test-key".to_string(),
             base_url: "https://api.moonshot.example/v1".to_string(),
             model: "kimi-k2.6".to_string(),
-        });
+        })
+        .expect("fixture configuration should be valid");
 
         // Act
-        let metadata = model::ModelBackend::metadata(&model);
+        let metadata = model.metadata();
 
         // Assert
         assert_eq!(metadata.provider(), "moonshot_ai");
         assert_eq!(metadata.model(), "kimi-k2.6");
+    }
+
+    #[test]
+    fn rejects_empty_model_during_construction() {
+        // Arrange
+        let config = KimiConfig {
+            api_key: "test-key".to_string(),
+            base_url: "https://api.moonshot.example/v1".to_string(),
+            model: "  ".to_string(),
+        };
+
+        // Act
+        let error = model::ModelClient::kimi(config)
+            .err()
+            .expect("empty model configuration should be rejected");
+
+        // Assert
+        assert_eq!(error, model::ModelMetadataError::EmptyModel);
     }
 
     async fn mount_structured_response(
