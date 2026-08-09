@@ -69,6 +69,8 @@ pub(crate) enum SessionCreationKind {
     Orchestrator,
     /// Worker linked durably to one orchestration task.
     OrchestrationChild { task_id: i64 },
+    /// Temporary read-only researcher linked to one orchestration task.
+    OrchestrationResearch { task_id: i64 },
 }
 
 impl SessionCreationKind {
@@ -79,6 +81,9 @@ impl SessionCreationKind {
             Self::OrchestrationChild { .. } => {
                 crate::domain::session::SessionRole::OrchestrationWorker
             }
+            Self::OrchestrationResearch { .. } => {
+                crate::domain::session::SessionRole::OrchestrationResearcher
+            }
             Self::Orchestrator => crate::domain::session::SessionRole::Orchestrator,
         }
     }
@@ -87,7 +92,9 @@ impl SessionCreationKind {
     pub(crate) fn orchestration_task_id(self) -> Option<i64> {
         match self {
             Self::Worker | Self::Orchestrator => None,
-            Self::OrchestrationChild { task_id } => Some(task_id),
+            Self::OrchestrationChild { task_id } | Self::OrchestrationResearch { task_id } => {
+                Some(task_id)
+            }
         }
     }
 }

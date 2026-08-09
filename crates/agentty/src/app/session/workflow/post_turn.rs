@@ -15,12 +15,12 @@ use tracing::warn;
 
 use super::task::SessionTranscriptMessageAppend;
 use super::worker::{SessionWorkerContext, TurnMetadata, has_unfinished_branch_operation};
-use super::{SessionTaskService, StatusTransition, published_branch};
+use super::{SessionTaskService, StatusTransition, published_branch, turn};
 use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, TurnAppliedState};
 use crate::app::{AppEvent, orchestration};
-use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats, Status};
+use crate::domain::session::{SessionFollowUpTask, SessionId, SessionRole, SessionStats, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
@@ -286,8 +286,8 @@ pub(super) async fn finalize_channel_turn(
     context: &TurnFinalizerContext,
     result: &Result<Status, SessionError>,
 ) {
-    let owns_branch_changes = session_owns_branch_changes(&context.db, &context.session_id).await;
-    if owns_branch_changes
+    let session_role = turn::load_session_role(&context.db, &context.session_id).await;
+    if session_role.tracks_worktree_changes()
         && let Some(diff_stats) = SessionTaskService::refresh_persisted_session_diff_stats(
             &context.db,
             context.fs_client.as_ref(),
@@ -305,7 +305,7 @@ pub(super) async fn finalize_channel_turn(
                 session_id: context.session_id.clone(),
             });
     }
-    if owns_branch_changes
+    if session_role.owns_branch_changes()
         && let Err(error) = orchestration::persist_managed_child_area_compliance(
             &context.db,
             context.git_client.as_ref(),
@@ -320,6 +320,9 @@ pub(super) async fn finalize_channel_turn(
             "Failed to refresh managed-child touched-area evidence"
         );
     }
+    if session_role == SessionRole::OrchestrationResearcher {
+        archive_research_diff(context).await;
+    }
 
     if let Some(target_status) = status_update_after_turn_result(result) {
         // Best-effort: status transition failure is non-critical.
@@ -332,6 +335,61 @@ pub(super) async fn finalize_channel_turn(
             Arc::clone(&context.status),
         );
         let _ = status_transition.apply(target_status).await;
+    }
+}
+
+/// Archives any observed researcher diff before its temporary worktree is
+/// reclaimed.
+///
+/// Research sessions are provider-enforced read-only, but preserving an
+/// unexpected diff makes a policy violation inspectable after cleanup.
+async fn archive_research_diff(context: &TurnFinalizerContext) {
+    let base_branch = match context
+        .db
+        .sessions()
+        .get_session_base_branch(&context.session_id)
+        .await
+    {
+        Ok(Some(base_branch)) => base_branch,
+        Ok(None) => return,
+        Err(error) => {
+            warn!(
+                session_id = %context.session_id,
+                %error,
+                "Failed to load research-session base branch before diff archival"
+            );
+
+            return;
+        }
+    };
+    let archived_diff = match context
+        .git_client
+        .diff(context.folder.clone(), base_branch)
+        .await
+    {
+        Ok(diff) => diff,
+        Err(error) => {
+            warn!(
+                session_id = %context.session_id,
+                %error,
+                "Failed to archive research-session diff before worktree cleanup"
+            );
+
+            return;
+        }
+    };
+
+    if let Err(error) = context
+        .db
+        .sessions()
+        .update_session_archived_diff(&context.session_id, Some(archived_diff))
+        .await
+    {
+        warn!(
+            session_id = %context.session_id,
+            %error,
+            "Failed to persist archived research-session diff"
+        );
     }
 }
 
@@ -503,16 +561,9 @@ async fn apply_successful_turn_result(
     Ok(target_status)
 }
 
-/// Returns whether the persisted session role owns branch changes.
 async fn session_owns_branch_changes(db: &AppRepositories, session_id: &str) -> bool {
-    db.sessions()
-        .load_session(session_id)
+    turn::load_session_role(db, session_id)
         .await
-        .ok()
-        .flatten()
-        .and_then(|row| row.role)
-        .and_then(|role| role.parse::<ag_session::SessionRole>().ok())
-        .unwrap_or_default()
         .owns_branch_changes()
 }
 
@@ -690,11 +741,63 @@ fn turn_applied_follow_up_tasks(_assistant_message: &AgentResponse) -> Vec<Sessi
 #[cfg(test)]
 mod tests {
     use ag_agent::MockOneShotClient;
-    use ag_git::MockGitClient;
+    use ag_git::{GitError, MockGitClient};
     use ag_protocol::ReviewCommentResolution;
+    use tracing::instrument::WithSubscriber;
 
     use super::*;
-    use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+    use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
+    use crate::infra::db::PersistedSessionCreation;
+
+    async fn insert_research_session(database: &AppRepositories, session_id: &str) {
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        database
+            .sessions()
+            .insert_session_with_agent(PersistedSessionCreation {
+                agent: "codex",
+                base_branch: "main",
+                id: session_id,
+                is_draft: false,
+                model: AgentKind::Codex.default_model().as_str(),
+                orchestration_task_id: None,
+                parent_session_id: None,
+                personality_id: None,
+                project_id,
+                reasoning_level: ReasoningLevel::default(),
+                role: Some("OrchestrationResearcher"),
+                speed_mode: SpeedMode::Normal,
+                status: "InProgress",
+            })
+            .await
+            .expect("failed to insert research session");
+    }
+
+    fn research_finalizer_context(
+        db: AppRepositories,
+        folder: PathBuf,
+        fs_client: crate::infra::fs::MockFsClient,
+        git_client: MockGitClient,
+        session_id: &str,
+    ) -> (TurnFinalizerContext, Arc<Mutex<Status>>) {
+        let status = Arc::new(Mutex::new(Status::InProgress));
+        let context = TurnFinalizerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db,
+            folder,
+            fs_client: Arc::new(fs_client),
+            git_client: Arc::new(git_client),
+            session_update_versions: Arc::default(),
+            session_id: session_id.into(),
+            status: Arc::clone(&status),
+        };
+
+        (context, status)
+    }
 
     #[test]
     fn test_truncate_turn_error_notice_keeps_short_errors_intact() {
@@ -835,6 +938,162 @@ mod tests {
             *status.lock().expect("status lock should remain usable"),
             Status::InProgress
         );
+    }
+
+    #[tokio::test]
+    async fn finalization_archives_research_diff_before_status_transition() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        insert_research_session(&db, "research-session").await;
+        let mut fs_client = crate::infra::fs::MockFsClient::new();
+        fs_client.expect_is_dir().times(1).return_const(false);
+        let mut git_client = MockGitClient::new();
+        git_client.expect_diff().times(1).returning(|folder, base| {
+            assert_eq!(folder, PathBuf::from("/tmp/research-session"));
+            assert_eq!(base, "main");
+
+            Box::pin(async {
+                Ok("diff --git a/violation.txt b/violation.txt\n+unexpected\n".to_string())
+            })
+        });
+        let (context, status) = research_finalizer_context(
+            db.clone(),
+            PathBuf::from("/tmp/research-session"),
+            fs_client,
+            git_client,
+            "research-session",
+        );
+
+        // Act
+        finalize_channel_turn(&context, &Ok(Status::Review)).await;
+        let archived_diff = db
+            .sessions()
+            .load_session_archived_diff("research-session")
+            .await
+            .expect("failed to load archived diff");
+
+        // Assert
+        assert_eq!(
+            archived_diff.as_deref(),
+            Some("diff --git a/violation.txt b/violation.txt\n+unexpected\n")
+        );
+        assert_eq!(
+            *status.lock().expect("status lock should remain usable"),
+            Status::Review
+        );
+    }
+
+    #[tokio::test]
+    async fn research_diff_archival_returns_when_base_branch_is_missing() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let (context, _status) = research_finalizer_context(
+            db.clone(),
+            PathBuf::from("/tmp/missing-research"),
+            crate::infra::fs::MockFsClient::new(),
+            MockGitClient::new(),
+            "missing-research",
+        );
+
+        // Act
+        archive_research_diff(&context).await;
+        let archived_diff = db
+            .sessions()
+            .load_session_archived_diff("missing-research")
+            .await
+            .expect("archive lookup should succeed");
+
+        // Assert
+        assert_eq!(archived_diff, None);
+    }
+
+    #[tokio::test]
+    async fn research_diff_archival_tolerates_base_branch_lookup_failure() {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        pool.close().await;
+        let (context, _status) = research_finalizer_context(
+            db,
+            PathBuf::from("/tmp/research-session"),
+            crate::infra::fs::MockFsClient::new(),
+            MockGitClient::new(),
+            "research-session",
+        );
+
+        // Act
+        archive_research_diff(&context)
+            .with_subscriber(crate::test_support::TestSubscriber)
+            .await;
+
+        // Assert
+        assert!(pool.is_closed());
+    }
+
+    #[tokio::test]
+    async fn research_diff_archival_tolerates_git_failure() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        insert_research_session(&db, "research-session").await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_diff().times(1).returning(|_, _| {
+            Box::pin(async { Err(GitError::OutputParse("diff failed".to_string())) })
+        });
+        let (context, _status) = research_finalizer_context(
+            db.clone(),
+            PathBuf::from("/tmp/research-session"),
+            crate::infra::fs::MockFsClient::new(),
+            git_client,
+            "research-session",
+        );
+
+        // Act
+        archive_research_diff(&context)
+            .with_subscriber(crate::test_support::TestSubscriber)
+            .await;
+        let archived_diff = db
+            .sessions()
+            .load_session_archived_diff("research-session")
+            .await
+            .expect("archive lookup should succeed");
+
+        // Assert
+        assert_eq!(archived_diff, None);
+    }
+
+    #[tokio::test]
+    async fn research_diff_archival_tolerates_persistence_failure() {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        insert_research_session(&db, "research-session").await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_diff().times(1).returning({
+            let pool = pool.clone();
+
+            move |_, _| {
+                let pool = pool.clone();
+
+                Box::pin(async move {
+                    pool.close().await;
+
+                    Ok("diff --git a/policy.txt b/policy.txt\n+write\n".to_string())
+                })
+            }
+        });
+        let (context, _status) = research_finalizer_context(
+            db,
+            PathBuf::from("/tmp/research-session"),
+            crate::infra::fs::MockFsClient::new(),
+            git_client,
+            "research-session",
+        );
+
+        // Act
+        archive_research_diff(&context)
+            .with_subscriber(crate::test_support::TestSubscriber)
+            .await;
+
+        // Assert
+        assert!(pool.is_closed());
     }
 
     #[tokio::test]

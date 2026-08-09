@@ -150,6 +150,9 @@ pub enum SessionRole {
     /// Worker whose write capabilities are owned exclusively by an
     /// orchestration coordinator.
     OrchestrationWorker,
+    /// Temporary read-only researcher whose worktree changes are discarded
+    /// after its report is captured.
+    OrchestrationResearcher,
     /// Controller session that plans and supervises child worker sessions.
     Orchestrator,
 }
@@ -164,15 +167,26 @@ impl SessionRole {
         matches!(self, SessionRole::Worker | SessionRole::OrchestrationWorker)
     }
 
+    /// Returns whether Agentty should observe worktree changes after a turn.
+    ///
+    /// Research children do not own their changes, but the coordinator records
+    /// whether a child attempted edits before discarding its worktree.
+    pub fn tracks_worktree_changes(self) -> bool {
+        !matches!(self, SessionRole::Orchestrator)
+    }
+
     /// Returns whether an end user may submit turns or branch mutations
     /// directly to this session.
     pub fn accepts_user_turns(self) -> bool {
-        !matches!(self, SessionRole::OrchestrationWorker)
+        !self.is_managed()
     }
 
     /// Returns whether this worker is owned by an orchestration coordinator.
     pub fn is_managed(self) -> bool {
-        matches!(self, SessionRole::OrchestrationWorker)
+        matches!(
+            self,
+            SessionRole::OrchestrationWorker | SessionRole::OrchestrationResearcher
+        )
     }
 }
 
@@ -181,6 +195,7 @@ impl fmt::Display for SessionRole {
         let value = match self {
             SessionRole::Worker => "Worker",
             SessionRole::OrchestrationWorker => "OrchestrationWorker",
+            SessionRole::OrchestrationResearcher => "OrchestrationResearcher",
             SessionRole::Orchestrator => "Orchestrator",
         };
 
@@ -195,6 +210,7 @@ impl FromStr for SessionRole {
         match value {
             "Worker" => Ok(SessionRole::Worker),
             "OrchestrationWorker" => Ok(SessionRole::OrchestrationWorker),
+            "OrchestrationResearcher" => Ok(SessionRole::OrchestrationResearcher),
             "Orchestrator" => Ok(SessionRole::Orchestrator),
             _ => Err(format!("Unknown role: {value}")),
         }
@@ -524,6 +540,7 @@ mod tests {
         let roles = [
             SessionRole::Worker,
             SessionRole::OrchestrationWorker,
+            SessionRole::OrchestrationResearcher,
             SessionRole::Orchestrator,
         ];
 
@@ -541,14 +558,20 @@ mod tests {
     }
 
     #[test]
-    fn only_worker_sessions_own_branch_changes() {
+    fn branch_ownership_and_tracking_follow_session_role() {
         // Arrange / Act / Assert
         assert!(SessionRole::Worker.owns_branch_changes());
         assert!(SessionRole::OrchestrationWorker.owns_branch_changes());
+        assert!(!SessionRole::OrchestrationResearcher.owns_branch_changes());
         assert!(!SessionRole::Orchestrator.owns_branch_changes());
+        assert!(SessionRole::Worker.tracks_worktree_changes());
+        assert!(SessionRole::OrchestrationResearcher.tracks_worktree_changes());
+        assert!(!SessionRole::Orchestrator.tracks_worktree_changes());
         assert!(SessionRole::Worker.accepts_user_turns());
         assert!(!SessionRole::OrchestrationWorker.accepts_user_turns());
+        assert!(!SessionRole::OrchestrationResearcher.accepts_user_turns());
         assert!(SessionRole::OrchestrationWorker.is_managed());
+        assert!(SessionRole::OrchestrationResearcher.is_managed());
     }
 
     #[test]

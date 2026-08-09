@@ -6,14 +6,17 @@ use agent_client_protocol::schema::v1::{
 };
 use serde_json::Value;
 
+use crate::model::permission::PermissionMode;
+
 /// Builds a `session/request_permission` response for the active session.
 ///
-/// Gemini ACP uses client-selected permission options to unblock file-changing
-/// tools. Agentty selects an explicit one-shot allow option when Gemini offers
-/// one and cancels the request when no allow option is available.
+/// Gemini ACP uses client-selected permission options to unblock tools.
+/// Agentty selects an explicit one-shot allow option for auto-edit turns and
+/// cancels every request for read-only turns.
 pub(super) fn build_permission_response(
     response_value: &Value,
     expected_session_id: &str,
+    permission_mode: PermissionMode,
 ) -> Option<Value> {
     if response_value.get("method").and_then(Value::as_str)
         != Some(CLIENT_METHOD_NAMES.session_request_permission)
@@ -30,7 +33,9 @@ pub(super) fn build_permission_response(
             return None;
         }
 
-        let selected_option_id = select_permission_option(&permission_request.options)
+        let selected_option_id = (!permission_mode.is_read_only())
+            .then(|| select_permission_option(&permission_request.options))
+            .flatten()
             .map(|option| option.option_id.to_string());
 
         return Some(build_permission_result_payload(
@@ -43,9 +48,13 @@ pub(super) fn build_permission_response(
         return None;
     }
 
-    let selected_option_id = params
-        .get("options")
-        .and_then(select_permission_option_id_from_value);
+    let selected_option_id = (!permission_mode.is_read_only())
+        .then(|| {
+            params
+                .get("options")
+                .and_then(select_permission_option_id_from_value)
+        })
+        .flatten();
 
     Some(build_permission_result_payload(
         &request_id,
@@ -139,4 +148,97 @@ fn preferred_allow_option_kinds() -> [PermissionOptionKind; 2] {
 /// Serializes one ACP permission kind to the wire representation.
 fn permission_option_kind_value(kind: PermissionOptionKind) -> Option<Value> {
     serde_json::to_value(kind).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_only_mode_cancels_an_acp_permission_request() {
+        // Arrange
+        let permission_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "permission-1",
+            "method": CLIENT_METHOD_NAMES.session_request_permission,
+            "params": {
+                "sessionId": "session-1",
+                "toolCall": {"toolCallId": "tool-1"},
+                "options": [{
+                    "optionId": "allow-once",
+                    "name": "Allow once",
+                    "kind": "allow_once"
+                }]
+            }
+        });
+
+        // Act
+        let response =
+            build_permission_response(&permission_request, "session-1", PermissionMode::ReadOnly)
+                .expect("permission response should be generated");
+
+        // Assert
+        assert_eq!(
+            response.pointer("/result/outcome/outcome"),
+            Some(&Value::String("cancelled".to_string()))
+        );
+    }
+
+    #[test]
+    fn auto_edit_mode_selects_an_acp_allow_option() {
+        // Arrange
+        let permission_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "permission-1",
+            "method": CLIENT_METHOD_NAMES.session_request_permission,
+            "params": {
+                "sessionId": "session-1",
+                "toolCall": {"toolCallId": "tool-1"},
+                "options": [{
+                    "optionId": "allow-once",
+                    "name": "Allow once",
+                    "kind": "allow_once"
+                }]
+            }
+        });
+
+        // Act
+        let response =
+            build_permission_response(&permission_request, "session-1", PermissionMode::AutoEdit)
+                .expect("permission response should be generated");
+
+        // Assert
+        assert_eq!(
+            response.pointer("/result/outcome/optionId"),
+            Some(&Value::String("allow-once".to_string()))
+        );
+    }
+
+    #[test]
+    fn auto_edit_mode_selects_an_allow_option_from_legacy_raw_params() {
+        // Arrange
+        let permission_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "permission-1",
+            "method": CLIENT_METHOD_NAMES.session_request_permission,
+            "params": {
+                "sessionId": "session-1",
+                "options": [{
+                    "optionId": "allow-always",
+                    "kind": "allow_always"
+                }]
+            }
+        });
+
+        // Act
+        let response =
+            build_permission_response(&permission_request, "session-1", PermissionMode::AutoEdit)
+                .expect("legacy permission response should be generated");
+
+        // Assert
+        assert_eq!(
+            response.pointer("/result/outcome/optionId"),
+            Some(&Value::String("allow-always".to_string()))
+        );
+    }
 }

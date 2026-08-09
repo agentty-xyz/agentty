@@ -60,6 +60,7 @@ impl RuntimeClientProvider for GeminiRuntimeProvider {
             lifecycle::run_turn_with_runtime(
                 &mut runtime.transport,
                 &runtime.state.session_id,
+                runtime.state.permission_mode,
                 prompt,
                 stream_tx,
             )
@@ -77,7 +78,9 @@ pub(crate) struct GeminiSessionRuntime {
 
 impl RuntimeClientRuntime for GeminiSessionRuntime {
     fn matches_request(&self, request: &AppServerTurnRequest) -> bool {
-        self.state.folder == request.folder && self.state.model == request.model
+        self.state.folder == request.folder
+            && self.state.model == request.model
+            && self.state.permission_mode == request.permission_mode
     }
 
     fn pid(&self) -> Option<u32> {
@@ -127,6 +130,7 @@ mod tests {
         let mut state = GeminiRuntimeState::new(
             PathBuf::from("/tmp/agentty-gemini-runtime"),
             AgentModel::Gemini31Pro.as_str().to_string(),
+            crate::model::permission::PermissionMode::AutoEdit,
         );
         state.session_id = "session-1".to_string();
 
@@ -135,6 +139,38 @@ mod tests {
             state,
             transport,
         }
+    }
+
+    #[tokio::test]
+    async fn runtime_reuse_requires_matching_permission_mode() {
+        // Arrange
+        let mut runtime = build_stopped_session_runtime();
+        let mut request = AppServerTurnRequest {
+            folder: runtime.state.folder.clone(),
+            live_transcript: None,
+            main_checkout_root: None,
+            model: runtime.state.model.clone(),
+            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            persisted_instruction_conversation_id: None,
+            personality: crate::channel::PersonalityPrompt::default(),
+            prompt: TurnPrompt::from("Continue"),
+            provider_conversation_id: None,
+            reasoning_level: ReasoningLevel::default(),
+            replay_transcript: None,
+            request_kind: crate::channel::AgentRequestKind::SessionResume,
+            session_id: "session-1".to_string(),
+            speed_mode: SpeedMode::default(),
+        };
+
+        // Act
+        let auto_edit_matches = runtime.matches_request(&request);
+        request.permission_mode = crate::model::permission::PermissionMode::ReadOnly;
+        let read_only_matches = runtime.matches_request(&request);
+        runtime.shutdown_runtime().await;
+
+        // Assert
+        assert!(auto_edit_matches);
+        assert!(!read_only_matches);
     }
 
     #[tokio::test]

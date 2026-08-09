@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+/// Whether temporary read-only research waves start without plan approval.
+pub(crate) const DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH: bool = true;
 /// Default number of orchestration children allowed to run concurrently.
 pub(crate) const DEFAULT_ORCHESTRATION_PARALLELISM: u8 = 3;
 /// Maximum orchestration concurrency exposed by the settings selector.
@@ -14,6 +16,8 @@ pub(crate) enum SettingName {
     ActiveProjectId,
     /// Persists the active list tab selection.
     ActiveTab,
+    /// Persists whether research-only orchestration waves start immediately.
+    AutoApproveOrchestrationResearch,
     /// Persists the provider that owns the fast-model default.
     DefaultFastAgent,
     /// Persists the project or global fast-model selection.
@@ -51,6 +55,7 @@ impl SettingName {
         match self {
             Self::ActiveProjectId => "ActiveProjectId",
             Self::ActiveTab => "ActiveTab",
+            Self::AutoApproveOrchestrationResearch => "AutoApproveOrchestrationResearch",
             Self::DefaultFastAgent => "DefaultFastAgent",
             Self::DefaultFastModel => "DefaultFastModel",
             Self::DefaultFastReasoningLevel => "DefaultFastReasoningLevel",
@@ -86,6 +91,10 @@ mod tests {
         let settings = [
             (SettingName::ActiveProjectId, "ActiveProjectId"),
             (SettingName::ActiveTab, "ActiveTab"),
+            (
+                SettingName::AutoApproveOrchestrationResearch,
+                "AutoApproveOrchestrationResearch",
+            ),
             (SettingName::DefaultFastAgent, "DefaultFastAgent"),
             (SettingName::DefaultFastModel, "DefaultFastModel"),
             (
@@ -133,6 +142,7 @@ mod tests {
         let settings = [
             SettingName::ActiveProjectId,
             SettingName::ActiveTab,
+            SettingName::AutoApproveOrchestrationResearch,
             SettingName::DefaultFastAgent,
             SettingName::DefaultFastModel,
             SettingName::DefaultFastReasoningLevel,

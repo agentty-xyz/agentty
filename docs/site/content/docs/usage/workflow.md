@@ -44,10 +44,10 @@ tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
   submission fails after creation, Agentty opens the recoverable session with the error
   in its transcript. Comments are not loaded in this iteration. Install the GitHub CLI
   and run `gh auth login` to enable this tab.
-- **Settings**: Configure the color theme, orchestrator parallelism, per-role
-  smart/fast/review model and reasoning defaults, the optional
-  `Last used model as default` mode, the session commit coauthor trailer, and
-  `Launch Configurations` for the active project.
+- **Settings**: Configure the color theme, orchestrator parallelism, automatic approval
+  for read-only research waves, per-role smart/fast/review model and reasoning defaults,
+  the optional `Last used model as default` mode, the session commit coauthor trailer,
+  and `Launch Configurations` for the active project.
 
 On startup, Agentty restores the last active list tab. If no tab has been saved yet but
 an active project is already persisted, Agentty opens on **Sessions** so you can resume
@@ -391,9 +391,10 @@ an available `Stacked` option are marked `[Preview]`:
   base branch at launch time. From a draft session view, `Ctrl+V`, `Ctrl+Shift+V`, or
   `Alt+V` opens the draft composer and pastes one clipboard image into the next staged
   draft.
-- `Orchestrator` turns a broad goal into an independent-task plan, waits for approval,
-  runs multiple managed worker sessions, verifies their results, and integrates the
-  approved work. The controller reads the repository but never owns branch changes.
+- `Orchestrator` can first run temporary read-only researchers, then turns a broad goal
+  into an independent implementation plan, waits for approval, runs multiple managed
+  worker sessions, verifies their results, and integrates the approved work. The
+  controller reads the repository but never owns branch changes.
 - `Stacked` creates a draft below the selected parent session, with its future branch
   based on the parent session branch. Only one stacking level is available.
 
@@ -410,7 +411,8 @@ canceled, its stacked child is canceled too.
 
 ### Parallel Orchestration
 
-Use an orchestrator when a goal contains at least two independent pieces of work:
+Use an orchestrator when a goal needs deep repository discovery or contains at least two
+independent pieces of implementation work:
 
 1. On the **Sessions** tab, press `a`, choose `Orchestrator` (marked `[Preview]`), and
    press `Enter`.
@@ -419,15 +421,21 @@ Use an orchestrator when a goal contains at least two independent pieces of work
    the decomposition or acceptance criteria. Controller clarifications and Agentty's
    plan or follow-up routing questions provide two or three selectable options with the
    recommended choice first; free-text answers remain available. A valid plan contains
-   between two and eight tasks. Every task has a stable key, standalone prompt, and
-   concrete acceptance criteria. Optional literal repository-relative touched areas are
-   best-effort planning references: they may overlap and do not prevent a worker from
-   changing other files needed to complete its task. Wildcards remain invalid.
+   between two and eight implementation tasks. When deeper discovery would materially
+   improve the plan, the controller instead proposes a separate wave of one to eight
+   `research` tasks before any implementation tasks. Research and implementation tasks
+   cannot share one wave. Every task has a stable key, standalone prompt, and concrete
+   acceptance criteria. Optional literal repository-relative touched areas apply only to
+   implementation tasks and are best-effort planning references: they may overlap and do
+   not prevent a worker from changing other files needed to complete its task. Wildcards
+   remain invalid for implementation tasks.
 1. Review the persisted plan on the campaign monitor above the controller chat. Before
    pressing `a` to approve, confirm the tasks and acceptance criteria. The number of
-   simultaneous workers comes from the global **Orchestrator Parallelism** setting.
-   Continue chatting to revise decomposition. If the goal does not meaningfully split,
-   the controller recommends a regular session instead of creating a ceremonial worker.
+   simultaneous children comes from the global **Orchestrator Parallelism** setting.
+   Research-only waves start immediately when **Auto-approve Research** is enabled; turn
+   that setting off to review those waves on the same approval board. Continue chatting
+   to revise decomposition. If an implementation goal does not meaningfully split, the
+   controller recommends a regular session instead of creating a ceremonial worker.
 1. Follow real-time task status on the campaign monitor. Status changes do not add
    transcript messages. Worker rows remain grouped with their controller in the
    **Sessions** list. Workers restrict direct Agentty actions: open one to inspect its
@@ -435,10 +443,12 @@ Use an orchestrator when a goal contains at least two independent pieces of work
    permanently transfer it into an ordinary user-owned session. A worker in **Review**
    also exposes `o` to open its materialized worktree. The confirmation warns that the
    shell has normal write access and edits can invalidate orchestration verification.
-   Direct reply, question-answer, cancel, merge, publish, fork, review-comment
-   addressing, `Ctrl+c` turn interruption, and slash-command actions are unavailable
-   while it is managed. The controller conversation below the monitor uses the same
-   line-by-line transcript scrolling as a regular session.
+   Temporary research children expose transcript and discarded-diff evidence but hide
+   `D` and `o`, because their worktree must be reclaimed after report capture. Direct
+   reply, question-answer, cancel, merge, publish, fork, review-comment addressing,
+   `Ctrl+c` turn interruption, and slash-command actions are unavailable while it is
+   managed. The controller conversation below the monitor uses the same line-by-line
+   transcript scrolling as a regular session.
 1. When a worker asks a blocking question, Agentty mirrors it into the controller's
    question panel only when the controller has no question of its own. The relay durably
    records the exact task that owns the mirrored question, so concurrent worker
@@ -446,6 +456,16 @@ Use an orchestrator when a goal contains at least two independent pieces of work
    without adding a controller model turn. Infrastructure failures retry twice without
    interrupting chat. Worker failures remain visible on the campaign monitor for
    follow-up.
+1. Research children run in their own temporary worktrees under a read-only role. They
+   cannot auto-commit. Agentty maps that role to provider-native read-only enforcement:
+   Codex uses a read-only sandbox and rejects pre-action approvals, Claude and
+   Antigravity use plan mode, and Gemini combines sandboxed plan mode with cancellation
+   of ACP mutation requests. After capturing the final report, Agentty archives the
+   observed diff, then discards the worktree and local branch. If a researcher
+   nevertheless edits files, the campaign board records that the temporary edits were
+   discarded and `d` opens the archived evidence after cleanup. Research skips focused
+   review and never enters merge or review-request integration. Its terminal status is
+   **Reported**.
 1. When a worker reaches review with a diff, Agentty waits for its focused auto-review.
    Actionable suggestions are sent back to that worker using the same verification-gated
    prompt as `/apply`: the worker checks each comment against the current code, applies
@@ -466,10 +486,15 @@ Use an orchestrator when a goal contains at least two independent pieces of work
    verification failure. The comparison remains **not checked** when no expected areas
    were provided, even if the child changed files. The controller can run targeted
    read-only Git inspection, reports only cross-task synthesis and risks, and records an
-   explicit pass or flag for every ready task. This verification response is the
-   campaign's single controller report. Only explicit passes enter integration; flagged
-   or missing verdicts remain parked for correction. The controller reuses a task key to
-   continue the same live child when a correction is required.
+   explicit pass or flag for every ready task. Research entries carry their bounded full
+   reports instead of branch and diff evidence; the envelope marks those model-authored
+   reports as inert data so instructions inside a report are never followed. This
+   verification response is the campaign's single controller report. Only explicit
+   passes enter integration; flagged or missing verdicts remain parked for correction.
+   The controller reuses a task key to continue the same live implementation child when
+   a correction is required. Reusing a reported research key starts a fresh temporary
+   researcher. A passing research wave can propose the implementation wave in the same
+   verification turn; that new scope parks on the normal plan approval board.
 1. At **AwaitingIntegration**, press `a`, then choose **Local merges** or **Review
    requests**. Agentty applies local merges or creates forge review requests in plan
    order and records failures on the campaign monitor. A published review-request task
@@ -480,21 +505,26 @@ Use an orchestrator when a goal contains at least two independent pieces of work
    worktree and local branch. Review-request workers retain their published branch and
    remain browsable under the controller. A review request closed without merging is
    recorded as an **Integration failed** task, leaving the controller active for
-   follow-up. Detached workers remain ordinary sessions.
+   follow-up. Detached workers remain ordinary sessions. A verified research-only wave
+   with no follow-up implementation scope completes automatically and never opens this
+   integration chooser.
 
-Multi-turn feedback is routed by task identity. Reusing a settled task's exact key
-continues its existing worker, branch, and conversation and returns it to verification,
-even when the follow-up expects different files. Any touched-area references emitted for
-the continuation replace the previous references and are included in the resumed worker
-prompt and next comparison. Previously passed but not yet integrated siblings return to
-**Ready** so the next settlement verifies one coherent campaign snapshot instead of
-stalling behind old integration state. This supports review-first workflows: after
-review workers settle and the controller summarizes their findings, describe the
-implementation follow-up in the orchestrator chat. The controller routes those
-instructions to the same completed workers, which keep their branches and conversation
-context. A new task key is treated as new scope and parks the campaign on the approval
-board before that worker starts. Once the controller is `Done`, a new goal or further
-feedback starts a new orchestrator campaign.
+Multi-turn feedback is routed by task identity. Reusing a settled implementation task's
+exact key continues its existing worker, branch, and conversation and returns it to
+verification, even when the follow-up expects different files. Any touched-area
+references emitted for the continuation replace the previous references and are included
+in the resumed worker prompt and next comparison. Previously passed but not yet
+integrated siblings return to **Ready** so the next settlement verifies one coherent
+campaign snapshot instead of stalling behind old integration state. This supports
+review-first workflows: after review workers settle and the controller summarizes their
+findings, describe the implementation follow-up in the orchestrator chat. The controller
+routes those instructions to the same completed workers, which keep their branches and
+conversation context. Research corrections reuse a key but start with a clean temporary
+child because research worktrees are never retained. A task cannot change between
+`research` and `implementation`; use a new key when moving from findings to
+implementation. A new task key is treated as new scope and parks the campaign on the
+approval board before that worker starts. Once the controller is `Done`, a new goal or
+further feedback starts a new orchestrator campaign.
 
 Press `c` on a draft or running controller to cancel it. Draft controllers can be
 canceled before their first goal is submitted. For running controllers, the confirmation

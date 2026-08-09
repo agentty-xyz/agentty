@@ -49,6 +49,8 @@ pub struct SessionOrchestrationTaskRow {
     pub attempt_count: i64,
     /// Persisted added-line count from the latest child diff refresh.
     pub child_added_lines: i64,
+    /// Latest assistant answer emitted by the linked child.
+    pub child_answer: Option<String>,
     /// Persisted deleted-line count from the latest child diff refresh.
     pub child_deleted_lines: i64,
     /// Durable focused-review generation state observed on the child.
@@ -75,14 +77,18 @@ pub struct SessionOrchestrationTaskRow {
     pub continuation_prompt: Option<String>,
     /// Stable database identifier.
     pub id: i64,
-    /// Most recent failure detail, when the task failed.
-    pub last_error: Option<String>,
     /// Number of bounded automatic spawn retries already consumed.
     pub infrastructure_retry_count: i64,
+    /// Persisted execution behavior string.
+    pub kind: String,
+    /// Most recent failure detail, when the task failed.
+    pub last_error: Option<String>,
     /// Stable integration order selected on the approval board.
     pub merge_position: i64,
     /// Standalone prompt handed to the child session.
     pub prompt: String,
+    /// Bounded full report captured from a temporary research child.
+    pub research_report: Option<String>,
     /// Bounded child-reported result summary used for fan-in, when present.
     pub result_summary: Option<String>,
     /// Number of automatic focused-review remediation turns already consumed.
@@ -137,6 +143,8 @@ pub struct SessionOrchestrationMetadataRow {
 pub struct PersistedOrchestrationTask {
     /// Serialized acceptance criteria checked during verification.
     pub acceptance_criteria: String,
+    /// Persisted execution behavior.
+    pub kind: String,
     /// Stable integration order selected on the approval board.
     pub merge_position: i64,
     /// Standalone prompt handed to the child session.
@@ -340,6 +348,14 @@ pub trait OrchestrationRepository: Send + Sync {
         result_summary: &str,
     ) -> Result<(), DbError>;
 
+    /// Records one research child's bounded report before its temporary
+    /// worktree is discarded.
+    async fn update_orchestration_task_research_report(
+        &self,
+        id: i64,
+        research_report: &str,
+    ) -> Result<(), DbError>;
+
     /// Records a mechanically computed touched-area planning comparison.
     async fn update_orchestration_task_area_compliance(
         &self,
@@ -464,6 +480,7 @@ RETURNING id AS "id!: i64"
     ) -> Result<i64, DbError> {
         let PersistedOrchestrationTask {
             acceptance_criteria,
+            kind,
             merge_position,
             prompt,
             session_orchestration_id,
@@ -471,6 +488,11 @@ RETURNING id AS "id!: i64"
             title,
             touched_areas,
         } = task;
+        kind.parse::<crate::domain::orchestration::OrchestrationTaskKind>()
+            .map_err(|_| DbError::InvalidData {
+                entity: "orchestration task kind",
+                reason: format!("unknown persisted kind `{kind}`"),
+            })?;
         let now = self.now();
         let mut transaction = self
             .0
@@ -487,15 +509,17 @@ INSERT INTO session_orchestration_task (
     prompt,
     touched_areas,
     acceptance_criteria,
+    kind,
     merge_position,
     status,
     created_at,
     updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, 'Planned', ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Planned', ?, ?)
 ON CONFLICT(session_orchestration_id, task_key) DO UPDATE
 SET title = excluded.title,
     prompt = excluded.prompt,
+    kind = excluded.kind,
     touched_areas = excluded.touched_areas,
     acceptance_criteria = excluded.acceptance_criteria,
     merge_position = excluded.merge_position,
@@ -503,6 +527,7 @@ SET title = excluded.title,
     child_session_id = NULL,
     continuation_prompt = NULL,
     review_iteration = 0,
+    research_report = NULL,
     result_summary = NULL,
     verification_reason = NULL,
     verification_verdict = NULL,
@@ -516,6 +541,7 @@ RETURNING id AS "id!: i64"
             prompt,
             touched_areas,
             acceptance_criteria,
+            kind,
             merge_position,
             now,
             now
@@ -737,6 +763,14 @@ SELECT task.id AS "id!: i64",
        task.areas_compliant AS "areas_compliant?: bool",
        task.attempt_count,
        COALESCE(child.added_lines, 0) AS "child_added_lines!: i64",
+       (
+           SELECT message.content
+           FROM session_message AS message
+           WHERE message.session_id = task.child_session_id
+             AND message.kind = 'assistant_answer'
+           ORDER BY message.position DESC
+           LIMIT 1
+       ) AS child_answer,
        COALESCE(child.deleted_lines, 0) AS "child_deleted_lines!: i64",
        child.focused_review_status AS child_focused_review_status,
        child.focused_review_text AS child_focused_review_text,
@@ -750,9 +784,11 @@ SELECT task.id AS "id!: i64",
        task.continuation_generation,
        task.continuation_prompt,
        task.infrastructure_retry_count,
+       task.kind,
        task.last_error,
        task.merge_position,
        task.prompt,
+       task.research_report,
        task.result_summary,
        task.review_iteration,
        task.status,
@@ -773,6 +809,12 @@ ORDER BY task.merge_position, task.id
         .await?;
         for row in &rows {
             status::validate_orchestration_task(&row.status)?;
+            row.kind
+                .parse::<crate::domain::orchestration::OrchestrationTaskKind>()
+                .map_err(|_| DbError::InvalidData {
+                    entity: "orchestration task kind",
+                    reason: format!("unknown persisted kind `{}`", row.kind),
+                })?;
             if let Some(child_status) = &row.child_status {
                 status::validate_session(child_status)?;
             }
@@ -806,6 +848,7 @@ INNER JOIN session AS child
 ON child.id = task.child_session_id
 WHERE child.id = ?
   AND child.role = 'OrchestrationWorker'
+  AND task.kind = 'Implementation'
 "#,
             child_session_id
         )
@@ -1011,7 +1054,7 @@ SET verification_reason = ?,
     updated_at = ?
 WHERE session_orchestration_id = ?
   AND task_key = ?
-  AND status = 'Ready'
+  AND status IN ('Ready', 'Reported')
   AND EXISTS (
       SELECT 1
       FROM session_orchestration
@@ -1621,6 +1664,31 @@ WHERE id = ?
         Ok(())
     }
 
+    async fn update_orchestration_task_research_report(
+        &self,
+        id: i64,
+        research_report: &str,
+    ) -> Result<(), DbError> {
+        let now = self.now();
+
+        sqlx::query!(
+            r"
+UPDATE session_orchestration_task
+SET research_report = ?,
+    updated_at = ?
+WHERE id = ?
+  AND kind = 'Research'
+",
+            research_report,
+            now,
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
     async fn update_orchestration_task_area_compliance(
         &self,
         id: i64,
@@ -1653,14 +1721,21 @@ WHERE id = ?
 mod tests {
     use super::*;
     use crate::domain::agent::{AgentKind, ReasoningLevel, SpeedMode};
-    use crate::domain::orchestration::{OrchestrationStatus, OrchestrationTaskStatus};
+    use crate::domain::orchestration::{
+        OrchestrationStatus, OrchestrationTaskKind, OrchestrationTaskStatus,
+    };
     use crate::domain::review::FocusedReviewStatus;
+    use crate::domain::session_message::SessionMessageKind;
     use crate::infra::db::{AppRepositories, PersistedSessionCreation, SessionRow};
 
     /// Inserts one project plus one controller session and returns the
     /// repository bundle ready for orchestration persistence assertions.
     async fn controller_fixture() -> AppRepositories {
-        let database = AppRepositories::in_memory().await;
+        controller_fixture_with_pool().await.0
+    }
+
+    async fn controller_fixture_with_pool() -> (AppRepositories, SqlitePool) {
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", None)
@@ -1686,7 +1761,7 @@ mod tests {
             .await
             .expect("failed to insert controller session");
 
-        database
+        (database, pool)
     }
 
     #[tokio::test]
@@ -1773,6 +1848,7 @@ mod tests {
     fn planned_task(session_orchestration_id: i64, task_key: &str) -> PersistedOrchestrationTask {
         PersistedOrchestrationTask {
             acceptance_criteria: format!(r#"["Complete {task_key}"]"#),
+            kind: "Implementation".to_string(),
             merge_position: 0,
             prompt: format!("Complete {task_key}"),
             session_orchestration_id,
@@ -1942,7 +2018,157 @@ mod tests {
         assert_eq!(tasks[0].task_key, "alpha");
         assert_eq!(tasks[0].child_session_id, None);
         assert_eq!(tasks[0].attempt_count, 0);
+        assert_eq!(
+            tasks[0].kind,
+            OrchestrationTaskKind::Implementation.to_string()
+        );
         assert_eq!(tasks[0].touched_areas, r#"["crates/alpha/"]"#);
+        assert!(tasks[0].child_answer.is_none());
+        assert!(tasks[0].research_report.is_none());
+    }
+
+    #[tokio::test]
+    async fn research_task_round_trips_report_and_latest_child_answer_without_scope() {
+        // Arrange
+        let database = controller_fixture().await;
+        let orchestration_id = database
+            .orchestrations()
+            .insert_orchestration("controller", &OrchestrationStatus::Running.to_string(), 2)
+            .await
+            .expect("failed to insert orchestration");
+        let task_id = database
+            .orchestrations()
+            .upsert_orchestration_task(PersistedOrchestrationTask {
+                kind: OrchestrationTaskKind::Research.to_string(),
+                touched_areas: "[]".to_string(),
+                ..planned_task(orchestration_id, "architecture")
+            })
+            .await
+            .expect("failed to insert research task");
+        assert!(
+            database
+                .orchestrations()
+                .claim_orchestration_task(task_id)
+                .await
+                .expect("failed to claim research task")
+        );
+        database
+            .sessions()
+            .insert_session_with_agent(PersistedSessionCreation {
+                agent: "codex",
+                base_branch: "main",
+                id: "research-child",
+                is_draft: false,
+                model: AgentKind::Codex.default_model().as_str(),
+                orchestration_task_id: Some(task_id),
+                parent_session_id: None,
+                personality_id: None,
+                project_id: 1,
+                reasoning_level: ReasoningLevel::default(),
+                role: Some("OrchestrationResearcher"),
+                speed_mode: SpeedMode::Normal,
+                status: "Review",
+            })
+            .await
+            .expect("failed to insert research child");
+        assert!(
+            database
+                .orchestrations()
+                .link_orchestration_task_child(task_id, "research-child")
+                .await
+                .expect("failed to link research child")
+        );
+        database
+            .sessions()
+            .append_session_message(
+                "research-child",
+                SessionMessageKind::AssistantAnswer,
+                "Full architecture report",
+            )
+            .await
+            .expect("failed to persist research answer");
+
+        // Act
+        database
+            .orchestrations()
+            .update_orchestration_task_research_report(task_id, "Full architecture report")
+            .await
+            .expect("failed to persist research report");
+        let task = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration_id)
+            .await
+            .expect("failed to load research task")
+            .remove(0);
+        let scope = database
+            .orchestrations()
+            .load_orchestration_task_scope_for_child("research-child")
+            .await
+            .expect("failed to inspect research child scope");
+
+        // Assert
+        assert_eq!(task.kind, OrchestrationTaskKind::Research.to_string());
+        assert_eq!(
+            task.child_answer.as_deref(),
+            Some("Full architecture report")
+        );
+        assert_eq!(
+            task.research_report.as_deref(),
+            Some("Full architecture report")
+        );
+        assert!(scope.is_none());
+    }
+
+    #[tokio::test]
+    async fn orchestration_task_kind_validation_rejects_unknown_writes_and_hydration() {
+        // Arrange
+        let (database, pool) = controller_fixture_with_pool().await;
+        let orchestration_id = database
+            .orchestrations()
+            .insert_orchestration("controller", &OrchestrationStatus::Running.to_string(), 2)
+            .await
+            .expect("failed to insert orchestration");
+        let invalid_task = PersistedOrchestrationTask {
+            kind: "Unknown".to_string(),
+            ..planned_task(orchestration_id, "invalid-write")
+        };
+
+        // Act
+        let write_error = database
+            .orchestrations()
+            .upsert_orchestration_task(invalid_task)
+            .await
+            .expect_err("unknown task kind should be rejected before persistence");
+        sqlx::query(
+            "INSERT INTO session_orchestration_task (session_orchestration_id, task_key, title, \
+             prompt, status, kind) VALUES (?, 'invalid-read', 'Invalid', 'Inspect', 'Planned', \
+             'Unknown')",
+        )
+        .bind(orchestration_id)
+        .execute(&pool)
+        .await
+        .expect("failed to seed invalid persisted kind");
+        let read_error = database
+            .orchestrations()
+            .load_orchestration_tasks(orchestration_id)
+            .await
+            .expect_err("unknown persisted task kind should fail hydration");
+
+        // Assert
+        assert!(matches!(
+            write_error,
+            DbError::InvalidData {
+                entity: "orchestration task kind",
+                reason,
+            } if reason == "unknown persisted kind `Unknown`"
+        ));
+        assert!(matches!(
+            read_error,
+            DbError::InvalidData {
+                entity: "orchestration task kind",
+                reason,
+            } if reason == "unknown persisted kind `Unknown`"
+        ));
     }
 
     #[tokio::test]

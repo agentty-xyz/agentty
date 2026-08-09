@@ -110,6 +110,37 @@ fn seed_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
     Ok(())
 }
 
+/// Seeds a completed read-only research task whose temporary worktree had
+/// edits so the campaign board proves both report capture and discard status.
+fn seed_reported_research_task(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        sqlx::query(
+            "UPDATE session_orchestration_task SET kind = 'Research', title = 'Architecture \
+             review', prompt = 'Inspect architecture', touched_areas = '[]', status = 'Reported', \
+             research_report = 'Architecture boundaries are documented', verification_verdict = \
+             'Pass' WHERE task_key = 'protocol'",
+        )
+        .execute(database.pool())
+        .await?;
+        sqlx::query(
+            "UPDATE session SET role = 'OrchestrationResearcher', has_diff = 1, status = \
+             'Canceled', archived_diff = 'diff --git a/policy.txt b/policy.txt\n+Unexpected \
+             research write\n' WHERE id = ?",
+        )
+        .bind(WORKER_ID)
+        .execute(database.pool())
+        .await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    Ok(())
+}
+
 /// Seeds one managed worker executing its first accepted review-remediation
 /// continuation so the campaign board exposes stable remediation progress.
 fn seed_orchestration_review_remediation(env: &BuilderEnv) -> E2eResult {
@@ -444,6 +475,56 @@ fn test_orchestration_review_remediation() -> E2eResult {
                     "Protocol contract [protocol]: applying review; remediation 1/3",
                     &full,
                 );
+            },
+        )
+}
+
+#[test]
+fn test_orchestration_research_report() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("orchestration_research_report")
+        .with_git()
+        .setup(seed_reported_research_task)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("[Research] Architecture review", 5000)
+                    .capture_labeled(
+                        "research_report",
+                        "Read-only research report on campaign board",
+                    )
+                    .press_key("q")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Managed by controller-0001", 5000)
+                    .press_key("d")
+                    .wait_for_text("Unexpected research write", 5000)
+                    .capture_labeled(
+                        "research_archived_diff",
+                        "Archived research diff after temporary cleanup",
+                    )
+            },
+            |frame, report| {
+                let report_frame = common::frame_from_capture(&report.captures[0]);
+                let report_full = Region::full(report_frame.cols(), report_frame.rows());
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    &report_frame,
+                    "[Research] Architecture review [protocol]: reported",
+                    &report_full,
+                );
+                assertion::assert_text_in_region(&report_frame, "report captured;", &report_full);
+                assertion::assert_text_in_region(
+                    &report_frame,
+                    "temporary edits discarded; verified",
+                    &report_full,
+                );
+                assertion::assert_text_in_region(frame, "Unexpected research write", &full);
+                assertion::assert_text_in_region(frame, "policy.txt", &full);
+                assertion::assert_text_in_region(frame, "q/Esc: back", &full);
             },
         )
 }

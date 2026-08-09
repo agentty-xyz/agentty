@@ -7,6 +7,7 @@ use ag_protocol::TurnPromptAttachment;
 
 use crate::channel::AgentRequestKind;
 use crate::model::agent::ReasoningLevel;
+use crate::model::permission::PermissionMode;
 use crate::model::session::SpeedMode;
 
 /// Transport runtime used to execute turns for one backend.
@@ -55,6 +56,8 @@ pub struct BuildCommandRequest<'a> {
     pub main_checkout_root: Option<&'a Path>,
     /// Provider-specific model identifier.
     pub model: &'a str,
+    /// Filesystem and command permission policy for this turn.
+    pub permission_mode: PermissionMode,
     /// Current personality body included during a full prompt bootstrap.
     pub personality_prompt: Option<&'a str>,
     /// User prompt to send.

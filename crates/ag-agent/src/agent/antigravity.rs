@@ -77,6 +77,7 @@ impl AgentBackend for AntigravityBackend {
             folder,
             main_checkout_root: _main_checkout_root,
             model,
+            permission_mode,
             prompt: _prompt,
             request_kind: _request_kind,
             replay_transcript: _replay_transcript,
@@ -92,9 +93,13 @@ impl AgentBackend for AntigravityBackend {
             CliPromptAccessRootMode::WorkspaceThenAttachments,
         );
 
+        command.arg("--sandbox");
+        if permission_mode.is_read_only() {
+            command.arg("--mode").arg("plan");
+        } else {
+            command.arg("--dangerously-skip-permissions");
+        }
         command
-            .arg("--sandbox")
-            .arg("--dangerously-skip-permissions")
             .arg("--print-timeout")
             .arg(ANTIGRAVITY_PRINT_TIMEOUT)
             .arg("--model")
@@ -178,6 +183,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: requested_model,
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
@@ -224,6 +230,47 @@ mod tests {
     }
 
     #[test]
+    /// Verifies Antigravity research turns use provider plan mode without
+    /// bypassing permission checks.
+    fn test_antigravity_read_only_mode_uses_sandboxed_plan_mode() {
+        // Arrange
+        let temp_directory = visible_tempdir();
+        let backend = supported_backend();
+
+        // Act
+        let command = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[],
+                folder: temp_directory.path(),
+                main_checkout_root: None,
+                replay_transcript: None,
+                model: AgentModel::Gemini31Pro.provider_model_str(),
+                permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+                personality_prompt: None,
+                prompt: "Inspect the architecture",
+                reasoning_level: ReasoningLevel::default(),
+                request_kind: &session_start_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
+            },
+        )
+        .expect("command should build");
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(args.iter().any(|argument| argument == "--sandbox"));
+        assert!(args.windows(2).any(|pair| pair == ["--mode", "plan"]));
+        assert!(
+            !args
+                .iter()
+                .any(|argument| argument == "--dangerously-skip-permissions")
+        );
+    }
+
+    #[test]
     /// Verifies Antigravity receives every supported effort and caps higher
     /// Agentty reasoning levels at the CLI's highest accepted value.
     fn test_antigravity_build_command_passes_supported_effort() {
@@ -242,6 +289,7 @@ mod tests {
                     main_checkout_root: None,
                     replay_transcript: None,
                     model: AgentModel::Gemini31Pro.provider_model_str(),
+                    permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                     personality_prompt: None,
                     prompt: "Write tests",
                     reasoning_level,
@@ -288,6 +336,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: requested_model,
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
@@ -363,6 +412,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: AgentModel::Gemini31Pro.provider_model_str(),
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Write tests",
                 reasoning_level: ReasoningLevel::default(),
@@ -398,6 +448,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: Some(&replay_transcript),
                 model: AgentModel::Gemini31Pro.provider_model_str(),
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Continue work",
                 reasoning_level: ReasoningLevel::default(),
@@ -436,6 +487,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: AgentModel::Gemini31Pro.provider_model_str(),
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Review [Image #1]",
                 reasoning_level: ReasoningLevel::default(),
@@ -477,6 +529,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: requested_model,
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Review [Image #1]",
                 reasoning_level: ReasoningLevel::default(),
@@ -549,6 +602,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: Some("previous answer"),
                 model: AgentModel::Gemini31Pro.provider_model_str(),
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "continue work",
                 reasoning_level: ReasoningLevel::default(),

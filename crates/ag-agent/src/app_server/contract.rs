@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use crate::app_server::AppServerError;
 use crate::channel::{AgentRequestKind, LiveTranscript, PersonalityPrompt};
 use crate::model::agent::ReasoningLevel;
+use crate::model::permission::PermissionMode;
 use crate::model::session::SpeedMode;
 
 /// Boxed async result used by [`AppServerClient`] trait methods.
@@ -61,6 +62,8 @@ pub struct AppServerTurnRequest {
     pub main_checkout_root: Option<PathBuf>,
     /// Provider-specific model identifier.
     pub model: String,
+    /// Filesystem and command permission policy for this turn.
+    pub permission_mode: PermissionMode,
     /// Personality prompt state resolved for this turn.
     pub personality: PersonalityPrompt,
     /// Structured prompt payload for this turn.

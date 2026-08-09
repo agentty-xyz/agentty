@@ -10,6 +10,7 @@ use ag_protocol::{AgentResponse, ProtocolRequestProfile, TurnPrompt};
 use tokio::sync::mpsc;
 
 use crate::model::agent::ReasoningLevel;
+use crate::model::permission::PermissionMode;
 use crate::model::session::SpeedMode;
 
 /// Boxed async result used by [`AgentChannel`] trait methods.
@@ -256,6 +257,8 @@ pub struct TurnRequest {
     pub main_checkout_root: Option<PathBuf>,
     /// Provider-specific model identifier.
     pub model: String,
+    /// Filesystem and command permission policy for this turn.
+    pub permission_mode: PermissionMode,
     /// Personality prompt state resolved from the session worktree.
     pub personality: PersonalityPrompt,
     /// Structured prompt payload for the turn.

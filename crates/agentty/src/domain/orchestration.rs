@@ -15,6 +15,39 @@ use super::session::Status as SessionStatus;
 /// worker settlement wave.
 pub const MAX_AUTOMATED_REVIEW_ITERATIONS: i64 = 3;
 
+/// Execution behavior for one persisted orchestration task.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum OrchestrationTaskKind {
+    /// Produces branch changes that proceed through review and integration.
+    #[default]
+    Implementation,
+    /// Produces a read-only report whose temporary worktree is discarded.
+    Research,
+}
+
+impl fmt::Display for OrchestrationTaskKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            OrchestrationTaskKind::Implementation => "Implementation",
+            OrchestrationTaskKind::Research => "Research",
+        };
+
+        formatter.write_str(value)
+    }
+}
+
+impl FromStr for OrchestrationTaskKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "Implementation" => Ok(OrchestrationTaskKind::Implementation),
+            "Research" => Ok(OrchestrationTaskKind::Research),
+            _ => Err(format!("Unknown orchestration task kind: {value}")),
+        }
+    }
+}
+
 /// Lifecycle state for one controller-owned orchestration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OrchestrationStatus {
@@ -140,6 +173,8 @@ pub enum OrchestrationTaskStatus {
     WaitingForInput,
     /// The child session finished and is ready for review or integration.
     Ready,
+    /// A research child returned its report and its worktree was discarded.
+    Reported,
     /// Approved feedback is being delivered to the existing managed child.
     ContinuationPending,
     /// Verification passed and this task awaits its integration gate.
@@ -186,6 +221,7 @@ impl OrchestrationTaskStatus {
         matches!(
             self,
             OrchestrationTaskStatus::Ready
+                | OrchestrationTaskStatus::Reported
                 | OrchestrationTaskStatus::Integrated
                 | OrchestrationTaskStatus::ReviewRequested
                 | OrchestrationTaskStatus::IntegrationFailed
@@ -249,7 +285,7 @@ impl OrchestrationTaskStatus {
                 OrchestrationTaskStatus::Running
                     | OrchestrationTaskStatus::Reviewing
                     | OrchestrationTaskStatus::WaitingForInput,
-                OrchestrationTaskStatus::Ready
+                OrchestrationTaskStatus::Ready | OrchestrationTaskStatus::Reported
             ) | (
                 OrchestrationTaskStatus::Reviewing,
                 OrchestrationTaskStatus::ReviewApplying
@@ -317,6 +353,7 @@ impl OrchestrationTaskStatus {
             OrchestrationTaskStatus::ReviewApplying => ("ReviewApplying", "applying review"),
             OrchestrationTaskStatus::WaitingForInput => ("WaitingForInput", "waiting on you"),
             OrchestrationTaskStatus::Ready => ("Ready", "ready"),
+            OrchestrationTaskStatus::Reported => ("Reported", "reported"),
             OrchestrationTaskStatus::ContinuationPending => ("ContinuationPending", "continuing"),
             OrchestrationTaskStatus::AwaitingIntegration => {
                 ("AwaitingIntegration", "awaiting integration")
@@ -378,9 +415,12 @@ impl OrchestrationPolicy {
 
 /// Protocol-independent snapshot of one task proposed by an orchestration
 /// controller.
+#[derive(Clone)]
 pub struct OrchestrationPlanTask {
     /// Observable conditions checked during settlement verification.
     pub acceptance_criteria: Vec<String>,
+    /// Whether the task implements changes or returns research findings.
+    pub kind: OrchestrationTaskKind,
     /// Standalone task prompt delivered to the child session.
     pub prompt: String,
     /// Stable kebab-case identity used for retries.
@@ -398,7 +438,19 @@ pub struct OrchestrationPlanTask {
 /// Returns a user-facing reason when the plan is too small, incomplete, or uses
 /// invalid task keys or planning paths.
 pub fn validate_subtasks(subtasks: &[OrchestrationPlanTask], is_retry: bool) -> Result<(), String> {
-    if subtasks.len() < 2 && !is_retry {
+    let is_research_wave = !subtasks.is_empty()
+        && subtasks
+            .iter()
+            .all(|subtask| subtask.kind == OrchestrationTaskKind::Research);
+    let has_research = subtasks
+        .iter()
+        .any(|subtask| subtask.kind == OrchestrationTaskKind::Research);
+    if has_research && !is_research_wave {
+        return Err(
+            "research and implementation tasks must be proposed in separate waves.".to_string(),
+        );
+    }
+    if subtasks.len() < 2 && !is_retry && !is_research_wave {
         return Err("a meaningful orchestration requires at least two subtasks.".to_string());
     }
     let mut task_keys = HashSet::new();
@@ -420,7 +472,11 @@ pub fn validate_subtasks(subtasks: &[OrchestrationPlanTask], is_retry: bool) -> 
                 subtask.task_key
             ));
         }
-        for area in &subtask.touched_areas {
+        for area in subtask
+            .touched_areas
+            .iter()
+            .filter(|_| subtask.kind == OrchestrationTaskKind::Implementation)
+        {
             normalized_scope(area).map_err(|reason| {
                 format!(
                     "subtask `{}` has invalid touched area `{area}`: {reason}.",
@@ -477,6 +533,7 @@ impl FromStr for OrchestrationTaskStatus {
             "ReviewApplying" => Ok(OrchestrationTaskStatus::ReviewApplying),
             "WaitingForInput" => Ok(OrchestrationTaskStatus::WaitingForInput),
             "Ready" => Ok(OrchestrationTaskStatus::Ready),
+            "Reported" => Ok(OrchestrationTaskStatus::Reported),
             "ContinuationPending" => Ok(OrchestrationTaskStatus::ContinuationPending),
             "AwaitingIntegration" => Ok(OrchestrationTaskStatus::AwaitingIntegration),
             "Merging" => Ok(OrchestrationTaskStatus::Merging),
@@ -545,6 +602,27 @@ mod tests {
     }
 
     #[test]
+    fn orchestration_task_kind_round_trips_persisted_values() {
+        // Arrange
+        let kinds = [
+            OrchestrationTaskKind::Implementation,
+            OrchestrationTaskKind::Research,
+        ];
+
+        // Act
+        let round_tripped = kinds.map(|kind| {
+            kind.to_string()
+                .parse::<OrchestrationTaskKind>()
+                .expect("kind should parse")
+        });
+
+        // Assert
+        assert_eq!(round_tripped, kinds);
+        assert_eq!(OrchestrationTaskKind::default(), kinds[0]);
+        assert!("Unknown".parse::<OrchestrationTaskKind>().is_err());
+    }
+
+    #[test]
     /// Restricts restart re-linking to orchestrations that still need work.
     fn test_only_unsettled_orchestrations_are_active() {
         // Arrange / Act / Assert
@@ -571,6 +649,7 @@ mod tests {
             OrchestrationTaskStatus::ReviewApplying,
             OrchestrationTaskStatus::WaitingForInput,
             OrchestrationTaskStatus::Ready,
+            OrchestrationTaskStatus::Reported,
             OrchestrationTaskStatus::ContinuationPending,
             OrchestrationTaskStatus::AwaitingIntegration,
             OrchestrationTaskStatus::Merging,
@@ -601,6 +680,7 @@ mod tests {
     fn test_settled_task_statuses_include_cancellation() {
         // Arrange / Act / Assert
         assert!(OrchestrationTaskStatus::Ready.is_settled());
+        assert!(OrchestrationTaskStatus::Reported.is_settled());
         assert!(OrchestrationTaskStatus::Integrated.is_settled());
         assert!(OrchestrationTaskStatus::ReviewRequested.is_settled());
         assert!(OrchestrationTaskStatus::IntegrationFailed.is_settled());
@@ -651,6 +731,9 @@ mod tests {
         );
         assert!(OrchestrationTaskStatus::Running.can_transition_to(OrchestrationTaskStatus::Ready));
         assert!(
+            OrchestrationTaskStatus::Running.can_transition_to(OrchestrationTaskStatus::Reported)
+        );
+        assert!(
             OrchestrationTaskStatus::Running.can_transition_to(OrchestrationTaskStatus::Reviewing)
         );
         assert!(
@@ -691,6 +774,7 @@ mod tests {
                 .into_iter()
                 .all(OrchestrationTaskStatus::is_integration_settled)
         );
+        assert!(!OrchestrationTaskStatus::Reported.is_integration_settled());
         assert!(!OrchestrationTaskStatus::AwaitingIntegration.is_integration_settled());
         assert!(!OrchestrationTaskStatus::ReviewRequested.is_integration_settled());
         assert!(
@@ -719,6 +803,7 @@ mod tests {
             OrchestrationTaskStatus::ReviewApplying,
             OrchestrationTaskStatus::WaitingForInput,
             OrchestrationTaskStatus::Ready,
+            OrchestrationTaskStatus::Reported,
             OrchestrationTaskStatus::ContinuationPending,
             OrchestrationTaskStatus::AwaitingIntegration,
             OrchestrationTaskStatus::Merging,
@@ -745,6 +830,7 @@ mod tests {
                 "applying review",
                 "waiting on you",
                 "ready",
+                "reported",
                 "continuing",
                 "awaiting integration",
                 "integrating",
@@ -755,6 +841,82 @@ mod tests {
                 "failed",
                 "canceled",
             ]
+        );
+    }
+
+    #[test]
+    fn validation_allows_one_research_task_and_ignores_its_touched_areas() {
+        // Arrange
+        let plan = [OrchestrationPlanTask {
+            acceptance_criteria: vec!["Architecture questions are answered".to_string()],
+            kind: OrchestrationTaskKind::Research,
+            prompt: "Inspect the architecture".to_string(),
+            task_key: "architecture".to_string(),
+            title: "Architecture research".to_string(),
+            touched_areas: vec!["**".to_string()],
+        }];
+
+        // Act
+        let result = validate_subtasks(&plan, false);
+
+        // Assert
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn validation_rejects_one_implementation_task_and_invalid_implementation_scope() {
+        // Arrange
+        let single = [OrchestrationPlanTask {
+            acceptance_criteria: vec!["Feature is complete".to_string()],
+            kind: OrchestrationTaskKind::Implementation,
+            prompt: "Implement the feature".to_string(),
+            task_key: "feature".to_string(),
+            title: "Feature".to_string(),
+            touched_areas: Vec::new(),
+        }];
+        let invalid_scope = [
+            OrchestrationPlanTask {
+                touched_areas: vec!["crates/one/**".to_string()],
+                ..single[0].clone()
+            },
+            OrchestrationPlanTask {
+                task_key: "tests".to_string(),
+                touched_areas: Vec::new(),
+                ..single[0].clone()
+            },
+        ];
+        let mixed = [
+            OrchestrationPlanTask {
+                kind: OrchestrationTaskKind::Research,
+                ..single[0].clone()
+            },
+            OrchestrationPlanTask {
+                task_key: "implementation".to_string(),
+                ..single[0].clone()
+            },
+        ];
+
+        // Act
+        let single_result = validate_subtasks(&single, false);
+        let empty_result = validate_subtasks(&[], false);
+        let scope_result = validate_subtasks(&invalid_scope, false);
+        let mixed_result = validate_subtasks(&mixed, false);
+
+        // Assert
+        assert_eq!(
+            single_result,
+            Err("a meaningful orchestration requires at least two subtasks.".to_string())
+        );
+        assert_eq!(
+            empty_result,
+            Err("a meaningful orchestration requires at least two subtasks.".to_string())
+        );
+        assert!(scope_result.is_err_and(|reason| reason.contains("wildcard patterns")));
+        assert_eq!(
+            mixed_result,
+            Err(
+                "research and implementation tasks must be proposed in separate waves.".to_string()
+            )
         );
     }
 

@@ -301,24 +301,7 @@ impl App {
         &mut self,
         request: CreateSessionRequest,
     ) -> Result<SessionId, ApiSessionError> {
-        if request.project_id != self.active_project_id() {
-            return Err(ApiSessionError::Operation(format!(
-                "Project `{}` is not active",
-                request.project_id
-            )));
-        }
-        if let CreateSessionMode::Stacked { parent_session_id } = &request.mode {
-            let parent = self
-                .get_api_session(parent_session_id)
-                .await?
-                .ok_or(ApiSessionError::NotFound)?;
-            if parent.settings.project_id != request.project_id {
-                return Err(ApiSessionError::Operation(format!(
-                    "Parent session `{parent_session_id}` belongs to project `{}`, not `{}`",
-                    parent.settings.project_id, request.project_id
-                )));
-            }
-        }
+        self.validate_api_session_request(&request).await?;
 
         let inherited_settings = self
             .inherited_creation_settings(
@@ -378,6 +361,15 @@ impl App {
                 )
                 .await
             }
+            CreateSessionMode::OrchestrationResearch { task_id } => {
+                self.create_api_materialized_session(
+                    request.project_id,
+                    base_branch_override,
+                    creation_settings,
+                    SessionCreationKind::OrchestrationResearch { task_id },
+                )
+                .await
+            }
             CreateSessionMode::Stacked { parent_session_id } => {
                 if let Some(settings) = creation_settings {
                     self.sessions
@@ -398,6 +390,32 @@ impl App {
         self.finish_api_session_creation(&session_id).await;
 
         Ok(SessionId::from(session_id))
+    }
+
+    async fn validate_api_session_request(
+        &self,
+        request: &CreateSessionRequest,
+    ) -> Result<(), ApiSessionError> {
+        if request.project_id != self.active_project_id() {
+            return Err(ApiSessionError::Operation(format!(
+                "Project `{}` is not active",
+                request.project_id
+            )));
+        }
+        if let CreateSessionMode::Stacked { parent_session_id } = &request.mode {
+            let parent = self
+                .get_api_session(parent_session_id)
+                .await?
+                .ok_or(ApiSessionError::NotFound)?;
+            if parent.settings.project_id != request.project_id {
+                return Err(ApiSessionError::Operation(format!(
+                    "Parent session `{parent_session_id}` belongs to project `{}`, not `{}`",
+                    parent.settings.project_id, request.project_id
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     async fn create_api_materialized_session(
@@ -1159,6 +1177,7 @@ mod tests {
     use ag_forge::ForgeKind;
 
     use super::*;
+    use crate::domain::orchestration::OrchestrationTaskKind;
     use crate::domain::session::Status;
     use crate::infra::db::PersistedOrchestrationTask;
 
@@ -1279,6 +1298,15 @@ mod tests {
         app: &mut App,
         link_child: bool,
     ) -> ActiveOrchestrationFixture {
+        seed_active_orchestration_session(app, link_child, OrchestrationTaskKind::Implementation)
+            .await
+    }
+
+    async fn seed_active_orchestration_session(
+        app: &mut App,
+        link_child: bool,
+        task_kind: OrchestrationTaskKind,
+    ) -> ActiveOrchestrationFixture {
         let project_id = app.active_project_id();
         let controller_session_id = request_session_creation(
             app,
@@ -1307,6 +1335,7 @@ mod tests {
             .orchestrations()
             .upsert_orchestration_task(PersistedOrchestrationTask {
                 acceptance_criteria: r#"["Worker task is implemented"]"#.to_string(),
+                kind: task_kind.to_string(),
                 merge_position: 0,
                 prompt: "Implement the worker task".to_string(),
                 session_orchestration_id: orchestration_id,
@@ -1321,6 +1350,7 @@ mod tests {
             .orchestrations()
             .upsert_orchestration_task(PersistedOrchestrationTask {
                 acceptance_criteria: r#"["Unlinked task is implemented"]"#.to_string(),
+                kind: "Implementation".to_string(),
                 merge_position: 1,
                 prompt: "Implement the unlinked task".to_string(),
                 session_orchestration_id: orchestration_id,
@@ -1342,7 +1372,14 @@ mod tests {
             app,
             CreateSessionRequest {
                 inherit_from_session_id: Some(controller_session_id.clone()),
-                mode: CreateSessionMode::OrchestrationChild { task_id },
+                mode: match task_kind {
+                    OrchestrationTaskKind::Implementation => {
+                        CreateSessionMode::OrchestrationChild { task_id }
+                    }
+                    OrchestrationTaskKind::Research => {
+                        CreateSessionMode::OrchestrationResearch { task_id }
+                    }
+                },
                 project_id,
             },
         )
@@ -1367,6 +1404,38 @@ mod tests {
             orchestration: orchestration_id,
             task: task_id,
         }
+    }
+
+    #[tokio::test]
+    async fn orchestration_research_mode_creates_a_managed_researcher() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+
+        // Act
+        let fixture =
+            seed_active_orchestration_session(&mut app, true, OrchestrationTaskKind::Research)
+                .await;
+        let child = app
+            .sessions
+            .session_for_id(&fixture.child)
+            .expect("research child should be loaded");
+        let persisted_task = app
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_tasks(fixture.orchestration)
+            .await
+            .expect("research task should load from persistence")
+            .into_iter()
+            .find(|task| task.id == fixture.task)
+            .expect("research task should exist in persistence");
+
+        // Assert
+        assert_eq!(child.role, SessionRole::OrchestrationResearcher);
+        assert_eq!(
+            persisted_task.child_session_id.as_deref(),
+            Some(fixture.child.as_str())
+        );
     }
 
     fn question_transition_app_server(

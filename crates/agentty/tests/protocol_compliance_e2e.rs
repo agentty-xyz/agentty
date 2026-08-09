@@ -271,6 +271,7 @@ fn build_turn_request(folder: PathBuf, model: AgentModel) -> TurnRequest {
         folder,
         main_checkout_root: None,
         model: model.provider_model_str().to_string(),
+        permission_mode: ag_agent::PermissionMode::AutoEdit,
         personality: ag_agent::PersonalityPrompt::default(),
         prompt: PROTOCOL_COMPLIANCE_PROMPT.to_string().into(),
         reasoning_level: ReasoningLevel::default(),

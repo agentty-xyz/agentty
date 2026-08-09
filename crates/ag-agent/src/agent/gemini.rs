@@ -16,7 +16,12 @@ impl AgentBackend for GeminiBackend {
         &'request self,
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
-        Ok(build_gemini_acp_command(request.folder, request.model))
+        let mut command = build_gemini_acp_command(request.folder, request.model);
+        if request.permission_mode.is_read_only() {
+            command.arg("--approval-mode").arg("plan").arg("--sandbox");
+        }
+
+        Ok(command)
     }
 }
 
@@ -67,6 +72,7 @@ mod tests {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "gemini-3.6-flash",
+                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Generate title",
                 reasoning_level: ReasoningLevel::default(),
@@ -83,5 +89,50 @@ mod tests {
         // Assert
         assert_eq!(args, vec!["--acp", "--model", "gemini-3.6-flash"]);
         assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
+    }
+
+    #[test]
+    /// Verifies Gemini research turns combine ACP permission cancellation
+    /// with the CLI's native sandboxed plan mode.
+    fn test_gemini_read_only_command_uses_sandboxed_plan_mode() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let backend = GeminiBackend;
+
+        // Act
+        let command = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[],
+                folder: temp_directory.path(),
+                main_checkout_root: None,
+                replay_transcript: None,
+                model: "gemini-3.6-flash",
+                permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+                personality_prompt: None,
+                prompt: "Inspect the architecture",
+                reasoning_level: ReasoningLevel::default(),
+                request_kind: &utility_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
+            },
+        )
+        .expect("command should build");
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            args,
+            vec![
+                "--acp",
+                "--model",
+                "gemini-3.6-flash",
+                "--approval-mode",
+                "plan",
+                "--sandbox"
+            ]
+        );
     }
 }

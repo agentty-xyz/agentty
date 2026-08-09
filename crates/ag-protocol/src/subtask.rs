@@ -4,6 +4,18 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Execution behavior requested for one orchestration subtask.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SubtaskKind {
+    /// Produces repository changes for later verification and integration.
+    #[default]
+    Implementation,
+    /// Inspects the repository without retaining any worktree changes and
+    /// returns a report to the controller.
+    Research,
+}
+
 /// One proposed child session in an orchestrator decomposition plan.
 ///
 /// Each subtask is executed unattended by its own child session in its own
@@ -29,6 +41,16 @@ pub struct SubtaskItem {
                        against the same list."
     )]
     pub acceptance_criteria: Vec<String>,
+    /// Whether this task implements repository changes or only reports
+    /// read-only findings.
+    #[serde(default)]
+    #[schemars(
+        title = "kind",
+        description = "Execution behavior for this subtask. `implementation` (the default) may \
+                       change repository files and proceeds to integration. `research` runs as a \
+                       temporary read-only child, returns a report, and is never integrated."
+    )]
+    pub kind: SubtaskKind,
     /// Complete standalone prompt handed to the child session.
     #[schemars(
         title = "prompt",

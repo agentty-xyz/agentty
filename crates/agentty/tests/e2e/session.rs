@@ -3077,6 +3077,7 @@ fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("j")
                     .press_key("j")
+                    .press_key("j")
                     .press_key("Enter")
                     .press_key("Enter")
                     .press_key("j")

@@ -15,6 +15,7 @@ use crate::agent;
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport::{self, extract_json_error_message, response_id_matches};
 use crate::model::agent::{AgentKind, ReasoningLevel};
+use crate::model::permission::PermissionMode;
 use crate::model::session::SpeedMode;
 
 /// Mutable runtime state required while a Codex app-server process is active.
@@ -25,6 +26,8 @@ pub(super) struct CodexRuntimeState {
     pub(super) latest_input_tokens: u64,
     /// Selected Codex model identifier.
     pub(super) model: String,
+    /// Provider permission policy enforced for this runtime.
+    pub(super) permission_mode: PermissionMode,
     /// Whether startup restored provider-native context.
     pub(super) restored_context: bool,
     /// Active provider-native thread identifier.
@@ -33,11 +36,12 @@ pub(super) struct CodexRuntimeState {
 
 impl CodexRuntimeState {
     /// Creates runtime state for one pending session bootstrap.
-    pub(super) fn new(folder: PathBuf, model: String) -> Self {
+    pub(super) fn new(folder: PathBuf, model: String, permission_mode: PermissionMode) -> Self {
         Self {
             folder,
             latest_input_tokens: 0,
             model,
+            permission_mode,
             restored_context: false,
             thread_id: String::new(),
         }
@@ -64,6 +68,7 @@ pub(super) async fn start_runtime(
             main_checkout_root: request.main_checkout_root.as_deref(),
             replay_transcript: None,
             model: &request.model,
+            permission_mode: request.permission_mode,
             personality_prompt: None,
             prompt: "",
             reasoning_level: request.reasoning_level,
@@ -100,7 +105,11 @@ pub(super) async fn start_runtime_with_built_command(
         "Codex app-server stdin is unavailable",
         "Failed reading Codex app-server stdout",
     );
-    let mut state = CodexRuntimeState::new(request.folder.clone(), request.model.clone());
+    let mut state = CodexRuntimeState::new(
+        request.folder.clone(),
+        request.model.clone(),
+        request.permission_mode,
+    );
 
     let bootstrap_result = async {
         initialize_runtime(&mut transport).await?;
@@ -109,6 +118,7 @@ pub(super) async fn start_runtime_with_built_command(
             &state.folder,
             &state.model,
             request.provider_conversation_id.as_deref(),
+            request.permission_mode,
             request.reasoning_level,
             request.speed_mode,
         )
@@ -175,6 +185,7 @@ pub(super) async fn start_or_resume_thread<Transport: AppServerRuntimeTransport>
     folder: &Path,
     model: &str,
     provider_conversation_id: Option<&str>,
+    permission_mode: PermissionMode,
     reasoning_level: ReasoningLevel,
     speed_mode: SpeedMode,
 ) -> Result<(String, bool), AppServerError> {
@@ -183,6 +194,7 @@ pub(super) async fn start_or_resume_thread<Transport: AppServerRuntimeTransport>
             transport,
             provider_conversation_id,
             model,
+            permission_mode,
             reasoning_level,
             speed_mode,
         )
@@ -191,7 +203,15 @@ pub(super) async fn start_or_resume_thread<Transport: AppServerRuntimeTransport>
         return Ok((thread_id, true));
     }
 
-    let thread_id = start_thread(transport, folder, model, reasoning_level, speed_mode).await?;
+    let thread_id = start_thread(
+        transport,
+        folder,
+        model,
+        permission_mode,
+        reasoning_level,
+        speed_mode,
+    )
+    .await?;
 
     Ok((thread_id, false))
 }
@@ -201,12 +221,19 @@ pub(super) async fn start_thread<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     folder: &Path,
     model: &str,
+    permission_mode: PermissionMode,
     reasoning_level: ReasoningLevel,
     speed_mode: SpeedMode,
 ) -> Result<String, AppServerError> {
     let thread_start_id = format!("thread-start-{}", uuid::Uuid::new_v4());
-    let thread_start_payload =
-        build_thread_start_payload(folder, model, reasoning_level, speed_mode, &thread_start_id);
+    let thread_start_payload = build_thread_start_payload(
+        folder,
+        model,
+        permission_mode,
+        reasoning_level,
+        speed_mode,
+        &thread_start_id,
+    );
 
     transport.write_json_line(thread_start_payload).await?;
     let response_line = transport.wait_for_response_line(thread_start_id).await?;
@@ -234,6 +261,7 @@ pub(super) async fn resume_thread<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     thread_id: &str,
     model: &str,
+    permission_mode: PermissionMode,
     reasoning_level: ReasoningLevel,
     speed_mode: SpeedMode,
 ) -> Result<String, AppServerError> {
@@ -242,6 +270,7 @@ pub(super) async fn resume_thread<Transport: AppServerRuntimeTransport>(
         &thread_resume_request_id,
         thread_id,
         model,
+        permission_mode,
         reasoning_level,
         speed_mode,
     );
@@ -274,6 +303,7 @@ pub(super) async fn resume_thread<Transport: AppServerRuntimeTransport>(
 pub(super) fn build_thread_start_payload(
     folder: &Path,
     model: &str,
+    permission_mode: PermissionMode,
     reasoning_level: ReasoningLevel,
     speed_mode: SpeedMode,
     thread_start_id: &str,
@@ -285,9 +315,9 @@ pub(super) fn build_thread_start_payload(
             "model": model,
             "serviceTier": speed_mode.codex_service_tier(),
             "cwd": folder.to_string_lossy(),
-            "approvalPolicy": policy::approval_policy(),
-            "sandbox": policy::thread_sandbox_mode(),
-            "config": policy::thread_config(reasoning_level),
+            "approvalPolicy": policy::approval_policy(permission_mode),
+            "sandbox": policy::thread_sandbox_mode(permission_mode),
+            "config": policy::thread_config(permission_mode, reasoning_level),
             "experimentalRawEvents": false,
             "persistExtendedHistory": false
         }
@@ -299,6 +329,7 @@ pub(super) fn build_thread_resume_payload(
     thread_resume_request_id: &str,
     thread_id: &str,
     model: &str,
+    permission_mode: PermissionMode,
     reasoning_level: ReasoningLevel,
     speed_mode: SpeedMode,
 ) -> Value {
@@ -309,9 +340,9 @@ pub(super) fn build_thread_resume_payload(
             "threadId": thread_id,
             "model": model,
             "serviceTier": speed_mode.codex_service_tier(),
-            "approvalPolicy": policy::approval_policy(),
-            "sandbox": policy::thread_sandbox_mode(),
-            "config": policy::thread_config(reasoning_level),
+            "approvalPolicy": policy::approval_policy(permission_mode),
+            "sandbox": policy::thread_sandbox_mode(permission_mode),
+            "config": policy::thread_config(permission_mode, reasoning_level),
             "experimentalRawEvents": false,
             "persistExtendedHistory": false
         }
@@ -342,6 +373,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
         CodexTurnEventLoopInput {
             folder: &state.folder,
             model: &state.model,
+            permission_mode: state.permission_mode,
             prompt: prompt.clone(),
             reasoning_level,
             speed_mode,
@@ -370,6 +402,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
                 CodexTurnEventLoopInput {
                     folder: &state.folder,
                     model: &state.model,
+                    permission_mode: state.permission_mode,
                     prompt,
                     reasoning_level,
                     speed_mode,
@@ -469,6 +502,8 @@ pub(super) struct CodexTurnEventLoopInput<'a> {
     pub(super) model: &'a str,
     /// Prompt payload sent to the runtime.
     pub(super) prompt: TurnPrompt,
+    /// Provider permission policy enforced for this turn.
+    pub(super) permission_mode: PermissionMode,
     /// Reasoning level sent to the runtime.
     pub(super) reasoning_level: ReasoningLevel,
     /// Response-speed preference sent to Codex.
@@ -489,6 +524,7 @@ pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport
 ) -> Result<(String, u64, u64), AppServerError> {
     let turn_start_id = write_turn_start_request(transport, &input).await?;
     let folder = input.folder;
+    let permission_mode = input.permission_mode;
     let turn_timeout = input.turn_timeout;
     let mut state = CodexTurnEventLoopState::new(input.stream_tx);
 
@@ -499,7 +535,13 @@ pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport
             };
 
             if let Some(turn_completion) = state
-                .process_response(transport, folder, &turn_start_id, response_value)
+                .process_response(
+                    transport,
+                    permission_mode,
+                    folder,
+                    &turn_start_id,
+                    response_value,
+                )
                 .await?
             {
                 return Ok(turn_completion);
@@ -540,6 +582,7 @@ impl CodexTurnEventLoopState {
     async fn process_response<Transport: AppServerRuntimeTransport>(
         &mut self,
         transport: &mut Transport,
+        permission_mode: PermissionMode,
         folder: &Path,
         turn_start_id: &str,
         response_value: Value,
@@ -551,7 +594,7 @@ impl CodexTurnEventLoopState {
         }
 
         if let Some(server_request_response) =
-            policy::build_server_request_response(&response_value, folder)
+            policy::build_server_request_response(&response_value, permission_mode, folder)
         {
             transport.write_json_line(server_request_response).await?;
 
@@ -681,44 +724,55 @@ async fn write_turn_start_request<Transport: AppServerRuntimeTransport>(
     input: &CodexTurnEventLoopInput<'_>,
 ) -> Result<String, AppServerError> {
     let turn_start_id = format!("turn-start-{}", uuid::Uuid::new_v4());
-    let turn_start_payload = build_turn_start_payload(
-        input.folder,
-        input.model,
-        input.reasoning_level,
-        input.speed_mode,
-        input.thread_id,
-        &input.prompt,
-        &turn_start_id,
-    );
+    let turn_start_payload = build_turn_start_payload(&CodexTurnStartPayloadInput {
+        folder: input.folder,
+        model: input.model,
+        permission_mode: input.permission_mode,
+        prompt: input.prompt.clone(),
+        reasoning_level: input.reasoning_level,
+        speed_mode: input.speed_mode,
+        thread_id: input.thread_id,
+        turn_start_id: &turn_start_id,
+    });
     transport.write_json_line(turn_start_payload).await?;
 
     Ok(turn_start_id)
 }
 
-/// Builds one `turn/start` request payload for the active thread.
-pub(super) fn build_turn_start_payload(
-    folder: &Path,
-    model: &str,
-    reasoning_level: ReasoningLevel,
-    speed_mode: SpeedMode,
-    thread_id: &str,
-    prompt: impl Into<TurnPrompt>,
-    turn_start_id: &str,
-) -> Value {
-    let prompt = prompt.into();
+/// Inputs required to build one Codex `turn/start` payload.
+pub(super) struct CodexTurnStartPayloadInput<'a> {
+    /// Worktree folder where the turn executes.
+    pub(super) folder: &'a Path,
+    /// Provider model identifier.
+    pub(super) model: &'a str,
+    /// Provider permission policy enforced for the turn.
+    pub(super) permission_mode: PermissionMode,
+    /// Structured prompt content sent to Codex.
+    pub(super) prompt: TurnPrompt,
+    /// Requested Codex reasoning effort.
+    pub(super) reasoning_level: ReasoningLevel,
+    /// Requested Codex service speed.
+    pub(super) speed_mode: SpeedMode,
+    /// Active provider thread identifier.
+    pub(super) thread_id: &'a str,
+    /// Request identifier for the turn-start response.
+    pub(super) turn_start_id: &'a str,
+}
 
+/// Builds one `turn/start` request payload for the active thread.
+pub(super) fn build_turn_start_payload(input: &CodexTurnStartPayloadInput<'_>) -> Value {
     serde_json::json!({
         "method": "turn/start",
-        "id": turn_start_id,
+        "id": input.turn_start_id,
         "params": {
-            "threadId": thread_id,
-            "input": build_turn_input_items(&prompt),
-            "cwd": folder.to_string_lossy(),
-            "approvalPolicy": policy::approval_policy(),
-            "sandboxPolicy": policy::turn_sandbox_policy(folder),
-            "model": model,
-            "serviceTier": speed_mode.codex_service_tier(),
-            "effort": reasoning_level.codex(),
+            "threadId": input.thread_id,
+            "input": build_turn_input_items(&input.prompt),
+            "cwd": input.folder.to_string_lossy(),
+            "approvalPolicy": policy::approval_policy(input.permission_mode),
+            "sandboxPolicy": policy::turn_sandbox_policy(input.permission_mode, input.folder),
+            "model": input.model,
+            "serviceTier": input.speed_mode.codex_service_tier(),
+            "effort": input.reasoning_level.codex(),
             "summary": Value::Null,
             "personality": Value::Null,
             "outputSchema": agent_response_output_schema(SchemaRequiredPolicy::AllProperties)
@@ -944,6 +998,7 @@ mod tests {
             live_transcript: None,
             main_checkout_root: None,
             model: AgentModel::Gpt56Sol.as_str().to_string(),
+            permission_mode: PermissionMode::AutoEdit,
             personality: crate::channel::PersonalityPrompt::active(
                 "Review carefully.".to_string(),
                 true,
@@ -979,6 +1034,7 @@ mod tests {
             live_transcript: None,
             main_checkout_root: None,
             model: AgentModel::Gpt56Sol.as_str().to_string(),
+            permission_mode: PermissionMode::AutoEdit,
             personality: crate::channel::PersonalityPrompt::default(),
             prompt: TurnPrompt::from("Run the turn"),
             request_kind: crate::channel::AgentRequestKind::SessionStart,
@@ -1011,7 +1067,7 @@ mod tests {
         let model = AgentModel::Gpt56Sol.as_str().to_string();
 
         // Act
-        let state = CodexRuntimeState::new(folder.clone(), model.clone());
+        let state = CodexRuntimeState::new(folder.clone(), model.clone(), PermissionMode::AutoEdit);
 
         // Assert
         assert_eq!(state.folder, folder);
@@ -1031,6 +1087,7 @@ mod tests {
         let payload = build_thread_start_payload(
             &folder,
             model,
+            PermissionMode::AutoEdit,
             ReasoningLevel::High,
             SpeedMode::Fast,
             "thread-start-1",
@@ -1080,6 +1137,7 @@ mod tests {
             "thread-resume-1",
             "existing-thread",
             model,
+            PermissionMode::AutoEdit,
             ReasoningLevel::Medium,
             SpeedMode::default(),
         );
@@ -1111,15 +1169,16 @@ mod tests {
         let folder = PathBuf::from("/tmp/agentty-codex-turn-start");
 
         // Act
-        let payload = build_turn_start_payload(
-            &folder,
-            AgentModel::Gpt56Sol.as_str(),
-            ReasoningLevel::Medium,
-            SpeedMode::default(),
-            "thread-1",
-            "Update the repository instructions",
-            "turn-start-1",
-        );
+        let payload = build_turn_start_payload(&CodexTurnStartPayloadInput {
+            folder: &folder,
+            model: AgentModel::Gpt56Sol.as_str(),
+            permission_mode: PermissionMode::AutoEdit,
+            prompt: "Update the repository instructions".into(),
+            reasoning_level: ReasoningLevel::Medium,
+            speed_mode: SpeedMode::default(),
+            thread_id: "thread-1",
+            turn_start_id: "turn-start-1",
+        });
 
         // Assert
         let sandbox_policy = payload
@@ -1140,6 +1199,59 @@ mod tests {
                 .pointer("/params/serviceTier")
                 .and_then(Value::as_str),
             Some("default")
+        );
+    }
+
+    #[test]
+    fn read_only_payloads_deny_writes_network_and_pre_action_requests() {
+        // Arrange
+        let folder = PathBuf::from("/tmp/agentty-codex-research");
+        let approval_request = serde_json::json!({
+            "id": "approval-1",
+            "method": "item/commandExecution/requestApproval"
+        });
+
+        // Act
+        let thread_payload = build_thread_start_payload(
+            &folder,
+            AgentModel::Gpt56Sol.as_str(),
+            PermissionMode::ReadOnly,
+            ReasoningLevel::Medium,
+            SpeedMode::default(),
+            "thread-start-1",
+        );
+        let turn_payload = build_turn_start_payload(&CodexTurnStartPayloadInput {
+            folder: &folder,
+            model: AgentModel::Gpt56Sol.as_str(),
+            permission_mode: PermissionMode::ReadOnly,
+            prompt: "Inspect the architecture".into(),
+            reasoning_level: ReasoningLevel::Medium,
+            speed_mode: SpeedMode::default(),
+            thread_id: "thread-1",
+            turn_start_id: "turn-start-1",
+        });
+        let approval_response = policy::build_server_request_response(
+            &approval_request,
+            PermissionMode::ReadOnly,
+            &folder,
+        )
+        .expect("approval response should be generated");
+
+        // Assert
+        assert_eq!(
+            thread_payload.pointer("/params/sandbox"),
+            Some(&Value::String("read-only".to_string()))
+        );
+        assert_eq!(
+            turn_payload.pointer("/params/sandboxPolicy"),
+            Some(&serde_json::json!({
+                "type": "readOnly",
+                "networkAccess": false
+            }))
+        );
+        assert_eq!(
+            approval_response.pointer("/result/decision"),
+            Some(&Value::String("reject".to_string()))
         );
     }
 

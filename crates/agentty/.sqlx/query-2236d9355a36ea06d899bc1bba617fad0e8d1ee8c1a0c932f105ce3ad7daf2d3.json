@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT child.base_branch,\n       task.id AS \"id!: i64\",\n       task.touched_areas\nFROM session_orchestration_task AS task\nINNER JOIN session AS child\nON child.id = task.child_session_id\nWHERE child.id = ?\n  AND child.role = 'OrchestrationWorker'\n",
+  "query": "\nSELECT child.base_branch,\n       task.id AS \"id!: i64\",\n       task.touched_areas\nFROM session_orchestration_task AS task\nINNER JOIN session AS child\nON child.id = task.child_session_id\nWHERE child.id = ?\n  AND child.role = 'OrchestrationWorker'\n  AND task.kind = 'Implementation'\n",
   "describe": {
     "columns": [
       {
@@ -46,5 +46,5 @@
       false
     ]
   },
-  "hash": "dcb8da857d3e12628b6f7f61fd06b183f358168f70c6c2b383c937c4729758a9"
+  "hash": "2236d9355a36ea06d899bc1bba617fad0e8d1ee8c1a0c932f105ce3ad7daf2d3"
 }

@@ -194,7 +194,9 @@ State-specific differences:
 - **Orchestrator** sessions use a campaign board above chat. On a parked plan, `a`
   approves the plan; after verification, `a` opens a choice between local merges and
   review requests. Worker parallelism comes from the global **Orchestrator Parallelism**
-  setting. Controllers hide branch actions: `d`, `o`, `p`, `F`, `m`, and `r`.
+  setting. Read-only research waves also use that cap and can start without approval
+  through **Auto-approve Research**. Controllers hide branch actions: `d`, `o`, `p`,
+  `F`, `m`, and `r`.
 - Managed orchestration workers restrict direct Agentty actions. `d` opens their diff,
   `D` confirms a one-way detach into a regular user-owned session, and a worker in
   **Review** exposes `o` to open its materialized worktree. The confirmation warns that
@@ -203,6 +205,10 @@ State-specific differences:
   direct question-answer actions stay hidden; `Ctrl+c` is ignored while the worker
   remains managed. After a managed merge removes the worktree, `d` reads the immutable
   diff archived during integration.
+- Temporary research children expose their transcript and `d` evidence while active, but
+  hide `D` and `o`: their worktree is always reclaimed after report capture and cannot
+  be transferred into a user-owned session. After cleanup, `d` reads the archived
+  observed diff so unexpected writes remain inspectable.
 - Review-ready stacked parents with a materialized child keep `Enter`, `/`, `m`, and `r`
   while the stack is idle.
 - Sessions with a linked pull request or merge request use `c` to open its comments page

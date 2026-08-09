@@ -440,7 +440,8 @@ impl Session {
     /// but a settled worker in `Review` may be opened for external inspection.
     pub fn allows_worktree_open_action(&self) -> bool {
         self.status.allows_session_actions()
-            && (self.accepts_user_turns() || (self.is_managed() && self.status == Status::Review))
+            && (self.accepts_user_turns()
+                || (self.role == SessionRole::OrchestrationWorker && self.status == Status::Review))
     }
 
     /// Returns whether this session exposes branch diff, merge, and publish
@@ -1161,9 +1162,15 @@ pub(crate) mod tests {
                 .build()
                 .allows_worktree_open_action()
         });
+        let research_permission = SessionFixtureBuilder::new()
+            .role(SessionRole::OrchestrationResearcher)
+            .status(Status::Review)
+            .build()
+            .allows_worktree_open_action();
 
         // Assert
         assert_eq!(open_permissions, [false, true, false]);
+        assert!(!research_permission);
     }
 
     #[test]

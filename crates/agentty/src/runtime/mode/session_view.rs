@@ -132,6 +132,11 @@ impl ViewSessionSnapshot {
         self.mutate_session_branch.is_enabled()
     }
 
+    /// Returns whether managed-worker-only keys may be handled.
+    fn accepts_managed_keys(&self) -> bool {
+        self.is_managed && self.session_state != ViewSessionState::ManagedResearch
+    }
+
     /// Returns whether this session can enter the merge queue under stack
     /// rules.
     fn can_merge_session_branch(&self) -> bool {
@@ -309,7 +314,8 @@ async fn handle_primary_view_key(
     {
         return Some(true);
     }
-    if view_session_snapshot.is_managed && handle_managed_view_key(app, key, view_context) {
+    let accepts_managed_keys = view_session_snapshot.accepts_managed_keys();
+    if accepts_managed_keys && handle_managed_view_key(app, key, view_context) {
         return Some(false);
     }
 
@@ -1201,7 +1207,11 @@ async fn load_view_session_diff(app: &App, view_context: &ViewContext) -> String
         return String::new();
     };
 
-    if session.is_managed() && session.status == Status::Done {
+    let uses_archived_diff = session.is_managed()
+        && (session.status == Status::Done
+            || (session.role == crate::domain::session::SessionRole::OrchestrationResearcher
+                && session.status == Status::Canceled));
+    if uses_archived_diff {
         return match app
             .services
             .db()
@@ -2276,6 +2286,34 @@ mod tests {
         // Assert
         assert_eq!(diff, archived_diff);
         assert_eq!(missing_diff, "");
+    }
+
+    #[tokio::test]
+    async fn canceled_research_session_loads_archived_diff_without_worktree() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let archived_diff = "diff --git a/policy.txt b/policy.txt\n+unexpected write\n";
+        app.services
+            .db()
+            .sessions()
+            .update_session_archived_diff(&session_id, Some(archived_diff.to_string()))
+            .await
+            .expect("failed to persist archived diff");
+        let session = &mut app.sessions.sessions_mut()[0];
+        session.folder = PathBuf::from("reclaimed-research-worktree");
+        session.role = SessionRole::OrchestrationResearcher;
+        session.status = Status::Canceled;
+        let context = ViewContext {
+            scroll_offset: Some(0),
+            session_id: session_id.into(),
+            session_index: 0,
+        };
+
+        // Act
+        let diff = load_view_session_diff(&app, &context).await;
+
+        // Assert
+        assert_eq!(diff, archived_diff);
     }
 
     #[tokio::test]

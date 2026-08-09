@@ -35,5 +35,5 @@ pub use schema::{
     SchemaRequiredPolicy, agent_response_json_schema_json, agent_response_output_schema,
     agent_response_output_schema_json,
 };
-pub use subtask::SubtaskItem;
+pub use subtask::{SubtaskItem, SubtaskKind};
 pub use verification::{VerificationVerdict, VerificationVerdictItem};
