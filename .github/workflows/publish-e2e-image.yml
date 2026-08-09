@@ -1,0 +1,163 @@
+name: Publish E2E Image
+run-name: Publish E2E image from ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  E2E_REPOSITORY: ghcr.io/agentty-xyz/agentty-e2e
+
+concurrency:
+  group: publish-e2e-image
+  cancel-in-progress: false
+
+jobs:
+  require-default-branch:
+    name: Require default branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify selected branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SELECTED_BRANCH: ${{ github.ref_name }}
+        run: test "$SELECTED_BRANCH" = "$DEFAULT_BRANCH"
+
+  build:
+    name: Build and test (${{ matrix.platform }})
+    needs: require-default-branch
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            runner_arch: X64
+          - architecture: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            runner_arch: ARM64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify native runner architecture
+        env:
+          EXPECTED_RUNNER_ARCH: ${{ matrix.runner_arch }}
+        run: test "$RUNNER_ARCH" = "$EXPECTED_RUNNER_ARCH"
+
+      - name: Build candidate image
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          candidate_image="${E2E_REPOSITORY}:build-${ARCHITECTURE}"
+          podman build \
+            --platform "$PLATFORM" \
+            --tag "$candidate_image" \
+            --file container/e2e.Containerfile \
+            container
+          test "$(podman image inspect --format '{{.Architecture}}' "$candidate_image")" = "$ARCHITECTURE"
+
+      - name: Run end-to-end feature suite
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          candidate_image="${E2E_REPOSITORY}:build-${ARCHITECTURE}"
+          podman run --rm \
+            --platform "$PLATFORM" \
+            --mount type=bind,source="$GITHUB_WORKSPACE",target=/workspace,readonly=true \
+            --env CARGO_TARGET_DIR=/tmp/target \
+            "$candidate_image" \
+            prek run test-agentty-e2e --all-files --hook-stage manual
+
+      - name: Authenticate with GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      - name: Push candidate image
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          candidate_image="${E2E_REPOSITORY}:build-${ARCHITECTURE}"
+          podman push "$candidate_image" "docker://${candidate_image}"
+
+  publish:
+    name: Publish and verify manifest
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+
+    steps:
+      - name: Authenticate with GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      - name: Assemble manifest
+        run: |
+          podman manifest create "${E2E_REPOSITORY}:latest"
+          podman manifest add \
+            "${E2E_REPOSITORY}:latest" \
+            "docker://${E2E_REPOSITORY}:build-amd64"
+          podman manifest add \
+            "${E2E_REPOSITORY}:latest" \
+            "docker://${E2E_REPOSITORY}:build-arm64"
+
+      - name: Publish manifest
+        id: publish
+        run: |
+          digest_file=$(mktemp)
+          trap 'rm -f "$digest_file"' EXIT
+          podman manifest push --all \
+            --digestfile "$digest_file" \
+            "${E2E_REPOSITORY}:latest" \
+            "docker://${E2E_REPOSITORY}:latest"
+          digest=$(sed -n '1p' "$digest_file")
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Log out before anonymous verification
+        run: podman logout ghcr.io
+
+      - name: Verify published manifest
+        env:
+          PUBLISHED_IMAGE: ${{ env.E2E_REPOSITORY }}@${{ steps.publish.outputs.digest }}
+        run: |
+          skopeo inspect --raw "docker://${PUBLISHED_IMAGE}" | jq -e '
+            (.mediaType == "application/vnd.oci.image.index.v1+json"
+              or .mediaType == "application/vnd.docker.distribution.manifest.list.v2+json")
+            and ([
+              .manifests[].platform
+              | select(.os == "linux")
+              | .architecture
+            ] | unique | sort == ["amd64", "arm64"])
+          '
+          podman pull --platform linux/amd64 "$PUBLISHED_IMAGE"
+          podman pull --platform linux/arm64 "$PUBLISHED_IMAGE"
+
+      - name: Report published digest
+        env:
+          PUBLISHED_IMAGE: ${{ env.E2E_REPOSITORY }}@${{ steps.publish.outputs.digest }}
+        run: |
+          printf '## Published E2E image\n\n`%s`\n' "$PUBLISHED_IMAGE" >> "$GITHUB_STEP_SUMMARY"

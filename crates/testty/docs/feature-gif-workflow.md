@@ -81,18 +81,27 @@ still show the real value.
 
 ## Canonical container workflow
 
-Agentty checks feature GIF freshness in one pinned `linux/amd64` container defined by
-`container/e2e.Containerfile`. Presubmit, postsubmit, and release workflows use Podman
-to pull the same GHCR image by digest, mount the checkout read-only, and run the suite
-in `check` mode. CI never records, rewrites, or commits feature artifacts.
+Agentty checks feature GIF freshness in the pinned `linux/amd64` variant of the image
+defined by `container/e2e.Containerfile`. Presubmit, postsubmit, and release workflows
+use Podman to pull the same GHCR image by digest, mount the checkout read-only, and run
+the suite in `check` mode. CI never records, rewrites, or commits feature artifacts. The
+Containerfile also supports native `linux/arm64` recording, but a digest is eligible for
+that workflow only after its published image index is verified to contain both
+architectures.
+
+The manually dispatched **Publish E2E Image** workflow builds and tests both variants on
+native GitHub-hosted runners, publishes their shared image index, verifies anonymous
+platform pulls, and reports the digest used to update the pinned references. The
+existing GHCR package must grant this repository Actions write access before the
+workflow's first run.
 
 When an intentional UI change makes a sidecar stale, a developer runs the affected test
 in that container with a writable checkout and `generate` mode. Only missing or stale
 GIFs are recorded. The developer reviews the changed GIF and hash sidecar, refreshes the
 matching PNG poster, and commits the three artifacts with the UI change.
 
-Use the exact digest-pinned Podman recording command in `skills/feature-test/SKILL.md`.
-It runs the local container as the host UID and GID so Linux bind mounts remain
-writable, while CI keeps the image's fixed non-root user and read-only checkout.
-Recording in the same container that performs the freshness check prevents host-specific
-output from churning committed artifacts.
+Use the exact platform-explicit, digest-pinned Podman recording command in
+`skills/feature-test/SKILL.md`. It runs the local container as the host UID and GID so
+Linux bind mounts remain writable, while CI keeps the image's fixed non-root user and
+read-only checkout. Recording in the same container that performs the freshness check
+prevents host-specific output from churning committed artifacts.
