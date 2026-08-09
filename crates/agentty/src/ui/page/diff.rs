@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hasher;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -82,6 +83,7 @@ impl OwnedDiffLine {
 #[derive(Clone)]
 pub(crate) struct DiffContentSnapshot {
     all_files_summary: DiffSelectionChangeSummary,
+    file_line_ranges: Arc<HashMap<String, Vec<Range<usize>>>>,
     file_list_lines: Arc<[Line<'static>]>,
     key: DiffContentCacheKey,
     parsed_lines: Arc<[OwnedDiffLine]>,
@@ -138,6 +140,26 @@ impl DiffContentSnapshot {
         self.tree_items.len()
     }
 
+    /// Returns cached diff body rows for `path` without walking unrelated
+    /// files.
+    pub(crate) fn file_lines(&self, path: &str) -> Vec<DiffLine<'_>> {
+        let Some(ranges) = self.file_line_ranges.get(path) else {
+            return Vec::new();
+        };
+
+        ranges
+            .iter()
+            .flat_map(|range| self.parsed_lines[range.clone()].iter())
+            .filter(|line| {
+                matches!(
+                    line.kind,
+                    DiffLineKind::Addition | DiffLineKind::Deletion | DiffLineKind::Context
+                )
+            })
+            .map(OwnedDiffLine::borrowed)
+            .collect()
+    }
+
     /// Returns the selected repository-relative markdown file path.
     pub(crate) fn selected_markdown_path(&self, selected_index: usize) -> Option<&str> {
         let FileTreeItem::File(path) = self.tree_items.get(selected_index)? else {
@@ -171,7 +193,7 @@ impl DiffContentSnapshot {
         diff_util::filter_diff_lines(&parsed_lines, selected_item)
     }
 
-    /// Returns the complete parsed diff as borrowed lines.
+    /// Returns the complete cached diff snapshot as borrowed lines.
     fn borrowed_lines(&self) -> Vec<DiffLine<'_>> {
         self.parsed_lines
             .iter()
@@ -234,6 +256,54 @@ impl DiffContentSnapshot {
             .collect();
 
         (all_files_summary, selection_summaries)
+    }
+
+    /// Indexes each old and new file path to its parsed-line ranges.
+    fn file_line_ranges(parsed_lines: &[DiffLine<'_>]) -> HashMap<String, Vec<Range<usize>>> {
+        let mut file_line_ranges = HashMap::new();
+        let mut current_paths = None;
+        let mut current_start_index = 0;
+
+        for (line_index, line) in parsed_lines.iter().enumerate() {
+            if line.kind != DiffLineKind::FileHeader || !line.content.starts_with("diff --git") {
+                continue;
+            }
+
+            if let Some(paths) = current_paths.take() {
+                Self::store_file_line_range(
+                    &mut file_line_ranges,
+                    paths,
+                    current_start_index..line_index,
+                );
+            }
+            current_paths = diff_util::diff_header_paths(line.content);
+            current_start_index = line_index.saturating_add(1);
+        }
+
+        if let Some(paths) = current_paths {
+            Self::store_file_line_range(
+                &mut file_line_ranges,
+                paths,
+                current_start_index..parsed_lines.len(),
+            );
+        }
+
+        file_line_ranges
+    }
+
+    /// Adds one file block under both rename-aware paths without duplication.
+    fn store_file_line_range(
+        file_line_ranges: &mut HashMap<String, Vec<Range<usize>>>,
+        (old_path, new_path): (String, String),
+        range: Range<usize>,
+    ) {
+        file_line_ranges
+            .entry(old_path.clone())
+            .or_default()
+            .push(range.clone());
+        if new_path != old_path {
+            file_line_ranges.entry(new_path).or_default().push(range);
+        }
     }
 
     /// Aggregates file-level change totals into folder-prefix totals.
@@ -325,10 +395,13 @@ struct DiffLayoutCacheEntry {
 /// Bounded cache for parsed diff content and fully assembled diff layouts.
 ///
 /// The parsed-content layer avoids re-parsing the same raw diff and rebuilding
-/// file-tree metadata on every frame. The rendered-layout layer sits above
-/// styled diff assembly so scroll metrics and frame painting reuse the same
-/// rows for unchanged diff content, selection, panel width/height, scrollbar
-/// gutter state, and active style version.
+/// file-tree metadata or per-path line ranges on every frame. Its key is the
+/// raw diff's hash and byte length, so replacing the diff invalidates the
+/// snapshot. The rendered-layout layer sits above styled diff assembly so
+/// scroll metrics and frame painting
+/// reuse the same rows until diff content, selection, panel width/height,
+/// scrollbar gutter state, or the active style version changes. Both LRU
+/// layers evict their oldest entries at their fixed limits.
 pub struct DiffLayoutCache {
     content_entries: RefCell<VecDeque<DiffContentCacheEntry>>,
     layout_entries: RefCell<VecDeque<DiffLayoutCacheEntry>>,
@@ -355,8 +428,10 @@ impl DiffLayoutCache {
         let (file_list_lines, tree_items) = FileExplorer::file_tree(&parsed_lines);
         let (all_files_summary, selection_summaries) =
             DiffContentSnapshot::change_summaries(&parsed_lines, &tree_items);
+        let file_line_ranges = DiffContentSnapshot::file_line_ranges(&parsed_lines);
         let snapshot = DiffContentSnapshot {
             all_files_summary,
+            file_line_ranges: Arc::new(file_line_ranges),
             file_list_lines: Arc::from(file_list_lines),
             key,
             parsed_lines: Arc::from(
@@ -1051,6 +1126,10 @@ mod tests {
             &second_content.parsed_lines
         ));
         assert!(Arc::ptr_eq(
+            &first_content.file_line_ranges,
+            &second_content.file_line_ranges
+        ));
+        assert!(Arc::ptr_eq(
             &first_content.file_list_lines,
             &second_content.file_list_lines
         ));
@@ -1058,6 +1137,46 @@ mod tests {
             &first_content.selection_summaries,
             &second_content.selection_summaries
         ));
+    }
+
+    #[test]
+    fn test_diff_content_snapshot_indexes_repeated_and_renamed_file_blocks() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(concat!(
+            "diff --git a/src/old.rs b/src/new.rs\n",
+            "index 111..222 100644\n",
+            "@@ -1 +1 @@\n",
+            "-old first\n",
+            "+new first\n",
+            "diff --git malformed\n",
+            "+ignored malformed\n",
+            "diff --git a/src/new.rs b/src/new.rs\n",
+            "@@ -2 +2 @@\n",
+            " unchanged second\n",
+        ));
+
+        // Act
+        let old_path_lines = content.file_lines("src/old.rs");
+        let new_path_lines = content.file_lines("src/new.rs");
+        let missing_path_lines = content.file_lines("src/missing.rs");
+
+        // Assert
+        assert_eq!(
+            old_path_lines
+                .iter()
+                .map(|line| line.content)
+                .collect::<Vec<_>>(),
+            vec!["old first", "new first"]
+        );
+        assert_eq!(
+            new_path_lines
+                .iter()
+                .map(|line| line.content)
+                .collect::<Vec<_>>(),
+            vec!["old first", "new first", "unchanged second"]
+        );
+        assert!(missing_path_lines.is_empty());
     }
 
     #[test]
