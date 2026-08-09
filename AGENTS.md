@@ -357,15 +357,18 @@ the full suite.
 - **User-visible UI behavior:** Satisfy the MANDATORY feature-test gate, then run the
   focused E2E workflow. For routine validation, run E2E feature tests with
   `TESTTY_GIF_MODE=check` so agents verify GIF freshness without launching VHS/Chrome.
-  When intentionally regenerating GIF assets, record in the pinned `linux/amd64` image
-  from `container/e2e.Containerfile` with `TESTTY_GIF_MODE=generate` so committed hash
-  sidecars match the container CI verifies them in; follow
-  `skills/feature-test/SKILL.md` for the exact commands. If recording on the host
-  instead, `TESTTY_GIF_MODE=force` must run from an unsandboxed shell (a normal
-  terminal, or one command explicitly approved to bypass the agent sandbox): VHS records
-  through localhost sockets (`ttyd` plus Chrome DevTools), so a network-denied sandbox
-  crashes `vhs` before Chrome launches — an error easy to misdiagnose as a missing
-  browser binary. Do not run the full E2E feature suite locally;
+  When intentionally regenerating GIF assets, follow `skills/feature-test/SKILL.md` to
+  select `linux/amd64` or `linux/arm64` explicitly and run the pinned image from
+  `container/e2e.Containerfile` with `TESTTY_GIF_MODE=generate`. A digest is eligible
+  for ARM64 recording only after its published image index is verified to contain both
+  platforms. Publish replacements through the manual **Publish E2E Image** workflow in
+  `.github/workflows/publish-e2e-image.yml`; it tests both native variants before
+  reporting the digest. CI selects and verifies the `linux/amd64` variant. If recording
+  on the host instead, `TESTTY_GIF_MODE=force` must run from an unsandboxed shell (a
+  normal terminal, or one command explicitly approved to bypass the agent sandbox): VHS
+  records through localhost sockets (`ttyd` plus Chrome DevTools), so a network-denied
+  sandbox crashes `vhs` before Chrome launches — an error easy to misdiagnose as a
+  missing browser binary. Do not run the full E2E feature suite locally;
   `.github/workflows/presubmit.yml` and `.github/workflows/postsubmit.yml` run
   `test-agentty-e2e` in that image on GitHub.
 
