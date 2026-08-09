@@ -1,19 +1,12 @@
-use std::time::Duration;
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use thiserror::Error;
 
-use crate::{model, schema_contract};
+use crate::{chat_completion, model, schema_contract};
 
-const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
-const JSON_STRING_MAX_EXPANSION: usize = 6;
 const PROVIDER_NAME: &str = "alibaba_cloud";
-const RESPONSE_ENVELOPE_LIMIT_BYTES: usize = 64 * 1024;
-const REQUEST_TIMEOUT: Duration = Duration::from_mins(1);
-const SUCCESS_BODY_LIMIT_BYTES: usize = schema_contract::RESPONSE_CONTENT_LIMIT_BYTES
-    * JSON_STRING_MAX_EXPANSION
-    + RESPONSE_ENVELOPE_LIMIT_BYTES;
 const STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
     "Return only one JSON object. The object must validate against this JSON Schema. ",
     "Do not include Markdown fences or any other text.\n\nJSON Schema:\n",
@@ -35,82 +28,39 @@ pub struct QwenConfig {
 /// Qwen implementation of the provider-neutral [`model::ModelBackend`]
 /// strategy.
 pub struct Qwen {
-    client: reqwest::Client,
+    client: Arc<dyn chat_completion::ChatCompletionClient>,
     config: QwenConfig,
 }
 
 impl Qwen {
     /// Creates a Qwen model adapter.
     pub fn new(config: QwenConfig) -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            config,
-        }
+        Self::with_client(config, chat_completion::default_client())
     }
 
-    fn endpoint(&self) -> String {
-        format!(
-            "{}/chat/completions",
-            self.config.base_url.trim_end_matches('/')
-        )
+    fn with_client(
+        config: QwenConfig,
+        client: Arc<dyn chat_completion::ChatCompletionClient>,
+    ) -> Self {
+        Self { client, config }
     }
 
-    async fn error_body_summary(
-        response: &mut reqwest::Response,
-    ) -> Result<String, reqwest::Error> {
-        let mut body = Vec::new();
-        let mut is_truncated = false;
-
-        while let Some(chunk) = response.chunk().await? {
-            let remaining = ERROR_BODY_LIMIT_BYTES.saturating_sub(body.len());
-
-            if chunk.len() > remaining {
-                body.extend_from_slice(&chunk[..remaining]);
-                is_truncated = true;
-
-                break;
+    fn map_completion_error(error: chat_completion::ChatCompletionError) -> model::ModelError {
+        match error {
+            chat_completion::ChatCompletionError::Http {
+                body,
+                source,
+                status,
+            } => model::ModelError::request(QwenHttpError {
+                body,
+                source,
+                status,
+            }),
+            chat_completion::ChatCompletionError::ResponseBodyTooLarge => {
+                model::ModelError::ResponseBodyTooLarge
             }
-
-            body.extend_from_slice(&chunk);
+            error => model::ModelError::request(error),
         }
-
-        let mut summary = String::from_utf8_lossy(&body)
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if is_truncated {
-            summary.push_str(" ...");
-        }
-
-        Ok(summary)
-    }
-
-    async fn success_body(response: &mut reqwest::Response) -> Result<Vec<u8>, model::ModelError> {
-        let limit = u64::try_from(SUCCESS_BODY_LIMIT_BYTES).unwrap_or(u64::MAX);
-        if response
-            .content_length()
-            .is_some_and(|content_length| content_length > limit)
-        {
-            return Err(model::ModelError::ResponseBodyTooLarge);
-        }
-
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(model::ModelError::request)? {
-            Self::append_success_chunk(&mut body, &chunk)?;
-        }
-
-        Ok(body)
-    }
-
-    fn append_success_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), model::ModelError> {
-        let remaining = SUCCESS_BODY_LIMIT_BYTES.saturating_sub(body.len());
-        if chunk.len() > remaining {
-            return Err(model::ModelError::ResponseBodyTooLarge);
-        }
-
-        body.extend_from_slice(chunk);
-
-        Ok(())
     }
 }
 
@@ -146,48 +96,24 @@ impl model::ModelBackend for Qwen {
                 kind: "json_object",
             },
         };
-
-        let mut response = self
+        let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
+        let completion = self
             .client
-            .post(self.endpoint())
-            .bearer_auth(&self.config.api_key)
-            .timeout(REQUEST_TIMEOUT)
-            .json(&payload)
-            .send()
+            .complete(chat_completion::ChatCompletionRequest::new(
+                &self.config.api_key,
+                chat_completion::endpoint(&self.config.base_url),
+                payload,
+            ))
             .await
-            .map_err(model::ModelError::request)?;
-
-        if let Err(source) = response.error_for_status_ref() {
-            let body = Self::error_body_summary(&mut response)
-                .await
-                .map_err(model::ModelError::request)?;
-            let error = QwenHttpError {
-                body,
-                source,
-                status: response.status(),
-            };
-
-            return Err(model::ModelError::request(error));
-        }
-
-        let body = Self::success_body(&mut response).await?;
-        let response =
-            serde_json::from_slice::<QwenResponse>(&body).map_err(model::ModelError::request)?;
-
-        let choice = response
-            .choices
-            .into_iter()
-            .next()
+            .map_err(Self::map_completion_error)?
             .ok_or(model::ModelError::InvalidResponse)?;
-        if choice.finish_reason != "stop" {
+        let (finish_reason, content) = completion.into_parts();
+        if finish_reason != "stop" {
             return Err(model::ModelError::IncompleteResponse {
-                reason: schema_contract::bounded_diagnostic(choice.finish_reason),
+                reason: schema_contract::bounded_diagnostic(finish_reason),
             });
         }
-        let text = choice
-            .message
-            .content
-            .ok_or(model::ModelError::InvalidResponse)?;
+        let text = content.ok_or(model::ModelError::InvalidResponse)?;
 
         Ok(text)
     }
@@ -221,22 +147,6 @@ struct QwenResponseFormat {
     kind: &'static str,
 }
 
-#[derive(Deserialize)]
-struct QwenResponse {
-    choices: Vec<QwenChoice>,
-}
-
-#[derive(Deserialize)]
-struct QwenChoice {
-    finish_reason: String,
-    message: QwenResponseMessage,
-}
-
-#[derive(Deserialize)]
-struct QwenResponseMessage {
-    content: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -245,6 +155,31 @@ mod tests {
 
     use super::*;
     use crate::Model;
+    use crate::chat_completion::{
+        ChatCompletion, ChatCompletionClient, ChatCompletionError, ChatCompletionRequest,
+        ERROR_BODY_LIMIT_BYTES, RESPONSE_ENVELOPE_LIMIT_BYTES, SUCCESS_BODY_LIMIT_BYTES,
+    };
+
+    struct StubClient;
+
+    #[async_trait]
+    impl ChatCompletionClient for StubClient {
+        async fn complete(
+            &self,
+            request: ChatCompletionRequest<'_>,
+        ) -> Result<Option<ChatCompletion>, ChatCompletionError> {
+            let (api_key, endpoint, payload) = request.into_parts();
+            assert_eq!(api_key, "stub-key");
+            assert_eq!(endpoint, "https://stub.example/v1/chat/completions");
+            assert_eq!(payload["model"], "qwen-stub");
+            assert_eq!(payload["response_format"]["type"], "json_object");
+
+            Ok(Some(ChatCompletion::new(
+                "stop".to_string(),
+                Some(r#"{"name":"Ada"}"#.to_string()),
+            )))
+        }
+    }
 
     fn person_schema_value() -> serde_json::Value {
         json!({
@@ -333,6 +268,28 @@ mod tests {
             .complete(request("extract the name"))
             .await
             .expect("Qwen request should succeed");
+
+        // Assert
+        assert_eq!(response.output(), &json!({ "name": "Ada" }));
+    }
+
+    #[tokio::test]
+    async fn completes_through_injected_client() {
+        // Arrange
+        let model = Qwen::with_client(
+            QwenConfig {
+                api_key: "stub-key".to_string(),
+                base_url: "https://stub.example/v1/".to_string(),
+                model: "qwen-stub".to_string(),
+            },
+            Arc::new(StubClient),
+        );
+
+        // Act
+        let response = model
+            .complete(request("extract the name"))
+            .await
+            .expect("stubbed Qwen request should succeed");
 
         // Assert
         assert_eq!(response.output(), &json!({ "name": "Ada" }));
@@ -467,19 +424,6 @@ mod tests {
             .complete(request("hello"))
             .await
             .expect_err("oversized successful response should fail");
-
-        // Assert
-        assert!(matches!(error, model::ModelError::ResponseBodyTooLarge));
-    }
-
-    #[test]
-    fn rejects_success_chunk_that_exceeds_remaining_capacity() {
-        // Arrange
-        let mut body = vec![0; SUCCESS_BODY_LIMIT_BYTES - 1];
-
-        // Act
-        let error = Qwen::append_success_chunk(&mut body, &[0, 1])
-            .expect_err("chunk exceeding the limit should fail");
 
         // Assert
         assert!(matches!(error, model::ModelError::ResponseBodyTooLarge));
@@ -659,6 +603,13 @@ mod tests {
             "model request failed: Qwen returned HTTP 401 Unauthorized: \
              {\"error\":{\"message\":\"invalid API key\"}}"
         );
+        let provider_error = std::error::Error::source(&error)
+            .expect("HTTP failure should retain its provider error");
+        let source = provider_error
+            .source()
+            .and_then(|source| source.downcast_ref::<reqwest::Error>())
+            .expect("HTTP failure should retain its reqwest source");
+        assert_eq!(source.status(), Some(reqwest::StatusCode::UNAUTHORIZED));
     }
 
     #[tokio::test]
