@@ -4,8 +4,6 @@ use std::time::{Instant, SystemTime};
 
 use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
 use crate::domain::selection::SelectionState;
-#[cfg(test)]
-use crate::domain::session::SessionRole;
 use crate::domain::session::{Session, SessionDiffStats, SessionHandles, SessionId, Status};
 
 /// Cached ahead/behind snapshots for one session branch.
@@ -500,13 +498,11 @@ mod tests {
     use super::*;
     use crate::domain::agent::{AgentKind, AgentSelection};
     use crate::domain::selection::SelectionState;
-    use crate::domain::session::{
-        Session, SessionDiffState, SessionHandles, SessionSize, SessionStats, Status,
-    };
+    use crate::domain::session::{Session, SessionDiffState, SessionHandles, SessionSize, Status};
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::domain::transient_message::{
         TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
-        TransientMessageSlot, TransientMessageStore,
+        TransientMessageSlot,
     };
     use crate::test_support::SessionFixtureBuilder;
 
@@ -542,47 +538,27 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// Builds the common session snapshot used by state-focused tests.
+    fn state_session_fixture(session_id: impl Into<SessionId>, status: Status) -> Session {
+        SessionFixtureBuilder::new()
+            .agent(AgentSelection::new(
+                AgentKind::Antigravity,
+                AgentKind::Antigravity.default_model(),
+            ))
+            .folder(std::env::temp_dir())
+            .id(session_id)
+            .prompt("prompt")
+            .status(status)
+            .build()
+    }
+
     #[test]
     /// Verifies handle transcript replaces the session transcript snapshot.
     fn sync_from_handles_updates_transcript_snapshot() {
         // Arrange
         let session_id = "sess-1".to_string();
-        let session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: std::env::temp_dir(),
-            follow_up_tasks: Vec::new(),
-            id: session_id.clone().into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentKind::Antigravity.default_model(),
-            ),
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: "prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: crate::domain::agent::SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::Review,
-            summary: None,
-            title: None,
-            transcript: Some(crate::test_support::assistant_transcript("old")),
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
+        let mut session = state_session_fixture(session_id.clone(), Status::Review);
+        session.transcript = Some(crate::test_support::assistant_transcript("old"));
         let handles: HashMap<SessionId, SessionHandles> = HashMap::from([(
             session_id.into(),
             SessionHandles::new_with_transcript(
@@ -651,42 +627,8 @@ mod tests {
     /// Verifies direct single-session sync updates transcript and status.
     fn sync_session_with_handles_updates_transcript_and_status() {
         // Arrange
-        let mut session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: std::env::temp_dir(),
-            follow_up_tasks: Vec::new(),
-            id: "session-2".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentKind::Antigravity.default_model(),
-            ),
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: "prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: crate::domain::agent::SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::Draft,
-            summary: None,
-            title: None,
-            transcript: Some(crate::test_support::assistant_transcript("Old")),
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
+        let mut session = state_session_fixture("session-2", Status::Draft);
+        session.transcript = Some(crate::test_support::assistant_transcript("Old"));
         let handles = SessionHandles::new_with_transcript(
             Status::InProgress,
             crate::test_support::assistant_transcript("New"),
@@ -704,42 +646,8 @@ mod tests {
     /// Verifies extended handle transcripts replace the session snapshot.
     fn sync_session_with_handles_replaces_with_extended_transcript() {
         // Arrange
-        let mut session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: std::env::temp_dir(),
-            follow_up_tasks: Vec::new(),
-            id: "session-3".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentKind::Antigravity.default_model(),
-            ),
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: "prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: crate::domain::agent::SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::InProgress,
-            summary: None,
-            title: None,
-            transcript: Some(crate::test_support::assistant_transcript("first line\n")),
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
+        let mut session = state_session_fixture("session-3", Status::InProgress);
+        session.transcript = Some(crate::test_support::assistant_transcript("first line\n"));
         let handles = SessionHandles::new_with_transcript(
             Status::InProgress,
             crate::test_support::assistant_transcript("first line\nsecond line\n"),
@@ -782,42 +690,7 @@ mod tests {
     fn apply_session_diff_stats_updated_updates_matching_session() {
         // Arrange
         let session_id = "session-3".to_string();
-        let session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: std::env::temp_dir(),
-            follow_up_tasks: Vec::new(),
-            id: session_id.clone().into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentKind::Antigravity.default_model(),
-            ),
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: "prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: crate::domain::agent::SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::Review,
-            summary: None,
-            title: None,
-            transcript: None,
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
+        let session = state_session_fixture(session_id.clone(), Status::Review);
         let mut state = SessionState::new(
             HashMap::new(),
             vec![session],
@@ -853,78 +726,8 @@ mod tests {
     /// Verifies replacing the session list rebuilds identifier lookups.
     fn replace_sessions_rebuilds_session_id_index() {
         // Arrange
-        let initial_session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: std::env::temp_dir(),
-            follow_up_tasks: Vec::new(),
-            id: "session-1".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentKind::Antigravity.default_model(),
-            ),
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: "prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: crate::domain::agent::SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::Review,
-            summary: None,
-            title: None,
-            transcript: None,
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
-        let replacement_session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: std::env::temp_dir(),
-            follow_up_tasks: Vec::new(),
-            id: "session-2".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentKind::Antigravity.default_model(),
-            ),
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: "prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: crate::domain::agent::SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::Review,
-            summary: None,
-            title: None,
-            transcript: None,
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
+        let initial_session = state_session_fixture("session-1", Status::Review);
+        let replacement_session = state_session_fixture("session-2", Status::Review);
         let mut state = SessionState::new(
             HashMap::new(),
             vec![initial_session],
@@ -994,78 +797,8 @@ mod tests {
     /// remaining list order.
     fn remove_session_at_rebuilds_session_id_index() {
         // Arrange
-        let first_session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: std::env::temp_dir(),
-            follow_up_tasks: Vec::new(),
-            id: "session-1".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentKind::Antigravity.default_model(),
-            ),
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: "prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: crate::domain::agent::SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::Review,
-            summary: None,
-            title: None,
-            transcript: None,
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
-        let second_session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: std::env::temp_dir(),
-            follow_up_tasks: Vec::new(),
-            id: "session-2".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentKind::Antigravity.default_model(),
-            ),
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: "prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: crate::domain::agent::SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::Review,
-            summary: None,
-            title: None,
-            transcript: None,
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
+        let first_session = state_session_fixture("session-1", Status::Review);
+        let second_session = state_session_fixture("session-2", Status::Review);
         let mut state = SessionState::new(
             HashMap::new(),
             vec![first_session, second_session],
@@ -1091,42 +824,8 @@ mod tests {
     /// Verifies non-prefix transcript changes still replace the snapshot.
     fn sync_session_with_handles_replaces_transcript_when_prefix_changes() {
         // Arrange
-        let mut session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: std::env::temp_dir(),
-            follow_up_tasks: Vec::new(),
-            id: "session-4".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentKind::Antigravity.default_model(),
-            ),
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: "prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: crate::domain::agent::SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::InProgress,
-            summary: None,
-            title: None,
-            transcript: Some(crate::test_support::assistant_transcript("abc")),
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
+        let mut session = state_session_fixture("session-4", Status::InProgress);
+        session.transcript = Some(crate::test_support::assistant_transcript("abc"));
         let handles = SessionHandles::new_with_transcript(
             Status::Review,
             crate::test_support::assistant_transcript("xyzq"),
@@ -1191,48 +890,13 @@ mod tests {
     /// pass.
     fn retain_follow_up_task_positions_clamps_and_drops_invalid_entries() {
         // Arrange
-        let agent = AgentSelection::new(
-            AgentKind::Antigravity,
-            AgentKind::Antigravity.default_model(),
-        );
-        let mut surviving_session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: std::env::temp_dir(),
-            follow_up_tasks: vec![crate::domain::session::SessionFollowUpTask {
-                id: 1,
-                launched_session_id: None,
-                position: 0,
-                text: "Document the behavior.".to_string(),
-            }],
-            id: "session-1".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent,
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: "prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: crate::domain::agent::SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::Done,
-            summary: None,
-            title: None,
-            transcript: None,
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
+        let mut surviving_session = state_session_fixture("session-1", Status::Done);
+        surviving_session.follow_up_tasks = vec![crate::domain::session::SessionFollowUpTask {
+            id: 1,
+            launched_session_id: None,
+            position: 0,
+            text: "Document the behavior.".to_string(),
+        }];
         surviving_session
             .follow_up_tasks
             .push(crate::domain::session::SessionFollowUpTask {
@@ -1241,39 +905,7 @@ mod tests {
                 position: 1,
                 text: "Add the regression test.".to_string(),
             });
-        let taskless_session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: std::env::temp_dir(),
-            follow_up_tasks: Vec::new(),
-            id: "session-2".into(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent,
-            parent_session_id: None,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: "prompt".to_string(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: crate::domain::agent::SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::Done,
-            summary: None,
-            title: None,
-            transcript: None,
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
+        let taskless_session = state_session_fixture("session-2", Status::Done);
         let mut state = SessionState::new(
             HashMap::new(),
             vec![surviving_session, taskless_session],
