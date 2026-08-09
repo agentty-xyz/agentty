@@ -377,7 +377,9 @@ fn test_review_request_campaign_waits_for_worker_merge() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
-                    .wait_for_text("Phase: Integrating", 5000)
+                    // Campaign reconciliation competes with up to four E2E
+                    // processes on CI, so allow one longer render deadline.
+                    .wait_for_text("Phase: Integrating", 10_000)
                     .capture_labeled(
                         "controller_waiting",
                         "Controller remains active while review request is open",

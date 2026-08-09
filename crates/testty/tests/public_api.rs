@@ -25,7 +25,7 @@ use std::time::Duration;
 use testty::assertion::{self, AssertionFailure, Expected, MatchResult, SoftAssertions};
 use testty::feature::{
     self, FeatureDemo, FeatureMeta, FeatureResult, GifMode, GifStatus, Redaction,
-    compute_frame_hash, hash_sidecar_path,
+    compute_frame_hash, compute_gif_hash, hash_sidecar_path,
 };
 use testty::frame::{CellColor, CellStyle, TerminalFrame};
 use testty::journey::{Journey, StartupWait};
@@ -40,6 +40,7 @@ use testty::snapshot::{SnapshotConfig, SnapshotError};
 use testty::spec::model::{ExpectSpec, RegionSpec, ScenarioSpec, SessionSpec, StepSpec};
 use testty::spec::runtime::{LoweredScenario, SpecError};
 use testty::step::{FramePredicate, Step};
+use testty::vhs::VhsTapeSettings;
 
 /// Minimal `ProofBackend` impl used to exercise the trait through its
 /// owning module path without instantiating a real backend.
@@ -219,6 +220,7 @@ fn auxiliary_surface_is_stable() {
     // Feature freshness primitives — exposed so external tooling can build
     // freshness reports without re-running VHS.
     let _: fn(&ProofReport, &[Redaction]) -> u64 = compute_frame_hash;
+    let _: fn(&ProofReport, &[Redaction], &VhsTapeSettings) -> u64 = compute_gif_hash;
     let _: fn(&Path, &str) -> PathBuf = hash_sidecar_path;
     let _: GifMode = GifMode::default();
     let _: GifMode = GifMode::CheckOnly;

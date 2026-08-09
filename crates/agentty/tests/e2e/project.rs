@@ -58,12 +58,12 @@ fn projects_page_shows_cwd() {
 /// popup and that selecting another project switches the active project
 /// without leaving the Sessions view.
 ///
-/// The test seeds a second registered project (`beta-project`) that was never
+/// The test seeds a second registered project (`zeta-project`) that was never
 /// opened, so the active `test-project` stays first in MRU order and the
-/// seeded project sorts below it. The scenario starts on a pre-persisted
-/// Sessions tab and toggles the active project there and back, so the
-/// follow-up VHS recording replays against the exact same persisted state as
-/// the assertion run.
+/// seeded project sorts below it even when both projects receive the same
+/// pinned last-opened timestamp. The scenario starts on a pre-persisted
+/// Sessions tab and toggles the active project there and back, so the follow-up
+/// VHS recording replays against the same MRU order as the assertion run.
 #[test]
 fn test_project_switcher() {
     // Arrange, Act, Assert
@@ -95,10 +95,7 @@ fn test_project_switcher() {
                     .press_key("p")
                     .wait_for_text("Switch project", 5000)
                     .wait_for_stable_frame(300, 5000)
-                    .viewing_pause_ms(1000)
-                    .press_key("j")
-                    .wait_for_stable_frame(300, 3000)
-                    .viewing_pause_ms(1000)
+                    .viewing_pause_ms(1500)
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(2000)
@@ -122,7 +119,7 @@ fn test_project_switcher() {
                 let popup_region = Region::full(popup_frame.cols(), popup_frame.rows());
                 assertion::assert_text_in_region(&popup_frame, "Switch project", &popup_region);
                 assertion::assert_text_in_region(&popup_frame, "* test-project", &popup_region);
-                assertion::assert_text_in_region(&popup_frame, "beta-project", &popup_region);
+                assertion::assert_text_in_region(&popup_frame, "zeta-project", &popup_region);
 
                 let switched_capture = report
                     .captures
@@ -133,7 +130,7 @@ fn test_project_switcher() {
                 let switched_region = Region::full(switched_frame.cols(), switched_frame.rows());
                 assertion::assert_text_in_region(
                     &switched_frame,
-                    "Project: beta-project",
+                    "Project: zeta-project",
                     &switched_region,
                 );
             },
@@ -148,7 +145,7 @@ fn seed_second_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error
         .workdir
         .parent()
         .ok_or("missing temp root for second project")?;
-    let second_project_dir = temp_root.join("beta-project");
+    let second_project_dir = temp_root.join("zeta-project");
     std::fs::create_dir_all(&second_project_dir)?;
     init_git_repository(&second_project_dir)?;
 

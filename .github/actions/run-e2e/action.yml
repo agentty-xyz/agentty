@@ -5,7 +5,7 @@ inputs:
   image:
     description: Immutable Agentty E2E container image.
     required: false
-    default: ghcr.io/agentty-xyz/agentty-e2e@sha256:d348629b6c449d33f5285c9ef2b7ea0ac3c47fcf264b1ec7f3f4c58a6952a696
+    default: ghcr.io/agentty-xyz/agentty-e2e@sha256:d8bcf1bcc38f051c583ed75b614bde552df28646dc74772e31e61453b1b00079
 
 runs:
   using: composite
@@ -14,7 +14,7 @@ runs:
       shell: bash
       env:
         E2E_IMAGE: ${{ inputs.image }}
-      run: podman pull "$E2E_IMAGE"
+      run: podman pull --platform linux/amd64 "$E2E_IMAGE"
 
     # The checkout is mounted read-only so `TESTTY_GIF_MODE=check` (set by
     # the hook) verifies committed GIF hash sidecars without rewriting them.

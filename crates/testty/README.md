@@ -178,6 +178,8 @@ See [YAML scenarios](docs/scenarios-yaml.md).
 - [Snapshots](docs/snapshots.md) — compare a test against a saved baseline
 - [Proof pipeline](docs/proof-pipeline.md) — save what a test saw as text, image, GIF,
   HTML, or JUnit-XML
+- [Feature GIF workflow](docs/feature-gif-workflow.md) — record hash-cached feature
+  demos that refresh when the UI or rendering preset changes
 - [Journeys](docs/journeys.md) — reusable building blocks for tests
 - [Frame diffing](docs/frame-diffing.md) — see what changed between two screens
 - [Examples](docs/examples.md) — runnable example programs

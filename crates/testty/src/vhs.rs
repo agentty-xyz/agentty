@@ -19,7 +19,7 @@ const MAX_VHS_RETRIES: u8 = 3;
 ///
 /// Controls the visual appearance of generated GIF recordings. Use
 /// [`VhsTapeSettings::default()`] for compact proof GIFs or
-/// [`VhsTapeSettings::feature_demo()`] for high-resolution feature
+/// [`VhsTapeSettings::feature_demo()`] for browser-ready feature
 /// showcase recordings.
 #[derive(Debug, Clone)]
 pub struct VhsTapeSettings {
@@ -52,15 +52,15 @@ impl Default for VhsTapeSettings {
 }
 
 impl VhsTapeSettings {
-    /// High-resolution preset for feature demo GIFs.
+    /// Browser-ready preset for feature demo GIFs.
     ///
-    /// Produces sharp, browser-ready recordings at 3200×1600, font size 36,
+    /// Produces sharp recordings at 1600×800, font size 18,
     /// `OneDark` theme, and 30 fps.
     pub fn feature_demo() -> Self {
         Self {
-            width: 3200,
-            height: 1600,
-            font_size: 36,
+            width: 1600,
+            height: 800,
+            font_size: 18,
             theme: "OneDark".to_string(),
             framerate: 30,
             padding: 0,
@@ -104,7 +104,7 @@ impl VhsTape {
 
     /// Compile a scenario into a VHS tape with explicit rendering settings.
     ///
-    /// Use [`VhsTapeSettings::feature_demo()`] for high-resolution feature
+    /// Use [`VhsTapeSettings::feature_demo()`] for browser-ready feature
     /// GIFs or [`VhsTapeSettings::default()`] for compact proof recordings.
     pub fn from_scenario_with_settings(
         scenario: &Scenario,
@@ -837,9 +837,9 @@ mod tests {
         let settings = VhsTapeSettings::feature_demo();
 
         // Assert
-        assert_eq!(settings.width, 3200);
-        assert_eq!(settings.height, 1600);
-        assert_eq!(settings.font_size, 36);
+        assert_eq!(settings.width, 1600);
+        assert_eq!(settings.height, 800);
+        assert_eq!(settings.font_size, 18);
         assert_eq!(settings.theme, "OneDark");
         assert_eq!(settings.framerate, 30);
         assert_eq!(settings.padding, 0);
@@ -876,9 +876,9 @@ mod tests {
 
         // Assert
         let content = tape.render();
-        assert!(content.contains("Set FontSize 36"));
-        assert!(content.contains("Set Width 3200"));
-        assert!(content.contains("Set Height 1600"));
+        assert!(content.contains("Set FontSize 18"));
+        assert!(content.contains("Set Width 1600"));
+        assert!(content.contains("Set Height 800"));
         assert!(content.contains("Set Theme \"OneDark\""));
         assert!(content.contains("Set Framerate 30"));
     }

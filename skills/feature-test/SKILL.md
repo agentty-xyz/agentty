@@ -217,13 +217,18 @@ Committed hash sidecars must be produced by the same pinned container definition
 uses. `container/e2e.Containerfile` supports both `linux/amd64` and `linux/arm64`, with
 architecture-specific checksums for the Rust installer, `prek`, `cargo-nextest`, `vhs`,
 and `ttyd`, plus the full recording stack (Chromium, `ffmpeg`, JetBrains Mono).
-Presubmit, postsubmit, and release checks currently pull the published `linux/amd64`
-image from GHCR by digest and run the `test-agentty-e2e` hook inside it against a
-read-only checkout. That published digest is not currently a multi-architecture
-manifest, so ARM64 hosts must build the native image from `container/e2e.Containerfile`
-instead of attempting to emulate its AMD64 image. The host needs a running Podman
-environment only — no local Chrome or VHS — and the localhost-socket sandbox restriction
-below does not apply inside the container.
+Presubmit, postsubmit, and release checks pull the published image index from GHCR by
+digest, select its `linux/amd64` variant explicitly, and run the `test-agentty-e2e` hook
+inside it against a read-only checkout. The same index contains a native `linux/arm64`
+variant for recording on ARM64 hosts. The host needs a running Podman environment only —
+no local Chrome or VHS — and the localhost-socket sandbox restriction below does not
+apply inside the container.
+
+The canonical feature preset records at 1600×800 with an 18-point font, matching the
+site poster dimensions and avoiding the excessive VHS and FFmpeg memory use caused by
+larger canvases during long scenarios. Rendering settings participate in the freshness
+hash, so changing the canvas, font, theme, framerate, or padding makes existing
+recordings stale even when their captured terminal frames are unchanged.
 
 A published digest is multi-architecture only when it resolves to an image index or
 manifest list containing both `linux/amd64` and `linux/arm64`; the Containerfile's
@@ -241,7 +246,7 @@ Linux bind mounts remain writable. A host-owned cache directory provides writabl
 Cargo, `prek`, and build locations while preserving them between runs:
 
 ```sh
-published_e2e_image=ghcr.io/agentty-xyz/agentty-e2e@sha256:d348629b6c449d33f5285c9ef2b7ea0ac3c47fcf264b1ec7f3f4c58a6952a696
+published_e2e_image=ghcr.io/agentty-xyz/agentty-e2e@sha256:d8bcf1bcc38f051c583ed75b614bde552df28646dc74772e31e61453b1b00079
 e2e_cache_root="${XDG_CACHE_HOME:-${HOME}/.cache}/agentty-e2e"
 mkdir -p \
   "${e2e_cache_root}/home" \
@@ -252,23 +257,18 @@ mkdir -p \
 case "$(uname -m)" in
   x86_64 | amd64)
     e2e_platform=linux/amd64
-    e2e_image="${published_e2e_image}"
-    podman pull --platform "${e2e_platform}" "${e2e_image}"
     ;;
   arm64 | aarch64)
     e2e_platform=linux/arm64
-    e2e_image=localhost/agentty-e2e:recording-arm64
-    podman build \
-      --platform "${e2e_platform}" \
-      --tag "${e2e_image}" \
-      --file container/e2e.Containerfile \
-      container
     ;;
   *)
     echo "unsupported recording architecture: $(uname -m)" >&2
     exit 1
     ;;
 esac
+
+e2e_image="${published_e2e_image}"
+podman pull --platform "${e2e_platform}" "${e2e_image}"
 
 podman run --rm \
   --platform "${e2e_platform}" \
@@ -289,18 +289,20 @@ test -s docs/site/static/features/{name}.gif || {
 }
 ```
 
-The ARM64 branch builds natively; do not pull or run the published AMD64 digest under
-QEMU because Rust compiler probes can crash before the test starts. The `--user`
-override is only for writable local recording. CI does not use it: the image retains its
-unprivileged UID 1001 default, and workflows mount the checkout read-only for `check`
-mode. Always perform the nonempty-file check after recording: VHS can exit successfully
-after creating its screenshots even when GIF finalization has not produced a usable
-artifact.
+Both host branches pull their native variant from the same published image index; do not
+run the other architecture through emulation because Rust compiler probes can crash
+before the test starts. The `--user` override is only for writable local recording. CI
+does not use it: the image retains its unprivileged UID 1001 default, and workflows
+mount the checkout read-only for `check` mode. Always perform the nonempty-file check
+after recording: VHS can exit successfully after creating its screenshots even when GIF
+finalization has not produced a usable artifact.
 
 Review the changed GIF and `.{name}.hash` sidecar, then refresh the PNG poster for every
-regenerated GIF (section 4) before committing all three together. Successful generation
-removes the previous same-named PNG intentionally so a stale poster cannot pass the
-nonempty-poster integrity check; a failed recording preserves the last valid poster.
+regenerated GIF (section 4) before committing all three together. Testty records to a
+hidden staging file and replaces the committed GIF only after the recording is nonempty.
+Successful generation removes the previous same-named PNG intentionally so a stale
+poster cannot pass the nonempty-poster integrity check; a failed recording preserves the
+last valid GIF, hash sidecar, and poster.
 
 #### Refresh the canonical image
 
@@ -322,9 +324,8 @@ itself. `container/e2e.Containerfile` carries the `org.opencontainers.image.sour
 label to preserve the repository association on subsequent publications.
 
 Copy the reported digest into the `image` default in
-`.github/actions/run-e2e/action.yml` and the `published_e2e_image` assignment above.
-After the pinned digest contains both platforms, the ARM64 recording branch can replace
-its native build with an explicit pull of that published image. Do not update the
+`.github/actions/run-e2e/action.yml` and the `published_e2e_image` assignment above. The
+pinned digest must remain an image index with both platforms; do not update the
 repository when either native test or either platform pull fails. Re-record every
 feature affected by a tool, browser, font, or rendering change and refresh its PNG
 poster before updating the digest and artifacts together.
@@ -407,8 +408,8 @@ The `TESTTY_GIF_MODE` env var selects the freshness mode used by `FeatureTest`:
 - `check` / `check-only` — compute the would-be hash and compare it to the on-disk
   sidecar without invoking VHS or touching the GIF output directory. The harness fails
   the test when a committed sidecar has drifted, an existing sidecar is invalid, or the
-  GIF itself is missing, and surfaces the current/committed hashes plus sidecar errors
-  so CI catches drift. Existing GIFs that predate sidecars are tolerated until a
+  GIF itself is missing or empty, and surfaces the current/committed hashes plus sidecar
+  errors so CI catches drift. Existing GIFs that predate sidecars are tolerated until a
   recording run creates their baseline. `.zola(...)` tests without any committed docs
   page, GIF, or sidecar are treated as unpublished and skipped by check mode until a
   recording run publishes their artifacts.
@@ -487,7 +488,8 @@ When using the legacy pattern, create the Zola page manually at
 - [ ] Assertions verify visible UI text or state, not internal implementation details.
 - [ ] A same-named PNG poster exists, shows a meaningful stable frame, and was refreshed
   after the latest GIF change.
-- [ ] The generated GIF exists and is nonempty before its hash sidecar is accepted.
+- [ ] The generated GIF exists and is nonempty before its hash sidecar is accepted; a
+  failed recording preserves the previous GIF, hash sidecar, and poster.
 - [ ] Container recording selects `linux/amd64` or `linux/arm64` explicitly, and every
   pulled digest contains the selected platform.
 - [ ] Focused E2E workflow passes with
