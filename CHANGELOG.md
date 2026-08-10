@@ -7,6 +7,43 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.14.4] - 2026-08-09
+
+### Added
+
+- agentty: add provider-enforced read-only research waves with configurable
+  auto-approval, separate research and implementation planning, persisted reports, and
+  verification-gated follow-up work.
+- ag-harness: add Kimi support, a shared OpenAI-compatible Chat Completions transport,
+  and request-duration telemetry for successful, failed, and cancelled model calls.
+
+### Changed
+
+- agentty: queue review-request publishing behind active turns, preserve focused-review
+  ordering around durable notices, and expose publish progress without breaking branch
+  operation serialization.
+- agentty: tighten structured session, review, and orchestration prompt contracts around
+  untrusted input, workspace isolation, read-only Git access, quality checks, and
+  schema-driven responses.
+- agentty: reuse cached diff, Markdown, and session-row render data across layout and
+  paint paths.
+- ci: use pinned Rust toolchains and centralize coverage, E2E, and multi-architecture
+  image validation across workflows.
+- docs: add the open-source pull-request reviewer to the public roadmap.
+- release: bump workspace crate metadata and lockfile package versions to `0.14.4`.
+
+### Fixed
+
+- agentty: clear stale terminal content when navigation changes the routed surface while
+  preserving search positions and normal within-page diff rendering.
+- agentty: accept only valid terminal Codex answers for completed focused reviews while
+  ignoring commentary, blank fallbacks, and unsupported assistant items.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.14.3] - 2026-08-05
 
 ### Added
