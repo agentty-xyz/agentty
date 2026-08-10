@@ -34,7 +34,7 @@ mod tests {
         ERROR_BODY_LIMIT_BYTES, JsonObjectBackend, RESPONSE_ENVELOPE_LIMIT_BYTES,
         STRUCTURED_OUTPUT_INSTRUCTION, SUCCESS_BODY_LIMIT_BYTES,
     };
-    use crate::{model, schema_contract};
+    use crate::{model, schema_contract, tool};
 
     struct StubClient;
 
@@ -74,6 +74,23 @@ mod tests {
 
     fn request(prompt: &str) -> model::ModelRequest {
         model::ModelRequest::new(prompt, person_schema())
+    }
+
+    fn read_request(prompt: &str) -> model::ModelRequest {
+        request(prompt).with_tool(tool::ToolDefinition::read())
+    }
+
+    fn read_tool_wire() -> serde_json::Value {
+        let definition = tool::ToolDefinition::read();
+
+        json!({
+            "type": "function",
+            "function": {
+                "description": definition.description(),
+                "name": definition.name(),
+                "parameters": definition.parameters()
+            }
+        })
     }
 
     fn escaped_value_schema() -> crate::OutputSchema {
@@ -136,7 +153,37 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "choices": [{
                     "finish_reason": "stop",
-                    "message": {"content": content}
+                    "message": {"content": content, "tool_calls": null}
+                }]
+            })))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_tool_response(server: &MockServer, prompt: &str, message: serde_json::Value) {
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(bearer_token("test-key"))
+            .and(body_json(json!({
+                "messages": [
+                    {
+                        "content": format!(
+                            "{STRUCTURED_OUTPUT_INSTRUCTION}{}",
+                            person_schema_value()
+                        ),
+                        "role": "system"
+                    },
+                    {"content": prompt, "role": "user"}
+                ],
+                "model": "qwen-plus",
+                "response_format": {"type": "json_object"},
+                "tools": [read_tool_wire()]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": message
                 }]
             })))
             .expect(1)
@@ -145,7 +192,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completes_structured_request() {
+    async fn completes_terminal_response_with_null_tool_calls() {
         // Arrange
         let server = MockServer::start().await;
         let schema_value = person_schema_value();
@@ -165,7 +212,160 @@ mod tests {
             .expect("Qwen request should succeed");
 
         // Assert
-        assert_eq!(response.output(), &json!({ "name": "Ada" }));
+        assert_eq!(response.output(), Some(&json!({ "name": "Ada" })));
+    }
+
+    #[tokio::test]
+    async fn advertises_and_decodes_read_tool_call() {
+        // Arrange
+        let server = MockServer::start().await;
+        mount_tool_response(
+            &server,
+            "inspect the manifest",
+            json!({
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_qwen_read",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": r#"{"path":"Cargo.toml","offset":1,"limit":12}"#
+                    }
+                }]
+            }),
+        )
+        .await;
+        let model = qwen(&server);
+
+        // Act
+        let response = model
+            .complete(read_request("inspect the manifest"))
+            .await
+            .expect("Qwen read request should decode");
+
+        // Assert
+        assert!(response.output().is_none());
+        let call = response
+            .call()
+            .expect("response should contain a tool call");
+        assert_eq!(call.id(), "call_qwen_read");
+        assert_eq!(call.name(), "read");
+        assert_eq!(call.arguments().path(), "Cargo.toml");
+        assert_eq!(call.arguments().offset(), Some(1));
+        assert_eq!(call.arguments().limit(), Some(12));
+    }
+
+    #[tokio::test]
+    async fn rejects_malformed_and_invalid_read_arguments() {
+        // Arrange
+        let cases = [
+            ("{", "model returned invalid tool arguments:"),
+            (
+                r#"{"path":"Cargo.toml","offset":0}"#,
+                "model returned invalid tool arguments:",
+            ),
+            (
+                r#"{"path":"Cargo.toml","extra":true}"#,
+                "model returned invalid tool arguments:",
+            ),
+        ];
+
+        // Act
+        let mut errors = Vec::new();
+        for (index, (arguments, expected)) in cases.into_iter().enumerate() {
+            let server = MockServer::start().await;
+            mount_tool_response(
+                &server,
+                "inspect the manifest",
+                json!({
+                    "content": null,
+                    "tool_calls": [{
+                        "id": format!("call_{index}"),
+                        "type": "function",
+                        "function": {"name": "read", "arguments": arguments}
+                    }]
+                }),
+            )
+            .await;
+            let error = qwen(&server)
+                .complete(read_request("inspect the manifest"))
+                .await
+                .expect_err("invalid read arguments should fail");
+            errors.push((error.to_string(), expected));
+        }
+
+        // Assert
+        assert!(
+            errors
+                .iter()
+                .all(|(error, expected)| error.starts_with(expected))
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_unsupported_tool_type_name_and_terminal_content() {
+        // Arrange
+        let messages = [
+            (
+                json!({
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_type",
+                        "type": "custom"
+                    }]
+                }),
+                "model requested unsupported tool type: custom",
+            ),
+            (
+                json!({
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_name",
+                        "type": "function",
+                        "function": {"name": "write", "arguments": r#"{"path":"Cargo.toml"}"#}
+                    }]
+                }),
+                "model requested unsupported tool: write",
+            ),
+            (
+                json!({
+                    "content": "done",
+                    "tool_calls": [{
+                        "id": "call_content",
+                        "type": "function",
+                        "function": {"name": "read", "arguments": r#"{"path":"Cargo.toml"}"#}
+                    }]
+                }),
+                "model tool call response contained terminal content",
+            ),
+            (
+                json!({
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_function_payload",
+                        "type": "function"
+                    }]
+                }),
+                "model returned invalid tool arguments:",
+            ),
+        ];
+
+        // Act
+        let mut errors = Vec::new();
+        for (message, expected) in messages {
+            let server = MockServer::start().await;
+            mount_tool_response(&server, "inspect the manifest", message).await;
+            let error = qwen(&server)
+                .complete(read_request("inspect the manifest"))
+                .await
+                .expect_err("unsupported tool response should fail");
+            errors.push((error.to_string(), expected));
+        }
+
+        // Assert
+        assert!(errors.iter().all(|(error, expected)| {
+            error == expected || (expected.ends_with(':') && error.starts_with(expected))
+        }));
     }
 
     #[tokio::test]
@@ -186,7 +386,11 @@ mod tests {
             .expect("stubbed Qwen request should succeed");
 
         // Assert
-        assert_eq!(output, r#"{"name":"Ada"}"#);
+        assert!(matches!(
+            output,
+            crate::chat_completion::GeneratedResponse::Output(output)
+                if output == r#"{"name":"Ada"}"#
+        ));
     }
 
     #[tokio::test]
@@ -291,6 +495,7 @@ mod tests {
         assert_eq!(
             response
                 .output()
+                .expect("response should contain terminal output")
                 .get("value")
                 .and_then(serde_json::Value::as_str)
                 .map(str::len),

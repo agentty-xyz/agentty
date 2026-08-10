@@ -30,7 +30,7 @@ mod tests {
         ERROR_BODY_LIMIT_BYTES, RESPONSE_ENVELOPE_LIMIT_BYTES, STRUCTURED_OUTPUT_INSTRUCTION,
         SUCCESS_BODY_LIMIT_BYTES,
     };
-    use crate::{model, schema_contract};
+    use crate::{model, schema_contract, tool};
 
     fn person_schema_value() -> Value {
         json!({
@@ -49,6 +49,23 @@ mod tests {
 
     fn request(prompt: &str) -> model::ModelRequest {
         model::ModelRequest::new(prompt, person_schema())
+    }
+
+    fn read_request(prompt: &str) -> model::ModelRequest {
+        request(prompt).with_tool(tool::ToolDefinition::read())
+    }
+
+    fn read_tool_wire() -> Value {
+        let definition = tool::ToolDefinition::read();
+
+        json!({
+            "type": "function",
+            "function": {
+                "description": definition.description(),
+                "name": definition.name(),
+                "parameters": definition.parameters()
+            }
+        })
     }
 
     fn escaped_value_schema() -> crate::OutputSchema {
@@ -139,6 +156,36 @@ mod tests {
             .await;
     }
 
+    async fn mount_tool_response(server: &MockServer, prompt: &str, message: Value) {
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(bearer_token("test-key"))
+            .and(body_json(json!({
+                "messages": [
+                    {
+                        "content": format!(
+                            "{STRUCTURED_OUTPUT_INSTRUCTION}{}",
+                            person_schema_value()
+                        ),
+                        "role": "system"
+                    },
+                    {"content": prompt, "role": "user"}
+                ],
+                "model": "kimi-k2.6",
+                "response_format": {"type": "json_object"},
+                "tools": [read_tool_wire()]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": message
+                }]
+            })))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
     #[tokio::test]
     async fn accepts_object_root_in_type_array() {
         // Arrange
@@ -155,7 +202,7 @@ mod tests {
             .expect("Kimi request should succeed");
 
         // Assert
-        assert_eq!(response.output(), &json!({}));
+        assert_eq!(response.output(), Some(&json!({})));
     }
 
     #[tokio::test]
@@ -179,7 +226,156 @@ mod tests {
             .expect("Kimi request should succeed");
 
         // Assert
-        assert_eq!(response.output(), &json!({ "name": "Ada" }));
+        assert_eq!(response.output(), Some(&json!({ "name": "Ada" })));
+    }
+
+    #[tokio::test]
+    async fn advertises_and_decodes_read_tool_call() {
+        // Arrange
+        let server = MockServer::start().await;
+        mount_tool_response(
+            &server,
+            "inspect the manifest",
+            json!({
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_kimi_read",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": r#"{"path":"Cargo.toml","offset":1,"limit":12}"#
+                    }
+                }]
+            }),
+        )
+        .await;
+        let model = kimi(&server);
+
+        // Act
+        let response = model
+            .complete(read_request("inspect the manifest"))
+            .await
+            .expect("Kimi read request should decode");
+
+        // Assert
+        assert!(response.output().is_none());
+        let call = response
+            .call()
+            .expect("response should contain a tool call");
+        assert_eq!(call.id(), "call_kimi_read");
+        assert_eq!(call.name(), "read");
+        assert_eq!(call.arguments().path(), "Cargo.toml");
+        assert_eq!(call.arguments().offset(), Some(1));
+        assert_eq!(call.arguments().limit(), Some(12));
+    }
+
+    #[tokio::test]
+    async fn rejects_missing_and_multiple_tool_calls() {
+        // Arrange
+        let messages = [
+            (json!({"content": null}), "model returned no tool call"),
+            (
+                json!({
+                    "content": null,
+                    "tool_calls": [
+                        {
+                            "id": "call_one",
+                            "type": "function",
+                            "function": {"name": "read", "arguments": r#"{"path":"Cargo.toml"}"#}
+                        },
+                        {
+                            "id": "call_two",
+                            "type": "function",
+                            "function": {"name": "read", "arguments": r#"{"path":"README.md"}"#}
+                        }
+                    ]
+                }),
+                "model returned multiple tool calls",
+            ),
+        ];
+
+        // Act
+        let mut errors = Vec::new();
+        for (message, expected) in messages {
+            let server = MockServer::start().await;
+            mount_tool_response(&server, "inspect the manifest", message).await;
+            let error = kimi(&server)
+                .complete(read_request("inspect the manifest"))
+                .await
+                .expect_err("invalid tool-call count should fail");
+            errors.push((error.to_string(), expected));
+        }
+
+        // Assert
+        assert!(errors.iter().all(|(error, expected)| error == expected));
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_read_range() {
+        // Arrange
+        let server = MockServer::start().await;
+        mount_tool_response(
+            &server,
+            "inspect the manifest",
+            json!({
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_invalid_limit",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": r#"{"path":"Cargo.toml","limit":0}"#
+                    }
+                }]
+            }),
+        )
+        .await;
+        let model = kimi(&server);
+
+        // Act
+        let error = model
+            .complete(read_request("inspect the manifest"))
+            .await
+            .expect_err("zero read limit should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            model::ModelError::InvalidToolArguments { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_read_arguments() {
+        // Arrange
+        let server = MockServer::start().await;
+        let arguments = format!(
+            r#"{{"path":"{}"}}"#,
+            "x".repeat(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES)
+        );
+        mount_tool_response(
+            &server,
+            "inspect the manifest",
+            json!({
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_oversized",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": arguments}
+                }]
+            }),
+        )
+        .await;
+        let model = kimi(&server);
+
+        // Act
+        let error = model
+            .complete(read_request("inspect the manifest"))
+            .await
+            .expect_err("oversized read arguments should fail");
+
+        // Assert
+        assert!(matches!(error, model::ModelError::ResponseContentTooLarge));
     }
 
     #[tokio::test]
@@ -284,6 +480,7 @@ mod tests {
         assert_eq!(
             response
                 .output()
+                .expect("response should contain terminal output")
                 .get("value")
                 .and_then(Value::as_str)
                 .map(str::len),

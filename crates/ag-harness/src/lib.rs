@@ -8,9 +8,11 @@ mod model;
 mod provider;
 mod schema_contract;
 mod telemetry;
+mod tool;
 
 pub use model::{
     Model, ModelClient, ModelError, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,
 };
 pub use provider::{KimiConfig, QwenConfig};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
+pub use tool::{ReadArguments, ToolCall, ToolDefinition};

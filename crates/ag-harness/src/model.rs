@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::provider::{self, KimiConfig, QwenConfig};
 use crate::schema_contract::{OutputSchema, OutputValidationError};
-use crate::{chat_completion, telemetry};
+use crate::{chat_completion, telemetry, tool};
 
 /// Object-safe boundary for provider-neutral model requests.
 ///
@@ -79,13 +79,18 @@ impl ModelClient {
     /// cannot be converted to the provider-neutral response.
     pub async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
         let _duration = telemetry::RequestDuration::start(self.metadata());
-        let output = self.backend.generate(&request).await?;
+        let response = self.backend.generate(&request).await?;
 
-        request
-            .schema()
-            .parse_and_validate(&output)
-            .map(ModelResponse::new)
-            .map_err(ModelError::from)
+        match response {
+            chat_completion::GeneratedResponse::Output(output) => request
+                .schema()
+                .parse_and_validate(&output)
+                .map(ModelResponse::from_output)
+                .map_err(ModelError::from),
+            chat_completion::GeneratedResponse::ToolCall(call) => {
+                Ok(ModelResponse::tool_call(call))
+            }
+        }
     }
 
     fn chat_completion(
@@ -165,6 +170,7 @@ pub enum ModelMetadataError {
 pub struct ModelRequest {
     prompt: String,
     schema: OutputSchema,
+    tools: Vec<tool::ToolDefinition>,
 }
 
 impl ModelRequest {
@@ -173,7 +179,16 @@ impl ModelRequest {
         Self {
             prompt: prompt.into(),
             schema,
+            tools: Vec::new(),
         }
+    }
+
+    /// Advertises one native function tool for this request.
+    #[must_use]
+    pub fn with_tool(mut self, tool: tool::ToolDefinition) -> Self {
+        self.tools.push(tool);
+
+        self
     }
 
     /// Returns the request prompt.
@@ -185,22 +200,49 @@ impl ModelRequest {
     pub fn schema(&self) -> &OutputSchema {
         &self.schema
     }
+
+    /// Returns the native function tools explicitly advertised by the caller.
+    pub fn tools(&self) -> &[tool::ToolDefinition] {
+        &self.tools
+    }
+
+    pub(crate) fn advertises_tool(&self, name: &str) -> bool {
+        self.tools.iter().any(|tool| tool.name() == name)
+    }
 }
 
 /// Provider-neutral output from one model request.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ModelResponse {
-    output: Value,
+pub enum ModelResponse {
+    /// Terminal, locally schema-validated model output.
+    Output(Value),
+    /// One validated native function call requiring application handling.
+    ToolCall(tool::ToolCall),
 }
 
 impl ModelResponse {
-    /// Returns the parsed, schema-validated output.
-    pub fn output(&self) -> &Value {
-        &self.output
+    /// Returns parsed, schema-validated terminal output, when present.
+    pub fn output(&self) -> Option<&Value> {
+        match self {
+            Self::Output(output) => Some(output),
+            Self::ToolCall(_) => None,
+        }
     }
 
-    fn new(output: Value) -> Self {
-        Self { output }
+    /// Returns the intermediate native function call, when present.
+    pub fn call(&self) -> Option<&tool::ToolCall> {
+        match self {
+            Self::Output(_) => None,
+            Self::ToolCall(call) => Some(call),
+        }
+    }
+
+    fn from_output(output: Value) -> Self {
+        Self::Output(output)
+    }
+
+    fn tool_call(call: tool::ToolCall) -> Self {
+        Self::ToolCall(call)
     }
 }
 
@@ -244,6 +286,33 @@ pub enum ModelError {
         /// root.
         path: String,
         /// Validator diagnostic for the failed constraint.
+        reason: String,
+    },
+    /// The provider returned tool calls without any call entries.
+    #[error("model returned no tool call")]
+    MissingToolCall,
+    /// The provider returned more than the single supported call.
+    #[error("model returned multiple tool calls")]
+    MultipleToolCalls,
+    /// A tool-call response also contained terminal assistant content.
+    #[error("model tool call response contained terminal content")]
+    ToolCallWithContent,
+    /// The provider returned an unsupported tool-call type.
+    #[error("model requested unsupported tool type: {kind}")]
+    UnsupportedToolType {
+        /// Provider tool type that is not a native function.
+        kind: String,
+    },
+    /// The provider returned an unsupported or unadvertised native function.
+    #[error("model requested unsupported tool: {name}")]
+    UnsupportedToolName {
+        /// Native function name that was not advertised for the request.
+        name: String,
+    },
+    /// The provider returned malformed or invalid native function arguments.
+    #[error("model returned invalid tool arguments: {reason}")]
+    InvalidToolArguments {
+        /// Bounded parser or validation diagnostic.
         reason: String,
     },
 }
@@ -354,6 +423,22 @@ mod tests {
         // Assert
         assert_eq!(request.prompt(), "hello");
         assert_eq!(request.schema(), &schema);
+        assert!(request.tools().is_empty());
+    }
+
+    #[test]
+    fn request_explicitly_advertises_read() {
+        // Arrange
+        let schema =
+            OutputSchema::new(json!({ "type": "object" })).expect("schema should be valid");
+
+        // Act
+        let request = ModelRequest::new("hello", schema).with_tool(tool::ToolDefinition::read());
+
+        // Assert
+        assert_eq!(request.tools(), &[tool::ToolDefinition::read()]);
+        assert!(request.advertises_tool("read"));
+        assert!(!request.advertises_tool("write"));
     }
 
     #[test]
@@ -362,10 +447,11 @@ mod tests {
         let value = json!({ "name": "Ada" });
 
         // Act
-        let response = ModelResponse::new(value.clone());
+        let response = ModelResponse::from_output(value.clone());
 
         // Assert
-        assert_eq!(response.output(), &value);
+        assert_eq!(response.output(), Some(&value));
+        assert!(response.call().is_none());
     }
 
     #[test]

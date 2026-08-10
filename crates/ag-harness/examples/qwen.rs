@@ -47,7 +47,10 @@ async fn request_greeting(config: QwenConfig) -> Result<(), DynError> {
         ))
         .await?;
 
-    writeln!(io::stdout().lock(), "{}", response.output())?;
+    let output = response
+        .output()
+        .ok_or_else(|| io::Error::other("Qwen returned an unexpected tool call"))?;
+    writeln!(io::stdout().lock(), "{output}")?;
 
     Ok(())
 }
