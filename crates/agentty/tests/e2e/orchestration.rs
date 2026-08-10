@@ -128,8 +128,8 @@ fn seed_reported_research_task(env: &BuilderEnv) -> E2eResult {
         .await?;
         sqlx::query(
             "UPDATE session SET role = 'OrchestrationResearcher', has_diff = 1, status = \
-             'Canceled', archived_diff = 'diff --git a/policy.txt b/policy.txt\n+Unexpected \
-             research write\n' WHERE id = ?",
+             'Canceled', title = 'Inspect architecture boundaries', archived_diff = 'diff --git \
+             a/policy.txt b/policy.txt\n+Unexpected research write\n' WHERE id = ?",
         )
         .bind(WORKER_ID)
         .execute(database.pool())
@@ -502,6 +502,7 @@ fn test_orchestration_research_report() -> E2eResult {
                     .press_key("j")
                     .press_key("Enter")
                     .wait_for_text("Managed by controller-0001", 5000)
+                    .wait_for_text("Inspect architecture boundaries", 5000)
                     .press_key("d")
                     .wait_for_text("Unexpected research write", 5000)
                     .capture_labeled(
@@ -525,6 +526,7 @@ fn test_orchestration_research_report() -> E2eResult {
                     &report_full,
                 );
                 assertion::assert_text_in_region(frame, "Unexpected research write", &full);
+                assertion::assert_text_in_region(frame, "Inspect architecture boundaries", &full);
                 assertion::assert_text_in_region(frame, "policy.txt", &full);
                 assertion::assert_text_in_region(frame, "q/Esc: back", &full);
             },

@@ -2685,6 +2685,7 @@ impl SessionManager {
                 child_pid: None,
                 folder: folder.to_path_buf(),
                 model: session_agent.model(),
+                permission_mode: ag_agent::PermissionMode::ReadOnly,
                 prompt: prompt.to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level,
@@ -4800,6 +4801,7 @@ mod tests {
                 assert_eq!(request.agent_kind, AgentKind::Claude);
                 assert_eq!(request.folder, expected_folder);
                 assert_eq!(request.model, AgentModel::ClaudeSonnet5);
+                assert_eq!(request.permission_mode, ag_agent::PermissionMode::ReadOnly);
                 assert_eq!(request.prompt, "Generate a title");
                 assert_eq!(request.reasoning_level, ReasoningLevel::Low);
                 assert_eq!(request.request_kind, AgentRequestKind::UtilityPrompt);

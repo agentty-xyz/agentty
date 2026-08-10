@@ -227,16 +227,14 @@ pub(super) async fn run_channel_turn(
         Arc::clone(&context.child_pid),
     ));
 
-    if should_spawn_turn_title_generation(permission_mode) {
-        spawn_turn_title_generation(
-            context,
-            Arc::clone(&one_shot_client),
-            session_project_id,
-            &prompt.text,
-            turn_metadata.session_agent,
-        )
-        .await;
-    }
+    spawn_turn_title_generation(
+        context,
+        Arc::clone(&one_shot_client),
+        session_project_id,
+        &prompt.text,
+        turn_metadata.session_agent,
+    )
+    .await;
 
     let turn_result = run_turn_with_cancellation(context, turn_cancel_token, req, event_tx).await;
     SessionManager::cleanup_prompt_attachment_paths(
@@ -725,12 +723,8 @@ async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: S
     .await;
 }
 
-/// Returns whether the session may launch a write-capable title utility turn.
-fn should_spawn_turn_title_generation(permission_mode: PermissionMode) -> bool {
-    !permission_mode.is_read_only()
-}
-
-/// Spawns title generation while a session still has its provisional title.
+/// Spawns read-only title generation while a session still has its
+/// provisional title.
 async fn spawn_turn_title_generation(
     context: &SessionWorkerContext,
     one_shot_client: Arc<dyn OneShotClient>,
@@ -834,18 +828,6 @@ mod tests {
         // Assert
         assert_eq!(worker_mode, PermissionMode::AutoEdit);
         assert_eq!(research_mode, PermissionMode::ReadOnly);
-    }
-
-    #[test]
-    fn title_generation_is_disabled_for_read_only_research() {
-        // Arrange
-        let permission_modes = [PermissionMode::AutoEdit, PermissionMode::ReadOnly];
-
-        // Act
-        let title_generation = permission_modes.map(should_spawn_turn_title_generation);
-
-        // Assert
-        assert_eq!(title_generation, [true, false]);
     }
 
     #[tokio::test]

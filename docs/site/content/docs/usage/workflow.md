@@ -735,12 +735,13 @@ it and the transcript reports the fallback.
 
 <a id="usage-title-refinement"></a> When the first prompt is submitted, Agentty stores
 it as a provisional title and generates a refined title in the background using the
-project's `Default Fast Model`. Any prompt without an actionable session goal keeps the
-provisional title; the first later prompt with actionable intent then supplies the
-refined title. Draft sessions regenerate the title as more drafts are staged. Generated
-title candidates are ordered, so an empty response does not discard an earlier usable
-candidate, while a slow response cannot replace a newer accepted candidate, draft, or
-commit-derived title.
+project's `Default Fast Model`. Title refinement runs for every session role, including
+managed read-only research sessions, and the isolated title prompt is itself read-only.
+Any prompt without an actionable session goal keeps the provisional title; the first
+later prompt with actionable intent then supplies the refined title. Draft sessions
+regenerate the title as more drafts are staged. Generated title candidates are ordered,
+so an empty response does not discard an earlier usable candidate, while a slow response
+cannot replace a newer accepted candidate, draft, or commit-derived title.
 
 ## Settings Scope
 
