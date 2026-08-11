@@ -542,8 +542,8 @@ fn test_orchestrator_auto_review_scope() -> E2eResult {
                     .wait_for_text("Tab: focus | Enter: send", 5000)
                     .write_text(CONTROLLER_REVISION_PROMPT)
                     .press_key("Enter")
-                    .wait_for_text(CONTROLLER_REVISION_RESPONSE, 30000)
-                    .wait_for_stable_frame(300, 5000)
+                    .wait_for_text("Enter: reply", 30000)
+                    .wait_for_text("Phase: Running", 5000)
                     .capture_labeled(
                         "controller_review_ready",
                         "Controller remains review-ready after its turn",
@@ -564,7 +564,7 @@ fn test_orchestrator_auto_review_scope() -> E2eResult {
                     Region::full(controller_frame.cols(), controller_frame.rows());
                 assertion::assert_text_in_region(
                     &controller_frame,
-                    CONTROLLER_REVISION_RESPONSE,
+                    "Enter: reply",
                     &controller_full,
                 );
                 assertion::assert_text_in_region(

@@ -15,7 +15,7 @@ use ag_forge::{
 };
 use ag_git as git;
 use ag_protocol::{
-    AgentResponse, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
+    AgentResponse, QuestionItem, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
     parse_agent_response_strict,
 };
 use tempfile::tempdir;
@@ -43,7 +43,9 @@ use crate::domain::transient_message::{
 use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
-use crate::presentation::app_mode::{AppMode, ReviewCommentAction, ReviewCommentActionSelection};
+use crate::presentation::app_mode::{
+    AppMode, DiffPreview, HelpContext, ReviewCommentAction, ReviewCommentActionSelection,
+};
 
 /// Builds a filesystem mock that delegates operations to local disk.
 fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
@@ -3542,7 +3544,7 @@ fn review_message_body<'a>(app: &'a App, session_id: &str) -> &'a TransientMessa
 }
 
 #[tokio::test]
-async fn test_refresh_sessions_if_needed_remaps_view_mode_index() {
+async fn test_refresh_sessions_loads_question_detail_when_another_session_is_selected() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let db = AppRepositories::in_memory().await;
@@ -3556,7 +3558,7 @@ async fn test_refresh_sessions_if_needed_remaps_view_mode_index() {
             "alpha000",
             "gemini-3.6-flash",
             "main",
-            "InProgress",
+            "Question",
             project_id,
         )
         .await
@@ -3565,6 +3567,14 @@ async fn test_refresh_sessions_if_needed_remaps_view_mode_index() {
         .insert_session("beta0000", "claude-opus-5", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
+    db.sessions()
+        .update_session_prompt("alpha000", "Alpha prompt")
+        .await
+        .expect("failed to set alpha000 prompt");
+    db.sessions()
+        .update_session_prompt("beta0000", "Beta prompt")
+        .await
+        .expect("failed to set beta0000 prompt");
     db.sessions()
         .update_session_updated_at("alpha000", 1)
         .await
@@ -3585,27 +3595,149 @@ async fn test_refresh_sessions_if_needed_remaps_view_mode_index() {
         db,
     )
     .await;
-    let selected_session_id = app.sessions.sessions()[1].id.clone();
-    app.mode = AppMode::View {
-        session_id: selected_session_id.clone(),
-        scroll_offset: None,
-    };
+    let question_session_id = SessionId::from("alpha000");
+    let selected_index = app
+        .sessions
+        .sessions()
+        .iter()
+        .position(|session| session.id == "beta0000")
+        .expect("beta0000 should be loaded");
+    app.sessions.select_session_index(Some(selected_index));
+    app.enter_question_mode(
+        &question_session_id,
+        vec![QuestionItem::new("Which target should be used?")],
+    );
 
     // Act
     app.services
         .db()
         .sessions()
-        .update_session_status_with_timing_at("alpha000", "Done", 0)
+        .update_session_status_with_timing_at("alpha000", "Question", 0)
         .await
         .expect("failed to update session status");
     app.refresh_sessions_now().await;
 
     // Assert
     assert_eq!(app.sessions.sessions()[0].id, "alpha000");
-    assert!(matches!(app.mode, AppMode::View { .. }));
-    if let AppMode::View { session_id, .. } = app.mode {
-        assert_eq!(session_id, selected_session_id);
+    assert!(matches!(
+        app.mode,
+        AppMode::Question { ref session_id, .. } if session_id == &question_session_id
+    ));
+    assert_eq!(
+        app.sessions
+            .selected_session()
+            .map(|session| session.id.as_str()),
+        Some("beta0000")
+    );
+    assert_eq!(
+        app.sessions
+            .session_for_id(&question_session_id)
+            .map(|session| session.prompt.as_str()),
+        Some("Alpha prompt")
+    );
+    assert_eq!(
+        app.sessions
+            .session_for_id("beta0000")
+            .map(|session| session.prompt.as_str()),
+        Some("")
+    );
+}
+
+#[tokio::test]
+async fn test_refresh_sessions_loads_diff_help_detail_when_another_session_is_selected() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let db = AppRepositories::in_memory().await;
+    let project_id = db
+        .projects()
+        .upsert_project("/tmp/test", None)
+        .await
+        .expect("failed to upsert project");
+    db.sessions()
+        .insert_session("alpha000", "gemini-3.6-flash", "main", "Review", project_id)
+        .await
+        .expect("failed to insert alpha000");
+    db.sessions()
+        .insert_session("beta0000", "claude-opus-5", "main", "Done", project_id)
+        .await
+        .expect("failed to insert beta0000");
+    db.sessions()
+        .update_session_prompt("alpha000", "Alpha prompt")
+        .await
+        .expect("failed to set alpha000 prompt");
+    db.sessions()
+        .update_session_prompt("beta0000", "Beta prompt")
+        .await
+        .expect("failed to set beta0000 prompt");
+    db.sessions()
+        .update_session_updated_at("alpha000", 1)
+        .await
+        .expect("failed to set alpha000 timestamp");
+    db.sessions()
+        .update_session_updated_at("beta0000", 2)
+        .await
+        .expect("failed to set beta0000 timestamp");
+    for session_id in ["alpha000", "beta0000"] {
+        let session_dir = session_folder(dir.path(), session_id);
+        let data_dir = session_dir.join(SESSION_DATA_DIR);
+        std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
     }
+    let mut app = new_test_app_with_db(
+        dir.path().to_path_buf(),
+        PathBuf::from("/tmp/test"),
+        None,
+        db,
+    )
+    .await;
+    let help_session_id = SessionId::from("alpha000");
+    let selected_index = app
+        .sessions
+        .sessions()
+        .iter()
+        .position(|session| session.id == "beta0000")
+        .expect("beta0000 should be loaded");
+    app.sessions.select_session_index(Some(selected_index));
+    app.mode = AppMode::Help {
+        context: HelpContext::Diff {
+            diff: String::new(),
+            file_explorer_selected_index: 0,
+            preview: DiffPreview::default(),
+            restore: None,
+            session_id: help_session_id.clone(),
+            scroll_offset: 0,
+        },
+        scroll_offset: 0,
+    };
+
+    // Act
+    app.refresh_sessions_now().await;
+
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::Help {
+            context: HelpContext::Diff { ref session_id, .. },
+            ..
+        } if session_id == &help_session_id
+    ));
+    assert_eq!(
+        app.sessions
+            .selected_session()
+            .map(|session| session.id.as_str()),
+        Some("beta0000")
+    );
+    assert_eq!(
+        app.sessions
+            .session_for_id(&help_session_id)
+            .map(|session| session.prompt.as_str()),
+        Some("Alpha prompt")
+    );
+    assert_eq!(
+        app.sessions
+            .session_for_id("beta0000")
+            .map(|session| session.prompt.as_str()),
+        Some("")
+    );
 }
 
 #[tokio::test]

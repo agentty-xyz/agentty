@@ -8,15 +8,16 @@
 use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionSize,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
 use agentty::domain::session_message::SessionMessageKind;
 use agentty::test_support;
@@ -47,9 +48,18 @@ const REBASING_QUEUE_SESSION_ID: &str = "rebasing-queue-0001";
 /// Stable id for the seeded binary-only diff session.
 const BINARY_DIFF_SESSION_ID: &str = "binary-diff-0001";
 
-/// Stable id for the seeded clarification-question session used by the
-/// question-resume test.
-const QUESTION_RESUME_SESSION_ID: &str = "question-resume-0001";
+/// Stable id for the unrelated row selected before the refresh regression
+/// creates its question session.
+const QUESTION_REFRESH_SELECTED_SESSION_ID: &str = "question-refresh-selected";
+
+/// Initial prompt that must survive the title-generation refresh.
+const QUESTION_REFRESH_INITIAL_PROMPT: &str = "Implement the initial task";
+
+/// Generated title that must survive clarification submission.
+const QUESTION_REFRESH_TITLE: &str = "Keep the original task title";
+
+/// Final answer emitted after the clarification response resumes the worker.
+const QUESTION_REFRESH_FINAL_ANSWER: &str = "Clarifications accepted.";
 
 /// First clarification question shown when the seeded question session opens.
 const FIRST_QUESTION_TEXT: &str = "Use the default target branch?";
@@ -1627,56 +1637,55 @@ fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-/// Seeds one `Question`-status session with two option questions and a known
-/// empty diff state.
-fn seed_question_resume_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+/// Seeds an unrelated selected row and a prompt-aware agent stub for the
+/// question-refresh regression.
+fn seed_question_refresh_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
         SessionSeed::regular(
-            QUESTION_RESUME_SESSION_ID,
-            "gpt-5.6-sol",
+            QUESTION_REFRESH_SELECTED_SESSION_ID,
+            "claude-haiku-4-5-20251001",
             "main",
-            "Question",
+            "Done",
         )
-        .with_title("Question resume session"),
+        .with_title("Other session"),
     )?;
 
-    let session_worktree =
-        test_support::session_folder(&env.agentty_root.join("wt"), QUESTION_RESUME_SESSION_ID);
-    std::fs::create_dir_all(&session_worktree)?;
-    run_git(&session_worktree, &["init", "-b", "main"])?;
-    run_git(
-        &session_worktree,
-        &["config", "user.email", "test@test.com"],
-    )?;
-    run_git(&session_worktree, &["config", "user.name", "Test"])?;
-    std::fs::write(session_worktree.join("README.md"), "clean session\n")?;
-    run_git(&session_worktree, &["add", "."])?;
-    run_git(&session_worktree, &["commit", "-m", "init"])?;
-
-    let questions_json = format!(
-        r#"[{{"options":["Yes","No"],"text":"{FIRST_QUESTION_TEXT}"}},{{"options":["Unit","Integration"],"text":"{SECOND_QUESTION_TEXT}"}}]"#
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+input=$(cat)
+case "$input" in
+  *"Generate a concise, commit-style title"*)
+    sleep 2
+    result='{{\"answer\":\"{QUESTION_REFRESH_TITLE}\",\"questions\":[],\"review_comment_outcomes\":[],\"summary\":null}}'
+    ;;
+  *"Clarifications:"*)
+    result='{{\"answer\":\"{QUESTION_REFRESH_FINAL_ANSWER}\",\"questions\":[],\"review_comment_outcomes\":[],\"summary\":null}}'
+    ;;
+  *)
+    result='{{\"answer\":\"Need two clarifications.\",\"questions\":[{{\"text\":\"{FIRST_QUESTION_TEXT}\",\"options\":[\"Yes\",\"No\"]}},{{\"text\":\"{SECOND_QUESTION_TEXT}\",\"options\":[\"Unit\",\"Integration\"]}}],\"review_comment_outcomes\":[],\"summary\":null}}'
+    ;;
+esac
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":9}}}}"
+"#
     );
-    let runtime = common::seed_runtime()?;
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
 
-    runtime.block_on(async {
-        let database = common::open_database(env).await?;
-
-        database
-            .sessions()
-            .update_session_questions(QUESTION_RESUME_SESSION_ID, &questions_json)
-            .await?;
-        database
-            .sessions()
-            .update_session_diff_stats(
-                0,
-                0,
-                false,
-                QUESTION_RESUME_SESSION_ID,
-                SessionSize::Xs.label(),
-            )
-            .await
-    })?;
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+        ],
+    )?;
 
     Ok(())
 }
@@ -3954,22 +3963,38 @@ fn session_stop_turn_returns_to_review() -> E2eResult {
 #[test]
 fn session_question_resume_after_leaving_to_list() -> E2eResult {
     // Arrange
+    let agentty_root = Arc::new(Mutex::new(None::<PathBuf>));
+    let setup_agentty_root = Arc::clone(&agentty_root);
+
     FeatureTest::new("session_question_resume")
         .with_git()
-        .setup(seed_question_resume_session)
+        .setup(move |env| {
+            setup_agentty_root
+                .lock()
+                .expect("agentty root capture should remain available")
+                .replace(env.agentty_root.clone());
+
+            seed_question_refresh_project(env)
+        })
         .run(
             |scenario| {
                 // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("Question resume session", 5000)
+                    .wait_for_text("Other session", 5000)
+                    .press_key("a")
                     .press_key("Enter")
-                    .wait_for_text("Question 1/2", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text(QUESTION_REFRESH_INITIAL_PROMPT)
+                    .wait_for_text(QUESTION_REFRESH_INITIAL_PROMPT, 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Question 1/2", 30000)
+                    .wait_for_text(QUESTION_REFRESH_TITLE, 30000)
                     .wait_for_text("Tab: focus", 5000)
                     .capture_labeled(
                         "answer_focused",
-                        "Question mode starts with the answer input focused",
+                        "Title refresh completes while question mode remains active",
                     )
                     .press_key("Escape")
                     .wait_for_text(
@@ -3995,47 +4020,114 @@ fn session_question_resume_after_leaving_to_list() -> E2eResult {
                         "resumed_second_question",
                         "Reopening the session resumes at the second question",
                     )
+                    .press_key("Enter")
+                    .wait_for_text(QUESTION_REFRESH_FINAL_ANSWER, 30000)
+                    .capture_labeled(
+                        "title_preserved",
+                        "Clarification submission preserves title and initial prompt",
+                    )
             },
-            |frame, report| {
+            move |frame, report| {
                 // Assert
-                let answer_focused_frame = common::frame_from_capture(&report.captures[0]);
-                let answer_focused_full =
-                    Region::full(answer_focused_frame.cols(), answer_focused_frame.rows());
-                assertion::assert_text_in_region(
-                    &answer_focused_frame,
-                    "Tab: focus | Enter: send | q: sessions | Ctrl+C: end turn",
-                    &answer_focused_full,
-                );
+                assert_question_refresh_result(frame, report);
+                let agentty_root = agentty_root
+                    .lock()
+                    .expect("agentty root capture should remain available")
+                    .clone()
+                    .expect("feature setup should capture the agentty root");
+                let (persisted_title, persisted_prompt) =
+                    load_question_refresh_metadata(&agentty_root)
+                        .expect("question metadata should remain persisted");
 
-                let chat_focused_frame = common::frame_from_capture(&report.captures[1]);
-                let chat_focused_full =
-                    Region::full(chat_focused_frame.cols(), chat_focused_frame.rows());
-                assertion::assert_text_in_region(
-                    &chat_focused_frame,
-                    "Tab: focus | j/k: scroll | q: sessions",
-                    &chat_focused_full,
-                );
-                assertion::assert_not_visible(&chat_focused_frame, "d: diff");
-                assertion::assert_not_visible(&chat_focused_frame, "Ctrl+C");
-                assertion::assert_text_in_region(
-                    &chat_focused_frame,
-                    "Question 1/2",
-                    &chat_focused_full,
-                );
-                assertion::assert_text_in_region(
-                    &chat_focused_frame,
-                    FIRST_QUESTION_TEXT,
-                    &chat_focused_full,
-                );
-
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Question 2/2", &full);
-                assertion::assert_text_in_region(frame, SECOND_QUESTION_TEXT, &full);
-                assertion::assert_not_visible(frame, FIRST_QUESTION_TEXT);
+                assert_eq!(persisted_title.as_deref(), Some(QUESTION_REFRESH_TITLE));
+                assert_eq!(persisted_prompt, QUESTION_REFRESH_INITIAL_PROMPT);
             },
         )?;
 
     Ok(())
+}
+
+/// Asserts question progress and refreshed-title output for the
+/// question-refresh feature journey.
+fn assert_question_refresh_result(frame: &TerminalFrame, report: &ProofReport) {
+    let answer_focused_frame = common::frame_from_capture(&report.captures[0]);
+    let answer_focused_full =
+        Region::full(answer_focused_frame.cols(), answer_focused_frame.rows());
+    assertion::assert_text_in_region(
+        &answer_focused_frame,
+        "Tab: focus | Enter: send | q: sessions | Ctrl+C: end turn",
+        &answer_focused_full,
+    );
+    assertion::assert_text_in_region(
+        &answer_focused_frame,
+        QUESTION_REFRESH_TITLE,
+        &answer_focused_full,
+    );
+
+    let chat_focused_frame = common::frame_from_capture(&report.captures[1]);
+    let chat_focused_full = Region::full(chat_focused_frame.cols(), chat_focused_frame.rows());
+    assertion::assert_text_in_region(
+        &chat_focused_frame,
+        "Tab: focus | j/k: scroll | q: sessions",
+        &chat_focused_full,
+    );
+    assertion::assert_not_visible(&chat_focused_frame, "d: diff");
+    assertion::assert_not_visible(&chat_focused_frame, "Ctrl+C");
+    assertion::assert_text_in_region(&chat_focused_frame, "Question 1/2", &chat_focused_full);
+    assertion::assert_text_in_region(&chat_focused_frame, FIRST_QUESTION_TEXT, &chat_focused_full);
+
+    let resumed_frame = common::frame_from_capture(&report.captures[2]);
+    let resumed_full = Region::full(resumed_frame.cols(), resumed_frame.rows());
+    assertion::assert_text_in_region(&resumed_frame, "Question 2/2", &resumed_full);
+    assertion::assert_text_in_region(&resumed_frame, SECOND_QUESTION_TEXT, &resumed_full);
+    assertion::assert_not_visible(&resumed_frame, FIRST_QUESTION_TEXT);
+
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(frame, QUESTION_REFRESH_TITLE, &full);
+    assertion::assert_text_in_region(frame, QUESTION_REFRESH_FINAL_ANSWER, &full);
+}
+
+/// Loads the newly created question session's title and prompt from the
+/// feature-test database.
+fn load_question_refresh_metadata(
+    agentty_root: &Path,
+) -> Result<(Option<String>, String), Box<dyn std::error::Error>> {
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = Database::open(&agentty_root.join(DB_DIR).join(DB_FILE))
+            .await
+            .map_err(|error| std::io::Error::other(format!("feature database: {error}")))?;
+        let selected_session = database
+            .sessions()
+            .load_session(QUESTION_REFRESH_SELECTED_SESSION_ID)
+            .await
+            .map_err(|error| std::io::Error::other(format!("selected session: {error}")))?
+            .ok_or_else(|| std::io::Error::other("selected session does not exist"))?;
+        let project_id = selected_session
+            .project_id
+            .ok_or_else(|| std::io::Error::other("selected session has no project"))?;
+        let question_session_id = database
+            .sessions()
+            .load_sessions_for_project(project_id)
+            .await
+            .map_err(|error| std::io::Error::other(format!("project sessions: {error}")))?
+            .into_iter()
+            .find(|session| session.id != QUESTION_REFRESH_SELECTED_SESSION_ID)
+            .map(|session| session.id)
+            .ok_or_else(|| std::io::Error::other("new question session is not listed"))?;
+        let question_session = database
+            .sessions()
+            .load_session(&question_session_id)
+            .await
+            .map_err(|error| std::io::Error::other(format!("question session: {error}")))?
+            .ok_or_else(|| std::io::Error::other("question session does not exist"))?;
+
+        Result::<_, Box<dyn std::error::Error>>::Ok((
+            question_session.title,
+            question_session.prompt,
+        ))
+    })
 }
 
 /// Persists the `Sessions` tab as the startup tab.

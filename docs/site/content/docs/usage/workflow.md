@@ -732,7 +732,9 @@ Any prompt without an actionable session goal keeps the provisional title; the f
 later prompt with actionable intent then supplies the refined title. Draft sessions
 regenerate the title as more drafts are staged. Generated title candidates are ordered,
 so an empty response does not discard an earlier usable candidate, while a slow response
-cannot replace a newer accepted candidate, draft, or commit-derived title.
+cannot replace a newer accepted candidate, draft, or commit-derived title. Clarification
+answers and other follow-up messages never become fallback titles for an already-started
+session, even when its transcript detail is loaded lazily.
 
 ## Settings Scope
 

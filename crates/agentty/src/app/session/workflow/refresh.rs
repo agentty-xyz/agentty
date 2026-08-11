@@ -10,7 +10,7 @@ use super::load::SessionLoadInput;
 use crate::app::session::SessionError;
 use crate::app::{AppServices, ProjectManager, SessionManager};
 use crate::domain::session::{ForgeKind, ReviewRequest, SessionId};
-use crate::presentation::app_mode::{AppMode, ConfirmationViewMode};
+use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 
 impl SessionManager {
     /// Reloads session rows when the metadata cache indicates a change.
@@ -108,6 +108,9 @@ impl SessionManager {
         let selected_session_id = selected_index
             .and_then(|index| self.state.sessions.get(index))
             .map(|session| session.id.clone());
+        let detail_session_id = Self::mode_session_id(mode)
+            .cloned()
+            .or_else(|| selected_session_id.clone());
         let live_orchestration_progress = self
             .state
             .sessions
@@ -127,7 +130,7 @@ impl SessionManager {
             Self::load_sessions_with_fs_client(
                 SessionLoadInput {
                     active_project_id: projects.active_project_id(),
-                    active_session_id: selected_session_id.as_deref(),
+                    active_session_id: detail_session_id.as_deref(),
                     base: services.base_path(),
                     clock: clock.as_ref(),
                     db: services.db(),
@@ -163,6 +166,39 @@ impl SessionManager {
             self.state.updated_at_max = sessions_updated_at_max;
         } else {
             self.update_sessions_metadata_cache(services).await;
+        }
+    }
+
+    /// Returns the session whose detail is visible or being edited in the
+    /// current application mode.
+    fn mode_session_id(mode: &AppMode) -> Option<&SessionId> {
+        match mode {
+            AppMode::Confirmation {
+                session_id: Some(session_id),
+                ..
+            }
+            | AppMode::Prompt { session_id, .. }
+            | AppMode::Question { session_id, .. }
+            | AppMode::View { session_id, .. }
+            | AppMode::Diff { session_id, .. }
+            | AppMode::ReviewComments { session_id, .. }
+            | AppMode::Help {
+                context: HelpContext::View { session_id, .. } | HelpContext::Diff { session_id, .. },
+                ..
+            }
+            | AppMode::ViewInfoPopup {
+                restore_view: ConfirmationViewMode { session_id, .. },
+                ..
+            }
+            | AppMode::LaunchConfigurationSelector {
+                restore_view: ConfirmationViewMode { session_id, .. },
+                ..
+            }
+            | AppMode::PublishBranchInput {
+                restore_view: ConfirmationViewMode { session_id, .. },
+                ..
+            } => Some(session_id),
+            _ => None,
         }
     }
 
@@ -268,26 +304,7 @@ impl SessionManager {
 
     /// Switches back to list mode if the currently viewed session is missing.
     fn ensure_mode_session_exists(&self, mode: &mut AppMode) {
-        let mode_session_id = match &*mode {
-            AppMode::Confirmation {
-                session_id: Some(session_id),
-                ..
-            }
-            | AppMode::Prompt { session_id, .. }
-            | AppMode::Question { session_id, .. }
-            | AppMode::View { session_id, .. }
-            | AppMode::Diff { session_id, .. }
-            | AppMode::ReviewComments { session_id, .. }
-            | AppMode::LaunchConfigurationSelector {
-                restore_view: ConfirmationViewMode { session_id, .. },
-                ..
-            }
-            | AppMode::PublishBranchInput {
-                restore_view: ConfirmationViewMode { session_id, .. },
-                ..
-            } => Some(session_id),
-            _ => None,
-        };
+        let mode_session_id = Self::mode_session_id(mode);
         let Some(session_id) = mode_session_id else {
             return;
         };
@@ -350,13 +367,16 @@ mod tests {
     use crate::app::session::{Clock, SessionDefaults};
     use crate::app::{AppServices, SessionState};
     use crate::domain::agent::AgentKind;
+    use crate::domain::input::InputState;
     use crate::domain::selection::SelectionState;
     use crate::domain::session::{
-        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session,
-        SessionHandles, Status,
+        ForgeKind, PublishBranchAction, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+        Session, SessionHandles, Status,
     };
     use crate::infra::db::AppRepositories;
     use crate::infra::fs;
+    use crate::presentation::app_mode::DiffPreview;
+    use crate::presentation::help_action::ViewSessionState;
 
     /// Builds a filesystem mock that delegates directory checks to local disk.
     fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
@@ -789,6 +809,106 @@ mod tests {
 
         // Assert
         assert!(refresh_due);
+    }
+
+    #[test]
+    fn mode_session_id_uses_view_info_popup_restore_view() {
+        // Arrange
+        let mode = AppMode::ViewInfoPopup {
+            is_loading: false,
+            loading_label: "Refreshing review request...".to_string(),
+            message: "Review request refreshed.".to_string(),
+            restore_view: ConfirmationViewMode {
+                scroll_offset: Some(2),
+                session_id: "popup-session".into(),
+            },
+            title: "Review request refreshed".to_string(),
+        };
+
+        // Act
+        let session_id = SessionManager::mode_session_id(&mode);
+
+        // Assert
+        assert_eq!(session_id.map(SessionId::as_str), Some("popup-session"));
+    }
+
+    #[test]
+    fn mode_session_id_uses_view_help_context() {
+        // Arrange
+        let mode = AppMode::Help {
+            context: HelpContext::View {
+                can_fork_session: false,
+                can_merge_session_branch: false,
+                can_mutate_session_branch: false,
+                can_open_worktree: false,
+                can_rebase_session_branch: false,
+                can_reply_to_session: false,
+                can_start_staged_session: false,
+                can_view_review_comments: false,
+                publish_pull_request_action: None,
+                scroll_offset: Some(2),
+                session_id: "help-session".into(),
+                session_state: ViewSessionState::Review,
+            },
+            scroll_offset: 0,
+        };
+
+        // Act
+        let session_id = SessionManager::mode_session_id(&mode);
+
+        // Assert
+        assert_eq!(session_id.map(SessionId::as_str), Some("help-session"));
+    }
+
+    #[test]
+    fn mode_session_id_uses_diff_and_session_overlay_contexts() {
+        // Arrange
+        let modes = [
+            AppMode::Diff {
+                diff: String::new(),
+                file_explorer_selected_index: 0,
+                preview: DiffPreview::default(),
+                restore: None,
+                scroll_cache: None,
+                scroll_offset: 0,
+                session_id: "diff-session".into(),
+            },
+            AppMode::LaunchConfigurationSelector {
+                commands: vec!["cargo test".to_string()],
+                restore_view: ConfirmationViewMode {
+                    scroll_offset: None,
+                    session_id: "launch-session".into(),
+                },
+                selected_command_index: 0,
+            },
+            AppMode::PublishBranchInput {
+                default_branch_name: "wt/session".to_string(),
+                input: InputState::default(),
+                locked_upstream_ref: None,
+                publish_branch_action: PublishBranchAction::Push,
+                restore_view: ConfirmationViewMode {
+                    scroll_offset: None,
+                    session_id: "publish-session".into(),
+                },
+            },
+        ];
+
+        // Act
+        let session_ids = modes
+            .iter()
+            .map(SessionManager::mode_session_id)
+            .map(|session_id| session_id.map(SessionId::as_str))
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            session_ids,
+            [
+                Some("diff-session"),
+                Some("launch-session"),
+                Some("publish-session"),
+            ]
+        );
     }
 
     #[test]
