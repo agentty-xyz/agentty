@@ -668,10 +668,11 @@ their triggers:
 
 - **Session title generation** (provisional start or resume title): runs a one-shot
   title prompt and persists a concise generated title when the model identifies an
-  actionable session goal. Issued and accepted candidate generations are tracked
-  separately: empty responses leave older usable candidates eligible, newer accepted
-  candidates supersede older ones, and draft edits or commit-derived titles invalidate
-  every outstanding candidate.
+  actionable session goal. The one-shot uses read-only permissions for every session
+  role, including temporary orchestration researchers. Issued and accepted candidate
+  generations are tracked separately: empty responses leave older usable candidates
+  eligible, newer accepted candidates supersede older ones, and draft edits or
+  commit-derived titles invalidate every outstanding candidate.
 
 - **At-mention file indexing** (`@` in prompt or question input): lists session files
   for the mention picker, falling back to the project root for unstarted drafts.

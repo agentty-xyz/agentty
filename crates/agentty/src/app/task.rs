@@ -547,6 +547,7 @@ impl TaskService {
                 child_pid: None,
                 folder: session_folder.to_path_buf(),
                 model: review_selection.model(),
+                permission_mode: ag_agent::PermissionMode::AutoEdit,
                 prompt: review_prompt,
                 request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                 reasoning_level,

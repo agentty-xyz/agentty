@@ -40,6 +40,8 @@ pub struct OneShotRequest {
     pub folder: PathBuf,
     /// Provider-specific model used for command construction and parsing.
     pub model: AgentModel,
+    /// Filesystem and command permission policy for this isolated prompt.
+    pub permission_mode: PermissionMode,
     /// Prompt text submitted to the agent.
     pub prompt: String,
     /// Canonical request kind for this isolated prompt.
@@ -169,7 +171,7 @@ async fn submit_one_shot_with_app_server_client(
         live_transcript: None,
         main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
-        permission_mode: PermissionMode::AutoEdit,
+        permission_mode: request.permission_mode,
         personality: crate::channel::PersonalityPrompt::default(),
         prompt: ag_protocol::TurnPrompt::from_agent_data(request.prompt.clone()),
         request_kind: request.request_kind.clone(),
@@ -321,7 +323,7 @@ async fn attempt_one_shot_app_server_repair(
         live_transcript: None,
         main_checkout_root: None,
         model: request.model.provider_model_str().to_string(),
-        permission_mode: PermissionMode::AutoEdit,
+        permission_mode: request.permission_mode,
         personality: crate::channel::PersonalityPrompt::default(),
         prompt: ag_protocol::TurnPrompt::from_agent_data(repair_prompt),
         request_kind: request.request_kind,
@@ -372,7 +374,7 @@ async fn execute_one_shot_command(
         main_checkout_root: None,
         replay_transcript: None,
         model: request.model.provider_model_str(),
-        permission_mode: PermissionMode::AutoEdit,
+        permission_mode: request.permission_mode,
         personality_prompt: None,
         prompt,
         reasoning_level: request.reasoning_level,
@@ -579,6 +581,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt56Sol,
+                permission_mode: PermissionMode::AutoEdit,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -602,6 +605,7 @@ mod tests {
                 request.request_kind,
                 AgentRequestKind::UtilityPrompt
             ));
+            assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
             assert_eq!(request.prompt, "Generate title");
 
             Ok(mock_shell_command(
@@ -619,6 +623,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
+                permission_mode: PermissionMode::ReadOnly,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -661,6 +666,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt56Sol,
+                permission_mode: PermissionMode::AutoEdit,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -707,6 +713,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
+                permission_mode: PermissionMode::AutoEdit,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -757,6 +764,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
+                permission_mode: PermissionMode::AutoEdit,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -806,6 +814,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt56Sol,
+                permission_mode: PermissionMode::AutoEdit,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -845,6 +854,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt56Sol,
+                permission_mode: PermissionMode::AutoEdit,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -889,6 +899,7 @@ mod tests {
                     child_pid: None,
                     folder: temp_directory.path().to_path_buf(),
                     model: AgentModel::ClaudeSonnet5,
+                    permission_mode: PermissionMode::AutoEdit,
                     prompt: large_prompt.clone(),
                     request_kind: AgentRequestKind::UtilityPrompt,
                     reasoning_level: ReasoningLevel::default(),
@@ -925,6 +936,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
+                permission_mode: PermissionMode::AutoEdit,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -966,6 +978,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
+                permission_mode: PermissionMode::AutoEdit,
                 prompt: large_prompt,
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -1006,6 +1019,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::ClaudeSonnet5,
+                permission_mode: PermissionMode::AutoEdit,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -1038,6 +1052,7 @@ mod tests {
                     request.request_kind,
                     AgentRequestKind::UtilityPrompt
                 ));
+                assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
                 assert_eq!(request.prompt.text, "Generate title");
 
                 Box::pin(async {
@@ -1066,6 +1081,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt56Sol,
+                permission_mode: PermissionMode::ReadOnly,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -1114,6 +1130,7 @@ mod tests {
                 child_pid: Some(Arc::clone(&child_pid)),
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt56Sol,
+                permission_mode: PermissionMode::AutoEdit,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -1143,6 +1160,7 @@ mod tests {
             .times(2)
             .returning(|request, _| {
                 assert_eq!(request.model, AgentModel::Gpt56Sol.as_str());
+                assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
 
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
@@ -1168,6 +1186,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt56Sol,
+                permission_mode: PermissionMode::ReadOnly,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
@@ -1223,6 +1242,7 @@ mod tests {
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
                 model: AgentModel::Gpt56Sol,
+                permission_mode: PermissionMode::AutoEdit,
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::SessionStart,
                 reasoning_level: ReasoningLevel::default(),

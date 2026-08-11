@@ -1584,6 +1584,33 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// Builds a title-generation boundary that verifies temporary research
+    /// sessions use an isolated read-only utility request.
+    fn research_title_one_shot_client() -> Arc<dyn OneShotClient> {
+        let mut title_client = MockOneShotClient::new();
+        title_client
+            .expect_submit()
+            .once()
+            .withf(|request| {
+                request.permission_mode == PermissionMode::ReadOnly
+                    && request.request_kind == AgentRequestKind::UtilityPrompt
+            })
+            .returning(|_| {
+                Ok(agent::OneShotSubmission {
+                    response: AgentResponse::plain("Inspect architecture boundaries"),
+                    stats: agent::SessionStats {
+                        added_lines: 0,
+                        deleted_lines: 0,
+                        diff_state: agent::SessionDiffState::Unknown,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    },
+                })
+            });
+
+        Arc::new(title_client)
+    }
+
     /// Builds a deterministic post-turn one-shot boundary. Tests whose
     /// worktrees are clean never submit; auto-commit tests receive the
     /// canonical message they already expect.
@@ -2102,6 +2129,10 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         insert_in_progress_research_session(&db).await;
+        db.sessions()
+            .update_session_provisional_title("sess1", "test prompt")
+            .await
+            .expect("failed to persist provisional research title");
 
         let mut mock_channel = MockAgentChannel::new();
         mock_channel
@@ -2154,7 +2185,7 @@ mod tests {
         // Act
         let result = run_channel_turn(
             &context,
-            auto_commit_one_shot_client(),
+            research_title_one_shot_client(),
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -2187,6 +2218,10 @@ mod tests {
         assert_eq!(
             sessions[0].status, "InProgress",
             "stopped turn worker must not persist Review and trigger automatic focused review"
+        );
+        assert_eq!(
+            sessions[0].title.as_deref(),
+            Some("Inspect architecture boundaries")
         );
     }
 

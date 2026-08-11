@@ -525,6 +525,7 @@ impl RealSyncAssistClient {
                 child_pid: None,
                 folder,
                 model: session_agent.model(),
+                permission_mode: ag_agent::PermissionMode::AutoEdit,
                 prompt,
                 request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
