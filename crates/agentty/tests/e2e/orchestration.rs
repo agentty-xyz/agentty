@@ -683,8 +683,10 @@ fn test_orchestration_review_remediation() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::open_selected_session_view())
-                    .wait_for_text("remediation 1/3", 5000)
+                    .compose(&common::open_selected_session_view_with_texts(&[
+                        "Campaign: Managed feature delivery",
+                        "remediation 1/3",
+                    ]))
                     .capture_labeled(
                         "review_remediation",
                         "Managed worker focused-review remediation progress",
@@ -765,8 +767,10 @@ fn test_orchestration_campaign_smooth_scroll() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::open_selected_session_view())
-                    .wait_for_text("Transcript line 59", 5000)
+                    .compose(&common::open_selected_session_view_with_texts(&[
+                        "Campaign: Managed feature delivery",
+                        "Transcript line 59",
+                    ]))
                     .capture_labeled("campaign_bottom", "Controller transcript at bottom")
                     .press_key("k")
                     .wait_for_stable_frame(300, 5000)
