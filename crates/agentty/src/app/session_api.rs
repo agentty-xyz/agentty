@@ -263,8 +263,6 @@ impl App {
 
             return;
         };
-        let is_queued =
-            branch_publish_context.session.status == crate::domain::session::Status::InProgress;
         let branch_operation_lock = Arc::clone(&branch_publish_context.branch_operation_lock);
         // Reserve an idle branch before persistence. An existing owner
         // already serializes worker execution, so the runtime actor never waits here.
@@ -278,20 +276,22 @@ impl App {
                 Some(response_tx),
             )
             .await;
-        let loading_label = if is_queued {
-            review_request_queued_label()
-        } else {
-            branch_publish_loading_label(PublishBranchAction::PublishPullRequest)
-        };
-        self.sessions
-            .start_branch_publish(&session_id, loading_label);
-        if let Err(error) = enqueue_result {
-            self.sessions.finish_branch_publish(
+        match enqueue_result {
+            Err(error) => self.sessions.finish_branch_publish(
                 &session_id,
                 crate::domain::transient_message::TransientMessageBody::Markdown(format!(
                     "**Review request publish failed**\n\n{error}"
                 )),
-            );
+            ),
+            Ok(Some(queued_order)) => self.sessions.queue_branch_publish(
+                &session_id,
+                queued_order,
+                review_request_queued_label(),
+            ),
+            Ok(None) => self.sessions.start_branch_publish(
+                &session_id,
+                branch_publish_loading_label(PublishBranchAction::PublishPullRequest),
+            ),
         }
     }
 
@@ -480,7 +480,13 @@ impl App {
         let queued_messages = self
             .sessions
             .session_for_id(session_id)
-            .map(|session| session.queued_messages.clone())
+            .map(|session| {
+                session
+                    .queued_messages
+                    .iter()
+                    .map(|message| message.transcript_text().to_string())
+                    .collect()
+            })
             .unwrap_or_default();
 
         build_api_session(row, message_rows, queued_messages).map(Some)
@@ -1179,6 +1185,7 @@ mod tests {
     use super::*;
     use crate::domain::orchestration::OrchestrationTaskKind;
     use crate::domain::session::Status;
+    use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
     use crate::infra::db::PersistedOrchestrationTask;
 
     async fn request_session_creation(
@@ -2063,6 +2070,62 @@ mod tests {
             ),
             "unexpected review-request response: {response_after_unlock:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn review_request_runtime_handler_queues_on_existing_worker() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let session_id = SessionId::from(
+            app.create_session()
+                .await
+                .expect("regular session should be created"),
+        );
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &session_id,
+            SessionStatus::Done,
+        );
+        let branch_operation_lock = Arc::clone(
+            &app.sessions
+                .session_handles_or_err(&session_id)
+                .expect("expected session handles")
+                .branch_operation_lock,
+        );
+        let existing_operation_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
+        let (first_response_tx, _first_response_rx) = oneshot::channel();
+        app.start_api_review_request_publish(
+            session_id.clone(),
+            SessionRuntimeAccess::User,
+            first_response_tx,
+        )
+        .await;
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &session_id,
+            SessionStatus::InProgress,
+        );
+        let (queued_response_tx, _queued_response_rx) = oneshot::channel();
+
+        // Act
+        app.start_api_review_request_publish(
+            session_id.clone(),
+            SessionRuntimeAccess::User,
+            queued_response_tx,
+        )
+        .await;
+        let publish_body = app.sessions.state().sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::BranchPublish)
+            .map(|message| &message.body);
+
+        // Assert
+        assert!(matches!(
+            publish_body,
+            Some(TransientMessageBody::Queued(action))
+                if action.order == 0 && action.text == "review request — publish after this turn"
+        ));
+        drop(existing_operation_guard);
     }
 
     #[tokio::test]
@@ -2983,10 +3046,7 @@ mod tests {
             ApiSessionError::Operation("Session has no questions to answer".to_string())
         );
         assert_eq!(resumed_turn_kind, AgentRequestKind::SessionResume);
-        assert_eq!(
-            queued_messages_before_transition,
-            [] as [std::string::String; 0]
-        );
+        assert!(queued_messages_before_transition.is_empty());
         assert_eq!(session.questions, [] as [ag_protocol::QuestionItem; 0]);
         assert_eq!(session.queued_messages, [] as [std::string::String; 0]);
         assert_eq!(clarification_answer_count(&session), 1);

@@ -179,13 +179,20 @@ thought and tool-status text; the transcript itself updates only after the final
 result is parsed and persisted.
 
 Pressing `Enter` during a running turn or session sync opens the composer and queues the
-message inline with a `queued ›` prefix below the transcript messages and workflow
-notices that preceded it. Queued messages dispatch one-by-one as new turns after the
-active turn or sync finishes. During **InProgress**, each `Ctrl+c` press retracts the
-most recently queued message (LIFO) without interrupting the running turn; once the
+message inline with a `≡ queued ›` prefix below the active turn. All waiting work uses
+the same subdued, slowly pulsing `≡` indicator; warning-colored animation is reserved
+for work that is actively running. Queued worker actions such as sync or review-request
+publishing and queued chat messages share one first-in, first-out list. Rows appear from
+top to bottom in submission order, and the worker executes them in that same order after
+the active turn or sync finishes. During **InProgress**, each `Ctrl+c` press retracts
+the most recently queued message (LIFO) without interrupting the running turn; once the
 queue is empty, the next `Ctrl+c` stops the current turn and returns the session to
-**Review**. **Rebasing** keeps cancellation unavailable while still accepting queued
-messages. The queue is in-memory only and is discarded if `agentty` restarts.
+**Review**. If session sync is waiting behind that turn, the same stop cancels the sync
+and removes its queued row without entering **Rebasing**. A queued review-request action
+is canceled the same way: its waiting row disappears and `p` becomes available again
+without starting publish work. **Rebasing** keeps cancellation unavailable while still
+accepting queued messages. The chat queue is in-memory only and is discarded if
+`agentty` restarts.
 
 While the composer is open, `Tab` moves focus to the chat transcript above it so the
 conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without
@@ -210,22 +217,28 @@ session stays **InProgress** while the active turn runs, then moves to **Rebasin
 the queued sync command starts. The existing worker must accept the request; Agentty
 never creates a second worker from an **InProgress** status just to start sync. If sync
 arrives while Agentty is draining queued chat, the active chat turn finishes before sync
-runs, and sync runs before the remaining queued messages. Agentty shows a `[Sync]`
-notice below the active turn while the rebase is queued, and repeated `r` presses keep
-the single queued rebase instead of adding duplicates. Session sync reserves
-branch-publish ownership before it queues or starts, and retains that ownership through
-its post-rebase push. A completed turn or subsequent sync therefore cannot start a
-competing published-branch auto-push.
+runs; earlier queued messages stay ahead of sync, while later messages wait behind it.
+Agentty shows a `[Sync]` notice only when sync resolves; while it waits, the
+consolidated queue shows `≡ sync — rebase onto the base branch after this turn`. The
+waiting row disappears when the active `Rebasing...` loader starts. Agentty validates
+the session worktree before that promotion; a validation failure replaces the waiting
+row with a durable `[Sync Error]` notice without showing sync as active. Repeated `r`
+presses keep the single queued rebase instead of adding duplicates. Session sync
+reserves branch-publish ownership before it queues or starts, and retains that ownership
+through its post-rebase push. A completed turn or subsequent sync therefore cannot start
+a competing published-branch auto-push.
 
 Pressing `p` during a running turn opens the usual branch-name popup and queues
 review-request creation on that same worker. The session remains **InProgress** and
 shows a queued review-request row until the active turn finishes. Publishing then runs
-before any remaining queued chat messages, and the row changes to
-`Publishing review request...`. Like queued sync, the queued publish reserves branch
-ownership before the current turn reaches auto-push, so the completed turn cannot race
-the requested review creation. If another branch operation already owns that lock, the
-handler queues immediately without waiting and the worker serializes review-request
-creation behind the operation in progress.
+when it reaches the top of the shared queue, and the row changes to
+`Publishing review request...`; chat submitted before it runs first, while later chat
+waits behind it. The waiting label itself is not added to durable transcript history.
+Like queued sync, the queued publish reserves branch ownership before the current turn
+reaches auto-push, so the completed turn cannot race the requested review creation. If
+another branch operation already owns that lock, the handler queues immediately without
+waiting and the worker serializes review-request creation behind the operation in
+progress.
 
 Session output keeps workflow feedback in execution order. Commit feedback appears
 before its sync result, post-sync auto-push progress appears after that result, and
@@ -529,15 +542,16 @@ can retry without reporting a false terminal cancellation.
 - Agentty publishes with `git push --force-with-lease`, then creates or refreshes the
   linked review request. After confirmation, the popup closes and publishing continues
   on the session worker while session chat remains interactive. During **InProgress**,
-  the action waits behind the active turn and ahead of remaining queued chat. Inline
-  progress is replaced only after the forge URL is ready, including across intermediate
-  session refreshes. It becomes a one-line `[Review Request] Created PR URL` or
-  `[Review Request] Created MR URL` transcript notice recorded at that point in session
-  history, or failure details when the task finishes; `p` stays hidden while that
-  publish is active. Later turns do not move or reconstruct the creation notice. GitHub
-  projects publish pull requests; GitLab projects publish merge requests. Manual
-  publishing and completed-turn auto-push share one per-session branch-operation lock,
-  so whichever starts later waits instead of force-pushing the same branch concurrently.
+  the action waits behind the active turn at its submission position in the shared FIFO
+  queue. Inline progress is replaced only after the forge URL is ready, including across
+  intermediate session refreshes. It becomes a one-line
+  `[Review Request] Created PR URL` or `[Review Request] Created MR URL` transcript
+  notice recorded at that point in session history, or failure details when the task
+  finishes; `p` stays hidden while that publish is active. Later turns do not move or
+  reconstruct the creation notice. GitHub projects publish pull requests; GitLab
+  projects publish merge requests. Manual publishing and completed-turn auto-push share
+  one per-session branch-operation lock, so whichever starts later waits instead of
+  force-pushing the same branch concurrently.
 - Stacked child review requests target the parent review branch while the parent link is
   active.
 - When no review request is linked yet, only an open request for the same branch is

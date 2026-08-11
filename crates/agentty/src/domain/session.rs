@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub use ag_agent::{SessionDiffState, SessionStats, SpeedMode};
@@ -274,9 +274,10 @@ pub struct Session {
     pub project_name: String,
     /// Initial user prompt used to create the session.
     pub prompt: String,
-    /// Transcript text for each chat message queued while the active turn is
-    /// running, mirrored from [`SessionHandles::queued_messages`] for render.
-    pub queued_messages: Vec<String>,
+    /// Chat messages queued while the active turn is running, mirrored from
+    /// [`SessionHandles::queued_messages`] for render in submission order
+    /// alongside queued workflow actions.
+    pub queued_messages: Vec<QueuedMessage>,
     /// Session-scoped reasoning override selected through prompt slash
     /// commands.
     pub reasoning_level_override: Option<ReasoningLevel>,
@@ -580,7 +581,7 @@ impl Session {
         let is_publish_active = self
             .transient_messages
             .get(TransientMessageSlot::BranchPublish)
-            .is_some_and(|message| matches!(&message.body, TransientMessageBody::Loading(_)));
+            .is_some_and(|message| message.body.is_pending_indicator());
 
         (self.accepts_user_turns()
             && self.owns_branch_changes()
@@ -813,6 +814,51 @@ fn find_session<'a>(sessions: &'a [Session], session_id: &str) -> Option<&'a Ses
         .find(|session| session.id.as_str() == session_id)
 }
 
+/// One chat prompt waiting behind active session work.
+///
+/// `order` comes from the same session-local sequence as queued workflow
+/// actions, allowing the worker and renderer to preserve one FIFO order
+/// across both kinds of work.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueuedMessage {
+    order: u64,
+    prompt: TurnPrompt,
+    transcript_text: String,
+}
+
+impl QueuedMessage {
+    /// Creates one queued chat prompt at its reserved submission order.
+    pub(crate) fn new(order: u64, prompt: TurnPrompt) -> Self {
+        let transcript_text = prompt.transcript_text();
+
+        Self {
+            order,
+            prompt,
+            transcript_text,
+        }
+    }
+
+    /// Consumes the queue entry and returns its structured prompt.
+    pub(crate) fn into_prompt(self) -> TurnPrompt {
+        self.prompt
+    }
+
+    /// Returns the session-local submission order shared with queued actions.
+    pub(crate) fn order(&self) -> u64 {
+        self.order
+    }
+
+    /// Returns the structured prompt without consuming the queue entry.
+    pub(crate) fn prompt(&self) -> &TurnPrompt {
+        &self.prompt
+    }
+
+    /// Returns the transcript rendering of the queued prompt.
+    pub(crate) fn transcript_text(&self) -> &str {
+        &self.transcript_text
+    }
+}
+
 /// Shared runtime handles for one active session worker.
 pub struct SessionHandles {
     /// Serializes branch-publish ownership with queued branch operations.
@@ -834,7 +880,9 @@ pub struct SessionHandles {
     /// Pushed by the chat composer when the user submits while the session is
     /// `InProgress`; popped by the session worker between turns. The queue is
     /// session-local and discarded on app restart.
-    pub queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
+    pub queued_messages: Arc<Mutex<VecDeque<QueuedMessage>>>,
+    /// Monotonic submission order shared by queued chat and workflow actions.
+    pub queued_work_sequence: Arc<AtomicU64>,
     /// Shared mutable status synchronized with persistence/UI.
     pub status: Arc<Mutex<Status>>,
     /// Shared typed transcript snapshot mirrored to the render layer.
@@ -854,6 +902,7 @@ impl SessionHandles {
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            queued_work_sequence: Arc::new(AtomicU64::new(0)),
             status: Arc::new(Mutex::new(status)),
             transcript: Arc::new(Mutex::new(SessionTranscript::default())),
             transcript_is_hydrated: AtomicBool::new(true),
@@ -867,6 +916,7 @@ impl SessionHandles {
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            queued_work_sequence: Arc::new(AtomicU64::new(0)),
             status: Arc::new(Mutex::new(status)),
             transcript: Arc::new(Mutex::new(SessionTranscript::default())),
             transcript_is_hydrated: AtomicBool::new(false),
@@ -880,6 +930,7 @@ impl SessionHandles {
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            queued_work_sequence: Arc::new(AtomicU64::new(0)),
             status: Arc::new(Mutex::new(status)),
             transcript: Arc::new(Mutex::new(transcript)),
             transcript_is_hydrated: AtomicBool::new(true),
@@ -908,20 +959,20 @@ impl SessionHandles {
         Some(transcript.clone())
     }
 
-    /// Returns the transcript text for each queued message in submission
-    /// order so callers can mirror queue contents into render snapshots.
-    pub fn queued_message_transcripts(&self) -> Vec<String> {
+    /// Reserves the next shared submission order for queued session work.
+    pub(crate) fn next_queued_work_order(&self) -> u64 {
+        self.queued_work_sequence.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Returns queued chat messages in submission order so callers can mirror
+    /// queue contents into render snapshots.
+    pub fn queued_message_snapshot(&self) -> Vec<QueuedMessage> {
         // Sync critical section (read-only clone, no `.await`);
         // `std::sync::Mutex` is the correct choice per CLAUDE.md §"Mutex
         // Selection".
         self.queued_messages
             .lock()
-            .map(|guard| {
-                guard
-                    .iter()
-                    .map(TurnPrompt::transcript_text)
-                    .collect::<Vec<_>>()
-            })
+            .map(|guard| guard.iter().cloned().collect::<Vec<_>>())
             .unwrap_or_default()
     }
 
@@ -962,6 +1013,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::domain::agent::AgentModel;
+    use crate::domain::transient_message::QueuedAction;
     use crate::test_support::SessionFixtureBuilder;
 
     #[test]
@@ -2108,21 +2160,29 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
 
     #[test]
     fn test_publish_pull_request_action_returns_none_while_publish_is_active() {
-        // Arrange
-        let mut session = crate::test_support::session_fixture("session-id", Status::Review);
-        session.transient_messages.upsert(TransientMessage {
-            anchor: TransientMessageAnchor::Tail,
-            body: TransientMessageBody::Loading("Publishing review request...".to_string()),
-            lifecycle: TransientMessageLifecycle::UntilResolved,
-            slot: TransientMessageSlot::BranchPublish,
-            turn_position: None,
-        });
+        for body in [
+            TransientMessageBody::Queued(QueuedAction::new(
+                0,
+                "publish after this turn".to_string(),
+            )),
+            TransientMessageBody::Loading("Publishing review request...".to_string()),
+        ] {
+            // Arrange
+            let mut session = crate::test_support::session_fixture("session-id", Status::Review);
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body,
+                lifecycle: TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::BranchPublish,
+                turn_position: None,
+            });
 
-        // Act
-        let action = session.publish_pull_request_action();
+            // Act
+            let action = session.publish_pull_request_action();
 
-        // Assert
-        assert_eq!(action, None);
+            // Assert
+            assert_eq!(action, None);
+        }
     }
 
     #[test]

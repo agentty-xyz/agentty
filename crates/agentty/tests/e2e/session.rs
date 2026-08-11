@@ -1827,18 +1827,29 @@ const QUEUED_SYNC_TURN_ANSWER: &str = "Running turn completed before sync";
 /// Answer emitted before queued review-request creation begins.
 const QUEUED_REVIEW_REQUEST_TURN_ANSWER: &str =
     "Running turn completed before review request creation";
+/// Answer emitted for the chat message queued before review-request creation.
+const QUEUED_REVIEW_FOLLOW_UP_ANSWER: &str = "Queued review follow-up completed before publish";
 
 /// Installs a delayed Claude turn so the scenario can queue sync while the
-/// worker is still active, then observe the answer before the rebase result.
-fn install_delayed_sync_claude_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+/// worker is still active, optionally forcing its later validation to fail.
+fn install_delayed_sync_claude_stub(
+    env: &BuilderEnv,
+    fail_sync_validation: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
+    let validation_failure_marker = env.stub_bin.join("queued-sync-validation-failure");
+    let mark_validation_failure = if fail_sync_validation {
+        format!("touch '{}'; ", validation_failure_marker.display())
+    } else {
+        String::new()
+    };
     let script = format!(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 sleep 10
-printf '%s\n' '{{"type":"system","subtype":"init"}}'
+{mark_validation_failure}printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_SYNC_TURN_ANSWER}"}}]}}}}'
 printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_SYNC_TURN_ANSWER}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
 "#
@@ -1848,7 +1859,39 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
 
+    if fail_sync_validation {
+        install_sync_validation_failure_git_stub(env, &validation_failure_marker)?;
+    }
+
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+}
+
+/// Installs a Git wrapper that fails only the marked queued-sync validation.
+fn install_sync_validation_failure_git_stub(
+    env: &BuilderEnv,
+    validation_failure_marker: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
+    let git_path = env.stub_bin.join("git");
+    let script = format!(
+        r#"#!/bin/sh
+if [ -f '{}' ] && [ "$1" = "rev-parse" ] && [ "$2" = "--is-bare-repository" ]; then
+  printf '%s\n' 'forced queued-sync validation failure' >&2
+  exit 1
+fi
+exec '{}' "$@"
+"#,
+        validation_failure_marker.display(),
+        real_git.display()
+    );
+    std::fs::write(&git_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
 }
 
 /// Installs delayed agent, Git, and GitHub stubs so review-request creation
@@ -1932,6 +1975,60 @@ esac
     std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+}
+
+/// Extends the queued-review stubs with enough turn latency for a deliberate
+/// cancellation after the publish action has been queued.
+fn install_cancelled_queued_review_request_stubs(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    install_queued_review_request_stubs(env)?;
+
+    let claude_path = env.stub_bin.join("claude");
+    let claude_script = std::fs::read_to_string(&claude_path)?;
+    let delayed_script = claude_script.replacen("sleep 8", "sleep 30", 1);
+    if delayed_script == claude_script {
+        return Err("queued review-request stub is missing its turn delay".into());
+    }
+    std::fs::write(&claude_path, delayed_script)?;
+
+    Ok(())
+}
+
+/// Extends the queued-review stubs with a distinct second agent turn so the
+/// mixed FIFO feature can prove the chat message executes before publishing.
+fn install_fifo_queued_review_request_stubs(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    install_queued_review_request_stubs(env)?;
+
+    let claude_path = env.stub_bin.join("claude");
+    let claude_script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+turn_marker="${{0}}.turn"
+if [ -f "$turn_marker" ]; then
+  printf '%s\n' '{{"type":"system","subtype":"init"}}'
+  printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_REVIEW_FOLLOW_UP_ANSWER}"}}]}}}}'
+  printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_REVIEW_FOLLOW_UP_ANSWER}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+else
+  touch "$turn_marker"
+  # Keep the first turn active while the PTY driver queues both items, even
+  # when the E2E test group is running four scenarios concurrently.
+  sleep 20
+  printf '%s\n' '{{"type":"system","subtype":"init"}}'
+  printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}"}}]}}}}'
+  printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+fi
+"#
+    );
+    std::fs::write(&claude_path, claude_script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
 }
 
 /// Installs a Claude stub that reports whether Agentty passed web-capable
@@ -3468,7 +3565,7 @@ fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
                     .write_text("first queued")
                     .wait_for_text("first queued", 3000)
                     .press_key("Enter")
-                    .wait_for_text("queued ›", 5000)
+                    .wait_for_text("≡ queued ›", 5000)
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
                     .write_text("second queued")
@@ -3507,7 +3604,7 @@ fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
             |frame, report| {
                 let queued_frame = common::frame_from_capture(&report.captures[0]);
                 let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-                assertion::assert_text_in_region(&queued_frame, "queued ›", &queued_full);
+                assertion::assert_text_in_region(&queued_frame, "≡ queued ›", &queued_full);
                 assertion::assert_text_in_region(&queued_frame, "first queued", &queued_full);
                 assertion::assert_text_in_region(&queued_frame, "second queued", &queued_full);
 
@@ -3519,7 +3616,11 @@ fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
                     "Ctrl+c: stop",
                     &after_first_full,
                 );
-                assertion::assert_text_in_region(&after_first_frame, "queued ›", &after_first_full);
+                assertion::assert_text_in_region(
+                    &after_first_frame,
+                    "≡ queued ›",
+                    &after_first_full,
+                );
                 assertion::assert_text_in_region(
                     &after_first_frame,
                     "first queued",
@@ -3571,7 +3672,7 @@ fn session_queue_chat_message_during_rebase() -> E2eResult {
                     .write_text("follow up after sync")
                     .wait_for_text("follow up after sync", 3000)
                     .press_key("Enter")
-                    .wait_for_text("queued ›", 5000)
+                    .wait_for_text("≡ queued ›", 5000)
                     .viewing_pause_ms(1000)
                     .capture_labeled(
                         "message_queued_during_rebase",
@@ -3587,7 +3688,7 @@ fn session_queue_chat_message_during_rebase() -> E2eResult {
                     "[Sync Assist] Resolving existing conflicts.",
                     &full,
                 );
-                assertion::assert_text_in_region(frame, "queued ›", &full);
+                assertion::assert_text_in_region(frame, "≡ queued ›", &full);
                 assertion::assert_text_in_region(frame, "follow up after sync", &full);
                 let commit_row = frame
                     .find_text("[Commit] No changes to commit.")
@@ -3623,7 +3724,7 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_running_sync_shortcut")
         .with_git()
-        .setup(install_delayed_sync_claude_stub)
+        .setup(|env| install_delayed_sync_claude_stub(env, false))
         .run(
             |scenario| {
                 scenario
@@ -3638,7 +3739,7 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     .wait_for_text("Ctrl+c: stop", 5000)
                     .wait_for_text("r: sync", 5000)
                     .press_key("r")
-                    .wait_for_text("will rebase after the current turn finishes", 5000)
+                    .wait_for_text("rebase onto the base branch after this turn", 5000)
                     .viewing_pause_ms(1000)
                     .capture_labeled(
                         "running_sync_queued",
@@ -3657,7 +3758,7 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                 let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
                 assertion::assert_text_in_region(
                     &queued_frame,
-                    "will rebase after the current turn finishes",
+                    "≡ sync — rebase onto the base branch after this turn",
                     &queued_full,
                 );
                 assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
@@ -3668,7 +3769,7 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     .rect
                     .row;
                 let queued_sync_row = queued_frame
-                    .find_text("will rebase after the current turn finishes")
+                    .find_text("rebase onto the base branch after this turn")
                     .first()
                     .expect("missing queued sync notice")
                     .rect
@@ -3680,6 +3781,7 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                 assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
                 assertion::assert_text_in_region(frame, "Enter: reply", &full);
                 assertion::assert_not_visible(frame, "[Stopped]");
+                assertion::assert_not_visible(frame, "≡ sync —");
 
                 let answer_row = frame
                     .find_text(QUEUED_SYNC_TURN_ANSWER)
@@ -3694,6 +3796,142 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     .rect
                     .row;
                 assert!(answer_row < sync_row);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify stopping an active turn also removes its canceled queued-sync row
+/// without promoting the skipped command to active rebase work.
+#[test]
+fn session_queued_sync_clears_when_turn_is_cancelled() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_queued_sync_cancelled_with_turn")
+        .with_git()
+        .setup(|env| install_delayed_sync_claude_stub(env, false))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Cancel the turn and queued sync")
+                    .wait_for_text("Cancel the turn and queued sync", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Ctrl+c: stop", 5000)
+                    .press_key("r")
+                    .wait_for_text("rebase onto the base branch after this turn", 5000)
+                    .capture_labeled(
+                        "queued_sync_before_turn_cancel",
+                        "Sync waits behind the active turn before cancellation",
+                    )
+                    .press_key("ctrl+c")
+                    .eventually(
+                        Duration::from_secs(10),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+                            assertion::match_text_in_region(frame, "Enter: reply", &full)?;
+
+                            assertion::match_not_visible(frame, "≡ sync —")
+                        },
+                    )
+                    .capture_labeled(
+                        "queued_sync_cleared_after_turn_cancel",
+                        "Canceled queued sync disappears without starting rebase",
+                    )
+            },
+            |frame, report| {
+                let queued_frame = common::frame_from_capture(&report.captures[0]);
+                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                assertion::assert_text_in_region(
+                    &queued_frame,
+                    "≡ sync — rebase onto the base branch after this turn",
+                    &queued_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                assertion::assert_not_visible(frame, "≡ sync —");
+                assertion::assert_not_visible(frame, "Rebasing...");
+                assertion::assert_not_visible(frame, "[Sync] Successfully synced");
+                assertion::assert_not_visible(frame, QUEUED_SYNC_TURN_ANSWER);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify queued sync validation failures replace waiting state with a
+/// durable error without briefly presenting the sync as active work.
+#[test]
+fn session_queued_sync_validation_failure_is_visible() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_queued_sync_validation_failure")
+        .with_git()
+        .setup(|env| install_delayed_sync_claude_stub(env, true))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Fail queued sync validation")
+                    .wait_for_text("Fail queued sync validation", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Ctrl+c: stop", 5000)
+                    .press_key("r")
+                    .wait_for_text("rebase onto the base branch after this turn", 5000)
+                    .capture_labeled(
+                        "queued_sync_waiting",
+                        "Sync remains queued behind the active turn",
+                    )
+                    .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 30000)
+                    .wait_for_text("[Sync Error] Session isolation violation", 10000)
+                    .wait_for_text("Enter: reply", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "queued_sync_validation_failed",
+                        "Validation failure replaces queued sync with a durable error",
+                    )
+            },
+            |frame, report| {
+                let queued_frame = common::frame_from_capture(&report.captures[0]);
+                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                assertion::assert_text_in_region(
+                    &queued_frame,
+                    "≡ sync — rebase onto the base branch after this turn",
+                    &queued_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "[Sync Error] Session isolation violation",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                assertion::assert_not_visible(frame, "≡ sync —");
+                assertion::assert_not_visible(frame, "Rebasing...");
+                let answer_row = frame
+                    .find_text(QUEUED_SYNC_TURN_ANSWER)
+                    .first()
+                    .expect("missing completed turn answer")
+                    .rect
+                    .row;
+                let error_row = frame
+                    .find_text("[Sync Error] Session isolation violation")
+                    .first()
+                    .expect("missing queued sync validation error")
+                    .rect
+                    .row;
+                assert!(answer_row < error_row);
             },
         )?;
 
@@ -3728,10 +3966,7 @@ fn review_request_creation_queues_during_running_turn() -> E2eResult {
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 5000)
                     .press_key("Enter")
-                    .wait_for_text(
-                        "Review request queued; publishing after the current turn finishes...",
-                        5000,
-                    )
+                    .wait_for_text("≡ review request — publish after this turn", 5000)
                     .viewing_pause_ms(1200)
                     .capture_labeled(
                         "review_request_queued",
@@ -3754,7 +3989,7 @@ fn review_request_creation_queues_during_running_turn() -> E2eResult {
                 let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
                 assertion::assert_text_in_region(
                     &queued_frame,
-                    "Review request queued; publishing after the current turn finishes...",
+                    "≡ review request — publish after this turn",
                     &queued_full,
                 );
                 assertion::assert_text_in_region(
@@ -3776,6 +4011,7 @@ fn review_request_creation_queues_during_running_turn() -> E2eResult {
                     "Publishing review request...",
                     &started_full,
                 );
+                assertion::assert_not_visible(&started_frame, "≡ review request —");
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(
@@ -3783,7 +4019,159 @@ fn review_request_creation_queues_during_running_turn() -> E2eResult {
                     "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42",
                     &full,
                 );
-                assertion::assert_not_visible(frame, "Review request queued;");
+                assertion::assert_not_visible(frame, "≡ review request —");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify stopping an active turn also removes its canceled queued
+/// review-request row without promoting the skipped command to publish work.
+#[test]
+fn review_request_queued_creation_clears_when_turn_is_cancelled() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_queued_creation_cancelled_with_turn")
+        .with_git()
+        .setup(install_cancelled_queued_review_request_stubs)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Cancel the turn and queued review request")
+                    .wait_for_text("Cancel the turn and queued review request", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Ctrl+c: stop", 5000)
+                    .wait_for_text("p: PR", 5000)
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("≡ review request — publish after this turn", 5000)
+                    .capture_labeled(
+                        "queued_review_request_before_turn_cancel",
+                        "Review-request creation waits behind the active turn",
+                    )
+                    .press_key("ctrl+c")
+                    .eventually(
+                        Duration::from_secs(10),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+                            assertion::match_text_in_region(frame, "Enter: reply", &full)?;
+
+                            assertion::match_not_visible(frame, "≡ review request —")
+                        },
+                    )
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 5000)
+                    .capture_labeled(
+                        "queued_review_request_cleared_after_turn_cancel",
+                        "Canceled review-request row disappears and publish opens again",
+                    )
+            },
+            |frame, report| {
+                let queued_frame = common::frame_from_capture(&report.captures[0]);
+                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                assertion::assert_text_in_region(
+                    &queued_frame,
+                    "≡ review request — publish after this turn",
+                    &queued_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Publish Review Request", &full);
+                assertion::assert_not_visible(frame, "≡ review request —");
+                assertion::assert_not_visible(frame, "Publishing review request...");
+                assertion::assert_not_visible(frame, "[Review Request] Created PR");
+                assertion::assert_not_visible(frame, QUEUED_REVIEW_REQUEST_TURN_ANSWER);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify mixed chat and workflow work renders and executes from top to
+/// bottom in the order each item was submitted.
+#[test]
+fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_queued_work_fifo")
+        .with_git()
+        .setup(install_fifo_queued_review_request_stubs)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Queue mixed work")
+                    .wait_for_text("Queue mixed work", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("p: PR", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("Review once more")
+                    .wait_for_text("Review once more", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("≡ queued › Review once more", 5000)
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("≡ review request — publish after this turn", 5000)
+                    .capture_labeled(
+                        "mixed_queue_submission_order",
+                        "Queued chat appears above the later review-request action",
+                    )
+                    .wait_for_text(QUEUED_REVIEW_REQUEST_TURN_ANSWER, 30000)
+                    .wait_for_text(QUEUED_REVIEW_FOLLOW_UP_ANSWER, 10000)
+                    .wait_for_text("[Review Request] Created PR", 15000)
+                    .capture_labeled(
+                        "mixed_queue_execution_order",
+                        "Queued chat completes before the later review-request action",
+                    )
+            },
+            |frame, report| {
+                let queued_frame = common::frame_from_capture(&report.captures[0]);
+                let queued_chat_row = queued_frame
+                    .find_text("queued › Review once more")
+                    .first()
+                    .expect("missing queued chat message")
+                    .rect
+                    .row;
+                let queued_publish_row = queued_frame
+                    .find_text("review request — publish after this turn")
+                    .first()
+                    .expect("missing queued review-request action")
+                    .rect
+                    .row;
+                assert!(queued_chat_row < queued_publish_row);
+
+                let active_answer_row = frame
+                    .find_text(QUEUED_REVIEW_REQUEST_TURN_ANSWER)
+                    .first()
+                    .expect("missing active turn answer")
+                    .rect
+                    .row;
+                let queued_answer_row = frame
+                    .find_text(QUEUED_REVIEW_FOLLOW_UP_ANSWER)
+                    .first()
+                    .expect("missing queued chat answer")
+                    .rect
+                    .row;
+                let review_request_row = frame
+                    .find_text("[Review Request] Created PR")
+                    .first()
+                    .expect("missing created review request")
+                    .rect
+                    .row;
+                assert!(active_answer_row < queued_answer_row);
+                assert!(queued_answer_row < review_request_row);
             },
         )?;
 

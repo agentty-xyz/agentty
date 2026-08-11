@@ -189,7 +189,7 @@ pub(crate) fn branch_publish_loading_label(publish_branch_action: PublishBranchA
 /// Returns the inline label shown while review-request creation waits behind
 /// an active session turn.
 pub(crate) fn review_request_queued_label() -> String {
-    "Review request queued; publishing after the current turn finishes...".to_string()
+    "review request — publish after this turn".to_string()
 }
 
 /// Returns the inline success title for a completed branch-publish action.
@@ -913,6 +913,15 @@ mod tests {
 
     use super::*;
     use crate::infra::db::AppRepositories;
+
+    #[test]
+    fn review_request_queued_label_describes_waiting_without_loading_punctuation() {
+        // Arrange, Act
+        let label = review_request_queued_label();
+
+        // Assert
+        assert_eq!(label, "review request — publish after this turn");
+    }
 
     fn expect_safe_session_branch_push(mock_git_client: &mut git::MockGitClient, session_id: &str) {
         let expected_branch = session::session_branch(session_id);

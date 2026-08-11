@@ -12,7 +12,7 @@ use crate::domain::agent::{
 };
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    DailyActivity, ReviewRequest, ReviewRequestSummary, Session, SessionDiffState,
+    DailyActivity, QueuedMessage, ReviewRequest, ReviewRequestSummary, Session, SessionDiffState,
     SessionDiffStats, SessionFollowUpTask, SessionHandles, SessionId, SessionRole, SessionSize,
     SessionStats, Status, activity_day_key_with_offset,
 };
@@ -74,7 +74,7 @@ struct LoadedSessionInput {
     session_agent: AgentSelection,
     session_id: SessionId,
     session_prompt: String,
-    session_queued_messages: Vec<String>,
+    session_queued_messages: Vec<QueuedMessage>,
     session_questions: Vec<QuestionItem>,
     session_summary: Option<String>,
     session_status: Status,
@@ -312,7 +312,7 @@ impl SessionManager {
         let speed_mode = row.speed_mode.parse::<SpeedMode>().unwrap_or_default();
         let session_queued_messages = handles
             .get(&session_id)
-            .map(SessionHandles::queued_message_transcripts)
+            .map(SessionHandles::queued_message_snapshot)
             .unwrap_or_default();
         let (role, orchestration_metadata) =
             Self::loaded_orchestration_metadata(&row, orchestration_metadata);

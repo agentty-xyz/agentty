@@ -11,14 +11,16 @@ use std::sync::Arc;
 use ag_tui_text::text_util;
 use ratatui::text::Line;
 
-use crate::domain::session::{Session, Status};
+use crate::domain::session::{QueuedMessage, Session, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageSlot,
 };
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX, USER_PROMPT_RIGHT_GUTTER_WIDTH};
-use crate::ui::{session_format, style};
+use crate::ui::session_format;
+#[cfg(test)]
+use crate::ui::style;
 
 const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
 const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to stage the \
@@ -38,6 +40,7 @@ const USER_PROMPT_TAB_WIDTH: usize = 4;
 pub(crate) struct SessionOutputLines {
     pub(crate) active_loader_line_index: Option<usize>,
     pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) queued_line_indices: Vec<usize>,
     pub(crate) transient_loader_line_index: Option<usize>,
 }
 
@@ -45,6 +48,7 @@ pub(crate) struct SessionOutputLines {
 #[derive(Clone)]
 pub(crate) struct SessionOutputBody {
     pub(crate) lines: Arc<[Line<'static>]>,
+    pub(crate) queued_line_indices: Arc<[usize]>,
     pub(crate) transient_loader_line_index: Option<usize>,
 }
 
@@ -85,6 +89,7 @@ pub(crate) fn layout_from_body(
     SessionOutputLines {
         active_loader_line_index,
         lines,
+        queued_line_indices: body.queued_line_indices.iter().copied().collect(),
         transient_loader_line_index: body.transient_loader_line_index,
     }
 }
@@ -125,9 +130,9 @@ fn section_display_text(section: &SessionOutputTranscriptSection<'_>) -> String 
 #[cfg(test)]
 pub(crate) fn append_queued_message_lines(
     lines: &mut Vec<Line<'static>>,
-    queued_messages: &[String],
+    queued_messages: &[QueuedMessage],
 ) {
-    append_queued_messages(lines, queued_messages);
+    append_queued_entries(lines, &[], queued_messages);
 }
 
 /// Appends one user prompt block while retaining its prompt marker and shading.
@@ -186,6 +191,7 @@ struct SessionOutputAssembly<'a> {
     inner_width: usize,
     lines: Vec<Line<'static>>,
     markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
+    queued_line_indices: Vec<usize>,
     session: &'a Session,
     status: Status,
     transient_loader_line_index: Option<usize>,
@@ -225,6 +231,7 @@ impl SessionOutputAssembly<'_> {
         SessionOutputLines {
             active_loader_line_index: self.active_loader_line_index,
             lines: self.lines,
+            queued_line_indices: self.queued_line_indices,
             transient_loader_line_index: self.transient_loader_line_index,
         }
     }
@@ -238,6 +245,7 @@ impl SessionOutputAssembly<'_> {
 
         SessionOutputBody {
             lines: Arc::from(self.lines),
+            queued_line_indices: Arc::from(self.queued_line_indices),
             transient_loader_line_index: self.transient_loader_line_index,
         }
     }
@@ -287,7 +295,10 @@ impl SessionOutputAssembly<'_> {
             .transient_messages
             .messages()
             .iter()
-            .filter(|message| message.anchor == anchor)
+            .filter(|message| {
+                message.anchor == anchor
+                    && !matches!(&message.body, TransientMessageBody::Queued(_))
+            })
         {
             if let Some(loader_line_index) = append_transient_message(
                 &mut self.lines,
@@ -310,7 +321,11 @@ impl SessionOutputAssembly<'_> {
     }
 
     fn append_queued_messages(&mut self) {
-        append_queued_messages(&mut self.lines, &self.session.queued_messages);
+        self.queued_line_indices = append_queued_entries(
+            &mut self.lines,
+            self.session.transient_messages.messages(),
+            &self.session.queued_messages,
+        );
     }
 
     fn append_session_tail(&mut self) {
@@ -342,6 +357,7 @@ fn output_assembly<'assembly>(
         inner_width,
         lines: Vec::new(),
         markdown_render_cache,
+        queued_line_indices: Vec::new(),
         session,
         status,
         transient_loader_line_index: None,
@@ -399,7 +415,9 @@ fn review_loading_message(session: &Session) -> Option<&str> {
         .get(TransientMessageSlot::Review)
         .and_then(|message| match &message.body {
             TransientMessageBody::Loading(message) => Some(message.as_str()),
-            TransientMessageBody::Markdown(_) | TransientMessageBody::Plain(_) => None,
+            TransientMessageBody::Markdown(_)
+            | TransientMessageBody::Plain(_)
+            | TransientMessageBody::Queued(_) => None,
         })
 }
 
@@ -419,6 +437,7 @@ fn append_transient_message(
                 TransientMessageSlot::WorkflowNotice
                 | TransientMessageSlot::Orchestration
                 | TransientMessageSlot::BranchPublish
+                | TransientMessageSlot::SyncQueue
                 | TransientMessageSlot::PublishedBranchSync => markdown.clone(),
             };
             append_markdown_lines(lines, &markdown, inner_width, markdown_render_cache);
@@ -444,6 +463,7 @@ fn append_transient_message(
 
             Some(loader_line_index)
         }
+        TransientMessageBody::Queued(_) => None,
     }
 }
 
@@ -623,55 +643,65 @@ fn append_transcript_messages(
     }
 }
 
-fn append_queued_messages(lines: &mut Vec<Line<'static>>, queued_messages: &[String]) {
-    if queued_messages.is_empty() {
-        return;
-    }
-
-    let queued_style = ratatui::style::Style::default()
-        .fg(style::palette::text_subtle())
-        .add_modifier(ratatui::style::Modifier::ITALIC);
+fn append_queued_entries(
+    lines: &mut Vec<Line<'static>>,
+    transient_messages: &[TransientMessage],
+    queued_messages: &[QueuedMessage],
+) -> Vec<usize> {
+    let mut queued_line_indices = Vec::new();
     let mut has_rendered_message = false;
-    for queued_text in queued_messages {
-        let message_lines = queued_text.split('\n').collect::<Vec<_>>();
-        let Some(first_content_line_index) = message_lines
-            .iter()
-            .position(|message_line| !message_line.trim().is_empty())
-        else {
-            continue;
-        };
-        let last_content_line_index = message_lines
-            .iter()
-            .rposition(|message_line| !message_line.trim().is_empty())
-            .unwrap_or(first_content_line_index);
-        let separator = if has_rendered_message {
-            SessionOutputSeparator::AfterPreviousContent
-        } else {
-            SessionOutputSeparator::Always
-        };
-        append_block_separator(lines, separator);
-
-        for (line_index, message_line) in message_lines
-            [first_content_line_index..=last_content_line_index]
-            .iter()
-            .enumerate()
-        {
-            let prefix = if line_index == 0 {
-                "queued › "
+    let mut queued_entries = transient_messages
+        .iter()
+        .filter_map(|message| {
+            if let TransientMessageBody::Queued(queued_action) = &message.body {
+                Some((queued_action.order, queued_action.text.as_str(), ""))
             } else {
-                "        "
-            };
-            lines.push(Line::styled(
-                format!("{prefix}{message_line}"),
-                queued_style,
-            ));
-        }
-        has_rendered_message = true;
+                None
+            }
+        })
+        .chain(
+            queued_messages
+                .iter()
+                .map(|message| (message.order(), message.transcript_text(), "queued › ")),
+        )
+        .collect::<Vec<_>>();
+    queued_entries.sort_by_key(|(order, _, _)| *order);
+
+    for (_, queued_text, first_line_prefix) in queued_entries {
+        append_queued_entry(
+            lines,
+            &mut queued_line_indices,
+            &mut has_rendered_message,
+            queued_text,
+            first_line_prefix,
+        );
     }
 
     if has_rendered_message {
         lines.push(Line::from(""));
     }
+
+    queued_line_indices
+}
+
+fn append_queued_entry(
+    lines: &mut Vec<Line<'static>>,
+    queued_line_indices: &mut Vec<usize>,
+    has_rendered_message: &mut bool,
+    message: &str,
+    first_line_prefix: &str,
+) {
+    let queued_lines = session_format::session_output_queued_lines(message, first_line_prefix);
+    if queued_lines.is_empty() {
+        return;
+    }
+    if !*has_rendered_message {
+        append_block_separator(lines, SessionOutputSeparator::Always);
+    }
+
+    queued_line_indices.push(lines.len());
+    lines.extend(queued_lines);
+    *has_rendered_message = true;
 }
 
 fn append_user_prompt(
@@ -867,6 +897,12 @@ fn rendered_markdown_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::transient_message::QueuedAction;
+    use crate::domain::turn_prompt::TurnPrompt;
+
+    fn queued_message(order: u64, text: &str) -> QueuedMessage {
+        QueuedMessage::new(order, TurnPrompt::from_text(text.to_string()))
+    }
 
     #[test]
     fn test_section_display_text_handles_empty_and_markdown_sections() {
@@ -890,16 +926,91 @@ mod tests {
     fn test_queued_messages_skip_blank_entries() {
         // Arrange
         let mut lines = Vec::new();
-        let queued_messages = vec![" \n\t".to_string(), "queued reply".to_string()];
+        let queued_messages = vec![
+            queued_message(0, " \n\t"),
+            queued_message(1, "queued reply"),
+        ];
 
         // Act
-        append_queued_messages(&mut lines, &queued_messages);
+        append_queued_entries(&mut lines, &[], &queued_messages);
 
         // Assert
         assert_eq!(
             lines.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            ["", "queued › queued reply", ""]
+            ["", "≡ queued › queued reply", ""]
         );
+    }
+
+    #[test]
+    fn test_transient_message_appender_skips_queued_actions() {
+        // Arrange
+        let mut lines = Vec::new();
+        let message = TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Queued(QueuedAction::new(
+                0,
+                "sync after this turn".to_string(),
+            )),
+            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::SyncQueue,
+            turn_position: None,
+        };
+
+        // Act
+        let loader_line_index = append_transient_message(&mut lines, &message, 80, None);
+
+        // Assert
+        assert_eq!(loader_line_index, None);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_queued_entries_follow_shared_submission_order() {
+        // Arrange
+        let mut lines = vec![Line::from("Active turn")];
+        let transient_messages = vec![
+            TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body: TransientMessageBody::Queued(QueuedAction::new(
+                    0,
+                    "sync after this turn".to_string(),
+                )),
+                lifecycle:
+                    crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::SyncQueue,
+                turn_position: Some(1),
+            },
+            TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body: TransientMessageBody::Queued(QueuedAction::new(
+                    2,
+                    "publish review request".to_string(),
+                )),
+                lifecycle:
+                    crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::BranchPublish,
+                turn_position: Some(1),
+            },
+        ];
+        let queued_messages = vec![queued_message(1, "follow up")];
+
+        // Act
+        let queued_line_indices =
+            append_queued_entries(&mut lines, &transient_messages, &queued_messages);
+
+        // Assert
+        assert_eq!(
+            lines.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [
+                "Active turn",
+                "",
+                "≡ sync after this turn",
+                "≡ queued › follow up",
+                "≡ publish review request",
+                "",
+            ]
+        );
+        assert_eq!(queued_line_indices, [2, 3, 4]);
     }
 
     #[test]
@@ -994,7 +1105,7 @@ mod tests {
             SessionMessage::conversation(1, SessionMessageKind::AssistantAnswer, "first answer"),
             SessionMessage::conversation(2, SessionMessageKind::UserPrompt, "active prompt"),
         ]));
-        session.queued_messages = vec!["queued reply".to_string()];
+        session.queued_messages = vec![queued_message(0, "queued reply")];
 
         // Act
         let output = output_lines(&session, 80, None, None)

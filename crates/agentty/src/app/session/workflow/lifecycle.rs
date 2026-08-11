@@ -24,7 +24,7 @@ use crate::domain::agent::{
     AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
 };
 use crate::domain::session::{
-    ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
+    QueuedMessage, ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
     can_merge_session_branch_in_stack as stack_can_merge_session_branch,
     can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
     can_rebase_session_branch_in_stack as stack_can_rebase_session_branch,
@@ -1546,7 +1546,7 @@ impl SessionManager {
     /// press cancels the active turn.
     ///
     /// The just-pushed entry is mirrored into the render snapshot via
-    /// [`SessionState::sync_session_from_handle`] so the inline `queued ›`
+    /// [`SessionState::sync_session_from_handle`] so the inline `≡ queued ›`
     /// row appears on the very next frame, and the targeted
     /// [`AppEvent::SessionUpdated`] event triggers a single-session redraw
     /// without paying for a full DB-backed `RefreshSessions` reload.
@@ -1578,8 +1578,9 @@ impl SessionManager {
 
         // Sync critical section (single push, no `.await`); `std::sync::Mutex`
         // is the correct choice per CLAUDE.md §"Mutex Selection".
+        let order = handles.next_queued_work_order();
         if let Ok(mut guard) = handles.queued_messages.lock() {
-            guard.push_back(prompt);
+            guard.push_back(QueuedMessage::new(order, prompt));
         }
 
         self.state.sync_session_from_handle(session_id);
@@ -2457,7 +2458,7 @@ impl SessionManager {
             self.worker_service_mut()
                 .enqueue_existing_session_command(services, &persisted_session_id, command)
                 .await
-                .map(|()| true)
+                .map(|_| true)
         } else {
             self.enqueue_session_command(services, persisted_session_id, command)
                 .await

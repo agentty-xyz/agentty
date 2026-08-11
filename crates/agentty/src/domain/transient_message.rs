@@ -17,6 +17,8 @@ pub(crate) enum TransientMessageSlot {
     Orchestration,
     /// Manual branch or review-request publish progress and result.
     BranchPublish,
+    /// Session sync waiting behind the active worker command.
+    SyncQueue,
     /// Published-branch auto-push progress replaced by its durable result.
     PublishedBranchSync,
 }
@@ -61,6 +63,8 @@ pub(crate) enum TransientMessageBody {
     Plain(String),
     /// Animated status text with explicit loading semantics.
     Loading(String),
+    /// Calm waiting text for work queued behind the active command.
+    Queued(QueuedAction),
 }
 
 impl TransientMessageBody {
@@ -68,7 +72,29 @@ impl TransientMessageBody {
     pub(crate) fn text(&self) -> &str {
         match self {
             Self::Markdown(text) | Self::Plain(text) | Self::Loading(text) => text,
+            Self::Queued(action) => &action.text,
         }
+    }
+
+    /// Returns whether this body renders a time-driven pending indicator.
+    pub(crate) fn is_pending_indicator(&self) -> bool {
+        matches!(self, Self::Loading(_) | Self::Queued(_))
+    }
+}
+
+/// Display metadata for one workflow action in the shared session queue.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct QueuedAction {
+    /// Session-local submission order shared with queued chat messages.
+    pub(crate) order: u64,
+    /// Calm waiting label shown in session output.
+    pub(crate) text: String,
+}
+
+impl QueuedAction {
+    /// Creates queued-action display metadata at its reserved order.
+    pub(crate) fn new(order: u64, text: String) -> Self {
+        Self { order, text }
     }
 }
 
@@ -204,6 +230,36 @@ impl Default for TransientMessageStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_body_exposes_plain_display_text() {
+        // Arrange
+        let body =
+            TransientMessageBody::Queued(QueuedAction::new(2, "sync after this turn".to_string()));
+
+        // Act
+        let text = body.text();
+
+        // Assert
+        assert_eq!(text, "sync after this turn");
+    }
+
+    #[test]
+    fn pending_indicator_only_matches_loading_and_queued_bodies() {
+        // Arrange
+        let bodies = [
+            TransientMessageBody::Markdown("result".to_string()),
+            TransientMessageBody::Plain("failure".to_string()),
+            TransientMessageBody::Loading("working".to_string()),
+            TransientMessageBody::Queued(QueuedAction::new(0, "waiting".to_string())),
+        ];
+
+        // Act
+        let pending_indicators = bodies.map(|body| body.is_pending_indicator());
+
+        // Assert
+        assert_eq!(pending_indicators, [false, false, true, true]);
+    }
 
     fn message(slot: TransientMessageSlot, text: &str, turn_position: i64) -> TransientMessage {
         TransientMessage {

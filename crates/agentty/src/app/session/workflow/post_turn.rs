@@ -20,10 +20,11 @@ use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, TurnAppliedState};
 use crate::app::{AppEvent, orchestration};
-use crate::domain::session::{SessionFollowUpTask, SessionId, SessionRole, SessionStats, Status};
+use crate::domain::session::{
+    QueuedMessage, SessionFollowUpTask, SessionId, SessionRole, SessionStats, Status,
+};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, SessionTurnMetadata};
 use crate::infra::fs::FsClient;
 
@@ -61,7 +62,7 @@ pub(super) struct PostTurnContext {
     /// Provider-neutral boundary used by post-turn auto-commit prompts.
     pub(super) one_shot_client: Arc<dyn OneShotClient>,
     /// In-memory queue checked before starting detached auto-push effects.
-    pub(super) queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
+    pub(super) queued_messages: Arc<Mutex<VecDeque<QueuedMessage>>>,
     /// Forge boundary used for optional linked PR/MR metadata refresh.
     pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Per-app session update versions shared with the main runtime.
