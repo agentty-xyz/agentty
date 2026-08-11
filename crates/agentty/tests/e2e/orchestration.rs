@@ -1,9 +1,15 @@
 //! Orchestration campaign and managed-worker E2E tests.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::process::Command;
+
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
 use agentty::domain::session_message::SessionMessageKind;
+use agentty::test_support;
 use testty::assertion;
 use testty::frame::TerminalFrame;
 use testty::region::Region;
@@ -15,9 +21,88 @@ type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
 const CONTROLLER_ID: &str = "controller-0001";
 const WORKER_ID: &str = "worker-a-0001";
+const CONTROLLER_REVISION_PROMPT: &str = "Revise the plan without changing branches";
+const CONTROLLER_REVISION_RESPONSE: &str = "Controller revision recorded.";
 
 /// Seeds one parked campaign plus a linked managed worker for UI proofs.
 fn seed_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign_rows(env)?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("controll"))?;
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("worker-a"))?;
+
+    Ok(())
+}
+
+/// Seeds a controller and managed worker with real diffs so startup and turn
+/// completion exercise role-scoped automatic review.
+fn seed_orchestrator_auto_review_scope(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign_rows(env)?;
+    seed_orchestration_review_worktrees(env)?;
+    install_auto_review_claude_stub(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        for session_id in [CONTROLLER_ID, WORKER_ID] {
+            database
+                .sessions()
+                .update_session_model(session_id, "claude-haiku-4-5-20251001")
+                .await?;
+            database
+                .sessions()
+                .update_session_diff_stats(1, 0, true, session_id, "XS")
+                .await?;
+        }
+        database
+            .sessions()
+            .update_session_status_with_timing_at(WORKER_ID, "Review", 0)
+            .await?;
+
+        sqlx::query(
+            "UPDATE session_orchestration SET status = 'Running' WHERE controller_session_id = ?",
+        )
+        .bind(CONTROLLER_ID)
+        .execute(database.pool())
+        .await?;
+        sqlx::query(
+            "UPDATE session_orchestration_task SET status = CASE task_key WHEN 'protocol' THEN \
+             'Reviewing' ELSE 'Failed' END",
+        )
+        .execute(database.pool())
+        .await?;
+
+        let project_id =
+            sqlx::query_scalar::<_, i64>("SELECT project_id FROM session WHERE id = ?")
+                .bind(CONTROLLER_ID)
+                .fetch_one(database.pool())
+                .await?;
+        for (setting_name, setting_value) in [
+            ("DefaultReviewAgent", "claude"),
+            ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+        ] {
+            sqlx::query(
+                "INSERT INTO project_setting (project_id, name, value) VALUES (?, ?, ?) ON \
+                 CONFLICT(project_id, name) DO UPDATE SET value = excluded.value",
+            )
+            .bind(project_id)
+            .bind(setting_name)
+            .bind(setting_value)
+            .execute(database.pool())
+            .await?;
+        }
+
+        database
+            .sessions()
+            .update_session_title(CONTROLLER_ID, "Managed feature delivery")
+            .await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })
+}
+
+/// Seeds the persisted rows for one parked campaign and linked managed worker.
+fn seed_orchestration_campaign_rows(env: &BuilderEnv) -> E2eResult {
     common::seed_session(
         env,
         SessionSeed::regular(CONTROLLER_ID, "gpt-5.6-sol", "main", "Review")
@@ -104,8 +189,83 @@ fn seed_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
     });
     seed_result?;
 
-    std::fs::create_dir_all(env.agentty_root.join("wt").join("controll"))?;
-    std::fs::create_dir_all(env.agentty_root.join("wt").join("worker-a"))?;
+    Ok(())
+}
+
+/// Creates linked controller and worker worktrees with one tracked change in
+/// each branch.
+fn seed_orchestration_review_worktrees(env: &BuilderEnv) -> E2eResult {
+    std::fs::write(env.workdir.join("review-scope.txt"), "base\n")?;
+    run_git_command(&env.workdir, &["add", "review-scope.txt"])?;
+    run_git_command(&env.workdir, &["commit", "-m", "review scope base"])?;
+
+    let worktree_root = env.agentty_root.join("wt");
+    std::fs::create_dir_all(&worktree_root)?;
+    for (session_id, branch_name, content) in [
+        (CONTROLLER_ID, "wt/controll", "controller change\n"),
+        (WORKER_ID, "wt/worker-a", "worker change\n"),
+    ] {
+        let session_folder = test_support::session_folder(&worktree_root, session_id);
+        let session_folder_text = session_folder.to_string_lossy().into_owned();
+        run_git_command(
+            &env.workdir,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                branch_name,
+                session_folder_text.as_str(),
+            ],
+        )?;
+        std::fs::write(session_folder.join("review-scope.txt"), content)?;
+    }
+
+    Ok(())
+}
+
+/// Installs a prompt-aware Claude stub that completes controller chat quickly
+/// while leaving focused review visibly in progress.
+fn install_auto_review_claude_stub(env: &BuilderEnv) -> E2eResult {
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r###"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+input=$(cat)
+case "$input" in
+  *"Review the Git diff for display in a terminal UI."*)
+    sleep 30
+    result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Managed worker review completed.\\n\\n### Suggestions\\n\\n- None\",\"questions\":[],\"summary\":null}}'
+    ;;
+  *)
+    result='{{\"answer\":\"{CONTROLLER_REVISION_RESPONSE}\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":null,\"verification_verdicts\":[]}}'
+    ;;
+esac
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '{{"type":"result","subtype":"success","result":"%s","usage":{{"input_tokens":5,"output_tokens":9}}}}\n' "$result"
+"###,
+    );
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
+/// Runs one Git setup command inside the isolated E2E repository.
+fn run_git_command(working_directory: &Path, args: &[&str]) -> E2eResult {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(working_directory)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr),
+        ))
+        .into());
+    }
 
     Ok(())
 }
@@ -361,6 +521,66 @@ fn test_orchestration_campaign_board() -> E2eResult {
                     &full,
                 );
                 assertion::assert_text_in_region(frame, "a approve  Enter discuss/revise", &full);
+            },
+        )
+}
+
+#[test]
+fn test_orchestrator_auto_review_scope() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("orchestrator_auto_review_scope")
+        .with_git()
+        .setup(seed_orchestrator_auto_review_scope)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("Campaign: Managed feature delivery", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Tab: focus | Enter: send", 5000)
+                    .write_text(CONTROLLER_REVISION_PROMPT)
+                    .press_key("Enter")
+                    .wait_for_text(CONTROLLER_REVISION_RESPONSE, 30000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "controller_review_ready",
+                        "Controller remains review-ready after its turn",
+                    )
+                    .compose(&common::return_to_session_list())
+                    .press_key("j")
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("Managed by controller-0001", 5000)
+                    .wait_for_text("Reviewing changes with claude-haiku-4-5-20251001", 5000)
+                    .capture_labeled(
+                        "worker_auto_review",
+                        "Managed worker starts focused review automatically",
+                    )
+            },
+            |frame, report| {
+                let controller_frame = common::frame_from_capture(&report.captures[0]);
+                let controller_full =
+                    Region::full(controller_frame.cols(), controller_frame.rows());
+                assertion::assert_text_in_region(
+                    &controller_frame,
+                    CONTROLLER_REVISION_RESPONSE,
+                    &controller_full,
+                );
+                assertion::assert_text_in_region(
+                    &controller_frame,
+                    "Phase: Running",
+                    &controller_full,
+                );
+                assertion::assert_not_visible(&controller_frame, "Reviewing changes with");
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Reviewing changes with claude-haiku-4-5-20251001",
+                    &full,
+                );
             },
         )
 }

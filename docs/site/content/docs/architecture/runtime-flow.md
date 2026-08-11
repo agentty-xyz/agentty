@@ -295,7 +295,9 @@ flowchart LR
    payload, token-usage deltas, and provider conversation markers.
 1. `AppEvent::AgentResponseReceived` carries the reducer projection so the active
    session updates without a forced reload. If persistence fails, the worker appends a
-   recovery error and falls back to a durable-state reload.
+   recovery error and falls back to a durable-state reload. Focused-review startup
+   excludes `Orchestrator` controller sessions because they do not own branch changes;
+   ordinary sessions and managed implementation workers retain automatic review.
 1. For orchestrator turns, validated independent subtasks, their execution kind,
    acceptance criteria, and optional implementation touched-area planning references are
    stored in `session_orchestration_task` before `AwaitingApproval`. Research and

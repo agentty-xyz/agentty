@@ -12,7 +12,7 @@ use super::task;
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::review::FocusedReviewStatus;
-use crate::domain::session::{Session, SessionId, Status};
+use crate::domain::session::{Session, SessionId, SessionRole, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
@@ -385,7 +385,9 @@ pub(crate) fn apply_review_updates(
 /// the next completed diff triggers a fresh assist run. Sessions with a
 /// [`ReviewCacheEntry::Suppressed`] marker skip diff loading entirely; stopped
 /// turns set that marker synchronously so cancellation does not block on `git
-/// diff` just to prevent automatic review startup.
+/// diff` just to prevent automatic review startup. Orchestrator controllers
+/// also skip automatic review because they coordinate child work without
+/// owning branch changes.
 pub(crate) async fn auto_start_reviews(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
     session_ids: &HashSet<SessionId>,
@@ -439,7 +441,8 @@ async fn auto_start_review_for_session(
         return None;
     }
 
-    if !matches!(current_status, Status::Review | Status::AgentReview)
+    if session.role == SessionRole::Orchestrator
+        || !matches!(current_status, Status::Review | Status::AgentReview)
         || matches!(
             review_cache.get(session_id),
             Some(ReviewCacheEntry::Suppressed)

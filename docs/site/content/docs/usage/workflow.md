@@ -112,9 +112,11 @@ to the assist agent.
 The shortcuts available in each state are listed in
 [Keybindings](@/docs/usage/keybindings.md).
 
-When a session enters **Review**, Agentty starts focused review in the background. While
-it is running, **AgentReview** keeps the review-oriented shortcuts available; pressing
-`r` starts session sync immediately and cancels pending focused-review output so stale
+When an eligible session enters **Review**, Agentty starts focused review in the
+background. Orchestrator controller sessions skip this automatic review because they
+coordinate child branches without owning changes themselves. While focused review is
+running, **AgentReview** keeps the review-oriented shortcuts available; pressing `r`
+starts session sync immediately and cancels pending focused-review output so stale
 review text cannot reappear after the rebase begins. Provider progress and commentary
 remain transient; only the terminal focused-review answer is stored and rendered.
 
@@ -251,22 +253,23 @@ below that notice.
 
 ### Focused Review
 
-When a session enters **Review**, Agentty starts generating a focused review in the
-background and temporarily shows **AgentReview**. Press `f` to append the cached review
-into the session output, or to see a loading message while generation is still running.
-The appended review stays visible across diff mode, question mode, session switching,
-project switching, and background session metadata refreshes, and is cleared when you
-submit the next prompt. Focused review includes the saved user and agent chat history
-for context. It uses inspection-only context: it may read files, search, inspect git
-history, and browse when needed, but it recommends verification commands instead of
-running checks itself. The review treats explicit decisions, accepted tradeoffs, and
-explanations in the chat as constraints, and only reopens a resolved suggestion when the
-current diff contradicts the resolution or inspection finds a new significant risk.
-`Project Impact` renders concise bullets directly beneath its heading. `Suggestions`
-uses the same compact spacing and formats its bullets as `[Severity]: Issue details`,
-using `[High]` or `[Medium]` when follow-up work is needed. Empty `Suggestions` output
-does not offer the `/apply` action. A turn stopped with `Ctrl+c` does not start a
-focused review automatically; press `f` for a manual one.
+When an eligible session enters **Review**, Agentty starts generating a focused review
+in the background and temporarily shows **AgentReview**. Orchestrator controllers do not
+trigger this automatic review. Press `f` to append the cached review into the session
+output, or to see a loading message while generation is still running. The appended
+review stays visible across diff mode, question mode, session switching, project
+switching, and background session metadata refreshes, and is cleared when you submit the
+next prompt. Focused review includes the saved user and agent chat history for context.
+It uses inspection-only context: it may read files, search, inspect git history, and
+browse when needed, but it recommends verification commands instead of running checks
+itself. The review treats explicit decisions, accepted tradeoffs, and explanations in
+the chat as constraints, and only reopens a resolved suggestion when the current diff
+contradicts the resolution or inspection finds a new significant risk. `Project Impact`
+renders concise bullets directly beneath its heading. `Suggestions` uses the same
+compact spacing and formats its bullets as `[Severity]: Issue details`, using `[High]`
+or `[Medium]` when follow-up work is needed. Empty `Suggestions` output does not offer
+the `/apply` action. A turn stopped with `Ctrl+c` does not start a focused review
+automatically; press `f` for a manual one.
 
 ### Session Output Markdown
 
