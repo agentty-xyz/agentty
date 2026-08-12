@@ -674,7 +674,11 @@ their triggers:
   role, including temporary orchestration researchers. Issued and accepted candidate
   generations are tracked separately: empty responses leave older usable candidates
   eligible, newer accepted candidates supersede older ones, and draft edits or
-  commit-derived titles invalidate every outstanding candidate.
+  commit-derived titles invalidate every outstanding candidate. Session refreshes
+  hydrate transcript-scale detail for the session identified by the active application
+  mode, independently of the session-list table selection. Reply classification also
+  requires `Draft` status before an empty prompt can be treated as the first message, so
+  lightweight list rows cannot replace an existing title.
 
 - **At-mention file indexing** (`@` in prompt or question input): lists session files
   for the mention picker, falling back to the project root for unstarted drafts.

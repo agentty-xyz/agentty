@@ -2199,7 +2199,7 @@ impl SessionManager {
 
         let session = &mut self.state.sessions[session_index];
 
-        let is_first_message = session.prompt.is_empty();
+        let is_first_message = session.status == Status::Draft && session.prompt.is_empty();
         if !reply_eligibility.allows(session.status, is_first_message) {
             return Err(SessionError::Workflow(
                 "Session must be in review status".to_string(),
@@ -4697,6 +4697,39 @@ mod tests {
         assert_eq!(context.2, "session-id");
         assert_eq!(context.3, None);
         assert_eq!(session_manager.sessions()[0].prompt, "Initial prompt");
+        assert_eq!(
+            session_manager.sessions()[0].title,
+            Some("Initial prompt".to_string())
+        );
+    }
+
+    /// Ensures lazily unloaded prompt detail cannot make a question answer
+    /// replace the existing session title as though it were the first prompt.
+    #[test]
+    fn test_prepare_reply_context_question_answer_keeps_existing_title() {
+        // Arrange
+        let session = test_session("", Status::Question, Some("Initial prompt"), "");
+        let mut session_manager = session_manager_with_one_session(session);
+        let prompt = TurnPrompt::from_text(
+            "Clarifications:\n1. Q: Which target?\n   A: Full project".to_string(),
+        );
+
+        // Act
+        let context = session_manager
+            .prepare_reply_context(
+                "session-id",
+                &prompt,
+                false,
+                ReplyEligibility::QuestionAnswer,
+            )
+            .expect("question answer context should be available");
+
+        // Assert
+        assert_eq!(context.0, None);
+        assert!(!context.1);
+        assert_eq!(context.2, "session-id");
+        assert_eq!(context.3, None);
+        assert_eq!(session_manager.sessions()[0].prompt, "");
         assert_eq!(
             session_manager.sessions()[0].title,
             Some("Initial prompt".to_string())
