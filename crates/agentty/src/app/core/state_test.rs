@@ -18,16 +18,17 @@ use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
-    ForgeKind, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    SESSION_DATA_DIR, SessionDiffState, SessionDiffStats, SessionFollowUpTask, SessionHandles,
-    SessionRole, SessionSize, SessionStats, Status,
+    ForgeKind, PublishedBranchSyncStatus, QueuedMessage, ReviewRequest, ReviewRequestState,
+    ReviewRequestSummary, SESSION_DATA_DIR, SessionDiffState, SessionDiffStats,
+    SessionFollowUpTask, SessionHandles, SessionRole, SessionSize, SessionStats, Status,
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::setting::SettingName;
 use crate::domain::transient_message::{
-    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
-    TransientMessageSlot,
+    QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
+    TransientMessageLifecycle, TransientMessageSlot,
 };
+use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
@@ -230,6 +231,48 @@ async fn review_comments_page_has_no_tick_driven_ui() {
 
     // Assert
     assert!(!has_tick_driven_ui);
+}
+
+#[tokio::test]
+async fn queued_session_work_has_tick_driven_ui() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let mut session = crate::test_support::SessionFixtureBuilder::new()
+        .id("session-id")
+        .status(Status::Review)
+        .build();
+    session.transient_messages.upsert(TransientMessage {
+        anchor: TransientMessageAnchor::Tail,
+        body: TransientMessageBody::Queued(QueuedAction::new(
+            0,
+            "sync after this turn".to_string(),
+        )),
+        lifecycle: TransientMessageLifecycle::UntilResolved,
+        slot: TransientMessageSlot::SyncQueue,
+        turn_position: None,
+    });
+    app.sessions.push_session(session);
+    app.mode = test_view_app_mode("session-id");
+
+    // Act
+    let queued_action_has_tick_driven_ui = app.has_visible_tick_driven_ui();
+    let session = app
+        .sessions
+        .sessions_mut()
+        .first_mut()
+        .expect("queued session should remain available");
+    session
+        .transient_messages
+        .retract(TransientMessageSlot::SyncQueue);
+    session.queued_messages.push(QueuedMessage::new(
+        1,
+        TurnPrompt::from_text("follow up".to_string()),
+    ));
+    let queued_message_has_tick_driven_ui = app.has_visible_tick_driven_ui();
+
+    // Assert
+    assert!(queued_action_has_tick_driven_ui);
+    assert!(queued_message_has_tick_driven_ui);
 }
 
 #[tokio::test]
@@ -1433,6 +1476,66 @@ async fn review_request_enqueue_does_not_wait_for_existing_branch_operation() {
 }
 
 #[tokio::test]
+async fn running_review_request_action_queues_on_existing_worker() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("session should be created");
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Done);
+    let branch_operation_lock = Arc::clone(
+        &app.sessions
+            .session_handles_or_err(&session_id)
+            .expect("expected session handles")
+            .branch_operation_lock,
+    );
+    let existing_operation_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
+    app.start_publish_branch_action(
+        ConfirmationViewMode {
+            scroll_offset: None,
+            session_id: session_id.clone().into(),
+        },
+        &session_id,
+        PublishBranchAction::PublishPullRequest,
+        None,
+    )
+    .await;
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+
+    // Act
+    app.start_publish_branch_action(
+        ConfirmationViewMode {
+            scroll_offset: Some(4),
+            session_id: session_id.clone().into(),
+        },
+        &session_id,
+        PublishBranchAction::PublishPullRequest,
+        None,
+    )
+    .await;
+    let publish_body = app.sessions.state().sessions()[0]
+        .transient_messages
+        .get(TransientMessageSlot::BranchPublish)
+        .map(|message| &message.body);
+
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::View {
+            session_id: ref viewed_session_id,
+            scroll_offset: Some(4),
+        } if viewed_session_id == &session_id
+    ));
+    assert!(matches!(
+        publish_body,
+        Some(TransientMessageBody::Queued(action))
+            if action.order == 0 && action.text == "review request — publish after this turn"
+    ));
+    drop(existing_operation_guard);
+}
+
+#[tokio::test]
 async fn review_request_enqueue_failure_replaces_queued_status_with_error() {
     // Arrange
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
@@ -1948,9 +2051,10 @@ async fn apply_branch_publish_started_replaces_queued_label() {
         Arc::new(MockTmuxClient::new()),
     )
     .await;
-    app.sessions.start_branch_publish(
+    app.sessions.queue_branch_publish(
         "session-1",
-        "Review request queued; publishing after the current turn finishes...".to_string(),
+        0,
+        "review request — publish after this turn".to_string(),
     );
 
     // Act
@@ -1966,6 +2070,64 @@ async fn apply_branch_publish_started_replaces_queued_label() {
             .get(crate::domain::transient_message::TransientMessageSlot::BranchPublish)
             .map(|message| message.body.text()),
         Some("Publishing review request...")
+    );
+}
+
+#[tokio::test]
+async fn apply_branch_publish_resolved_retracts_waiting_row() {
+    // Arrange
+    let session_folder = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_selected_session(
+        session_folder.path().to_path_buf(),
+        "",
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    app.sessions.queue_branch_publish(
+        "session-1",
+        0,
+        "review request — publish after this turn".to_string(),
+    );
+
+    // Act
+    app.apply_app_events(AppEvent::BranchPublishActionResolved {
+        session_id: "session-1".into(),
+    })
+    .await;
+
+    // Assert
+    assert!(
+        app.sessions.state().sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::BranchPublish)
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn apply_queued_sync_resolved_retracts_waiting_row() {
+    // Arrange
+    let session_folder = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_selected_session(
+        session_folder.path().to_path_buf(),
+        "",
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    app.sessions.queue_session_sync("session-1", 0);
+
+    // Act
+    app.apply_app_events(AppEvent::SessionQueuedSyncResolved {
+        session_id: "session-1".into(),
+    })
+    .await;
+
+    // Assert
+    assert!(
+        app.sessions.state().sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::SyncQueue)
+            .is_none()
     );
 }
 
@@ -2773,6 +2935,12 @@ fn app_event_batch_collect_event_keeps_publish_results_and_latest_reviews() {
     event_batch.collect_event(AppEvent::BranchPublishActionStarted {
         session_id: "session-a".into(),
     });
+    event_batch.collect_event(AppEvent::BranchPublishActionResolved {
+        session_id: "session-b".into(),
+    });
+    event_batch.collect_event(AppEvent::SessionQueuedSyncResolved {
+        session_id: "session-b".into(),
+    });
 
     // Assert
     assert_eq!(
@@ -2804,8 +2972,18 @@ fn app_event_batch_collect_event_keeps_publish_results_and_latest_reviews() {
     );
     assert!(
         event_batch
+            .branch_publish_resolved_session_ids
+            .contains("session-b")
+    );
+    assert!(
+        event_batch
             .branch_publish_started_session_ids
             .contains("session-a")
+    );
+    assert!(
+        event_batch
+            .session_queued_sync_resolved_ids
+            .contains("session-b")
     );
     assert!(event_batch.should_refresh_git_status);
 }

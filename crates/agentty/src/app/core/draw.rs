@@ -3,7 +3,6 @@
 use super::state::{App, UpdateStatus};
 use crate::app::tab::Tab;
 use crate::domain::session::{Session, Status};
-use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 
 impl App {
@@ -129,13 +128,11 @@ impl App {
                 session.status,
                 Status::AgentReview | Status::InProgress | Status::Merging | Status::Rebasing
             )
-            || session.transient_messages.messages().iter().any(|message| {
-                matches!(
-                    message.slot,
-                    TransientMessageSlot::Orchestration
-                        | TransientMessageSlot::BranchPublish
-                        | TransientMessageSlot::PublishedBranchSync
-                ) && matches!(&message.body, TransientMessageBody::Loading(_))
-            })
+            || session
+                .transient_messages
+                .messages()
+                .iter()
+                .any(|message| message.body.is_pending_indicator())
+            || !session.queued_messages.is_empty()
     }
 }

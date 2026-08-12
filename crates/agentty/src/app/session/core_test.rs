@@ -875,6 +875,56 @@ fn test_append_workflow_notice_anchors_active_status_notices_after_active_turn()
 }
 
 #[test]
+fn test_queued_session_actions_use_explicit_waiting_slots_until_resolved() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+
+    // Act
+    session_manager.queue_branch_publish(
+        "session-id",
+        3,
+        "review request — publish after this turn".to_string(),
+    );
+    session_manager.queue_session_sync("session-id", 4);
+
+    // Assert
+    let transient_messages = &session_manager.sessions()[0].transient_messages;
+    assert!(matches!(
+        transient_messages
+            .get(TransientMessageSlot::BranchPublish)
+            .map(|message| &message.body),
+        Some(TransientMessageBody::Queued(label))
+            if label.order == 3 && label.text == "review request — publish after this turn"
+    ));
+    assert!(matches!(
+        transient_messages
+            .get(TransientMessageSlot::SyncQueue)
+            .map(|message| &message.body),
+        Some(TransientMessageBody::Queued(label))
+            if label.order == 4
+                && label.text == "sync — rebase onto the base branch after this turn"
+    ));
+
+    // Act
+    session_manager.resolve_queued_branch_publish("session-id");
+    session_manager.resolve_queued_session_sync("session-id");
+
+    // Assert
+    assert!(
+        session_manager.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::BranchPublish)
+            .is_none()
+    );
+    assert!(
+        session_manager.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::SyncQueue)
+            .is_none()
+    );
+}
+
+#[test]
 fn test_finish_review_request_publish_keeps_loading_review_at_tail() {
     // Arrange
     let mut session_manager = test_session_manager("session-id", None);
@@ -2870,7 +2920,7 @@ async fn test_enqueue_message_pushes_prompt_onto_in_memory_queue() {
         .iter()
         .find(|session| session.id == session_id)
         .expect("session present");
-    assert_eq!(session.queued_messages, vec!["queued reply".to_string()]);
+    assert_eq!(session.queued_messages[0].transcript_text(), "queued reply");
     let handles = app
         .sessions
         .session_handles()
@@ -2887,7 +2937,7 @@ async fn test_enqueue_message_pushes_prompt_onto_in_memory_queue() {
 /// `Session` snapshot with `queued_messages: Vec::new()`. The post-reload
 /// `sync_session_with_handles` did not restore `queued_messages` from the
 /// handles, so the just-pushed entry was silently wiped on the next
-/// reducer pass and the inline `queued ›` row briefly disappeared from
+/// reducer pass and the inline `≡ queued ›` row briefly disappeared from
 /// the transcript before reappearing on a later mutation.
 async fn test_enqueue_message_survives_refresh_sessions_reducer_pass() {
     // Arrange
@@ -2911,8 +2961,8 @@ async fn test_enqueue_message_survives_refresh_sessions_reducer_pass() {
         .find(|session| session.id == session_id)
         .expect("session present");
     assert_eq!(
-        session.queued_messages,
-        vec!["queued reply".to_string()],
+        session.queued_messages[0].transcript_text(),
+        "queued reply",
         "queued_messages snapshot must be re-projected from handles after a RefreshSessions \
          reducer pass instead of being wiped to an empty vec"
     );
@@ -2946,7 +2996,7 @@ async fn test_enqueue_message_rejects_empty_payload() {
         .iter()
         .find(|session| session.id == session_id)
         .expect("session present");
-    assert_eq!(session.queued_messages, [] as [std::string::String; 0]);
+    assert!(session.queued_messages.is_empty());
 }
 
 #[tokio::test]
@@ -4200,28 +4250,23 @@ async fn test_running_turn_finishes_before_queued_sync_and_later_chat() {
         .expect("later chat message should queue");
 
     // Assert
-    app.sessions.sync_from_handles();
-    assert_eq!(app.sessions.sessions()[0].status, Status::InProgress);
-    let active_turn_was_cancelled = app
-        .sessions
-        .session_handles()
-        .get(session_id.as_str())
-        .expect("missing session handles")
-        .cancel_token
-        .lock()
-        .expect("cancel token lock should not be poisoned")
-        .is_cancelled();
-    assert!(!active_turn_was_cancelled);
-    assert!(!session_replay_text(&app.sessions.sessions()[0]).contains("Successfully synced"));
+    assert_sync_waits_without_canceling_turn(&mut app, &session_id);
 
     // Act
     release_first_turn.notify_one();
     assert_eq!(turn_started_rx.recv().await, Some(1));
-    wait_for_output_contains(&mut app, &session_id, "Queued turn completed", 300).await;
+    wait_for_output_contains_after_events(&mut app, &session_id, "Queued turn completed", 300)
+        .await;
 
     // Assert
     app.sessions.sync_from_handles();
     let transcript = session_replay_text(&app.sessions.sessions()[0]);
+    assert!(
+        app.sessions.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::SyncQueue)
+            .is_none()
+    );
     let initial_answer_index = transcript
         .find("Initial turn completed")
         .expect("missing completed initial turn");
@@ -4233,6 +4278,29 @@ async fn test_running_turn_finishes_before_queued_sync_and_later_chat() {
         .expect("missing later queued prompt");
     assert!(initial_answer_index < sync_completion_index);
     assert!(sync_completion_index < queued_prompt_index);
+}
+
+fn assert_sync_waits_without_canceling_turn(app: &mut App, session_id: &str) {
+    app.sessions.sync_from_handles();
+    assert_eq!(app.sessions.sessions()[0].status, Status::InProgress);
+    let active_turn_was_cancelled = app
+        .sessions
+        .session_handles()
+        .get(session_id)
+        .expect("missing session handles")
+        .cancel_token
+        .lock()
+        .expect("cancel token lock should not be poisoned")
+        .is_cancelled();
+    assert!(!active_turn_was_cancelled);
+    assert!(!session_replay_text(&app.sessions.sessions()[0]).contains("Successfully synced"));
+    assert!(matches!(
+        app.sessions.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::SyncQueue)
+            .map(|message| &message.body),
+        Some(TransientMessageBody::Queued(_))
+    ));
 }
 
 #[tokio::test]

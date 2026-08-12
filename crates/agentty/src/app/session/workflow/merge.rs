@@ -876,17 +876,11 @@ impl SessionMergeService {
                 return Ok(());
             }
 
-            manager
+            let queued_order = manager
                 .worker_service_mut()
                 .enqueue_existing_session_command(services, &persisted_session_id, command)
                 .await?;
-            SessionTaskService::emit_session_workflow_notice(
-                &services.event_sender(),
-                persisted_session_id.as_str(),
-                TranscriptNotice::Rebase.format(
-                    "Queued sync; this session will rebase after the current turn finishes.",
-                ),
-            );
+            manager.queue_session_sync(persisted_session_id.as_str(), queued_order);
         } else {
             let handles = manager
                 .session_handles_or_err(session_id)
@@ -1862,6 +1856,9 @@ impl SessionManager {
         status_transition
             .apply_or_invalid_transition(Status::Rebasing)
             .await?;
+        let _ = app_event_tx.send(AppEvent::SessionQueuedSyncResolved {
+            session_id: id.clone(),
+        });
 
         let rebase_result: Result<String, SessionError> = async {
             let rebase_plan = Self::resolve_session_rebase_plan(

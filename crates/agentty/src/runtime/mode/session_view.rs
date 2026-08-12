@@ -799,19 +799,20 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
 /// token, persisted status, and auto-review suppression untouched so the
 /// running turn can keep streaming.
 async fn pop_last_queued_chat_message_if_any(app: &mut App, session_id: &str) -> bool {
-    let popped_prompt = app
+    let popped_message = app
         .sessions
         .session_handles()
         .get(session_id)
         .and_then(|handles| handles.queued_messages.lock().ok()?.pop_back());
 
-    let Some(popped_prompt) = popped_prompt else {
+    let Some(popped_message) = popped_message else {
         return false;
     };
 
     app.sessions.sync_session_from_handle(session_id);
 
-    app.cleanup_prompt_attachment_files(&popped_prompt).await;
+    app.cleanup_prompt_attachment_files(popped_message.prompt())
+        .await;
 
     app.services.emit_app_event(AppEvent::SessionUpdated {
         session_id: session_id.into(),
@@ -1282,15 +1283,21 @@ mod tests {
     use crate::domain::agent::AgentModel;
     use crate::domain::orchestration::OrchestrationStatus;
     use crate::domain::session::{
-        ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionRole,
+        ForgeKind, QueuedMessage, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+        SessionRole,
     };
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+    use crate::domain::turn_prompt::TurnPrompt;
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::presentation::app_mode::PromptModeSnapshot;
     use crate::presentation::prompt::PromptSlashState;
     use crate::runtime::mode::session_output_metric;
     use crate::ui::component::session_output::SessionOutputLineContext;
     use crate::ui::page::session_chat::SessionChatPage;
+
+    fn queued_message(order: u64, text: &str) -> QueuedMessage {
+        QueuedMessage::new(order, TurnPrompt::from_text(text.to_string()))
+    }
 
     fn session_replay_text(session: &crate::domain::session::Session) -> String {
         session
@@ -3969,16 +3976,16 @@ mod tests {
         let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
         {
             let mut queued = queued_messages.lock().expect("queued_messages lock");
-            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from("first queued"));
-            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from(
-                "second queued",
-            ));
+            queued.push_back(queued_message(0, "first queued"));
+            queued.push_back(queued_message(1, "second queued"));
         }
         app.sessions
             .session_handles_mut()
             .insert(session_id.clone().into(), handles);
-        app.sessions.sessions_mut()[0].queued_messages =
-            vec!["first queued".to_string(), "second queued".to_string()];
+        app.sessions.sessions_mut()[0].queued_messages = vec![
+            queued_message(0, "first queued"),
+            queued_message(1, "second queued"),
+        ];
 
         // Act — first Ctrl+C while the queue is non-empty.
         end_in_progress_turn(&mut app, &session_id).await;
@@ -3990,7 +3997,7 @@ mod tests {
             .lock()
             .expect("queued_messages lock")
             .iter()
-            .map(crate::domain::turn_prompt::TurnPrompt::transcript_text)
+            .map(|message| message.transcript_text().to_string())
             .collect();
         assert_eq!(
             remaining_handle_queue,
@@ -3998,8 +4005,8 @@ mod tests {
             "only the most recently queued chat message should be popped on first Ctrl+C"
         );
         assert_eq!(
-            app.sessions.sessions()[0].queued_messages,
-            vec!["first queued".to_string()],
+            app.sessions.sessions()[0].queued_messages[0].transcript_text(),
+            "first queued",
             "snapshot queued_messages should mirror the handle after LIFO pop"
         );
         assert_eq!(
@@ -4043,16 +4050,16 @@ mod tests {
         let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
         {
             let mut queued = queued_messages.lock().expect("queued_messages lock");
-            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from("first queued"));
-            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from(
-                "second queued",
-            ));
+            queued.push_back(queued_message(0, "first queued"));
+            queued.push_back(queued_message(1, "second queued"));
         }
         app.sessions
             .session_handles_mut()
             .insert(session_id.clone().into(), handles);
-        app.sessions.sessions_mut()[0].queued_messages =
-            vec!["first queued".to_string(), "second queued".to_string()];
+        app.sessions.sessions_mut()[0].queued_messages = vec![
+            queued_message(0, "first queued"),
+            queued_message(1, "second queued"),
+        ];
 
         // Act — first press pops "second queued".
         end_in_progress_turn(&mut app, &session_id).await;
@@ -4158,16 +4165,16 @@ mod tests {
         let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
         {
             let mut queued = queued_messages.lock().expect("queued_messages lock");
-            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from("first queued"));
-            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from(
-                "second queued",
-            ));
+            queued.push_back(queued_message(0, "first queued"));
+            queued.push_back(queued_message(1, "second queued"));
         }
         app.sessions
             .session_handles_mut()
             .insert(session_id.clone().into(), handles);
-        app.sessions.sessions_mut()[0].queued_messages =
-            vec!["first queued".to_string(), "second queued".to_string()];
+        app.sessions.sessions_mut()[0].queued_messages = vec![
+            queued_message(0, "first queued"),
+            queued_message(1, "second queued"),
+        ];
 
         // Simulate the worker `pop_front` draining the oldest entry before
         // the snapshot has been refreshed.

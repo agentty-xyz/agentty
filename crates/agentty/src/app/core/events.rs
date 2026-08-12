@@ -156,9 +156,13 @@ pub(crate) enum AppEvent {
         result: Box<BranchPublishTaskResult>,
         session_id: SessionId,
     },
+    /// Indicates a queued review-request action resolved without starting.
+    BranchPublishActionResolved { session_id: SessionId },
     /// Indicates a queued review-request action has begun executing on its
     /// session worker.
     BranchPublishActionStarted { session_id: SessionId },
+    /// Indicates a queued session sync has either started or failed visibly.
+    SessionQueuedSyncResolved { session_id: SessionId },
     /// Indicates review assist output became available for a session.
     ReviewPrepared {
         diff_hash: u64,
@@ -231,6 +235,7 @@ pub(super) struct AppEventBatch {
     pub(super) agent_cli_updates: Option<Vec<AgentCliInfo>>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
     pub(super) branch_publish_action_updates: Vec<BranchPublishActionUpdate>,
+    pub(super) branch_publish_resolved_session_ids: HashSet<SessionId>,
     pub(super) branch_publish_started_session_ids: HashSet<SessionId>,
     pub(super) diff_preview_updates: Vec<DiffPreviewUpdate>,
     pub(super) focused_review_persistence_retries: Vec<FocusedReviewPersistenceRetry>,
@@ -243,6 +248,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_update_versions: HashMap<SessionId, u64>,
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
     pub(super) session_orchestration_progress_updates: HashMap<SessionId, Option<String>>,
+    pub(super) session_queued_sync_resolved_ids: HashSet<SessionId>,
     pub(super) session_personality_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_reasoning_level_updates:
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
@@ -355,6 +361,7 @@ impl AppEventBatch {
             || !self.applied_turns.is_empty()
             || !self.at_mention_entries_updates.is_empty()
             || !self.branch_publish_action_updates.is_empty()
+            || !self.branch_publish_resolved_session_ids.is_empty()
             || !self.branch_publish_started_session_ids.is_empty()
             || !self.diff_preview_updates.is_empty()
             || !self.published_branch_sync_updates.is_empty()
@@ -364,6 +371,7 @@ impl AppEventBatch {
             || !self.session_orchestration_progress_updates.is_empty()
             || !self.session_personality_updates.is_empty()
             || !self.session_progress_updates.is_empty()
+            || !self.session_queued_sync_resolved_ids.is_empty()
             || !self.session_review_comment_snapshots.is_empty()
             || !self.session_reasoning_level_updates.is_empty()
             || !self.session_speed_mode_updates.is_empty()
@@ -447,7 +455,9 @@ impl AppEventBatch {
             | AppEvent::SessionDiffStatsUpdated { .. }
             | AppEvent::SessionTitleGenerationFinished { .. }
             | AppEvent::BranchPublishActionCompleted { .. }
+            | AppEvent::BranchPublishActionResolved { .. }
             | AppEvent::BranchPublishActionStarted { .. }
+            | AppEvent::SessionQueuedSyncResolved { .. }
             | AppEvent::ReviewPrepared { .. }
             | AppEvent::ReviewPreparationFailed { .. }
             | AppEvent::FocusedReviewPersistenceRetry { .. }
@@ -520,7 +530,9 @@ impl AppEventBatch {
                     .insert(session_id, generation);
             }
             event @ (AppEvent::BranchPublishActionCompleted { .. }
+            | AppEvent::BranchPublishActionResolved { .. }
             | AppEvent::BranchPublishActionStarted { .. }
+            | AppEvent::SessionQueuedSyncResolved { .. }
             | AppEvent::ReviewPrepared { .. }
             | AppEvent::ReviewPreparationFailed { .. }
             | AppEvent::FocusedReviewPersistenceRetry { .. }
@@ -554,8 +566,14 @@ impl AppEventBatch {
             AppEvent::BranchPublishActionCompleted { result, session_id } => {
                 self.collect_branch_publish_action_completed(*result, session_id);
             }
+            AppEvent::BranchPublishActionResolved { session_id } => {
+                self.branch_publish_resolved_session_ids.insert(session_id);
+            }
             AppEvent::BranchPublishActionStarted { session_id } => {
                 self.branch_publish_started_session_ids.insert(session_id);
+            }
+            AppEvent::SessionQueuedSyncResolved { session_id } => {
+                self.session_queued_sync_resolved_ids.insert(session_id);
             }
             AppEvent::ReviewPrepared {
                 diff_hash,
@@ -880,9 +898,7 @@ impl App {
         self.apply_batch_session_snapshot_updates(&mut event_batch);
         self.apply_app_event_effects(after_snapshot_effects).await;
 
-        self.apply_branch_publish_starts(std::mem::take(
-            &mut event_batch.branch_publish_started_session_ids,
-        ));
+        self.apply_worker_action_transitions(&mut event_batch);
 
         for branch_publish_action_update in
             std::mem::take(&mut event_batch.branch_publish_action_updates)
@@ -974,6 +990,19 @@ impl App {
         }
     }
 
+    /// Applies queued worker actions that started or otherwise resolved.
+    fn apply_worker_action_transitions(&mut self, event_batch: &mut AppEventBatch) {
+        self.apply_branch_publish_starts(std::mem::take(
+            &mut event_batch.branch_publish_started_session_ids,
+        ));
+        self.apply_branch_publish_resolutions(std::mem::take(
+            &mut event_batch.branch_publish_resolved_session_ids,
+        ));
+        self.apply_session_queued_sync_resolutions(std::mem::take(
+            &mut event_batch.session_queued_sync_resolved_ids,
+        ));
+    }
+
     /// Replaces queued review-request labels when their worker actions start.
     fn apply_branch_publish_starts(&mut self, session_ids: HashSet<SessionId>) {
         for session_id in session_ids {
@@ -981,6 +1010,20 @@ impl App {
                 &session_id,
                 Self::branch_publish_loading_label(PublishBranchAction::PublishPullRequest),
             );
+        }
+    }
+
+    /// Removes queued review-request labels that resolved without starting.
+    fn apply_branch_publish_resolutions(&mut self, session_ids: HashSet<SessionId>) {
+        for session_id in session_ids {
+            self.sessions.resolve_queued_branch_publish(&session_id);
+        }
+    }
+
+    /// Removes queued-sync labels once work starts or a visible failure lands.
+    fn apply_session_queued_sync_resolutions(&mut self, session_ids: HashSet<SessionId>) {
+        for session_id in session_ids {
+            self.sessions.resolve_queued_session_sync(&session_id);
         }
     }
 

@@ -4299,7 +4299,7 @@ mod tests {
         );
         assert_eq!(app.sessions.sessions()[0].queued_messages.len(), 1);
         assert_eq!(
-            app.sessions.sessions()[0].queued_messages[0],
+            app.sessions.sessions()[0].queued_messages[0].transcript_text(),
             "/model gpt-5",
             "queued message preserves the original slash-prefixed text"
         );
@@ -4333,10 +4333,10 @@ mod tests {
             .lock()
             .expect("queue lock");
         assert_eq!(queued_messages.len(), 1);
-        assert_eq!(queued_messages[0].text, "queued after rebase");
+        assert_eq!(queued_messages[0].transcript_text(), "queued after rebase");
         assert_eq!(
-            app.sessions.sessions()[0].queued_messages,
-            vec!["queued after rebase".to_string()]
+            app.sessions.sessions()[0].queued_messages[0].transcript_text(),
+            "queued after rebase"
         );
     }
 

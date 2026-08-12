@@ -328,7 +328,9 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::SessionDiffStatsUpdated { .. } => "SessionDiffStatsUpdated",
         AppEvent::SessionTitleGenerationFinished { .. } => "SessionTitleGenerationFinished",
         AppEvent::BranchPublishActionCompleted { .. } => "BranchPublishActionCompleted",
+        AppEvent::BranchPublishActionResolved { .. } => "BranchPublishActionResolved",
         AppEvent::BranchPublishActionStarted { .. } => "BranchPublishActionStarted",
+        AppEvent::SessionQueuedSyncResolved { .. } => "SessionQueuedSyncResolved",
         AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
         AppEvent::ReviewPreparationFailed { .. } => "ReviewPreparationFailed",
         AppEvent::FocusedReviewPersistenceRetry { .. } => "FocusedReviewPersistenceRetry",
@@ -448,6 +450,34 @@ mod tests {
 
         // Assert
         assert_eq!(label, "BranchPublishActionStarted");
+    }
+
+    #[test]
+    fn app_event_label_names_branch_publish_resolutions() {
+        // Arrange
+        let event = AppEvent::BranchPublishActionResolved {
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "BranchPublishActionResolved");
+    }
+
+    #[test]
+    fn app_event_label_names_queued_sync_resolutions() {
+        // Arrange
+        let event = AppEvent::SessionQueuedSyncResolved {
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "SessionQueuedSyncResolved");
     }
 
     #[tokio::test]

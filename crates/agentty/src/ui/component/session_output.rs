@@ -11,14 +11,15 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 use rustc_hash::FxHasher;
 
-use crate::domain::session::{Session, SessionId, Status};
+use crate::domain::session::{QueuedMessage, Session, SessionId, Status};
+use crate::ui::component::queue_pulse::QueuePulseEffect;
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 #[cfg(test)]
 use crate::ui::component::vertical_scrollbar::{SCROLLBAR_THUMB_SYMBOL, SCROLLBAR_TRACK_SYMBOL};
 #[cfg(test)]
 use crate::ui::icon::Icon;
-use crate::ui::icon::TACHYON_LOADER_WIDTH;
+use crate::ui::icon::{QUEUED_ACTION_WIDTH, TACHYON_LOADER_WIDTH};
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
 use crate::ui::session_output_assembly::{self, SessionOutputBody, SessionOutputLines};
 use crate::ui::{Component, markdown, session_format, style};
@@ -181,6 +182,8 @@ pub(crate) struct SessionOutputLayout {
     pub(crate) line_count: u16,
     /// Rendered lines shared between scroll metrics and frame painting.
     pub(crate) lines: Arc<[Line<'static>]>,
+    /// Indices of queued rows whose leading glyph receives a calm pulse.
+    pub(crate) queued_line_indices: Arc<[usize]>,
     /// Index of an explicit transient loader row within `lines`, when present.
     pub(crate) transient_loader_line_index: Option<usize>,
 }
@@ -578,6 +581,7 @@ impl<'a> SessionOutput<'a> {
             active_loader_line_index: output_lines.active_loader_line_index,
             line_count,
             lines: Arc::from(output_lines.lines),
+            queued_line_indices: Arc::from(output_lines.queued_line_indices),
             transient_loader_line_index: output_lines.transient_loader_line_index,
         }
     }
@@ -600,7 +604,10 @@ impl<'a> SessionOutput<'a> {
             markdown_render_version,
             output_width: u16::try_from(inner_width).unwrap_or(u16::MAX),
             queued_messages: TextFingerprint::from_texts(
-                session.queued_messages.iter().map(String::as_str),
+                session
+                    .queued_messages
+                    .iter()
+                    .map(QueuedMessage::transcript_text),
             ),
             session_id: session.id.clone(),
             session_update_version: context.session_update_version,
@@ -630,7 +637,10 @@ impl<'a> SessionOutput<'a> {
             markdown_render_version,
             output_width: u16::try_from(inner_width).unwrap_or(u16::MAX),
             queued_messages: TextFingerprint::from_texts(
-                session.queued_messages.iter().map(String::as_str),
+                session
+                    .queued_messages
+                    .iter()
+                    .map(QueuedMessage::transcript_text),
             ),
             session_id: session.id.clone(),
             theme_cache_version: style::active_theme_cache_version(),
@@ -650,14 +660,15 @@ impl<'a> SessionOutput<'a> {
         TextFingerprint::from_text(None)
     }
 
-    /// Returns the screen area occupied by a loader glyph when its row is
-    /// currently visible inside the scrolled output panel.
-    fn loader_area(
+    /// Returns the screen area occupied by a leading indicator when its row
+    /// is currently visible inside the scrolled output panel.
+    fn indicator_area(
         output_area: Rect,
-        loader_line_index: Option<usize>,
+        line_index: usize,
         final_scroll: u16,
+        indicator_width: u16,
     ) -> Option<Rect> {
-        if output_area.width < TACHYON_LOADER_WIDTH {
+        if output_area.width < indicator_width {
             return None;
         }
 
@@ -666,22 +677,19 @@ impl<'a> SessionOutput<'a> {
             return None;
         }
 
-        let status_line_index = loader_line_index?;
         let first_visible_line_index = usize::from(final_scroll);
         let last_visible_line_index =
             first_visible_line_index.saturating_add(usize::from(inner_area.height));
-        if status_line_index < first_visible_line_index
-            || status_line_index >= last_visible_line_index
-        {
+        if line_index < first_visible_line_index || line_index >= last_visible_line_index {
             return None;
         }
 
-        let row_offset = u16::try_from(status_line_index - first_visible_line_index).ok()?;
+        let row_offset = u16::try_from(line_index - first_visible_line_index).ok()?;
 
         Some(Rect::new(
             inner_area.x,
             inner_area.y.saturating_add(row_offset),
-            TACHYON_LOADER_WIDTH,
+            indicator_width,
             1,
         ))
     }
@@ -760,15 +768,22 @@ impl Component for SessionOutput<'_> {
             self.scroll_offset,
         );
         let active_loader_area = if session_format::session_output_uses_tachyon_loader(status) {
-            Self::loader_area(output_area, layout.active_loader_line_index, final_scroll)
+            layout.active_loader_line_index.and_then(|line_index| {
+                Self::indicator_area(output_area, line_index, final_scroll, TACHYON_LOADER_WIDTH)
+            })
         } else {
             None
         };
-        let transient_loader_area = Self::loader_area(
-            output_area,
-            layout.transient_loader_line_index,
-            final_scroll,
-        );
+        let transient_loader_area = layout.transient_loader_line_index.and_then(|line_index| {
+            Self::indicator_area(output_area, line_index, final_scroll, TACHYON_LOADER_WIDTH)
+        });
+        let queued_indicator_areas = layout
+            .queued_line_indices
+            .iter()
+            .filter_map(|line_index| {
+                Self::indicator_area(output_area, *line_index, final_scroll, QUEUED_ACTION_WIDTH)
+            })
+            .collect::<Vec<_>>();
 
         let paint_lines = text_util::borrowed_paint_lines(&layout.lines);
         let paragraph = Paragraph::new(paint_lines)
@@ -800,6 +815,9 @@ impl Component for SessionOutput<'_> {
         if let Some(loader_area) = transient_loader_area {
             TachyonLoaderEffect::apply_stateless(f.buffer_mut(), loader_area, spinner_frame);
         }
+        for queued_indicator_area in queued_indicator_areas {
+            QueuePulseEffect::apply_stateless(f.buffer_mut(), queued_indicator_area, spinner_frame);
+        }
     }
 }
 
@@ -817,9 +835,10 @@ mod tests {
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
     use crate::domain::theme::ColorTheme;
     use crate::domain::transient_message::{
-        TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
-        TransientMessageSlot,
+        QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
+        TransientMessageLifecycle, TransientMessageSlot,
     };
+    use crate::domain::turn_prompt::TurnPrompt;
     use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX};
 
     /// Builds one output-line context with defaults suitable for tests.
@@ -829,6 +848,10 @@ mod tests {
             active_progress: None,
             session_update_version: 0,
         }
+    }
+
+    fn queued_message(order: u64, text: &str) -> QueuedMessage {
+        QueuedMessage::new(order, TurnPrompt::from_text(text.to_string()))
     }
 
     /// Posts one focused-review slot for renderer tests.
@@ -956,6 +979,59 @@ mod tests {
             .collect::<String>();
         assert!(rendered_text.contains(SCROLLBAR_TRACK_SYMBOL));
         assert!(rendered_text.contains(SCROLLBAR_THUMB_SYMBOL));
+    }
+
+    #[test]
+    fn test_render_animates_transient_loader_and_queued_indicator() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Publishing review request...".to_string()),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::BranchPublish,
+            turn_position: None,
+        });
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Queued(QueuedAction::new(
+                0,
+                "sync after this turn".to_string(),
+            )),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::SyncQueue,
+            turn_position: None,
+        });
+        let backend = ratatui::backend::TestBackend::new(80, 10);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let tachyon_cell_symbol = Icon::TachyonLoader
+            .as_str()
+            .chars()
+            .next()
+            .expect("tachyon loader should contain a cell")
+            .to_string();
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionOutput::new(&session)
+                    .spinner_frame(5)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw session output");
+        let buffer = terminal.backend().buffer();
+        let queued_indicator = buffer
+            .content()
+            .iter()
+            .find(|cell| cell.symbol() == Icon::QueuedAction.as_str())
+            .expect("queued indicator should be rendered");
+
+        // Assert
+        assert_ne!(queued_indicator.fg, style::palette::text_subtle());
+        assert!(buffer.content().iter().any(|cell| {
+            cell.symbol() == tachyon_cell_symbol && cell.fg == style::palette::warning()
+        }));
     }
 
     #[test]
@@ -1321,7 +1397,7 @@ mod tests {
             context,
             Some(&markdown_render_cache),
         );
-        session.queued_messages = vec!["queued reply".to_string()];
+        session.queued_messages = vec![queued_message(0, "queued reply")];
         let queued_layout = output_layout_cache.layout(
             &session,
             Rect::new(0, 0, 80, 8),
@@ -1647,36 +1723,36 @@ mod tests {
     }
 
     #[test]
-    fn test_loader_area_tracks_scrolled_row() {
+    fn test_indicator_area_tracks_scrolled_row() {
         // Arrange
         let output_area = Rect::new(2, 3, 80, 10);
 
         // Act
-        let loader_area = SessionOutput::loader_area(output_area, Some(19), 12);
+        let loader_area = SessionOutput::indicator_area(output_area, 19, 12, TACHYON_LOADER_WIDTH);
 
         // Assert
         assert_eq!(loader_area, Some(Rect::new(2, 11, TACHYON_LOADER_WIDTH, 1)));
     }
 
     #[test]
-    fn test_loader_area_locates_row_before_following_hint() {
+    fn test_indicator_area_locates_row_before_following_hint() {
         // Arrange
         let output_area = Rect::new(0, 0, 80, 8);
 
         // Act
-        let loader_area = SessionOutput::loader_area(output_area, Some(1), 0);
+        let loader_area = SessionOutput::indicator_area(output_area, 1, 0, TACHYON_LOADER_WIDTH);
 
         // Assert
         assert_eq!(loader_area, Some(Rect::new(0, 2, TACHYON_LOADER_WIDTH, 1)));
     }
 
     #[test]
-    fn test_loader_area_skips_missing_line_index() {
+    fn test_indicator_area_skips_line_outside_viewport() {
         // Arrange
         let output_area = Rect::new(0, 0, 80, 10);
 
         // Act
-        let loader_area = SessionOutput::loader_area(output_area, None, 0);
+        let loader_area = SessionOutput::indicator_area(output_area, 20, 0, QUEUED_ACTION_WIDTH);
 
         // Assert
         assert_eq!(loader_area, None);
@@ -2302,8 +2378,8 @@ mod tests {
             "[Review Request] Created PR 42",
             "[Sync] Successfully synced onto main",
             "[Branch Push] Auto-pushed published branch.",
-            "queued › Verify the spacing.",
-            "queued › Keep one empty line.",
+            "≡ queued › Verify the spacing.",
+            "≡ queued › Keep one empty line.",
         ];
         set_conversation_transcript(
             &mut session,
@@ -2328,8 +2404,8 @@ mod tests {
             ],
         );
         session.queued_messages = vec![
-            "\nVerify the spacing.\n".to_string(),
-            " \nKeep one empty line.\n\t".to_string(),
+            queued_message(0, "\nVerify the spacing.\n"),
+            queued_message(1, " \nKeep one empty line.\n\t"),
         ];
 
         // Act
@@ -2348,7 +2424,12 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert!(message_rows.windows(2).all(|rows| rows[1] == rows[0] + 2));
+        assert!(
+            message_rows[..6]
+                .windows(2)
+                .all(|rows| rows[1] == rows[0] + 2)
+        );
+        assert_eq!(message_rows[6], message_rows[5] + 1);
     }
 
     /// Verifies queued-message edge trimming preserves blank lines within a
@@ -2358,8 +2439,8 @@ mod tests {
         // Arrange
         let mut lines = vec![Line::from("Previous message.")];
         let queued_messages = vec![
-            "\nFirst queued message.\n".to_string(),
-            " \nSecond queued message.\n\nMore context.\n\t".to_string(),
+            queued_message(0, "\nFirst queued message.\n"),
+            queued_message(1, " \nSecond queued message.\n\nMore context.\n\t"),
         ];
 
         // Act
@@ -2372,11 +2453,10 @@ mod tests {
             vec![
                 "Previous message.",
                 "",
-                "queued › First queued message.",
-                "",
-                "queued › Second queued message.",
-                "        ",
-                "        More context.",
+                "≡ queued › First queued message.",
+                "≡ queued › Second queued message.",
+                "           ",
+                "           More context.",
                 "",
             ]
         );
@@ -2603,7 +2683,7 @@ mod tests {
                 (SessionMessageKind::AssistantAnswer, "working"),
             ],
         );
-        session.queued_messages = vec!["follow up\nwith context".to_string()];
+        session.queued_messages = vec![queued_message(0, "follow up\nwith context")];
         session.summary = Some(summary_fixture());
         session.status = Status::InProgress;
 
@@ -2636,7 +2716,7 @@ mod tests {
         assert!(!text.contains("Change Summary"));
         assert!(commit_index < prompt_index);
         assert!(prompt_index < queued_index);
-        assert!(text.contains("        with context"));
+        assert!(text.contains("           with context"));
     }
 
     #[test]
@@ -2653,7 +2733,7 @@ mod tests {
             ],
         );
         session.status = Status::InProgress;
-        session.queued_messages = vec!["queued follow-up".to_string()];
+        session.queued_messages = vec![queued_message(0, "queued follow-up")];
         session.transient_messages.upsert(TransientMessage {
             anchor: TransientMessageAnchor::AfterActiveTurn,
             body: TransientMessageBody::Markdown(
@@ -2710,7 +2790,7 @@ mod tests {
             ],
         );
         session.status = Status::Rebasing;
-        session.queued_messages = vec!["address review comments".to_string()];
+        session.queued_messages = vec![queued_message(0, "address review comments")];
 
         // Act
         let lines = output_lines(&session, Rect::new(0, 0, 80, 12), line_context(), None);

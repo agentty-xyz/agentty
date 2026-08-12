@@ -1224,7 +1224,6 @@ impl App {
         };
 
         if publish_branch_action == PublishBranchAction::PublishPullRequest {
-            let is_queued = branch_publish_context.session.status == Status::InProgress;
             let branch_operation_lock = Arc::clone(&branch_publish_context.branch_operation_lock);
             // Reserve an idle branch before persistence. An existing owner
             // already serializes worker execution, so the UI never waits here.
@@ -1238,23 +1237,22 @@ impl App {
                     None,
                 )
                 .await;
-            let loading_label = if is_queued {
-                review_request_queued_label()
-            } else {
-                Self::branch_publish_loading_label(publish_branch_action)
-            };
-            if let Err(error) = enqueue_result {
-                self.sessions
-                    .start_branch_publish(session_id, loading_label);
-                self.sessions.finish_branch_publish(
+            match enqueue_result {
+                Err(error) => self.sessions.finish_branch_publish(
                     session_id,
                     TransientMessageBody::Markdown(format!(
                         "**Review request publish failed**\n\n{error}"
                     )),
-                );
-            } else {
-                self.sessions
-                    .start_branch_publish(session_id, loading_label);
+                ),
+                Ok(Some(queued_order)) => self.sessions.queue_branch_publish(
+                    session_id,
+                    queued_order,
+                    review_request_queued_label(),
+                ),
+                Ok(None) => self.sessions.start_branch_publish(
+                    session_id,
+                    Self::branch_publish_loading_label(publish_branch_action),
+                ),
             }
             self.mode = restore_view.into_view_mode();
 

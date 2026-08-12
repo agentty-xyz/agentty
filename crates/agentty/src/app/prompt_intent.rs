@@ -1252,10 +1252,7 @@ mod tests {
                 session_id: session_id.clone(),
             }
         );
-        assert_eq!(
-            app.sessions.sessions()[0].queued_messages,
-            [] as [std::string::String; 0]
-        );
+        assert!(app.sessions.sessions()[0].queued_messages.is_empty());
     }
 
     #[tokio::test]

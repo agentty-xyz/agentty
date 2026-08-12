@@ -423,7 +423,7 @@ impl SessionState {
     ///
     /// The handles are the single source of truth for `status`, the typed
     /// transcript, and the in-memory chat queue. `queued_messages` is rebuilt
-    /// from `SessionHandles::queued_message_transcripts()` so any
+    /// from `SessionHandles::queued_message_snapshot()` so any
     /// handle-driven mutation (lifecycle enqueue, worker drain between
     /// turns, runtime LIFO pop) becomes visible on the very next sync
     /// without callers also having to mirror the change into the snapshot
@@ -437,7 +437,7 @@ impl SessionState {
             session.transcript = (!transcript.is_empty()).then(|| transcript.clone());
         }
 
-        session.queued_messages = session_handles.queued_message_transcripts();
+        session.queued_messages = session_handles.queued_message_snapshot();
     }
 
     /// Advances the selected follow-up task for one session in the requested

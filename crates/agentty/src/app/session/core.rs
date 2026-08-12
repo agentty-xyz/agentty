@@ -28,8 +28,8 @@ use crate::domain::session::{
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::{
-    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
-    TransientMessageSlot,
+    QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
+    TransientMessageLifecycle, TransientMessageSlot,
 };
 
 /// Low-frequency fallback interval for metadata-based session refresh.
@@ -561,6 +561,78 @@ impl SessionManager {
                 slot: TransientMessageSlot::BranchPublish,
                 turn_position: session.latest_user_prompt_position(),
             });
+        }
+    }
+
+    /// Shows one review-request publish action waiting behind the active turn.
+    pub(crate) fn queue_branch_publish(
+        &mut self,
+        session_id: &str,
+        order: u64,
+        queued_label: String,
+    ) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body: TransientMessageBody::Queued(QueuedAction::new(order, queued_label)),
+                lifecycle: TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::BranchPublish,
+                turn_position: session.latest_user_prompt_position(),
+            });
+        }
+    }
+
+    /// Removes a queued review-request row that resolved without starting.
+    pub(crate) fn resolve_queued_branch_publish(&mut self, session_id: &str) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session
+                .transient_messages
+                .retract(TransientMessageSlot::BranchPublish);
+        }
+    }
+
+    /// Shows one session sync waiting behind the active turn.
+    pub(crate) fn queue_session_sync(&mut self, session_id: &str, order: u64) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body: TransientMessageBody::Queued(QueuedAction::new(
+                    order,
+                    "sync — rebase onto the base branch after this turn".to_string(),
+                )),
+                lifecycle: TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::SyncQueue,
+                turn_position: session.latest_user_prompt_position(),
+            });
+        }
+    }
+
+    /// Removes a queued-sync row after its worker command resolves or starts.
+    pub(crate) fn resolve_queued_session_sync(&mut self, session_id: &str) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session
+                .transient_messages
+                .retract(TransientMessageSlot::SyncQueue);
         }
     }
 

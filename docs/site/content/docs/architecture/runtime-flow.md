@@ -167,28 +167,45 @@ ordered `session_message` rows (typed `UserPrompt`, `AssistantAnswer`, `Workflow
 rows). Replaceable output lives in the session's typed transient-message slots instead
 of render-time visibility predicates. Each slot has stable identity, typed content, an
 output anchor, and an explicit lifecycle. Reducer paths upsert or retract summary,
-focused-review, workflow-feedback, manual-branch-publish, and published-branch-sync
-slots; starting a later turn clears older turn-scoped slots in one place.
+focused-review, workflow-feedback, queued-sync, manual-branch-publish, and
+published-branch-sync slots; starting a later turn clears older turn-scoped slots in one
+place. Transient bodies distinguish calm `Queued` rows from animated `Loading` rows. The
+output assembler gathers every queued transient into the same block as the handle-backed
+chat queue. Queued chat and worker commands reserve from one session-local submission
+sequence; the output assembler sorts the combined rows by that sequence, and the worker
+uses the same value to select the next runnable item.
 
 Manual branch publishing and review-request creation return from the branch-name popup
 to `AppMode::View`. Review-request creation is persisted on the per-session worker, so
-an action accepted during an active turn renders a queued row and executes before later
-queued chat. A worker-start event replaces that row with animated publish progress; the
-terminal reducer event then replaces it with inline success or failure output without
-changing whichever app mode is active at completion. Successful review-request creation
-retracts the transient row and appends its single-line URL result as a durable
-`WorkflowNotice` at the current transcript position. If focused review already completed
-at the output tail, the reducer first moves that result into completed-turn placement so
-the newer review-request notice remains below it. An in-flight focused review stays at
-the tail and therefore appears after the notice when it completes later. Later turns
-leave the durable result in its original history position instead of reconstructing a
-transient between turns. The manual task holds the same per-session branch-operation
-lock as completed-turn auto-push for its full push and forge-metadata workflow. Queued
-review-request creation also registers as unfinished branch work before the current turn
-can start automatic publishing. Its UI and API handlers only attempt a non-blocking lock
-reservation while persisting the command; when another branch action already owns the
-lock, they return after queueing and let the worker wait without stalling the foreground
-event loop.
+an action accepted during an active turn renders at its submission position and executes
+after earlier queued chat but before later queued chat. A worker-start event replaces
+that row with animated publish progress; the terminal reducer event then replaces it
+with inline success or failure output without changing whichever app mode is active at
+completion. Successful review-request creation retracts the transient row and appends
+its single-line URL result as a durable `WorkflowNotice` at the current transcript
+position. If focused review already completed at the output tail, the reducer first
+moves that result into completed-turn placement so the newer review-request notice
+remains below it. An in-flight focused review stays at the tail and therefore appears
+after the notice when it completes later. Later turns leave the durable result in its
+original history position instead of reconstructing a transient between turns. The
+manual task holds the same per-session branch-operation lock as completed-turn auto-push
+for its full push and forge-metadata workflow. Queued review-request creation also
+registers as unfinished branch work before the current turn can start automatic
+publishing. Its UI and API handlers only attempt a non-blocking lock reservation while
+persisting the command; when another branch action already owns the lock, they return
+after queueing and let the worker wait without stalling the foreground event loop. If
+turn cancellation marks a queued review-request operation canceled before it starts, the
+worker emits a resolution event; the reducer retracts the `BranchPublish` slot so the
+waiting row and its publish-action suppression cannot outlive the canceled command.
+
+Queued sync uses its own replaceable slot instead of appending a waiting notice to the
+transcript. Worktree validation runs while the slot remains queued. After a successful
+`Rebasing` status transition, a resolution event retracts the slot as the existing
+`Rebasing...` loader becomes active. Validation failures append a durable `[Sync Error]`
+notice before sending the same resolution event, so waiting state never disappears
+without an active state or visible result. If turn cancellation marks the queued rebase
+operation canceled before execution, the worker's skip path sends that resolution event
+without starting rebase work.
 
 Published-branch auto-push completion sends one terminal reducer event carrying its
 `WorkflowNotice`. After accepting the current operation identifier, the reducer persists
@@ -198,8 +215,11 @@ frame can contain both the progress row and completed notice. The in-progress au
 slot uses the session-output tail so a durable sync result that started the push remains
 above it in chronological order; focused-review progress follows in the status tail. The
 output-layout cache keys the transient-store version rather than maintaining a separate
-fingerprint for every temporary channel. Structured clarification questions render in
-the bottom question panel (`AppMode::Question`), not inside the output component.
+fingerprint for every temporary channel. Assembly also records the first line of every
+queued row; the paint path applies one deterministic two-second pulse to those leading
+glyphs after paragraph rendering while the active Tachyon loader keeps its faster
+warning sweep. Structured clarification questions render in the bottom question panel
+(`AppMode::Question`), not inside the output component.
 
 Runtime owns one shared `RenderCacheStore` for markdown, diff, and session-output layout
 caches. The session-output cache keeps a bounded stable-body layer keyed by the typed
@@ -278,9 +298,10 @@ flowchart LR
    review-request creation. An **InProgress** branch action can enqueue only through the
    sender already owned by that worker; it cannot lazily create another worker. The same
    in-memory chat queue accepts follow-up prompts while the worker is **InProgress** or
-   **Rebasing**, and drains them after the active operation. The receiver is checked
-   between every pair of retractable queued-chat turns, so a command received during one
-   chat turn waits for that turn and then runs before the remaining chat queue.
+   **Rebasing**. Follow-up prompts and queued branch actions reserve one shared
+   submission sequence, so after the active operation the worker always selects the
+   earliest item across both queues. A command received during a queued chat turn waits
+   for that turn, then runs before only the messages submitted after it.
 1. Immediately before a chat turn, the worker resolves the persisted personality ID
    through `PersonalityCatalogClient`. The catalog scans only the session worktree's
    `.agents/agents` directory. The worker compares the resolved prompt fingerprint with

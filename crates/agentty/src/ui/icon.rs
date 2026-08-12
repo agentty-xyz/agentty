@@ -4,6 +4,10 @@ use std::fmt;
 pub(crate) const TACHYON_LOADER_GLYPH: &str = "▌▌▌";
 /// Display width of [`TACHYON_LOADER_GLYPH`] in terminal cells.
 pub(crate) const TACHYON_LOADER_WIDTH: u16 = 3;
+/// Stable queued-action glyph painted by the calm pulse effect.
+pub(crate) const QUEUED_ACTION_GLYPH: &str = "≡";
+/// Display width of [`QUEUED_ACTION_GLYPH`] in terminal cells.
+pub(crate) const QUEUED_ACTION_WIDTH: u16 = 1;
 
 /// A collection of icons used throughout the terminal UI.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -20,6 +24,8 @@ pub enum Icon {
     GitBranch,
     /// A pending status symbol (·).
     Pending,
+    /// A queued-action symbol (≡).
+    QueuedAction,
     /// A compact loader symbol animated by Tachyonfx after render.
     TachyonLoader,
     /// A stable loader glyph animated by shared Tachyonfx effects after render.
@@ -48,6 +54,7 @@ impl Icon {
             Icon::Cross => "✗",
             Icon::GitBranch => "●",
             Icon::Pending => "·",
+            Icon::QueuedAction => QUEUED_ACTION_GLYPH,
             Icon::TachyonLoader | Icon::Spinner => TACHYON_LOADER_GLYPH,
             Icon::Warn => "!",
         }
@@ -73,6 +80,7 @@ mod tests {
         assert_eq!(Icon::Cross.as_str(), "✗");
         assert_eq!(Icon::GitBranch.as_str(), "●");
         assert_eq!(Icon::Pending.as_str(), "·");
+        assert_eq!(Icon::QueuedAction.as_str(), QUEUED_ACTION_GLYPH);
         assert_eq!(Icon::TachyonLoader.as_str(), TACHYON_LOADER_GLYPH);
         assert_eq!(Icon::Warn.as_str(), "!");
     }
@@ -111,6 +119,7 @@ mod tests {
             Icon::Cross,
             Icon::GitBranch,
             Icon::Pending,
+            Icon::QueuedAction,
             Icon::TachyonLoader,
             Icon::Spinner,
             Icon::Warn,

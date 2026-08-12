@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -32,8 +33,11 @@ use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::AgentSelection;
-use crate::domain::session::{PublishBranchAction, ReviewRequest, SessionId, SessionStats, Status};
+use crate::domain::session::{
+    PublishBranchAction, QueuedMessage, ReviewRequest, SessionId, SessionStats, Status,
+};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, OperationRepository, SessionOperationRow};
 use crate::infra::fs::FsClient;
@@ -151,6 +155,56 @@ impl SessionCommand {
     }
 }
 
+/// Worker command paired with its shared queue order when it was submitted
+/// behind active work.
+struct ScheduledSessionCommand {
+    command: SessionCommand,
+    queued_order: Option<u64>,
+}
+
+impl ScheduledSessionCommand {
+    /// Returns whether this command can make a questioned session runnable.
+    fn can_run_while_question(&self) -> bool {
+        self.queued_order.is_none() || matches!(self.command, SessionCommand::Run { .. })
+    }
+
+    /// Wraps a command that is ready to run without joining the visible queue.
+    fn immediate(command: SessionCommand) -> Self {
+        Self {
+            command,
+            queued_order: None,
+        }
+    }
+
+    /// Wraps a command queued at the supplied shared submission order.
+    fn queued(command: SessionCommand, queued_order: u64) -> Self {
+        Self {
+            command,
+            queued_order: Some(queued_order),
+        }
+    }
+}
+
+/// Sender and shared ordering source owned by one active session worker.
+#[derive(Clone)]
+struct SessionWorkerHandle {
+    queued_work_sequence: Arc<AtomicU64>,
+    sender: mpsc::UnboundedSender<ScheduledSessionCommand>,
+}
+
+impl SessionWorkerHandle {
+    /// Reserves the next submission order shared with queued chat messages.
+    fn next_queued_work_order(&self) -> u64 {
+        self.queued_work_sequence.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+/// Next unit selected from the combined action and chat queues.
+enum ScheduledSessionWork {
+    Command(Box<ScheduledSessionCommand>),
+    Message(QueuedMessage),
+}
+
 /// Returns whether the session has a queued or running rebase operation.
 pub(super) fn has_unfinished_rebase_operation(
     operations: &[SessionOperationRow],
@@ -201,7 +255,7 @@ pub(super) struct SessionWorkerContext {
     /// Shared with [`SessionHandles::queued_messages`]. The worker drains
     /// this queue between turns; the lifecycle pushes new entries when a
     /// user submits a chat message during a running turn.
-    pub(super) queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
+    pub(super) queued_messages: Arc<Mutex<VecDeque<QueuedMessage>>>,
     pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Per-app session update versions shared with the main runtime.
     pub(super) session_update_versions: SessionUpdateVersionMap,
@@ -213,8 +267,16 @@ pub(super) struct SessionWorkerContext {
 }
 
 impl SessionWorkerContext {
-    /// Pops the next queued prompt for dispatch as a follow-up turn.
-    fn pop_queued_prompt(&self) -> Option<TurnPrompt> {
+    /// Returns the submission order of the next queued chat prompt.
+    fn next_queued_message_order(&self) -> Option<u64> {
+        self.queued_messages
+            .lock()
+            .ok()
+            .and_then(|guard| guard.front().map(QueuedMessage::order))
+    }
+
+    /// Pops the next queued chat message for dispatch as a follow-up turn.
+    fn pop_queued_message(&self) -> Option<QueuedMessage> {
         // Sync critical section (single pop, no `.await`); `std::sync::Mutex`
         // is the correct choice per CLAUDE.md §"Mutex Selection".
         self.queued_messages
@@ -539,7 +601,8 @@ pub(super) struct SessionWorkerRuntime {
     child_pid: Arc<Mutex<Option<u32>>>,
     folder: PathBuf,
     personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
-    queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
+    queued_messages: Arc<Mutex<VecDeque<QueuedMessage>>>,
+    queued_work_sequence: Arc<AtomicU64>,
     review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Per-app session update versions shared with the main runtime.
     session_update_versions: SessionUpdateVersionMap,
@@ -559,7 +622,7 @@ pub(crate) struct SessionWorkerService {
     /// default factory, enabling deterministic command execution without
     /// spawning real provider processes.
     pub(in crate::app::session) test_agent_channels: HashMap<SessionId, Arc<dyn AgentChannel>>,
-    workers: HashMap<SessionId, mpsc::UnboundedSender<SessionCommand>>,
+    workers: HashMap<SessionId, SessionWorkerHandle>,
 }
 
 impl SessionWorkerService {
@@ -657,9 +720,9 @@ impl SessionWorkerService {
         command: SessionCommand,
     ) -> Result<(), SessionError> {
         let session_id = runtime.session_id.clone();
-        let sender = self.ensure_session_worker(services, &runtime);
+        let worker = self.ensure_session_worker(services, &runtime);
 
-        self.persist_and_send_command(services, &session_id, sender, command)
+        self.persist_and_send_command(services, &session_id, worker, command)
             .await
     }
 
@@ -688,9 +751,14 @@ impl SessionWorkerService {
             return Ok(false);
         }
 
-        let sender = self.ensure_session_worker(services, &runtime);
-        self.send_persisted_command(services.db().operations(), &session_id, sender, command)
-            .await?;
+        let worker = self.ensure_session_worker(services, &runtime);
+        self.send_persisted_command(
+            services.db().operations(),
+            &session_id,
+            worker.sender,
+            ScheduledSessionCommand::immediate(command),
+        )
+        .await?;
 
         Ok(true)
     }
@@ -710,16 +778,30 @@ impl SessionWorkerService {
         services: &AppServices,
         session_id: &SessionId,
         command: SessionCommand,
-    ) -> Result<(), SessionError> {
-        let sender = self.workers.get(session_id).cloned().ok_or_else(|| {
+    ) -> Result<u64, SessionError> {
+        let worker = self.workers.get(session_id).cloned().ok_or_else(|| {
             SessionError::Workflow(
                 "Cannot queue session action because the active session worker is unavailable"
                     .to_string(),
             )
         })?;
+        let operation_id = command.operation_id().to_string();
+        services
+            .db()
+            .operations()
+            .insert_session_operation(&operation_id, session_id, command.kind())
+            .await?;
+        let queued_order = worker.next_queued_work_order();
 
-        self.persist_and_send_command(services, session_id, sender, command)
-            .await
+        self.send_persisted_command(
+            services.db().operations(),
+            session_id,
+            worker.sender,
+            ScheduledSessionCommand::queued(command, queued_order),
+        )
+        .await?;
+
+        Ok(queued_order)
     }
 
     /// Drops the in-memory worker sender for a session.
@@ -738,9 +820,9 @@ impl SessionWorkerService {
         &mut self,
         services: &AppServices,
         runtime: &SessionWorkerRuntime,
-    ) -> mpsc::UnboundedSender<SessionCommand> {
-        if let Some(sender) = self.workers.get(&runtime.session_id) {
-            return sender.clone();
+    ) -> SessionWorkerHandle {
+        if let Some(worker) = self.workers.get(&runtime.session_id) {
+            return worker.clone();
         }
 
         // When a pre-registered channel exists, reuse it; otherwise fall back
@@ -776,11 +858,15 @@ impl SessionWorkerService {
             transcript: Arc::clone(&runtime.transcript),
         };
         let (sender, receiver) = mpsc::unbounded_channel();
+        let worker = SessionWorkerHandle {
+            queued_work_sequence: Arc::clone(&runtime.queued_work_sequence),
+            sender,
+        };
         self.workers
-            .insert(runtime.session_id.clone(), sender.clone());
+            .insert(runtime.session_id.clone(), worker.clone());
         Self::spawn_session_worker(context, services.one_shot_client(), receiver);
 
-        sender
+        worker
     }
 
     /// Persists one operation and sends its command to the selected worker.
@@ -788,7 +874,7 @@ impl SessionWorkerService {
         &mut self,
         services: &AppServices,
         session_id: &SessionId,
-        sender: mpsc::UnboundedSender<SessionCommand>,
+        worker: SessionWorkerHandle,
         command: SessionCommand,
     ) -> Result<(), SessionError> {
         let operation_id = command.operation_id().to_string();
@@ -798,8 +884,13 @@ impl SessionWorkerService {
             .insert_session_operation(&operation_id, session_id, command.kind())
             .await?;
 
-        self.send_persisted_command(services.db().operations(), session_id, sender, command)
-            .await
+        self.send_persisted_command(
+            services.db().operations(),
+            session_id,
+            worker.sender,
+            ScheduledSessionCommand::immediate(command),
+        )
+        .await
     }
 
     /// Sends one command whose operation row has already been persisted.
@@ -807,11 +898,11 @@ impl SessionWorkerService {
         &mut self,
         operations: &dyn OperationRepository,
         session_id: &SessionId,
-        sender: mpsc::UnboundedSender<SessionCommand>,
-        command: SessionCommand,
+        sender: mpsc::UnboundedSender<ScheduledSessionCommand>,
+        scheduled_command: ScheduledSessionCommand,
     ) -> Result<(), SessionError> {
-        let operation_id = command.operation_id().to_string();
-        if sender.send(command).is_err() {
+        let operation_id = scheduled_command.command.operation_id().to_string();
+        if sender.send(scheduled_command).is_err() {
             self.workers.remove(session_id);
             // Best-effort: operation tracking metadata is non-critical.
             let _ = operations
@@ -828,41 +919,42 @@ impl SessionWorkerService {
 
     /// Spawns the background loop that executes queued session commands.
     ///
-    /// After each command completes the worker drains
-    /// [`SessionWorkerContext::queued_messages`] inline so user prompts
-    /// submitted while a turn was running dispatch as follow-up turns
-    /// without bouncing the session through `Review` between them. Drainage
-    /// pauses while the session is in `Question` state and resumes once
-    /// status returns to a runnable state. A turn stopped by the user
-    /// (`Ctrl+C`) clears the queue so canceled work does not silently leak
-    /// into the next session activity.
+    /// Queued workflow actions and chat messages share one submission order,
+    /// so the next displayed row is always the next work executed. Scheduling
+    /// pauses while the session is in `Question` state, except for an
+    /// immediate answer command that makes the session runnable again. A turn
+    /// stopped by the user (`Ctrl+C`) clears queued chat so canceled work does
+    /// not silently leak into the next session activity.
     fn spawn_session_worker(
         context: SessionWorkerContext,
         one_shot_client: Arc<dyn OneShotClient>,
-        mut receiver: mpsc::UnboundedReceiver<SessionCommand>,
+        mut receiver: mpsc::UnboundedReceiver<ScheduledSessionCommand>,
     ) {
         tokio::spawn(async move {
-            while let Some(command) = receiver.recv().await {
-                let mut next_command = Some(command);
-                while let Some(command) = next_command.take() {
-                    let result =
-                        Self::process_session_command(&context, &one_shot_client, command).await;
-                    if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
-                        context.clear_queued_messages();
-                        Self::emit_queue_session_updated(&context);
-
-                        break;
-                    }
-
-                    next_command = receiver.try_recv().ok();
-                    if next_command.is_some() {
-                        continue;
-                    }
-
-                    next_command =
-                        Self::drain_queued_messages(&context, &one_shot_client, &mut receiver)
-                            .await;
+            let mut pending_commands = VecDeque::new();
+            loop {
+                while let Ok(command) = receiver.try_recv() {
+                    pending_commands.push_back(command);
                 }
+
+                let Some(work) = Self::next_scheduled_work(&context, &mut pending_commands) else {
+                    let Some(command) = receiver.recv().await else {
+                        break;
+                    };
+                    pending_commands.push_back(command);
+
+                    continue;
+                };
+                let result = match work {
+                    ScheduledSessionWork::Command(command) => {
+                        Self::process_session_command(&context, &one_shot_client, command.command)
+                            .await
+                    }
+                    ScheduledSessionWork::Message(message) => {
+                        Self::process_queued_message(&context, &one_shot_client, message).await
+                    }
+                };
+                Self::clear_queued_messages_after_stop(&context, result.as_ref());
             }
 
             // Best-effort: session transport may already be torn down.
@@ -877,6 +969,60 @@ impl SessionWorkerService {
                 *guard = None;
             }
         });
+    }
+
+    /// Selects the oldest runnable work across workflow and chat queues.
+    fn next_scheduled_work(
+        context: &SessionWorkerContext,
+        pending_commands: &mut VecDeque<ScheduledSessionCommand>,
+    ) -> Option<ScheduledSessionWork> {
+        if matches!(context.current_status(), Status::Question) {
+            let runnable_index = pending_commands
+                .iter()
+                .position(ScheduledSessionCommand::can_run_while_question)?;
+
+            return pending_commands
+                .remove(runnable_index)
+                .map(Box::new)
+                .map(ScheduledSessionWork::Command);
+        }
+        if pending_commands
+            .front()
+            .is_some_and(|command| command.queued_order.is_none())
+        {
+            return pending_commands
+                .pop_front()
+                .map(Box::new)
+                .map(ScheduledSessionWork::Command);
+        }
+
+        let command_order = pending_commands
+            .front()
+            .and_then(|command| command.queued_order);
+        let message_order = context.next_queued_message_order();
+        if command_order.is_some_and(|command_order| {
+            message_order.is_none_or(|message_order| command_order <= message_order)
+        }) {
+            return pending_commands
+                .pop_front()
+                .map(Box::new)
+                .map(ScheduledSessionWork::Command);
+        }
+
+        context
+            .pop_queued_message()
+            .map(ScheduledSessionWork::Message)
+    }
+
+    /// Clears pending chat messages when the work just stopped by user action.
+    fn clear_queued_messages_after_stop(
+        context: &SessionWorkerContext,
+        result: Option<&Result<(), SessionError>>,
+    ) {
+        if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
+            context.clear_queued_messages();
+            Self::emit_queue_session_updated(context);
+        }
     }
 
     /// Executes one queued session command including its operation
@@ -902,7 +1048,7 @@ impl SessionWorkerService {
             Self::should_skip_worker_command(context, &operation_id).await
         };
         if should_skip {
-            Self::complete_skipped_review_request_response(&command);
+            Self::complete_skipped_session_command(context, &command);
 
             return None;
         }
@@ -930,9 +1076,25 @@ impl SessionWorkerService {
         Some(result)
     }
 
-    /// Answers a programmatic review-request caller when its queued command
-    /// is canceled or otherwise finished before worker execution begins.
-    fn complete_skipped_review_request_response(command: &SessionCommand) {
+    /// Resolves external observers when a queued command is canceled or
+    /// otherwise finishes before worker execution begins.
+    fn complete_skipped_session_command(context: &SessionWorkerContext, command: &SessionCommand) {
+        if matches!(command, SessionCommand::CreateReviewRequest { .. }) {
+            let _ = context
+                .app_event_tx
+                .send(AppEvent::BranchPublishActionResolved {
+                    session_id: context.session_id.clone(),
+                });
+        }
+
+        if matches!(command, SessionCommand::Rebase { .. }) {
+            let _ = context
+                .app_event_tx
+                .send(AppEvent::SessionQueuedSyncResolved {
+                    session_id: context.session_id.clone(),
+                });
+        }
+
         if let SessionCommand::CreateReviewRequest {
             response: Some(response),
             ..
@@ -946,66 +1108,45 @@ impl SessionWorkerService {
         }
     }
 
-    /// Pops queued prompts and dispatches them as follow-up `SessionResume`
-    /// turns until the queue is empty, the session enters `Question` state,
-    /// or a worker command is pending.
+    /// Dispatches one queued chat message as a follow-up `SessionResume` turn.
     ///
-    /// Each drained turn is persisted as its own `reply` operation with a
-    /// fresh identifier so cancellation, retry, and operation tracking
-    /// behave the same as a normal reply. Worker commands are checked before
-    /// every queued turn, so a command received during an active turn waits
-    /// for that turn to finish and then preempts the remaining chat queue.
-    /// The drain stops on the first user-stopped turn and clears the remaining
-    /// queue so `Ctrl+C` cancels the queued work cleanly.
-    async fn drain_queued_messages(
+    /// The turn is persisted as its own `reply` operation with a fresh
+    /// identifier so cancellation, retry, and operation tracking behave the
+    /// same as a normal reply.
+    async fn process_queued_message(
         context: &SessionWorkerContext,
         one_shot_client: &Arc<dyn OneShotClient>,
-        receiver: &mut mpsc::UnboundedReceiver<SessionCommand>,
-    ) -> Option<SessionCommand> {
-        loop {
-            if matches!(context.current_status(), Status::Question) {
-                return None;
-            }
-            if let Ok(command) = receiver.try_recv() {
-                return Some(command);
-            }
-            let prompt = context.pop_queued_prompt()?;
+        message: QueuedMessage,
+    ) -> Option<Result<(), SessionError>> {
+        let prompt = message.into_prompt();
 
-            // Mirror the queue change into render snapshots so the inline
-            // "queued" rows disappear as soon as drainage starts the
-            // follow-up turn. The targeted `SessionUpdated` event re-syncs
-            // only this session's snapshot from handles instead of paying for
-            // a full DB-backed `RefreshSessions` reload.
-            Self::emit_queue_session_updated(context);
+        // Mirror the queue change into render snapshots so the inline queued
+        // row disappears as soon as the follow-up turn starts. The targeted
+        // event re-syncs only this session from handles.
+        Self::emit_queue_session_updated(context);
 
-            let operation_id = Uuid::new_v4().to_string();
-            // Best-effort: operation tracking metadata is non-critical.
-            let _ = context
-                .db
-                .operations()
-                .insert_session_operation(&operation_id, &context.session_id, "reply")
-                .await;
-            let published_upstream_ref = context.load_published_upstream_ref().await;
-            append_drained_prompt_to_transcript(context, &prompt).await;
-            let command = SessionCommand::Run {
-                operation_id,
-                request_kind: AgentRequestKind::SessionResume,
-                replay_transcript: None,
-                prompt,
-                turn_metadata: TurnMetadata {
-                    published_upstream_ref,
-                    review_comment_thread_ids: Vec::new(),
-                    session_agent: context.session_agent,
-                },
-            };
-            let result = Self::process_session_command(context, one_shot_client, command).await;
-            if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
-                context.clear_queued_messages();
-                Self::emit_queue_session_updated(context);
+        let operation_id = Uuid::new_v4().to_string();
+        // Best-effort: operation tracking metadata is non-critical.
+        let _ = context
+            .db
+            .operations()
+            .insert_session_operation(&operation_id, &context.session_id, "reply")
+            .await;
+        let published_upstream_ref = context.load_published_upstream_ref().await;
+        append_drained_prompt_to_transcript(context, &prompt).await;
+        let command = SessionCommand::Run {
+            operation_id,
+            request_kind: AgentRequestKind::SessionResume,
+            replay_transcript: None,
+            prompt,
+            turn_metadata: TurnMetadata {
+                published_upstream_ref,
+                review_comment_thread_ids: Vec::new(),
+                session_agent: context.session_agent,
+            },
+        };
 
-                return None;
-            }
-        }
+        Self::process_session_command(context, one_shot_client, command).await
     }
 
     /// Emits a targeted [`AppEvent::SessionUpdated`] for the worker's session
@@ -1131,13 +1272,21 @@ impl SessionWorkerService {
         one_shot_client: Arc<dyn OneShotClient>,
         base_branch: String,
     ) -> Result<(), SessionError> {
-        let validation = isolation::validate_session_worktree(
+        let validation = match isolation::validate_session_worktree(
             context.fs_client.as_ref(),
             context.git_client.as_ref(),
             &context.folder,
             &context.session_id,
         )
-        .await?;
+        .await
+        {
+            Ok(validation) => validation,
+            Err(error) => {
+                Self::record_rebase_validation_failure(context, &error).await;
+
+                return Err(error);
+            }
+        };
         let assist_client = Arc::new(SessionWorkerRebaseAssistClient::from_context(
             context,
             validation.main_checkout,
@@ -1162,6 +1311,29 @@ impl SessionWorkerService {
             transcript: Arc::clone(&context.transcript),
         })
         .await
+    }
+
+    /// Persists one pre-rebase validation failure before resolving its queue
+    /// row.
+    async fn record_rebase_validation_failure(
+        context: &SessionWorkerContext,
+        error: &SessionError,
+    ) {
+        let notice = TranscriptNotice::RebaseError.format(error);
+        SessionTaskService::append_workflow_notice(
+            &context.transcript,
+            &context.db,
+            &context.app_event_tx,
+            &context.session_update_versions,
+            &context.session_id,
+            &notice,
+        )
+        .await;
+        let _ = context
+            .app_event_tx
+            .send(AppEvent::SessionQueuedSyncResolved {
+                session_id: context.session_id.clone(),
+            });
     }
 
     /// Returns whether a queued command should be skipped before execution.
@@ -1273,7 +1445,7 @@ impl SessionManager {
         branch_publish_session: BranchPublishTaskSession,
         remote_branch_name: Option<String>,
         response_tx: Option<oneshot::Sender<Result<ReviewRequest, ag_session::SessionError>>>,
-    ) -> Result<(), SessionError> {
+    ) -> Result<Option<u64>, SessionError> {
         let session_id = branch_publish_session.id.clone();
         let status = branch_publish_session.status;
         let response = response_tx.map(|response_tx| Arc::new(Mutex::new(Some(response_tx))));
@@ -1287,9 +1459,11 @@ impl SessionManager {
             self.worker_service_mut()
                 .enqueue_existing_session_command(services, &session_id, command)
                 .await
+                .map(Some)
         } else {
             self.enqueue_session_command(services, &session_id, command)
                 .await
+                .map(|()| None)
         };
         if let Err(error) = &result
             && let Some(response) = response
@@ -1352,6 +1526,7 @@ impl SessionManager {
             folder: session.folder.clone(),
             personality_catalog_client: services.personality_catalog_client(),
             queued_messages: Arc::clone(&handles.queued_messages),
+            queued_work_sequence: Arc::clone(&handles.queued_work_sequence),
             review_request_client: services.review_request_client(),
             session_update_versions: services.session_update_versions(),
             session_id: session.id.clone(),
@@ -1392,7 +1567,6 @@ mod tests {
     use mockall::Sequence;
     use serde_json;
     use tempfile::tempdir;
-    use tokio::sync::Notify;
     use tracing::instrument::WithSubscriber;
 
     use super::super::post_turn::{
@@ -1853,7 +2027,7 @@ mod tests {
     #[tokio::test]
     async fn test_skipped_review_request_command_answers_programmatic_caller() {
         // Arrange
-        let (context, db, _queue, _base_dir) =
+        let (mut context, db, _queue, _base_dir) =
             queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::Review).await;
         db.operations()
             .insert_session_operation(
@@ -1868,6 +2042,8 @@ mod tests {
             .await
             .expect("review-request operation should be canceled");
         let (response_tx, response_rx) = oneshot::channel();
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        context.app_event_tx = app_event_tx;
         let command = SessionCommand::CreateReviewRequest {
             branch_publish_session: BranchPublishTaskSession {
                 base_branch: "main".to_string(),
@@ -1892,6 +2068,10 @@ mod tests {
         let response = response_rx
             .await
             .expect("skipped review-request response should be delivered");
+        let app_event = app_event_rx
+            .recv()
+            .await
+            .expect("skipped review-request should resolve its queued row");
 
         // Assert
         assert!(command_result.is_none());
@@ -1901,6 +2081,52 @@ mod tests {
                 SKIPPED_CREATE_REVIEW_REQUEST_REASON.to_string()
             ))
         );
+        assert!(matches!(
+            app_event,
+            AppEvent::BranchPublishActionResolved { session_id } if session_id == "sess1"
+        ));
+        assert!(app_event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_skipped_rebase_command_resolves_queued_sync() {
+        // Arrange
+        let (mut context, db, _queue, _base_dir) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+        db.operations()
+            .insert_session_operation("op-rebase", &context.session_id, REBASE_OPERATION_KIND)
+            .await
+            .expect("rebase operation should be inserted");
+        db.operations()
+            .request_cancel_for_session_operations(&context.session_id)
+            .await
+            .expect("rebase operation should be canceled");
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        context.app_event_tx = app_event_tx;
+        let command = SessionCommand::Rebase {
+            base_branch: "main".to_string(),
+            operation_id: "op-rebase".to_string(),
+        };
+
+        // Act
+        let command_result = SessionWorkerService::process_session_command(
+            &context,
+            &auto_commit_one_shot_client(),
+            command,
+        )
+        .await;
+        let app_event = app_event_rx
+            .recv()
+            .await
+            .expect("skipped rebase should resolve its queued row");
+
+        // Assert
+        assert!(command_result.is_none());
+        assert!(matches!(
+            app_event,
+            AppEvent::SessionQueuedSyncResolved { session_id } if session_id == "sess1"
+        ));
+        assert!(app_event_rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -1923,7 +2149,7 @@ mod tests {
                 database.operations(),
                 &SessionId::from("sess1"),
                 sender,
-                resume_command("rollup-failed"),
+                ScheduledSessionCommand::immediate(resume_command("rollup-failed")),
             )
             .await;
         let unfinished = database
@@ -4138,8 +4364,9 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             transcript: empty_transcript(),
             personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
-            queued_messages: Arc::new(Mutex::new(VecDeque::from([TurnPrompt::from_text(
-                "queued follow-up".to_string(),
+            queued_messages: Arc::new(Mutex::new(VecDeque::from([queued_message(
+                0,
+                "queued follow-up",
             )]))),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -4962,6 +5189,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_queued_rebase_validation_failure_persists_error_before_resolving_row() {
+        // Arrange
+        let mut context = queue_helper_context(Arc::new(Mutex::new(VecDeque::new()))).await;
+        context.session_id = "sess1".into();
+        context.folder = PathBuf::from("missing-session-worktree");
+        *context.status.lock().expect("status lock") = Status::Review;
+        insert_in_progress_test_session(&context.db).await;
+        let mut fs_client = fs::MockFsClient::new();
+        fs_client.expect_is_dir().once().return_const(false);
+        context.fs_client = Arc::new(fs_client);
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        context.app_event_tx = app_event_tx;
+
+        // Act
+        let error = SessionWorkerService::run_rebase_command(
+            &context,
+            auto_commit_one_shot_client(),
+            "main".to_string(),
+        )
+        .await
+        .expect_err("missing worktree should reject queued sync");
+        let persisted_messages = context
+            .db
+            .sessions()
+            .load_session_messages("sess1")
+            .await
+            .expect("failed to load persisted session messages");
+        let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+
+        // Assert
+        assert!(error.to_string().contains("Session isolation violation"));
+        assert!(transcript_text(&context.transcript).contains("[Sync Error]"));
+        assert_eq!(persisted_messages.len(), 1);
+        assert_eq!(persisted_messages[0].kind, "workflow_notice");
+        assert!(persisted_messages[0].content.contains("[Sync Error]"));
+        assert!(matches!(
+            events.as_slice(),
+            [
+                AppEvent::SessionUpdated { session_id, .. },
+                AppEvent::SessionQueuedSyncResolved {
+                    session_id: resolved_session_id,
+                },
+            ] if session_id == "sess1" && resolved_session_id == "sess1"
+        ));
+        assert_eq!(*context.status.lock().expect("status lock"), Status::Review);
+    }
+
+    #[tokio::test]
     /// Verifies recovery stops immediately when unfinished operations cannot
     /// be loaded from storage.
     async fn test_fail_unfinished_operations_from_previous_run_returns_load_error() {
@@ -5514,14 +5789,18 @@ mod tests {
     /// [`MockAgentChannel`], a fresh in-memory database, and the queued
     /// prompt list. The session row is pre-inserted as `InProgress` so the
     /// worker reaches drainage without first transitioning status.
+    fn queued_message(order: u64, text: &str) -> QueuedMessage {
+        QueuedMessage::new(order, TurnPrompt::from_text(text.to_string()))
+    }
+
     async fn queue_test_context(
         channel: MockAgentChannel,
-        queued_messages: VecDeque<TurnPrompt>,
+        queued_messages: VecDeque<QueuedMessage>,
         status: Status,
     ) -> (
         SessionWorkerContext,
         AppRepositories,
-        Arc<Mutex<VecDeque<TurnPrompt>>>,
+        Arc<Mutex<VecDeque<QueuedMessage>>>,
         tempfile::TempDir,
     ) {
         // Arrange
@@ -5609,7 +5888,9 @@ mod tests {
     /// Builds one [`SessionWorkerContext`] whose only meaningful state is the
     /// shared `queued_messages` mutex; every other field is wired with a stub
     /// value because these tests only exercise the queue helpers.
-    async fn queue_helper_context(queue: Arc<Mutex<VecDeque<TurnPrompt>>>) -> SessionWorkerContext {
+    async fn queue_helper_context(
+        queue: Arc<Mutex<VecDeque<QueuedMessage>>>,
+    ) -> SessionWorkerContext {
         SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -5636,22 +5917,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pop_queued_prompt_returns_messages_in_submission_order() {
+    async fn test_pop_queued_message_returns_messages_in_submission_order() {
         // Arrange
-        let queue: Arc<Mutex<VecDeque<TurnPrompt>>> = Arc::new(Mutex::new(VecDeque::from([
-            TurnPrompt::from_text("first".to_string()),
-            TurnPrompt::from_text("second".to_string()),
+        let queue = Arc::new(Mutex::new(VecDeque::from([
+            queued_message(0, "first"),
+            queued_message(1, "second"),
         ])));
         let context = queue_helper_context(Arc::clone(&queue)).await;
 
         // Act
-        let first_pop = context.pop_queued_prompt();
-        let second_pop = context.pop_queued_prompt();
-        let empty_pop = context.pop_queued_prompt();
+        let first_pop = context.pop_queued_message();
+        let second_pop = context.pop_queued_message();
+        let empty_pop = context.pop_queued_message();
 
         // Assert
-        assert_eq!(first_pop.expect("first prompt").text, "first");
-        assert_eq!(second_pop.expect("second prompt").text, "second");
+        assert_eq!(first_pop.expect("first prompt").transcript_text(), "first");
+        assert_eq!(
+            second_pop.expect("second prompt").transcript_text(),
+            "second"
+        );
         assert!(empty_pop.is_none());
         assert!(queue.lock().expect("queue lock").is_empty());
     }
@@ -5659,9 +5943,9 @@ mod tests {
     #[tokio::test]
     async fn test_clear_queued_messages_drops_all_pending_prompts() {
         // Arrange
-        let queue: Arc<Mutex<VecDeque<TurnPrompt>>> = Arc::new(Mutex::new(VecDeque::from([
-            TurnPrompt::from_text("alpha".to_string()),
-            TurnPrompt::from_text("beta".to_string()),
+        let queue = Arc::new(Mutex::new(VecDeque::from([
+            queued_message(0, "alpha"),
+            queued_message(1, "beta"),
         ])));
         let context = queue_helper_context(Arc::clone(&queue)).await;
 
@@ -5675,10 +5959,10 @@ mod tests {
     #[tokio::test]
     async fn test_clear_queued_messages_updates_shared_queue_state() {
         // Arrange
-        let queue: Arc<Mutex<VecDeque<TurnPrompt>>> =
-            Arc::new(Mutex::new(VecDeque::from([TurnPrompt::from_text(
-                "queued reply".to_string(),
-            )])));
+        let queue = Arc::new(Mutex::new(VecDeque::from([queued_message(
+            0,
+            "queued reply",
+        )])));
         let context = queue_helper_context(Arc::clone(&queue)).await;
 
         // Act
@@ -5692,107 +5976,139 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies that drainage holds while the session is in `Question` state
-    /// so queued prompts wait for the clarification flow to resolve before
-    /// dispatching as new turns.
-    async fn test_drain_queued_messages_pauses_while_status_is_question() {
+    async fn test_next_scheduled_work_follows_shared_submission_order() {
         // Arrange
-        let mut mock_channel = MockAgentChannel::new();
-        mock_channel.expect_run_turn().never().returning(|_, _, _| {
-            Box::pin(async { unreachable!("drain must not dispatch while status is Question") })
-        });
-        let queued = VecDeque::from([TurnPrompt::from_text("queued reply".to_string())]);
-        let (context, _db, queue_handle, _base_dir) =
-            queue_test_context(mock_channel, queued, Status::Question).await;
-        let (_command_tx, mut command_rx) = mpsc::unbounded_channel();
-
-        // Act
-        let one_shot_client = auto_commit_one_shot_client();
-        let next_command = SessionWorkerService::drain_queued_messages(
-            &context,
-            &one_shot_client,
-            &mut command_rx,
-        )
-        .await;
-
-        // Assert — queued prompt remains untouched until status becomes
-        // runnable again.
-        assert!(next_command.is_none());
-        let queue = queue_handle.lock().expect("queue lock");
-        assert_eq!(queue.len(), 1);
-        assert_eq!(queue.front().expect("queued head").text, "queued reply");
-    }
-
-    #[tokio::test]
-    /// Verifies a worker command received during one drained chat turn runs
-    /// before the remaining queued chat instead of waiting for the full batch.
-    async fn test_drain_queued_messages_yields_to_command_between_turns() {
-        // Arrange
-        let turn_started = Arc::new(Notify::new());
-        let turn_started_for_channel = Arc::clone(&turn_started);
-        let release_turn = Arc::new(Notify::new());
-        let release_turn_for_channel = Arc::clone(&release_turn);
-        let mut mock_channel = MockAgentChannel::new();
-        mock_channel
-            .expect_run_turn()
-            .times(1)
-            .withf(|_, request, _| request.prompt.text == "queued first")
-            .returning(move |_, _, _| {
-                let turn_started = Arc::clone(&turn_started_for_channel);
-                let release_turn = Arc::clone(&release_turn_for_channel);
-
-                Box::pin(async move {
-                    turn_started.notify_one();
-                    release_turn.notified().await;
-
-                    Ok(successful_turn_result("First queued turn completed."))
-                })
-            });
         let queued = VecDeque::from([
-            TurnPrompt::from_text("queued first".to_string()),
-            TurnPrompt::from_text("queued second".to_string()),
+            queued_message(0, "queued first"),
+            queued_message(1, "queued second"),
         ]);
         let (context, _db, queue_handle, _base_dir) =
-            queue_test_context(mock_channel, queued, Status::InProgress).await;
-        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+            queue_test_context(MockAgentChannel::new(), queued, Status::InProgress).await;
+        let mut pending_commands = VecDeque::from([ScheduledSessionCommand::queued(
+            SessionCommand::Rebase {
+                base_branch: "main".to_string(),
+                operation_id: "queued-rebase".to_string(),
+            },
+            2,
+        )]);
 
         // Act
-        let one_shot_client = auto_commit_one_shot_client();
-        let drain_future = SessionWorkerService::drain_queued_messages(
-            &context,
-            &one_shot_client,
-            &mut command_rx,
-        );
-        let enqueue_command_future = async {
-            turn_started.notified().await;
-            command_tx
-                .send(SessionCommand::Rebase {
-                    base_branch: "main".to_string(),
-                    operation_id: "queued-rebase".to_string(),
-                })
-                .expect("worker command receiver should remain available");
-            release_turn.notify_one();
-        };
-        let (next_command, ()) = tokio::join!(drain_future, enqueue_command_future);
+        let first_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+        let second_work =
+            SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+        let third_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+        queue_handle
+            .lock()
+            .expect("queue lock")
+            .push_back(queued_message(4, "queued last"));
+        pending_commands.push_back(ScheduledSessionCommand::queued(
+            SessionCommand::Rebase {
+                base_branch: "main".to_string(),
+                operation_id: "older-rebase".to_string(),
+            },
+            3,
+        ));
+        let fourth_work =
+            SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+        pending_commands.push_front(ScheduledSessionCommand::immediate(resume_command(
+            "immediate-reply",
+        )));
+        let fifth_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+        let sixth_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
 
         // Assert
         assert!(matches!(
-            next_command,
-            Some(SessionCommand::Rebase { operation_id, .. })
-                if operation_id == "queued-rebase"
+            first_work,
+            Some(ScheduledSessionWork::Message(message))
+                if message.transcript_text() == "queued first"
         ));
-        let queue = queue_handle.lock().expect("queue lock");
-        assert_eq!(queue.len(), 1);
-        assert_eq!(
-            queue.front().expect("remaining queued prompt").text,
-            "queued second"
-        );
+        assert!(matches!(
+            second_work,
+            Some(ScheduledSessionWork::Message(message))
+                if message.transcript_text() == "queued second"
+        ));
+        assert!(matches!(
+            third_work,
+            Some(ScheduledSessionWork::Command(command))
+                if command.queued_order == Some(2)
+                    && matches!(
+                        &command.command,
+                        SessionCommand::Rebase { operation_id, .. }
+                            if operation_id == "queued-rebase"
+                    )
+        ));
+        assert!(matches!(
+            fourth_work,
+            Some(ScheduledSessionWork::Command(command))
+                if command.queued_order == Some(3)
+                    && matches!(
+                        &command.command,
+                        SessionCommand::Rebase { operation_id, .. }
+                            if operation_id == "older-rebase"
+                    )
+        ));
+        assert!(matches!(
+            fifth_work,
+            Some(ScheduledSessionWork::Command(command))
+                if command.queued_order.is_none()
+                    && matches!(
+                        &command.command,
+                        SessionCommand::Run { operation_id, .. }
+                            if operation_id == "immediate-reply"
+                    )
+        ));
+        assert!(matches!(
+            sixth_work,
+            Some(ScheduledSessionWork::Message(message))
+                if message.transcript_text() == "queued last"
+        ));
+        assert!(queue_handle.lock().expect("queue lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_next_scheduled_work_pauses_queued_work_for_question() {
+        // Arrange
+        let queued = VecDeque::from([queued_message(1, "queued reply")]);
+        let (context, _db, queue_handle, _base_dir) =
+            queue_test_context(MockAgentChannel::new(), queued, Status::Question).await;
+        let mut pending_commands = VecDeque::from([ScheduledSessionCommand::queued(
+            SessionCommand::Rebase {
+                base_branch: "main".to_string(),
+                operation_id: "queued-rebase".to_string(),
+            },
+            0,
+        )]);
+
+        // Act
+        let paused_work =
+            SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+        pending_commands.push_back(ScheduledSessionCommand::queued(
+            resume_command("question-answer"),
+            2,
+        ));
+        let answer_work =
+            SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+
+        // Assert
+        assert!(paused_work.is_none());
+        assert!(matches!(
+            answer_work,
+            Some(ScheduledSessionWork::Command(command))
+                if command.queued_order == Some(2)
+                    && matches!(
+                        &command.command,
+                        SessionCommand::Run { operation_id, .. }
+                            if operation_id == "question-answer"
+                    )
+        ));
+        assert_eq!(pending_commands.len(), 1);
+        assert_eq!(queue_handle.lock().expect("queue lock").len(), 1);
     }
 
     #[tokio::test]
     /// Verifies the last queued follow-up turn reloads the persisted
     /// published branch and starts auto-push after the queue has drained.
-    async fn test_drain_queued_messages_auto_pushes_after_last_published_branch_follow_up() {
+    async fn test_process_queued_message_auto_pushes_after_last_published_branch_follow_up() {
         // Arrange
         let mut mock_channel = MockAgentChannel::new();
         mock_channel
@@ -5802,10 +6118,9 @@ mod tests {
                 session_id == "sess1" && request.prompt.text == "queued reply"
             })
             .returning(|_, _, _| Box::pin(async { Ok(successful_turn_result("Queued done.")) }));
-        let queued = VecDeque::from([TurnPrompt::from_text("queued reply".to_string())]);
+        let queued = VecDeque::from([queued_message(0, "queued reply")]);
         let (mut context, db, queue_handle, base_dir) =
             queue_test_context(mock_channel, queued, Status::InProgress).await;
-        let (_command_tx, mut command_rx) = mpsc::unbounded_channel();
         db.sessions()
             .update_session_published_upstream_ref(
                 "sess1",
@@ -5858,12 +6173,11 @@ mod tests {
 
         // Act
         let one_shot_client = auto_commit_one_shot_client();
-        let next_command = SessionWorkerService::drain_queued_messages(
-            &context,
-            &one_shot_client,
-            &mut command_rx,
-        )
-        .await;
+        let message = context
+            .pop_queued_message()
+            .expect("queued message should be available");
+        let turn_result =
+            SessionWorkerService::process_queued_message(&context, &one_shot_client, message).await;
         let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
             let mut sync_events = Vec::new();
             while sync_events.len() < 2 {
@@ -5885,7 +6199,7 @@ mod tests {
         .expect("timed out waiting for sync events");
 
         // Assert
-        assert!(next_command.is_none());
+        assert!(matches!(turn_result, Some(Ok(()))));
         assert!(queue_handle.lock().expect("queue lock").is_empty());
         assert_eq!(sync_events[0].2, PublishedBranchSyncStatus::InProgress);
         assert_eq!(sync_events[1].2, PublishedBranchSyncStatus::Succeeded);
@@ -5895,11 +6209,11 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies that drainage stops and clears every queued prompt once the
+    /// Verifies that the scheduler clears every queued prompt once the
     /// running queued turn returns `StoppedByUser`, matching the `Ctrl+C`
     /// expectation that cancellation drops pending follow-ups together with
     /// the active turn.
-    async fn test_drain_queued_messages_clears_queue_when_user_stops_running_turn() {
+    async fn test_process_queued_message_clears_queue_when_user_stops_running_turn() {
         // Arrange
         let mut mock_channel = MockAgentChannel::new();
         mock_channel
@@ -5916,25 +6230,27 @@ mod tests {
             .expect_shutdown_session()
             .returning(|_| Box::pin(async { Ok(()) }));
         let queued = VecDeque::from([
-            TurnPrompt::from_text("queued first".to_string()),
-            TurnPrompt::from_text("queued second".to_string()),
+            queued_message(0, "queued first"),
+            queued_message(1, "queued second"),
         ]);
         let (context, _db, queue_handle, _base_dir) =
             queue_test_context(mock_channel, queued, Status::InProgress).await;
-        let (_command_tx, mut command_rx) = mpsc::unbounded_channel();
 
         // Act
         let one_shot_client = auto_commit_one_shot_client();
-        let next_command = SessionWorkerService::drain_queued_messages(
-            &context,
-            &one_shot_client,
-            &mut command_rx,
-        )
-        .await;
+        let message = context
+            .pop_queued_message()
+            .expect("queued message should be available");
+        let turn_result =
+            SessionWorkerService::process_queued_message(&context, &one_shot_client, message).await;
+        SessionWorkerService::clear_queued_messages_after_stop(&context, turn_result.as_ref());
 
-        // Assert — first prompt was dispatched, the StoppedByUser result
-        // propagated, and the remaining queued prompt was cleared.
-        assert!(next_command.is_none());
+        // Assert — first prompt was dispatched, the stopped result propagated,
+        // and the remaining queued prompt was cleared.
+        assert!(matches!(
+            turn_result,
+            Some(Err(SessionError::StoppedByUser(_)))
+        ));
         let queue = queue_handle.lock().expect("queue lock");
         assert!(queue.is_empty(), "queue should be cleared on Ctrl+C");
     }

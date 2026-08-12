@@ -20,6 +20,8 @@ pub mod launch_configuration_overlay;
 pub mod project_switcher_overlay;
 /// Remote branch name input popup.
 pub mod publish_branch_overlay;
+/// Calm pulse for queued-action indicators.
+pub mod queue_pulse;
 /// New-session action selector popup.
 pub mod session_creation_overlay;
 /// Session transcript, progress, and result rendering.
