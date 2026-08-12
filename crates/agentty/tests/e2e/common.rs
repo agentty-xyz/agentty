@@ -478,11 +478,11 @@ async fn insert_session_seed(
     Ok(())
 }
 
-/// Acquire the global E2E test lock so PTY-driven tests do not overlap.
+/// Acquire the process-local E2E lock used by the standard Rust test harness.
 ///
-/// The real `agentty` binary uses shared terminal, process, and filesystem
-/// resources that become flaky when multiple PTY scenarios run in parallel
-/// under coverage or high-load CI jobs.
+/// This prevents same-process test threads from overlapping PTY scenarios.
+/// Nextest launches each test in a separate process, so its cross-process
+/// concurrency is governed by `.config/nextest.toml` instead.
 pub(crate) fn acquire_e2e_test_lock() -> MutexGuard<'static, ()> {
     static E2E_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -1155,6 +1155,12 @@ const SESSION_VIEW_FOOTER_MARKER: &str = "q: back";
 /// the back-to-list transition has completed.
 const SESSION_LIST_FOOTER_MARKER: &str = "new session";
 
+/// Wait budget for a session view plus scenario-specific content.
+///
+/// Content-heavy views receive a longer deadline than ordinary view
+/// transitions while still failing with the final structured frame context.
+const SESSION_CONTENT_TRANSITION_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Wait budget for predicate-driven session-view transitions.
 ///
 /// Five seconds covers slow CI workers without masking real regressions: a
@@ -1203,6 +1209,40 @@ fn eventually_footer_text_visible(marker: &'static str) -> Step {
     )
 }
 
+/// Build an `eventually` step that requires the session footer and every
+/// scenario-specific marker in the same live frame.
+fn eventually_session_view_texts_visible(expected_texts: Vec<String>) -> Step {
+    Step::eventually(
+        SESSION_CONTENT_TRANSITION_TIMEOUT,
+        SESSION_TRANSITION_POLL,
+        move |frame| match_session_view_texts(frame, &expected_texts),
+    )
+}
+
+/// Matches one fully rendered session view and retains structured frame
+/// diagnostics for the first missing marker.
+fn match_session_view_texts(
+    frame: &TerminalFrame,
+    expected_texts: &[String],
+) -> assertion::MatchResult {
+    let rows = frame.rows();
+    let footer_height = SESSION_TRANSITION_FOOTER_ROWS.min(rows);
+    let footer_region = Region::new(
+        0,
+        rows.saturating_sub(footer_height),
+        frame.cols(),
+        footer_height,
+    );
+    assertion::match_text_in_region(frame, SESSION_VIEW_FOOTER_MARKER, &footer_region)?;
+
+    let full = Region::full(frame.cols(), rows);
+    for expected_text in expected_texts {
+        assertion::match_text_in_region(frame, expected_text, &full)?;
+    }
+
+    Ok(())
+}
+
 /// Wait until the currently selected session has opened into chat view.
 pub(crate) fn wait_for_session_view_footer() -> Step {
     eventually_footer_text_visible(SESSION_VIEW_FOOTER_MARKER)
@@ -1219,6 +1259,20 @@ pub(crate) fn open_selected_session_view() -> Journey {
         .with_description("Press Enter and wait for the session view footer")
         .step(Step::press_key("Enter"))
         .step(wait_for_session_view_footer())
+}
+
+/// Press `Enter` and wait for a fully rendered session view containing every
+/// expected marker.
+pub(crate) fn open_selected_session_view_with_texts(expected_texts: &[&str]) -> Journey {
+    let expected_texts = expected_texts
+        .iter()
+        .map(|text| (*text).to_string())
+        .collect();
+
+    Journey::new("open_selected_session_view_with_texts")
+        .with_description("Press Enter and wait for the expected session view content")
+        .step(Step::press_key("Enter"))
+        .step(eventually_session_view_texts_visible(expected_texts))
 }
 
 /// Press `q` and wait for the Sessions list to render.
@@ -1273,6 +1327,67 @@ pub(crate) fn create_session_with_prompt_and_return_to_list(prompt: &str) -> Jou
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn match_session_view_texts_accepts_footer_and_all_markers() {
+        // Arrange
+        let frame = TerminalFrame::new(
+            80,
+            4,
+            b"Campaign: Managed feature delivery\r\nremediation 1/3\r\n\r\nq: back",
+        );
+        let expected_texts = vec![
+            "Campaign: Managed feature delivery".to_string(),
+            "remediation 1/3".to_string(),
+        ];
+
+        // Act
+        let result = match_session_view_texts(&frame, &expected_texts);
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn match_session_view_texts_reports_missing_content_with_frame() {
+        // Arrange
+        let frame = TerminalFrame::new(
+            80,
+            4,
+            b"Campaign: Managed feature delivery\r\nwaiting\r\n\r\nq: back",
+        );
+        let expected_texts = vec!["remediation 1/3".to_string()];
+
+        // Act
+        let failure = match_session_view_texts(&frame, &expected_texts)
+            .expect_err("missing campaign content should fail");
+
+        // Assert
+        assert!(failure.message.contains("remediation 1/3"));
+        assert!(
+            failure
+                .frame_excerpt
+                .contains("Campaign: Managed feature delivery")
+        );
+    }
+
+    #[test]
+    fn match_session_view_texts_requires_session_footer() {
+        // Arrange
+        let frame = TerminalFrame::new(
+            80,
+            4,
+            b"Campaign: Managed feature delivery\r\nremediation 1/3",
+        );
+        let expected_texts = vec!["remediation 1/3".to_string()];
+
+        // Act
+        let failure = match_session_view_texts(&frame, &expected_texts)
+            .expect_err("campaign text outside a session view should fail");
+
+        // Assert
+        assert!(failure.message.contains(SESSION_VIEW_FOOTER_MARKER));
+    }
 
     #[test]
     fn parse_gif_mode_recognizes_always_generate_aliases() {
