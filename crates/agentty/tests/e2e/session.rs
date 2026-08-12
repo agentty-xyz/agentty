@@ -1829,6 +1829,12 @@ const QUEUED_REVIEW_REQUEST_TURN_ANSWER: &str =
     "Running turn completed before review request creation";
 /// Answer emitted for the chat message queued before review-request creation.
 const QUEUED_REVIEW_FOLLOW_UP_ANSWER: &str = "Queued review follow-up completed before publish";
+/// Answer emitted for one-shot utility prompts in the mixed FIFO scenario.
+///
+/// Title generation, commit-message generation, and review-request metadata
+/// run as detached one-shot commands alongside session turns, so they need a
+/// response that no scenario assertion looks for.
+const QUEUED_FIFO_UTILITY_ANSWER: &str = "Queued FIFO helper response";
 
 /// Installs a delayed Claude turn so the scenario can queue sync while the
 /// worker is still active, optionally forcing its later validation to fail.
@@ -1997,6 +2003,12 @@ fn install_cancelled_queued_review_request_stubs(
 
 /// Extends the queued-review stubs with a distinct second agent turn so the
 /// mixed FIFO feature can prove the chat message executes before publishing.
+///
+/// Each response is selected from the prompt on stdin rather than from
+/// invocation order: Agentty runs detached one-shot utility commands (title
+/// generation first of all) concurrently with the opening turn, so an
+/// order-based stub can hand the delayed first-turn response to a helper
+/// command and answer the real turn immediately.
 fn install_fifo_queued_review_request_stubs(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -2007,21 +2019,29 @@ fn install_fifo_queued_review_request_stubs(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
-turn_marker="${{0}}.turn"
-if [ -f "$turn_marker" ]; then
+emit_answer() {{
   printf '%s\n' '{{"type":"system","subtype":"init"}}'
-  printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_REVIEW_FOLLOW_UP_ANSWER}"}}]}}}}'
-  printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_REVIEW_FOLLOW_UP_ANSWER}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
-else
-  touch "$turn_marker"
-  # Keep the first turn active while the PTY driver queues both items, even
-  # when the E2E test group is running four scenarios concurrently.
-  sleep 20
-  printf '%s\n' '{{"type":"system","subtype":"init"}}'
-  printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}"}}]}}}}'
-  printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
-fi
+  printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"'"$1"'"}}]}}}}'
+  printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"'"$1"'\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+}}
+input=$(cat)
+case "$input" in
+  *"For this one-shot utility prompt"*)
+    emit_answer '{QUEUED_FIFO_UTILITY_ANSWER}'
+    ;;
+  *"Review once more"*)
+    emit_answer '{QUEUED_REVIEW_FOLLOW_UP_ANSWER}'
+    ;;
+  *"Queue mixed work"*)
+    # Keep the first turn active while the PTY driver queues both items, even
+    # when the E2E test group is running four scenarios concurrently.
+    sleep 20
+    emit_answer '{QUEUED_REVIEW_REQUEST_TURN_ANSWER}'
+    ;;
+  *)
+    emit_answer '{QUEUED_FIFO_UTILITY_ANSWER}'
+    ;;
+esac
 "#
     );
     std::fs::write(&claude_path, claude_script)?;
@@ -4102,6 +4122,9 @@ fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queued_work_fifo")
         .with_git()
+        // Tall enough to hold both completed turns plus the review-request
+        // notice, so execution order never depends on transcript scrolling.
+        .with_terminal_size(80, 44)
         .setup(install_fifo_queued_review_request_stubs)
         .run(
             |scenario| {
