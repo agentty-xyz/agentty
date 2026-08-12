@@ -39,3 +39,5 @@ jobs:
       cargo-audit: true
       cargo-machete: true
       workspace-tests: true
+    secrets:
+      TRUNK_API_TOKEN: ${{ secrets.TRUNK_API_TOKEN }}

@@ -23,6 +23,10 @@ on:
         required: false
         type: boolean
         default: false
+    secrets:
+      TRUNK_API_TOKEN:
+        description: Trunk organization API token used to upload test results.
+        required: false
 
 permissions:
   contents: read
@@ -34,6 +38,8 @@ jobs:
   validate:
     name: Workspace validation
     runs-on: ubuntu-latest
+    env:
+      TRUNK_API_TOKEN_AVAILABLE: ${{ secrets.TRUNK_API_TOKEN != '' }}
 
     steps:
       - name: Checkout
@@ -60,5 +66,18 @@ jobs:
         run: prek run cargo-machete --all-files --hook-stage manual
 
       - name: Full test suite
+        id: workspace-tests
         if: ${{ inputs['workspace-tests'] }}
         run: prek run test-workspace --all-files --hook-stage manual
+
+      - name: Upload workspace test results to Trunk
+        if: ${{ !cancelled() && inputs['workspace-tests'] && env.TRUNK_API_TOKEN_AVAILABLE == 'true' }}
+        continue-on-error: true
+        uses: trunk-io/analytics-uploader@385f1ccdf345b4532dc4b6c665dd432b702b8e28 # v2
+        env:
+          TRUNK_API_TOKEN: ${{ secrets.TRUNK_API_TOKEN }}
+        with:
+          junit-paths: target/nextest/ci/junit.xml
+          org-slug: agentty
+          previous-step-outcome: ${{ steps.workspace-tests.outcome }}
+          token: ${{ secrets.TRUNK_API_TOKEN }}
