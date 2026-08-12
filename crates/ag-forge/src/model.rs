@@ -254,9 +254,9 @@ pub enum ReviewCommentAnchorSide {
 /// One review thread anchored to a line of the review request diff.
 ///
 /// Threads group chronological `comments` that share the same anchor. Agentty
-/// renders these in requested-review detail, grouped by file and sorted by
-/// `(path, line)` before display. Session-linked review workflows also use the
-/// native `id` to reply and resolve a thread after its fix is pushed.
+/// renders these in session review-comment views, grouped by file and sorted
+/// by `(path, line)` before display. Session-linked review workflows also use
+/// the native `id` to reply and resolve a thread after its fix is pushed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewCommentThread {
     /// Diff side used with `line` when placing this thread inline.

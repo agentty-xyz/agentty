@@ -275,19 +275,11 @@ impl AppStartup {
             return tab;
         }
 
-        let fallback_tab = if had_active_project_setting {
+        if had_active_project_setting {
             Tab::Sessions
         } else {
             Tab::Projects
-        };
-        if matches!(persisted_tab.as_deref(), Some("Inbox" | "Issues")) {
-            let _ = db
-                .settings()
-                .upsert_setting(SettingName::ActiveTab, fallback_tab.as_str())
-                .await;
         }
-
-        fallback_tab
     }
 
     /// Spawns app-wide background tasks that are not owned by the sync

@@ -139,8 +139,8 @@ impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
     }
 
     /// Fetches merge-request discussions through GitLab's REST API and
-    /// normalizes diff notes plus review-request-wide notes for
-    /// requested-review detail.
+    /// normalizes diff notes plus review-request-wide notes for session
+    /// review-comment views.
     fn fetch_authenticated_review_comment_snapshot(
         &self,
         remote: ForgeRemote,
@@ -737,7 +737,7 @@ struct GitLabDiscussionNote {
     note_type: Option<String>,
 }
 
-/// Minimal GitLab note author data shown in requested-review detail.
+/// Minimal GitLab note author data shown in session review-comment views.
 #[derive(Clone, Deserialize)]
 struct GitLabDiscussionAuthor {
     name: Option<String>,
