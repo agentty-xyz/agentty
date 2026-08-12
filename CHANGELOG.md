@@ -7,6 +7,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.14.5] - 2026-08-11
+
+### Changed
+
+- agentty: show queued work in FIFO order with calm status indicators, preserve existing
+  session titles through refreshes, and generate titles in read-only mode for every
+  session role.
+- agentty: remove assigned GitHub issue and requested-review Inbox workflows, and skip
+  automatic reviews for orchestrator controllers.
+- ci: accommodate E2E rendering deadlines under CI contention and preserve valid
+  feature-recording artifacts while selecting native E2E images.
+- deps: update the GitHub Actions and version-update dependency groups.
+- release: bump workspace crate metadata and lockfile package versions to `0.14.5`.
+
+### Contributors
+
+- @dependabot
+- @minev-dev
+
 ## [v0.14.4] - 2026-08-09
 
 ### Added
