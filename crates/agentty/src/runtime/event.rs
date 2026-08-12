@@ -98,35 +98,34 @@ fn spawn_event_reader_with_source(
     shutdown: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        loop {
-            if shutdown.load(Ordering::Relaxed) {
-                break;
-            }
-
-            match event_source.poll(FRAME_INTERVAL) {
-                Ok(true) => match event_source.read() {
-                    Ok(event) => {
-                        if event_tx.send(Ok(event)).is_err() {
-                            break;
-                        }
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                    Err(error) => {
-                        let _ = event_tx.send(Err(error));
-
-                        break;
-                    }
-                },
-                Ok(false) => {}
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => {
-                    let _ = event_tx.send(Err(error));
-
-                    break;
-                }
-            }
-        }
+        while !shutdown.load(Ordering::Relaxed)
+            && forward_next_terminal_event(event_source.as_ref(), &event_tx)
+        {}
     })
+}
+
+/// Polls for and forwards one terminal event, returning whether reading should
+/// continue.
+fn forward_next_terminal_event(
+    event_source: &dyn EventSource,
+    event_tx: &mpsc::UnboundedSender<io::Result<Event>>,
+) -> bool {
+    let event = match event_source.poll(FRAME_INTERVAL) {
+        Ok(true) => event_source.read(),
+        Ok(false) => return true,
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => return true,
+        Err(error) => Err(error),
+    };
+
+    match event {
+        Ok(event) => event_tx.send(Ok(event)).is_ok(),
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => true,
+        Err(error) => {
+            let _ = event_tx.send(Err(error));
+
+            false
+        }
+    }
 }
 
 /// Waits for the next terminal/app event or tick and dispatches one runtime
