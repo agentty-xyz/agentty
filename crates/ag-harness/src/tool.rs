@@ -1,11 +1,19 @@
+use std::fmt;
 use std::num::NonZeroU64;
 
-use serde::{Deserialize, Deserializer, de};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Number, Value, json};
 
 const READ_DESCRIPTION: &str =
     "Read a repository-relative file, optionally selecting a line range.";
 const READ_NAME: &str = "read";
+
+/// Built-in tool that can be enabled for a harness run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Tool {
+    /// Repository-relative file reads.
+    Read,
+}
 
 /// Provider-neutral definition of a native model tool.
 ///
@@ -30,7 +38,7 @@ impl ToolDefinition {
                     "path": {
                         "type": "string",
                         "minLength": 1,
-                        "pattern": "^(?:[^./\\u0000][^/\\u0000]*|\\.[^./\\u0000][^/\\u0000]*|\\.\\.[^/\\u0000]+)(?:/(?:[^./\\u0000][^/\\u0000]*|\\.[^./\\u0000][^/\\u0000]*|\\.\\.[^/\\u0000]+))*$"
+                        "pattern": "^(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+)(?:/(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+))*$"
                     },
                     "offset": {
                         "type": "integer",
@@ -66,11 +74,27 @@ impl ToolDefinition {
 }
 
 /// Provider-neutral model request for one native tool invocation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct ToolCall {
     arguments: ReadArguments,
     id: String,
     name: String,
+    reasoning_content: Option<String>,
+}
+
+impl fmt::Debug for ToolCall {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToolCall")
+            .field("arguments", &self.arguments)
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field(
+                "reasoning_content",
+                &self.reasoning_content.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
 }
 
 impl ToolCall {
@@ -89,12 +113,25 @@ impl ToolCall {
         &self.name
     }
 
-    pub(crate) fn read(id: String, arguments: ReadArguments) -> Self {
+    pub(crate) fn read(
+        id: String,
+        arguments: ReadArguments,
+        reasoning_content: Option<String>,
+    ) -> Self {
         Self {
             arguments,
             id,
             name: READ_NAME.to_string(),
+            reasoning_content,
         }
+    }
+
+    pub(crate) fn arguments_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&self.arguments)
+    }
+
+    pub(crate) fn reasoning_content(&self) -> Option<&str> {
+        self.reasoning_content.as_deref()
     }
 }
 
@@ -103,12 +140,20 @@ impl ToolCall {
 /// `path` is a non-empty repository-relative POSIX path. `offset`, when
 /// present, is a one-based line number, and `limit`, when present, is a
 /// positive maximum line count.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReadArguments {
-    #[serde(default, deserialize_with = "deserialize_optional_positive_integer")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_positive_integer",
+        skip_serializing_if = "Option::is_none"
+    )]
     limit: Option<NonZeroU64>,
-    #[serde(default, deserialize_with = "deserialize_optional_positive_integer")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_positive_integer",
+        skip_serializing_if = "Option::is_none"
+    )]
     offset: Option<NonZeroU64>,
     #[serde(deserialize_with = "deserialize_repository_path")]
     path: String,
@@ -189,7 +234,7 @@ where
     if path.is_empty() {
         return Err(de::Error::custom("path must not be empty"));
     }
-    if path.starts_with('/') {
+    if path.starts_with('/') || path.contains('\\') {
         return Err(de::Error::custom("path must be repository-relative"));
     }
     if path.contains('\0') {
@@ -261,6 +306,7 @@ mod tests {
             json!({}),
             json!({ "path": "" }),
             json!({ "path": "/Cargo.toml" }),
+            json!({ "path": "C:\\Cargo.toml" }),
             json!({ "path": "../Cargo.toml" }),
             json!({ "path": "Cargo\0.toml" }),
             json!({ "path": "Cargo.toml", "offset": 0 }),
@@ -285,6 +331,8 @@ mod tests {
         let invalid_paths = [
             "",
             "/Cargo.toml",
+            "C:\\Cargo.toml",
+            "server\\share",
             "src//lib.rs",
             "src/./lib.rs",
             "../lib.rs",

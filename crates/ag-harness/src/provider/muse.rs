@@ -1,4 +1,16 @@
+use std::env;
+
+use async_trait::async_trait;
+use thiserror::Error;
+
 use crate::chat_completion;
+use crate::model::{
+    Model, ModelClient, ModelError, ModelMetadataError, ModelRequest, ModelResponse,
+};
+
+const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
+const MODEL_API_BASE_URL_ENV: &str = "MODEL_API_BASE_URL";
+const MODEL_API_KEY_ENV: &str = "MODEL_API_KEY";
 
 /// Standard Muse Spark 1.2 model whose prompts and completions are not used
 /// to train Meta models.
@@ -16,6 +28,58 @@ pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
         telemetry_name: PROVIDER_NAME,
         unsupported_schema_reason: "Muse structured output requires an explicit object root schema",
     };
+
+/// Muse model configured from the standard Model API environment variables.
+pub struct Muse {
+    client: ModelClient,
+}
+
+impl Muse {
+    /// Creates a Muse model using `MODEL_API_KEY` and the optional
+    /// `MODEL_API_BASE_URL` override.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MuseError`] when `MODEL_API_KEY` is unavailable or `model` is
+    /// empty.
+    pub fn from_env(model: impl Into<String>) -> Result<Self, MuseError> {
+        Self::from_environment(model, |name| env::var(name))
+    }
+
+    fn from_environment(
+        model: impl Into<String>,
+        mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    ) -> Result<Self, MuseError> {
+        let api_key = environment(MODEL_API_KEY_ENV).map_err(MuseError::ApiKey)?;
+        let base_url =
+            environment(MODEL_API_BASE_URL_ENV).unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+        let client = ModelClient::muse(MuseConfig {
+            api_key,
+            base_url,
+            model: model.into(),
+        })?;
+
+        Ok(Self { client })
+    }
+}
+
+#[async_trait]
+impl Model for Muse {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        self.client.complete(request).await
+    }
+}
+
+/// Failure returned while configuring Muse from the environment.
+#[derive(Debug, Error)]
+pub enum MuseError {
+    /// `MODEL_API_KEY` is missing or is not valid Unicode.
+    #[error("MODEL_API_KEY is unavailable: {0}")]
+    ApiKey(#[source] env::VarError),
+    /// The selected model identifier is invalid.
+    #[error(transparent)]
+    Metadata(#[from] ModelMetadataError),
+}
 
 /// Configuration for a Muse model served through Meta's Model API.
 pub struct MuseConfig {
@@ -72,13 +136,23 @@ mod tests {
         })
     }
 
-    fn muse(server: &MockServer) -> model::ModelClient {
-        model::ModelClient::muse(MuseConfig {
-            api_key: "test-key".to_string(),
-            base_url: format!("{}/", server.uri()),
-            model: "muse-spark-1.2".to_string(),
+    fn default_environment(name: &str) -> Result<String, env::VarError> {
+        if name == MODEL_API_KEY_ENV {
+            Ok("test-key".to_string())
+        } else {
+            Err(env::VarError::NotPresent)
+        }
+    }
+
+    fn muse(server: &MockServer) -> Muse {
+        Muse::from_environment(MUSE_SPARK_1_2, |name| {
+            if name == MODEL_API_KEY_ENV {
+                Ok("test-key".to_string())
+            } else {
+                Ok(format!("{}/", server.uri()))
+            }
         })
-        .expect("fixture configuration should be valid")
+        .expect("fixture environment should be valid")
     }
 
     fn response_format() -> Value {
@@ -98,6 +172,45 @@ mod tests {
 
         // Assert
         assert_eq!(models, ["muse-spark-1.2", "muse-spark-1.2-contributor"]);
+    }
+
+    #[test]
+    fn environment_configuration_uses_official_base_url_default() {
+        // Arrange and Act
+        let muse = Muse::from_environment(MUSE_SPARK_1_2, default_environment)
+            .expect("fixture environment should be valid");
+
+        // Assert
+        assert_eq!(muse.client.metadata().provider(), "meta");
+        assert_eq!(muse.client.metadata().model(), MUSE_SPARK_1_2);
+    }
+
+    #[test]
+    fn environment_configuration_requires_api_key() {
+        // Arrange and Act
+        let error = Muse::from_environment(MUSE_SPARK_1_2, |_| Err(env::VarError::NotPresent))
+            .err()
+            .expect("missing API key should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            MuseError::ApiKey(env::VarError::NotPresent)
+        ));
+    }
+
+    #[test]
+    fn environment_configuration_rejects_empty_model() {
+        // Arrange and Act
+        let error = Muse::from_environment("  ", default_environment)
+            .err()
+            .expect("empty model should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            MuseError::Metadata(ModelMetadataError::EmptyModel)
+        ));
     }
 
     #[test]
@@ -223,6 +336,101 @@ mod tests {
         assert_eq!(call.arguments().path(), "Cargo.toml");
         assert_eq!(call.arguments().offset(), Some(1));
         assert_eq!(call.arguments().limit(), Some(12));
+    }
+
+    #[tokio::test]
+    async fn continues_after_read_tool_result() {
+        // Arrange
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(bearer_token("test-key"))
+            .and(body_json(json!({
+                "messages": [
+                    {"content": "inspect the manifest", "role": "user"}
+                ],
+                "model": "muse-spark-1.2",
+                "response_format": response_format(),
+                "tools": [read_tool_wire()]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "content": null,
+                        "tool_calls": [{
+                            "id": "call_muse_read",
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": r#"{"path":"Cargo.toml"}"#
+                            }
+                        }]
+                    }
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let model = muse(&server);
+        let mut request = read_request("inspect the manifest");
+        let response = model
+            .complete(request.clone())
+            .await
+            .expect("Muse read request should decode");
+        request.record_tool_result(
+            response
+                .call()
+                .expect("response should contain a tool call")
+                .clone(),
+            r#"{"content":"[package]\nname = \"ag-harness\"","next_offset":null}"#.to_string(),
+        );
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(bearer_token("test-key"))
+            .and(body_json(json!({
+                "messages": [
+                    {"content": "inspect the manifest", "role": "user"},
+                    {
+                        "content": null,
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "function": {
+                                "arguments": r#"{"path":"Cargo.toml"}"#,
+                                "name": "read"
+                            },
+                            "id": "call_muse_read",
+                            "type": "function"
+                        }]
+                    },
+                    {
+                        "content": r#"{"content":"[package]\nname = \"ag-harness\"","next_offset":null}"#,
+                        "role": "tool",
+                        "tool_call_id": "call_muse_read"
+                    }
+                ],
+                "model": "muse-spark-1.2",
+                "response_format": response_format(),
+                "tools": [read_tool_wire()]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": r#"{"name":"ag-harness"}"#}
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Act
+        let response = model
+            .complete(request)
+            .await
+            .expect("Muse continuation should succeed");
+
+        // Assert
+        assert_eq!(response.output(), Some(&json!({ "name": "ag-harness" })));
     }
 
     #[tokio::test]

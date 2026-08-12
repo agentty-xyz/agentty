@@ -7,20 +7,24 @@ license.workspace = true
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme = "README.md"
 
 [dependencies]
 async-trait.workspace = true
 jsonschema.workspace = true
 opentelemetry.workspace = true
 reqwest.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
 thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
+mockall.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
-tokio.workspace = true
+tempfile.workspace = true
 wiremock.workspace = true
 
 [lints]

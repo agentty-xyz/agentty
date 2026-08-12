@@ -12,6 +12,7 @@ use crate::{chat_completion, telemetry, tool};
 ///
 /// [`ModelClient`] implements this trait so applications can select supported
 /// providers dynamically without exposing provider backends or raw generation.
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait Model: Send + Sync {
     /// Completes one model request.
@@ -183,6 +184,7 @@ pub enum ModelMetadataError {
 /// Provider-neutral input for one model request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelRequest {
+    messages: Vec<ModelMessage>,
     prompt: String,
     schema: OutputSchema,
     tools: Vec<tool::ToolDefinition>,
@@ -191,8 +193,11 @@ pub struct ModelRequest {
 impl ModelRequest {
     /// Creates a model request whose response must match `schema`.
     pub fn new(prompt: impl Into<String>, schema: OutputSchema) -> Self {
+        let prompt = prompt.into();
+
         Self {
-            prompt: prompt.into(),
+            messages: vec![ModelMessage::User(prompt.clone())],
+            prompt,
             schema,
             tools: Vec::new(),
         }
@@ -201,7 +206,9 @@ impl ModelRequest {
     /// Advertises one native function tool for this request.
     #[must_use]
     pub fn with_tool(mut self, tool: tool::ToolDefinition) -> Self {
-        self.tools.push(tool);
+        if !self.advertises_tool(tool.name()) {
+            self.tools.push(tool);
+        }
 
         self
     }
@@ -224,6 +231,32 @@ impl ModelRequest {
     pub(crate) fn advertises_tool(&self, name: &str) -> bool {
         self.tools.iter().any(|tool| tool.name() == name)
     }
+
+    pub(crate) fn messages(&self) -> &[ModelMessage] {
+        &self.messages
+    }
+
+    pub(crate) fn record_tool_result(&mut self, call: tool::ToolCall, content: String) {
+        let call_id = call.id().to_string();
+        let name = call.name().to_string();
+        self.messages.push(ModelMessage::AssistantToolCall(call));
+        self.messages.push(ModelMessage::ToolResult {
+            call_id,
+            content,
+            name,
+        });
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ModelMessage {
+    User(String),
+    AssistantToolCall(tool::ToolCall),
+    ToolResult {
+        call_id: String,
+        content: String,
+        name: String,
+    },
 }
 
 /// Provider-neutral output from one model request.
@@ -312,6 +345,9 @@ pub enum ModelError {
     /// A tool-call response also contained terminal assistant content.
     #[error("model tool call response contained terminal content")]
     ToolCallWithContent,
+    /// A terminal response also contained native tool calls.
+    #[error("model terminal response contained tool calls")]
+    TerminalResponseWithToolCalls,
     /// The provider returned an unsupported tool-call type.
     #[error("model requested unsupported tool type: {kind}")]
     UnsupportedToolType {
@@ -358,6 +394,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::tool::{ReadArguments, ToolCall};
 
     #[test]
     fn client_exposes_provider_and_model() {
@@ -457,6 +494,21 @@ mod tests {
     }
 
     #[test]
+    fn request_deduplicates_native_tools() {
+        // Arrange
+        let schema =
+            OutputSchema::new(json!({ "type": "object" })).expect("schema should be valid");
+
+        // Act
+        let request = ModelRequest::new("hello", schema)
+            .with_tool(tool::ToolDefinition::read())
+            .with_tool(tool::ToolDefinition::read());
+
+        // Assert
+        assert_eq!(request.tools(), &[tool::ToolDefinition::read()]);
+    }
+
+    #[test]
     fn response_exposes_validated_output() {
         // Arrange
         let value = json!({ "name": "Ada" });
@@ -467,6 +519,29 @@ mod tests {
         // Assert
         assert_eq!(response.output(), Some(&value));
         assert!(response.call().is_none());
+    }
+
+    #[test]
+    fn response_debug_redacts_provider_reasoning() {
+        // Arrange
+        let secret_reasoning = "private reasoning from repository context";
+        let arguments = serde_json::from_value::<ReadArguments>(json!({
+            "path": "Cargo.toml"
+        }))
+        .expect("read arguments should be valid");
+        let response = ModelResponse::tool_call(ToolCall::read(
+            "call_read".to_string(),
+            arguments,
+            Some(secret_reasoning.to_string()),
+        ));
+
+        // Act
+        let debug_output = format!("{response:?}");
+
+        // Assert
+        assert!(debug_output.contains("call_read"));
+        assert!(debug_output.contains("[REDACTED]"));
+        assert!(!debug_output.contains(secret_reasoning));
     }
 
     #[test]

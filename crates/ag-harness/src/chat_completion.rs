@@ -25,8 +25,33 @@ pub(crate) const STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
 /// Structured-output representation selected by one Chat Completions provider.
 #[derive(Clone, Copy)]
 pub(crate) enum StructuredOutputMode {
-    JsonObject,
+    JsonObject {
+        assistant_reasoning_content: bool,
+        tool_result_name: bool,
+    },
     JsonSchema,
+}
+
+impl StructuredOutputMode {
+    fn assistant_reasoning_content(self) -> bool {
+        matches!(
+            self,
+            Self::JsonObject {
+                assistant_reasoning_content: true,
+                ..
+            }
+        )
+    }
+
+    fn tool_result_name(self) -> bool {
+        matches!(
+            self,
+            Self::JsonObject {
+                tool_result_name: true,
+                ..
+            }
+        )
+    }
 }
 
 /// Provider policy applied by the shared Chat Completions backend.
@@ -81,7 +106,7 @@ impl ChatCompletionBackend {
             });
         }
         let payload = ChatCompletionPayload {
-            messages: self.messages(request),
+            messages: self.messages(request)?,
             model: &self.model,
             response_format: self.response_format(request.schema()),
             tools: request
@@ -101,12 +126,24 @@ impl ChatCompletionBackend {
             .await
             .map_err(|error| self.map_completion_error(error))?
             .ok_or(model::ModelError::InvalidResponse)?;
-        let (finish_reason, content, tool_calls) = completion.into_parts();
+        let (finish_reason, content, reasoning_content, tool_calls) = completion.into_parts();
         match finish_reason.as_str() {
+            "stop" if !tool_calls.is_empty() => {
+                Err(model::ModelError::TerminalResponseWithToolCalls)
+            }
             "stop" => content
                 .map(GeneratedResponse::Output)
                 .ok_or(model::ModelError::InvalidResponse),
-            "tool_calls" => Self::decode_tool_call(request, content.as_deref(), tool_calls),
+            "tool_calls" => Self::decode_tool_call(
+                request,
+                content.as_deref(),
+                self.policy
+                    .structured_output
+                    .assistant_reasoning_content()
+                    .then_some(reasoning_content)
+                    .flatten(),
+                tool_calls,
+            ),
             _ => Err(model::ModelError::IncompleteResponse {
                 reason: schema_contract::bounded_diagnostic(finish_reason),
             }),
@@ -130,13 +167,16 @@ impl ChatCompletionBackend {
         }
     }
 
-    fn messages(&self, request: &model::ModelRequest) -> Vec<ChatCompletionMessagePayload> {
-        let mut messages = Vec::with_capacity(2);
+    fn messages(
+        &self,
+        request: &model::ModelRequest,
+    ) -> Result<Vec<ChatCompletionMessagePayload>, model::ModelError> {
+        let mut messages = Vec::with_capacity(request.messages().len() + 1);
         if matches!(
             self.policy.structured_output,
-            StructuredOutputMode::JsonObject
+            StructuredOutputMode::JsonObject { .. }
         ) {
-            messages.push(ChatCompletionMessagePayload {
+            messages.push(ChatCompletionMessagePayload::Text {
                 content: format!(
                     "{STRUCTURED_OUTPUT_INSTRUCTION}{}",
                     request.schema().value()
@@ -144,17 +184,61 @@ impl ChatCompletionBackend {
                 role: "system",
             });
         }
-        messages.push(ChatCompletionMessagePayload {
-            content: request.prompt().to_string(),
-            role: "user",
-        });
+        for message in request.messages() {
+            match message {
+                model::ModelMessage::User(content) => {
+                    messages.push(ChatCompletionMessagePayload::Text {
+                        content: content.clone(),
+                        role: "user",
+                    });
+                }
+                model::ModelMessage::AssistantToolCall(call) => {
+                    messages.push(ChatCompletionMessagePayload::AssistantToolCall {
+                        content: None,
+                        reasoning_content: self
+                            .policy
+                            .structured_output
+                            .assistant_reasoning_content()
+                            .then(|| call.reasoning_content().map(str::to_string))
+                            .flatten(),
+                        role: "assistant",
+                        tool_calls: vec![ChatCompletionOutgoingToolCall {
+                            function: ChatCompletionOutgoingFunctionCall {
+                                arguments: call
+                                    .arguments_json()
+                                    .map_err(model::ModelError::request)?,
+                                name: call.name().to_string(),
+                            },
+                            id: call.id().to_string(),
+                            kind: "function",
+                        }],
+                    });
+                }
+                model::ModelMessage::ToolResult {
+                    call_id,
+                    content,
+                    name,
+                } => {
+                    messages.push(ChatCompletionMessagePayload::ToolResult {
+                        content: content.clone(),
+                        name: self
+                            .policy
+                            .structured_output
+                            .tool_result_name()
+                            .then(|| name.clone()),
+                        role: "tool",
+                        tool_call_id: call_id.clone(),
+                    });
+                }
+            }
+        }
 
-        messages
+        Ok(messages)
     }
 
     fn response_format<'a>(&self, schema: &'a schema_contract::OutputSchema) -> ResponseFormat<'a> {
         match self.policy.structured_output {
-            StructuredOutputMode::JsonObject => ResponseFormat {
+            StructuredOutputMode::JsonObject { .. } => ResponseFormat {
                 json_schema: None,
                 kind: "json_object",
             },
@@ -188,6 +272,7 @@ impl ChatCompletionBackend {
     fn decode_tool_call(
         request: &model::ModelRequest,
         content: Option<&str>,
+        reasoning_content: Option<String>,
         mut calls: Vec<ChatCompletionToolCall>,
     ) -> Result<GeneratedResponse, model::ModelError> {
         if content.is_some_and(|content| !content.is_empty()) {
@@ -214,6 +299,10 @@ impl ChatCompletionBackend {
         }
         schema_contract::ensure_content_size(&function.arguments)
             .map_err(model::ModelError::from)?;
+        if let Some(reasoning_content) = reasoning_content.as_deref() {
+            schema_contract::ensure_content_size(reasoning_content)
+                .map_err(model::ModelError::from)?;
+        }
         let arguments =
             serde_json::from_str::<tool::ReadArguments>(&function.arguments).map_err(|error| {
                 model::ModelError::InvalidToolArguments {
@@ -222,7 +311,9 @@ impl ChatCompletionBackend {
             })?;
 
         Ok(GeneratedResponse::ToolCall(tool::ToolCall::read(
-            call.id, arguments,
+            call.id,
+            arguments,
+            reasoning_content,
         )))
     }
 }
@@ -254,6 +345,7 @@ impl<'a> ChatCompletionRequest<'a> {
 pub(crate) struct ChatCompletion {
     content: Option<String>,
     finish_reason: String,
+    reasoning_content: Option<String>,
     tool_calls: Vec<ChatCompletionToolCall>,
 }
 
@@ -263,13 +355,26 @@ impl ChatCompletion {
         Self {
             content,
             finish_reason,
+            reasoning_content: None,
             tool_calls: Vec::new(),
         }
     }
 
     /// Consumes the choice into provider-interpreted completion fields.
-    fn into_parts(self) -> (String, Option<String>, Vec<ChatCompletionToolCall>) {
-        (self.finish_reason, self.content, self.tool_calls)
+    fn into_parts(
+        self,
+    ) -> (
+        String,
+        Option<String>,
+        Option<String>,
+        Vec<ChatCompletionToolCall>,
+    ) {
+        (
+            self.finish_reason,
+            self.content,
+            self.reasoning_content,
+            self.tool_calls,
+        )
     }
 }
 
@@ -333,6 +438,7 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
 
         Ok(response.choices.into_iter().next().map(|choice| {
             let mut completion = ChatCompletion::new(choice.finish_reason, choice.message.content);
+            completion.reasoning_content = choice.message.reasoning_content;
             completion.tool_calls = choice.message.tool_calls.unwrap_or_default();
 
             completion
@@ -455,9 +561,40 @@ struct ChatCompletionPayload<'a> {
 }
 
 #[derive(Serialize)]
-struct ChatCompletionMessagePayload {
-    content: String,
-    role: &'static str,
+#[serde(untagged)]
+enum ChatCompletionMessagePayload {
+    Text {
+        content: String,
+        role: &'static str,
+    },
+    AssistantToolCall {
+        content: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
+        role: &'static str,
+        tool_calls: Vec<ChatCompletionOutgoingToolCall>,
+    },
+    ToolResult {
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        role: &'static str,
+        tool_call_id: String,
+    },
+}
+
+#[derive(Serialize)]
+struct ChatCompletionOutgoingToolCall {
+    function: ChatCompletionOutgoingFunctionCall,
+    id: String,
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+#[derive(Serialize)]
+struct ChatCompletionOutgoingFunctionCall {
+    arguments: String,
+    name: String,
 }
 
 #[derive(Serialize)]
@@ -516,6 +653,8 @@ struct ChatCompletionChoice {
 struct ChatCompletionMessage {
     content: Option<String>,
     #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
     tool_calls: Option<Vec<ChatCompletionToolCall>>,
 }
 
@@ -548,6 +687,69 @@ mod tests {
 
         // Assert
         assert_eq!(endpoint, "https://example.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn serializes_tool_history_for_native_json_schema_provider() {
+        // Arrange
+        let backend = ChatCompletionBackend::with_client(
+            "test-key".to_string(),
+            "https://example.com/v1".to_string(),
+            "native-schema-model".to_string(),
+            ChatCompletionProviderPolicy {
+                display_name: "Native schema provider",
+                structured_output: StructuredOutputMode::JsonSchema,
+                telemetry_name: "native_schema",
+                unsupported_schema_reason: "object schema required",
+            },
+            default_client(),
+        );
+        let schema = schema_contract::OutputSchema::new(serde_json::json!({
+            "type": "object"
+        }))
+        .expect("schema should be valid");
+        let arguments = serde_json::from_value(serde_json::json!({
+            "path": "Cargo.toml"
+        }))
+        .expect("read arguments should be valid");
+        let mut request = model::ModelRequest::new("inspect the manifest", schema);
+        request.record_tool_result(
+            tool::ToolCall::read("call_read".to_string(), arguments, None),
+            "result".to_string(),
+        );
+
+        // Act
+        let messages = serde_json::to_value(
+            backend
+                .messages(&request)
+                .expect("tool history should serialize"),
+        )
+        .expect("messages should encode as JSON");
+
+        // Assert
+        assert_eq!(
+            messages,
+            serde_json::json!([
+                {"content": "inspect the manifest", "role": "user"},
+                {
+                    "content": null,
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "function": {
+                            "arguments": r#"{"path":"Cargo.toml"}"#,
+                            "name": "read"
+                        },
+                        "id": "call_read",
+                        "type": "function"
+                    }]
+                },
+                {
+                    "content": "result",
+                    "role": "tool",
+                    "tool_call_id": "call_read"
+                }
+            ])
+        );
     }
 
     #[test]

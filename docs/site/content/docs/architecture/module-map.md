@@ -32,8 +32,9 @@ For file-level detail, read the module docstrings directly.
 - `crates/ag-harness/`: Application-facing LLM harness crate with the provider-neutral
   object-safe `Model` boundary, its `ModelClient` implementation, private Qwen, Kimi,
   and Muse policies, a shared Chat Completions backend with JSON Object and JSON Schema
-  modes, and backend-neutral request-duration telemetry. Application binaries own
-  telemetry setup.
+  modes, backend-neutral request-duration telemetry, and a deny-by-default `Harness`
+  loop that executes bounded repository reads through an injectable `FileSystem`.
+  Application binaries own telemetry setup.
 - `crates/ag-protocol/`: Shared structured response protocol library crate with
   transport-neutral response models, schema generation, parser diagnostics, protocol
   prompt envelopes, repair prompts, review-comment outcomes, and turn prompt payload
