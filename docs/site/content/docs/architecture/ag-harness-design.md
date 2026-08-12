@@ -71,6 +71,14 @@ system instruction, and rely on shared local schema validation before returning 
 successful response. Schemas without an explicit object root and unsupported
 configurations fail explicitly rather than falling back to unstructured output.
 
+The current wire-only tool foundation lets callers explicitly advertise the native
+`read` function on an individual `ModelRequest`. Qwen and Kimi translate the shared
+`ToolDefinition` into their Chat Completions payload and decode exactly one validated
+`ToolCall` with typed `ReadArguments`. A tool call remains distinct from terminal
+`ModelResponse` output, which continues through local `OutputSchema` validation. This
+slice stops at decoding: tool execution, filesystem access, tool-result messages, and
+the continuation loop remain future work.
+
 ## Session management
 
 - One host process manages multiple independent sessions.

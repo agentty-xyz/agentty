@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{model, schema_contract};
+use crate::{model, schema_contract, tool};
 
 pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
 const JSON_STRING_MAX_EXPANSION: usize = 6;
@@ -28,6 +28,12 @@ pub(crate) struct JsonObjectProviderPolicy {
     pub(crate) display_name: &'static str,
     pub(crate) telemetry_name: &'static str,
     pub(crate) unsupported_schema_reason: &'static str,
+}
+
+/// Provider-neutral result of decoding one Chat Completions choice.
+pub(crate) enum GeneratedResponse {
+    Output(String),
+    ToolCall(tool::ToolCall),
 }
 
 /// Shared JSON Object backend for OpenAI-compatible Chat Completions APIs.
@@ -59,7 +65,7 @@ impl JsonObjectBackend {
     pub(crate) async fn generate(
         &self,
         request: &model::ModelRequest,
-    ) -> Result<String, model::ModelError> {
+    ) -> Result<GeneratedResponse, model::ModelError> {
         if !request.schema().has_object_root() {
             return Err(model::ModelError::UnsupportedOutputSchema {
                 reason: self.policy.unsupported_schema_reason.to_string(),
@@ -84,6 +90,7 @@ impl JsonObjectBackend {
             response_format: JsonObjectResponseFormat {
                 kind: "json_object",
             },
+            tools: request.tools().iter().map(JsonObjectTool::from).collect(),
         };
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
         let completion = self
@@ -96,15 +103,16 @@ impl JsonObjectBackend {
             .await
             .map_err(|error| self.map_completion_error(error))?
             .ok_or(model::ModelError::InvalidResponse)?;
-        let (finish_reason, content) = completion.into_parts();
-        if finish_reason != "stop" {
-            return Err(model::ModelError::IncompleteResponse {
+        let (finish_reason, content, tool_calls) = completion.into_parts();
+        match finish_reason.as_str() {
+            "stop" => content
+                .map(GeneratedResponse::Output)
+                .ok_or(model::ModelError::InvalidResponse),
+            "tool_calls" => Self::decode_tool_call(request, content.as_deref(), tool_calls),
+            _ => Err(model::ModelError::IncompleteResponse {
                 reason: schema_contract::bounded_diagnostic(finish_reason),
-            });
+            }),
         }
-        let text = content.ok_or(model::ModelError::InvalidResponse)?;
-
-        Ok(text)
     }
 
     /// Creates a JSON Object backend with an injected transport client.
@@ -140,6 +148,47 @@ impl JsonObjectBackend {
             error => model::ModelError::request(error),
         }
     }
+
+    fn decode_tool_call(
+        request: &model::ModelRequest,
+        content: Option<&str>,
+        mut calls: Vec<ChatCompletionToolCall>,
+    ) -> Result<GeneratedResponse, model::ModelError> {
+        if content.is_some_and(|content| !content.is_empty()) {
+            return Err(model::ModelError::ToolCallWithContent);
+        }
+        let call = match calls.len() {
+            0 => return Err(model::ModelError::MissingToolCall),
+            1 => calls.remove(0),
+            _ => return Err(model::ModelError::MultipleToolCalls),
+        };
+        if call.kind != "function" {
+            return Err(model::ModelError::UnsupportedToolType {
+                kind: schema_contract::bounded_diagnostic(call.kind),
+            });
+        }
+        let function = serde_json::from_value::<ChatCompletionFunctionCall>(call.function)
+            .map_err(|error| model::ModelError::InvalidToolArguments {
+                reason: schema_contract::bounded_diagnostic(error),
+            })?;
+        if !request.advertises_tool(&function.name) {
+            return Err(model::ModelError::UnsupportedToolName {
+                name: schema_contract::bounded_diagnostic(function.name),
+            });
+        }
+        schema_contract::ensure_content_size(&function.arguments)
+            .map_err(model::ModelError::from)?;
+        let arguments =
+            serde_json::from_str::<tool::ReadArguments>(&function.arguments).map_err(|error| {
+                model::ModelError::InvalidToolArguments {
+                    reason: schema_contract::bounded_diagnostic(error),
+                }
+            })?;
+
+        Ok(GeneratedResponse::ToolCall(tool::ToolCall::read(
+            call.id, arguments,
+        )))
+    }
 }
 
 /// One provider-authenticated request using the Chat Completions wire API.
@@ -169,6 +218,7 @@ impl<'a> ChatCompletionRequest<'a> {
 pub(crate) struct ChatCompletion {
     content: Option<String>,
     finish_reason: String,
+    tool_calls: Vec<ChatCompletionToolCall>,
 }
 
 impl ChatCompletion {
@@ -177,12 +227,13 @@ impl ChatCompletion {
         Self {
             content,
             finish_reason,
+            tool_calls: Vec::new(),
         }
     }
 
     /// Consumes the choice into provider-interpreted completion fields.
-    pub(crate) fn into_parts(self) -> (String, Option<String>) {
-        (self.finish_reason, self.content)
+    fn into_parts(self) -> (String, Option<String>, Vec<ChatCompletionToolCall>) {
+        (self.finish_reason, self.content, self.tool_calls)
     }
 }
 
@@ -244,11 +295,12 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
         let response = serde_json::from_slice::<ChatCompletionResponse>(&body)
             .map_err(ChatCompletionError::InvalidResponse)?;
 
-        Ok(response
-            .choices
-            .into_iter()
-            .next()
-            .map(|choice| ChatCompletion::new(choice.finish_reason, choice.message.content)))
+        Ok(response.choices.into_iter().next().map(|choice| {
+            let mut completion = ChatCompletion::new(choice.finish_reason, choice.message.content);
+            completion.tool_calls = choice.message.tool_calls.unwrap_or_default();
+
+            completion
+        }))
     }
 }
 
@@ -362,6 +414,8 @@ struct JsonObjectRequest<'a> {
     messages: Vec<JsonObjectMessage>,
     model: &'a str,
     response_format: JsonObjectResponseFormat,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<JsonObjectTool<'a>>,
 }
 
 #[derive(Serialize)]
@@ -374,6 +428,33 @@ struct JsonObjectMessage {
 struct JsonObjectResponseFormat {
     #[serde(rename = "type")]
     kind: &'static str,
+}
+
+#[derive(Serialize)]
+struct JsonObjectTool<'a> {
+    function: JsonObjectFunction<'a>,
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+impl<'a> From<&'a tool::ToolDefinition> for JsonObjectTool<'a> {
+    fn from(definition: &'a tool::ToolDefinition) -> Self {
+        Self {
+            function: JsonObjectFunction {
+                description: definition.description(),
+                name: definition.name(),
+                parameters: definition.parameters(),
+            },
+            kind: "function",
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonObjectFunction<'a> {
+    description: &'static str,
+    name: &'static str,
+    parameters: &'a Value,
 }
 
 #[derive(Deserialize)]
@@ -390,6 +471,23 @@ struct ChatCompletionChoice {
 #[derive(Deserialize)]
 struct ChatCompletionMessage {
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ChatCompletionToolCall>>,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionToolCall {
+    #[serde(default)]
+    function: Value,
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionFunctionCall {
+    arguments: String,
+    name: String,
 }
 
 #[cfg(test)]
