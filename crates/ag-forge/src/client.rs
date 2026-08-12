@@ -5,8 +5,8 @@ use std::sync::Arc;
 use super::{
     CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeKind, ForgeRemote,
     GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
-    RequestedReview, ReviewCommentSnapshot, ReviewRequestError, ReviewRequestMetadata,
-    ReviewRequestSummary, UpdateReviewRequestInput, detect_remote,
+    ReviewCommentSnapshot, ReviewRequestError, ReviewRequestMetadata, ReviewRequestSummary,
+    UpdateReviewRequestInput, detect_remote,
 };
 
 /// Async boundary used by app orchestration for forge review requests.
@@ -129,17 +129,6 @@ pub trait ReviewRequestClient: Send + Sync {
         display_id: String,
         thread_id: String,
     ) -> ForgeFuture<Result<(), ReviewRequestError>>;
-
-    /// Lists open review requests asking the current authenticated user to
-    /// review the selected repository.
-    ///
-    /// # Errors
-    /// Returns a provider-specific review-request error when the list fetch
-    /// cannot be completed.
-    fn list_requested_reviews(
-        &self,
-        remote: ForgeRemote,
-    ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>>;
 }
 
 /// Production [`ReviewRequestClient`] that routes to forge-specific adapters.
@@ -297,15 +286,6 @@ impl ReviewRequestClient for RealReviewRequestClient {
             adapter.resolve_authenticated_thread(remote, display_id, thread_id)
         })
     }
-
-    fn list_requested_reviews(
-        &self,
-        remote: ForgeRemote,
-    ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>> {
-        self.call_with_authenticated_adapter(remote, move |adapter, remote| {
-            adapter.list_authenticated_requested_reviews(remote)
-        })
-    }
 }
 
 /// Provider-specific operation boundary used after client-level authentication.
@@ -385,12 +365,6 @@ pub(crate) trait ReviewRequestAdapter: Send + Sync {
         display_id: String,
         thread_id: String,
     ) -> ForgeFuture<Result<(), ReviewRequestError>>;
-
-    /// Lists requested reviews after authentication.
-    fn list_authenticated_requested_reviews(
-        &self,
-        remote: ForgeRemote,
-    ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>>;
 }
 
 #[cfg(test)]

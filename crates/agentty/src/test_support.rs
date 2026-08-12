@@ -48,8 +48,6 @@ use crate::domain::transient_message::TransientMessageStore;
 #[cfg(test)]
 use crate::infra::project_discovery::MockProjectDiscoveryClient;
 #[cfg(test)]
-use crate::presentation::app_mode::AppMode;
-
 /// Subscriber that enables tracing fields while unit tests exercise warning
 /// paths under source coverage.
 #[cfg(test)]
@@ -688,17 +686,6 @@ pub(crate) fn set_session_status_for_test(app: &mut App, session_id: &str, statu
     {
         *current_status = status;
     }
-}
-
-/// Switches a test app into review-detail mode with the provided review.
-#[cfg(test)]
-pub(crate) fn set_review_detail_mode(app: &mut App, review: ag_forge::RequestedReview) {
-    app.mode = AppMode::ReviewDetail {
-        comment_error: None,
-        is_loading_comments: false,
-        review,
-        scroll_offset: 0,
-    };
 }
 
 /// Returns the first rendered cell for a contiguous text match in a test

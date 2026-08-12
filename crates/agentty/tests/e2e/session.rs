@@ -3081,7 +3081,6 @@ fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Running session stop", 5000)
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("j")
                     .press_key("j")
@@ -3091,7 +3090,6 @@ fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
                     .press_key("j")
                     .press_key("Enter")
                     .wait_for_text("[xhigh]", 5000)
-                    .press_key("BackTab")
                     .press_key("BackTab")
                     .wait_for_text("gpt-5.6-sol [high]", 5000)
                     .capture_labeled(
@@ -3155,7 +3153,6 @@ fn session_list_selected_row_remains_readable_under_dark_horizon() -> E2eResult 
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
@@ -3179,7 +3176,6 @@ fn session_list_selected_row_remains_readable_under_dark_horizon() -> E2eResult 
                         "selected_row_highlight",
                         "Selected session row on the dedicated selection surface",
                     )
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
@@ -3343,7 +3339,6 @@ fn session_view_theme_switch_repaints_cached_messages() -> E2eResult {
                     .wait_for_text("Use bold and code.", 5000)
                     .press_key("q")
                     .wait_for_text("User markdown prompt", 5000)
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)

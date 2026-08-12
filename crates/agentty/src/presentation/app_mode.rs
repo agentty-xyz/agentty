@@ -1,4 +1,4 @@
-use ag_forge::{RequestedReview, ReviewCommentSnapshot};
+use ag_forge::ReviewCommentSnapshot;
 
 use super::help_action::{
     self, HelpAction, ViewActionAvailability, ViewHelpState, ViewSessionState,
@@ -337,19 +337,6 @@ pub enum ChatFocus {
 pub enum AppMode {
     /// Displays the active top-level list tab.
     List,
-    /// Displays the selected forge review request title, description, comment
-    /// loading state, loaded comments, and any comment-load failure.
-    ReviewDetail {
-        /// User-facing comment-load failure shown in the comments section.
-        comment_error: Option<String>,
-        /// Whether a background task is fetching the selected review's
-        /// comment snapshot.
-        is_loading_comments: bool,
-        /// Requested review snapshot opened from the top-level review list.
-        review: RequestedReview,
-        /// Vertical offset applied to the rendered review description page.
-        scroll_offset: u16,
-    },
     /// Displays the session creation selector above the sessions list.
     SessionCreation {
         /// Highlighted session creation option.

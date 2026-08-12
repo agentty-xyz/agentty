@@ -1,22 +1,18 @@
 //! GitHub review-request adapter routed through the `gh` CLI.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde::Deserialize;
 
 use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandRunner, ForgeFuture, ForgeKind,
-    ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide,
-    ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAdapter, ReviewRequestError,
-    ReviewRequestMetadata, ReviewRequestMetadataEdit, ReviewRequestOperations, ReviewRequestState,
-    ReviewRequestSummary, SyncReviewRequestMetadataConfig, UpdateReviewRequestInput,
-    map_parse_error, normalize_provider_label, operation_failed, parse_remote_url,
-    status_summary_parts, strip_port,
+    ForgeRemote, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
+    ReviewCommentThread, ReviewRequestAdapter, ReviewRequestError, ReviewRequestMetadata,
+    ReviewRequestMetadataEdit, ReviewRequestOperations, ReviewRequestState, ReviewRequestSummary,
+    SyncReviewRequestMetadataConfig, UpdateReviewRequestInput, map_parse_error,
+    normalize_provider_label, operation_failed, parse_remote_url, status_summary_parts, strip_port,
 };
 
-/// Maximum requested-review rows loaded from `gh` for one refresh.
-const REQUESTED_REVIEW_LIMIT: usize = 100;
 /// Paginated GraphQL query used to fetch review threads for one pull request.
 const REVIEW_THREADS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
@@ -280,42 +276,6 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
                 .await?;
 
             Ok(())
-        })
-    }
-
-    /// Lists open pull requests in `remote` that request review from the
-    /// current authenticated GitHub user, fetching the broader and direct
-    /// requested-review searches concurrently after authentication.
-    fn list_authenticated_requested_reviews(
-        &self,
-        remote: ForgeRemote,
-    ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>> {
-        let operations = self.operations.clone();
-
-        Box::pin(async move {
-            let (all_output, personal_output) = tokio::try_join!(
-                operations.run_review_command(
-                    &remote,
-                    requested_reviews_command(&remote),
-                    "list requested pull-request reviews",
-                ),
-                operations.run_review_command(
-                    &remote,
-                    personal_requested_reviews_command(&remote),
-                    "list personally requested pull-request reviews",
-                )
-            )?;
-
-            let all_reviews = map_parse_error(
-                remote.forge_kind,
-                parse_requested_reviews_response(&all_output.stdout, &remote),
-            )?;
-            let personal_reviews = map_parse_error(
-                remote.forge_kind,
-                parse_requested_reviews_response(&personal_output.stdout, &remote),
-            )?;
-
-            Ok(categorize_requested_reviews(all_reviews, &personal_reviews))
         })
     }
 }
@@ -725,126 +685,6 @@ fn review_comment_from_node(node: GitHubReviewCommentNode) -> ReviewComment {
     }
 }
 
-/// Builds the `gh search prs` command for PRs requesting the current user's
-/// review in the selected repository.
-fn requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
-    github_command(
-        remote,
-        vec![
-            "search".to_string(),
-            "prs".to_string(),
-            "--review-requested".to_string(),
-            "@me".to_string(),
-            "--state".to_string(),
-            "open".to_string(),
-            "--repo".to_string(),
-            remote.project_path(),
-            "--limit".to_string(),
-            REQUESTED_REVIEW_LIMIT.to_string(),
-            "--json".to_string(),
-            "number,title,body,url,isDraft,updatedAt,author".to_string(),
-        ],
-    )
-}
-
-/// Builds the `gh search prs` command for pull requests requesting review
-/// from the current GitHub user directly, excluding team-only requests.
-fn personal_requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
-    github_command(
-        remote,
-        vec![
-            "search".to_string(),
-            "prs".to_string(),
-            "user-review-requested:@me".to_string(),
-            "--state".to_string(),
-            "open".to_string(),
-            "--repo".to_string(),
-            remote.project_path(),
-            "--limit".to_string(),
-            REQUESTED_REVIEW_LIMIT.to_string(),
-            "--json".to_string(),
-            "number,title,body,url,isDraft,updatedAt,author".to_string(),
-        ],
-    )
-}
-
-/// Parses GitHub search rows into normalized requested-review rows.
-fn parse_requested_reviews_response(
-    stdout: &str,
-    remote: &ForgeRemote,
-) -> Result<Vec<RequestedReview>, String> {
-    let pull_requests: Vec<GitHubRequestedReviewResponse> = serde_json::from_str(stdout)
-        .map_err(|error| format!("invalid GitHub requested-review response: {error}"))?;
-
-    Ok(pull_requests
-        .into_iter()
-        .map(|pull_request| {
-            let status_summary = if pull_request.is_draft {
-                Some("Draft".to_string())
-            } else {
-                None
-            };
-
-            RequestedReview {
-                audience: RequestedReviewAudience::Personal,
-                author: pull_request
-                    .author
-                    .map_or_else(|| "ghost".to_string(), |author| author.login),
-                body: pull_request.body,
-                comment_snapshot: None,
-                display_id: format!("#{}", pull_request.number),
-                forge_kind: ForgeKind::GitHub,
-                repository: remote.project_path(),
-                status_summary,
-                title: pull_request.title,
-                updated_at: pull_request.updated_at,
-                web_url: pull_request.url,
-            }
-        })
-        .collect())
-}
-
-/// Merges requested-review rows from both GitHub searches, marking rows as
-/// personal when they appear in the `user-review-requested:@me` result and as
-/// group requests otherwise.
-///
-/// Rows from the broader search keep their original order, while personal-only
-/// rows are appended so brief API timing or pagination differences do not drop
-/// directly requested pull requests from the UI.
-fn categorize_requested_reviews(
-    all_reviews: Vec<RequestedReview>,
-    personal_reviews: &[RequestedReview],
-) -> Vec<RequestedReview> {
-    let personal_urls = personal_reviews
-        .iter()
-        .map(|review| review.web_url.as_str())
-        .collect::<HashSet<_>>();
-    let mut seen_urls = HashSet::new();
-    let mut categorized_reviews = Vec::with_capacity(all_reviews.len().max(personal_reviews.len()));
-
-    for mut review in all_reviews {
-        review.audience = if personal_urls.contains(review.web_url.as_str()) {
-            RequestedReviewAudience::Personal
-        } else {
-            RequestedReviewAudience::Group
-        };
-
-        if seen_urls.insert(review.web_url.clone()) {
-            categorized_reviews.push(review);
-        }
-    }
-
-    for review in personal_reviews {
-        if seen_urls.insert(review.web_url.clone()) {
-            let mut review = review.clone();
-            review.audience = RequestedReviewAudience::Personal;
-            categorized_reviews.push(review);
-        }
-    }
-
-    categorized_reviews
-}
-
 /// Builds one base `gh` command with deterministic color settings and the
 /// optional session worktree for repository-aware git fallback commands.
 fn github_command(remote: &ForgeRemote, arguments: Vec<String>) -> ForgeCommand {
@@ -858,27 +698,6 @@ fn github_command(remote: &ForgeRemote, arguments: Vec<String>) -> ForgeCommand 
 #[derive(Deserialize)]
 struct GitHubLookupResponse {
     number: u64,
-}
-
-/// GitHub search row returned by `gh search prs --json`.
-#[derive(Deserialize)]
-struct GitHubRequestedReviewResponse {
-    author: Option<GitHubRequestedReviewAuthor>,
-    #[serde(default)]
-    body: Option<String>,
-    #[serde(rename = "isDraft")]
-    is_draft: bool,
-    number: u64,
-    title: String,
-    #[serde(rename = "updatedAt")]
-    updated_at: Option<String>,
-    url: String,
-}
-
-/// GitHub search author node for the user who opened a requested review.
-#[derive(Deserialize)]
-struct GitHubRequestedReviewAuthor {
-    login: String,
 }
 
 /// GraphQL response envelope for review-threads queries.
@@ -1446,86 +1265,6 @@ mod tests {
                     "Manual-safe body".to_string(),
                 ],
             )
-        );
-    }
-
-    #[tokio::test]
-    async fn list_authenticated_requested_reviews_separates_personal_and_group_rows() {
-        // Arrange
-        let remote = github_remote();
-        let mut command_runner = MockForgeCommandRunner::new();
-        command_runner
-            .expect_run()
-            .once()
-            .withf({
-                let remote = remote.clone();
-
-                move |command| command == &requested_reviews_command(&remote)
-            })
-            .returning(|_| Box::pin(async { Ok(success_output(github_requested_reviews_json())) }));
-        command_runner
-            .expect_run()
-            .once()
-            .withf({
-                let remote = remote.clone();
-
-                move |command| command == &personal_requested_reviews_command(&remote)
-            })
-            .returning(|_| {
-                Box::pin(async { Ok(success_output(github_personal_requested_reviews_json())) })
-            });
-        let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
-
-        // Act
-        let requested_reviews = adapter
-            .list_authenticated_requested_reviews(remote)
-            .await
-            .expect("GitHub requested reviews should load");
-
-        // Assert
-        assert_eq!(
-            requested_reviews,
-            vec![
-                RequestedReview {
-                    audience: RequestedReviewAudience::Personal,
-                    author: "octocat".to_string(),
-                    body: Some("Implements the GitHub provider.".to_string()),
-                    comment_snapshot: None,
-                    display_id: "#42".to_string(),
-                    forge_kind: ForgeKind::GitHub,
-                    repository: "agentty-xyz/agentty".to_string(),
-                    status_summary: Some("Draft".to_string()),
-                    title: "Add forge review support".to_string(),
-                    updated_at: Some("2026-04-27T21:30:00Z".to_string()),
-                    web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
-                },
-                RequestedReview {
-                    audience: RequestedReviewAudience::Group,
-                    author: "team-lead".to_string(),
-                    body: Some("Adds team-owned parser coverage.".to_string()),
-                    comment_snapshot: None,
-                    display_id: "#43".to_string(),
-                    forge_kind: ForgeKind::GitHub,
-                    repository: "agentty-xyz/agentty".to_string(),
-                    status_summary: None,
-                    title: "Review team-owned parser".to_string(),
-                    updated_at: Some("2026-04-28T21:30:00Z".to_string()),
-                    web_url: "https://github.com/agentty-xyz/agentty/pull/43".to_string(),
-                },
-                RequestedReview {
-                    audience: RequestedReviewAudience::Personal,
-                    author: "reviewer".to_string(),
-                    body: Some("Adds direct-only parser coverage.".to_string()),
-                    comment_snapshot: None,
-                    display_id: "#44".to_string(),
-                    forge_kind: ForgeKind::GitHub,
-                    repository: "agentty-xyz/agentty".to_string(),
-                    status_summary: None,
-                    title: "Review direct-only parser".to_string(),
-                    updated_at: Some("2026-04-29T21:30:00Z".to_string()),
-                    web_url: "https://github.com/agentty-xyz/agentty/pull/44".to_string(),
-                },
-            ]
         );
     }
 
@@ -2314,56 +2053,6 @@ mod tests {
             current: current.to_string(),
             desired: desired.to_string(),
         }
-    }
-
-    /// Returns one `gh search prs --json` fixture for requested reviews.
-    fn github_requested_reviews_json() -> String {
-        r#"[
-            {
-                "isDraft": true,
-                "number": 42,
-                "title": "Add forge review support",
-                "author": {"login": "octocat"},
-                "body": "Implements the GitHub provider.",
-                "updatedAt": "2026-04-27T21:30:00Z",
-                "url": "https://github.com/agentty-xyz/agentty/pull/42"
-            },
-            {
-                "isDraft": false,
-                "number": 43,
-                "title": "Review team-owned parser",
-                "author": {"login": "team-lead"},
-                "body": "Adds team-owned parser coverage.",
-                "updatedAt": "2026-04-28T21:30:00Z",
-                "url": "https://github.com/agentty-xyz/agentty/pull/43"
-            }
-        ]"#
-        .to_string()
-    }
-
-    /// Returns one `user-review-requested:@me` fixture for personal reviews.
-    fn github_personal_requested_reviews_json() -> String {
-        r#"[
-            {
-                "isDraft": true,
-                "number": 42,
-                "title": "Add forge review support",
-                "author": {"login": "octocat"},
-                "body": "Implements the GitHub provider.",
-                "updatedAt": "2026-04-27T21:30:00Z",
-                "url": "https://github.com/agentty-xyz/agentty/pull/42"
-            },
-            {
-                "isDraft": false,
-                "number": 44,
-                "title": "Review direct-only parser",
-                "author": {"login": "reviewer"},
-                "body": "Adds direct-only parser coverage.",
-                "updatedAt": "2026-04-29T21:30:00Z",
-                "url": "https://github.com/agentty-xyz/agentty/pull/44"
-            }
-        ]"#
-        .to_string()
     }
 
     fn success_output(stdout: String) -> ForgeCommandOutput {

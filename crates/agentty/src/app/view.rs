@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{App, RequestedReviewState, Tab, UpdateStatus, session};
+use crate::app::{App, Tab, UpdateStatus, session};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
@@ -36,8 +36,6 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) mru_project_order: &'a [usize],
     pub(crate) project_selected_index: Option<usize>,
     pub(crate) projects: &'a [ProjectListItem],
-    pub(crate) requested_review_selected_index: Option<usize>,
-    pub(crate) requested_reviews: &'a RequestedReviewState,
     pub(crate) session_branch_names: &'a HashMap<SessionId, String>,
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
@@ -95,8 +93,6 @@ impl App {
             mru_project_order: project.mru_project_order,
             project_selected_index: project.selected_index,
             projects: project.project_items,
-            requested_review_selected_index: self.requested_review_selected_index(),
-            requested_reviews: &self.requested_reviews,
             session_branch_names: sessions.session_branch_names,
             session_git_statuses: sessions.session_git_statuses,
             session_index_by_id: sessions.session_index_by_id,
@@ -136,7 +132,6 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::PublishBranchInput { restore_view, .. }
         | AppMode::ViewInfoPopup { restore_view, .. } => Some(&restore_view.session_id),
         AppMode::List
-        | AppMode::ReviewDetail { .. }
         | AppMode::SessionCreation { .. }
         | AppMode::PreCommitHookWarning { .. }
         | AppMode::ProjectSwitcher { .. }

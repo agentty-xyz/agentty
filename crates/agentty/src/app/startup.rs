@@ -280,7 +280,7 @@ impl AppStartup {
         } else {
             Tab::Projects
         };
-        if persisted_tab.as_deref() == Some("Issues") {
+        if matches!(persisted_tab.as_deref(), Some("Inbox" | "Issues")) {
             let _ = db
                 .settings()
                 .upsert_setting(SettingName::ActiveTab, fallback_tab.as_str())

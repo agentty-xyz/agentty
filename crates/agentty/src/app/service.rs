@@ -321,10 +321,6 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::RefreshSessions => "RefreshSessions",
         AppEvent::RefreshProjects => "RefreshProjects",
         AppEvent::RefreshGitStatus => "RefreshGitStatus",
-        AppEvent::RequestedReviewsLoaded { .. } => "RequestedReviewsLoaded",
-        AppEvent::RequestedReviewCommentSnapshotLoaded { .. } => {
-            "RequestedReviewCommentSnapshotLoaded"
-        }
         AppEvent::SessionReviewCommentSnapshotLoaded { .. } => "SessionReviewCommentSnapshotLoaded",
         AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
         AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",

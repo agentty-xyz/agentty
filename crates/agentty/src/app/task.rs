@@ -37,21 +37,6 @@ static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 /// session execution.
 pub(crate) struct TaskService;
 
-/// Payload needed to run one requested-review comment snapshot task and route
-/// its completion back to the matching list generation.
-pub(super) struct RequestedReviewCommentSnapshotTask {
-    /// Provider display id such as GitHub `#123` or GitLab `!123`.
-    pub(super) display_id: String,
-    /// Requested-review list generation visible when the comment load began.
-    pub(super) generation: u64,
-    /// Project id that owns the requested-review row.
-    pub(super) project_id: i64,
-    /// Browser-openable review-request URL used to disambiguate rows.
-    pub(super) web_url: String,
-    /// Project working directory used for git remote and forge CLI context.
-    pub(super) working_dir: PathBuf,
-}
-
 /// Payload needed to load comments for a linked session review request.
 pub(super) struct SessionReviewCommentSnapshotTask {
     /// Provider display id such as GitHub `#123` or GitLab `!123`.
@@ -199,61 +184,6 @@ impl TaskService {
         });
     }
 
-    /// Spawns one requested-review refresh for the active project.
-    ///
-    /// The task resolves the project remote through the injected git boundary,
-    /// asks the forge client for open PRs/MRs requesting the authenticated
-    /// user's review, and reports the result through [`AppEvent`] with the
-    /// generation that lets the reducer discard stale completions.
-    pub(super) fn spawn_requested_reviews_task(
-        generation: u64,
-        project_id: i64,
-        working_dir: PathBuf,
-        app_event_tx: mpsc::UnboundedSender<AppEvent>,
-        git_client: Arc<dyn GitClient>,
-        review_request_client: Arc<dyn ReviewRequestClient>,
-    ) {
-        tokio::spawn(async move {
-            let result = load_requested_reviews(
-                working_dir,
-                git_client.as_ref(),
-                review_request_client.as_ref(),
-            )
-            .await;
-            let _ = app_event_tx.send(AppEvent::RequestedReviewsLoaded {
-                generation,
-                project_id,
-                result,
-            });
-        });
-    }
-
-    /// Spawns one requested-review comment snapshot load for the open detail
-    /// page without blocking key handling or terminal redraws.
-    pub(super) fn spawn_requested_review_comment_snapshot_task(
-        task: RequestedReviewCommentSnapshotTask,
-        app_event_tx: mpsc::UnboundedSender<AppEvent>,
-        git_client: Arc<dyn GitClient>,
-        review_request_client: Arc<dyn ReviewRequestClient>,
-    ) {
-        tokio::spawn(async move {
-            let result = Self::load_requested_review_comment_snapshot(
-                task.working_dir,
-                task.display_id.clone(),
-                git_client.as_ref(),
-                review_request_client.as_ref(),
-            )
-            .await;
-            let _ = app_event_tx.send(AppEvent::RequestedReviewCommentSnapshotLoaded {
-                display_id: task.display_id,
-                generation: task.generation,
-                project_id: task.project_id,
-                result,
-                web_url: task.web_url,
-            });
-        });
-    }
-
     /// Spawns one linked session review-comment load without blocking terminal
     /// input or redraws.
     pub(super) fn spawn_session_review_comment_snapshot_task(
@@ -301,22 +231,6 @@ impl TaskService {
                         .map_err(|error| error.detail_message())?
                 }
             };
-
-        load_review_comment_snapshot(remote, display_id, review_request_client).await
-    }
-
-    /// Loads and normalizes the comment snapshot for one requested review.
-    ///
-    /// This is triggered lazily when users open a specific review detail page
-    /// so the top-level Inbox tab does not perform one comment API request
-    /// per listed PR or MR.
-    pub(super) async fn load_requested_review_comment_snapshot(
-        working_dir: PathBuf,
-        display_id: String,
-        git_client: &dyn GitClient,
-        review_request_client: &dyn ReviewRequestClient,
-    ) -> Result<ReviewCommentSnapshot, String> {
-        let remote = review_request_remote(working_dir, git_client, review_request_client).await?;
 
         load_review_comment_snapshot(remote, display_id, review_request_client).await
     }
@@ -572,23 +486,7 @@ impl TaskService {
     }
 }
 
-/// Resolves the active project remote and loads PRs/MRs requesting the current
-/// authenticated user's review without detail comment snapshots.
-async fn load_requested_reviews(
-    working_dir: PathBuf,
-    git_client: &dyn GitClient,
-    review_request_client: &dyn ReviewRequestClient,
-) -> Result<Vec<ag_forge::RequestedReview>, String> {
-    let remote = review_request_remote(working_dir, git_client, review_request_client).await?;
-
-    review_request_client
-        .list_requested_reviews(remote)
-        .await
-        .map_err(|error| error.detail_message())
-}
-
-/// Resolves the active project remote for requested-review list and detail
-/// loading.
+/// Resolves the active project remote for session review-comment loading.
 async fn review_request_remote(
     working_dir: PathBuf,
     git_client: &dyn GitClient,
@@ -654,8 +552,8 @@ mod tests {
     use std::time::Duration;
 
     use ag_forge::{
-        ForgeKind, MockReviewRequestClient, RequestedReview, RequestedReviewAudience,
-        ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
+        ForgeKind, MockReviewRequestClient, ReviewComment, ReviewCommentAnchorSide,
+        ReviewCommentSnapshot,
     };
     use ag_git::MockGitClient;
     use ag_protocol::{AgentResponse, parse_agent_response_strict};
@@ -705,74 +603,6 @@ mod tests {
 
         // Assert
         assert!(app_event_tx.is_closed());
-    }
-
-    #[tokio::test]
-    /// Ensures requested-review list loading does not fetch detail comment
-    /// snapshots for every listed PR or MR.
-    async fn load_requested_reviews_lists_metadata_without_comment_snapshots() {
-        // Arrange
-        let mut mock_git_client = MockGitClient::new();
-        mock_git_client.expect_repo_url().times(1).returning(|_| {
-            Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
-        });
-        let mut mock_review_request_client = MockReviewRequestClient::new();
-        mock_review_request_client
-            .expect_detect_remote()
-            .times(1)
-            .returning(|_| Ok(forge_remote()));
-        mock_review_request_client
-            .expect_list_requested_reviews()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok(vec![requested_review("#42")]) }));
-        mock_review_request_client
-            .expect_fetch_review_comment_snapshot()
-            .times(0);
-
-        // Act
-        let requested_reviews = load_requested_reviews(
-            PathBuf::from("/tmp/project"),
-            &mock_git_client,
-            &mock_review_request_client,
-        )
-        .await
-        .expect("requested reviews should load");
-
-        // Assert
-        assert_eq!(requested_reviews.len(), 1);
-        assert_eq!(requested_reviews[0].comment_snapshot, None);
-    }
-
-    #[tokio::test]
-    /// Ensures lazy requested-review detail loading fetches and stores the
-    /// selected PR or MR comment snapshot.
-    async fn load_requested_review_comment_snapshot_fetches_selected_review_comments() {
-        // Arrange
-        let mut mock_git_client = MockGitClient::new();
-        mock_git_client.expect_repo_url().times(1).returning(|_| {
-            Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
-        });
-        let mut mock_review_request_client = MockReviewRequestClient::new();
-        mock_review_request_client
-            .expect_detect_remote()
-            .times(1)
-            .returning(|_| Ok(forge_remote()));
-        mock_review_request_client
-            .expect_fetch_review_comment_snapshot()
-            .times(1)
-            .returning(|_, _| Box::pin(async { Ok(review_comment_snapshot()) }));
-
-        // Act
-        let comment_snapshot = TaskService::load_requested_review_comment_snapshot(
-            PathBuf::from("/tmp/project"),
-            "#42".to_string(),
-            &mock_git_client,
-            &mock_review_request_client,
-        )
-        .await;
-
-        // Assert
-        assert_eq!(comment_snapshot, Ok(review_comment_snapshot()));
     }
 
     #[tokio::test]
@@ -841,41 +671,6 @@ mod tests {
 
         // Assert
         assert!(matches!(result, Err(error) if error.contains("session worktree was removed")));
-    }
-
-    #[tokio::test]
-    /// Ensures requested-review comment snapshots are sorted before they are
-    /// stored for render-time reuse.
-    async fn load_requested_review_comment_snapshot_sorts_threads_once() {
-        // Arrange
-        let mut mock_git_client = MockGitClient::new();
-        mock_git_client.expect_repo_url().times(1).returning(|_| {
-            Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
-        });
-        let mut mock_review_request_client = MockReviewRequestClient::new();
-        mock_review_request_client
-            .expect_detect_remote()
-            .times(1)
-            .returning(|_| Ok(forge_remote()));
-        mock_review_request_client
-            .expect_fetch_review_comment_snapshot()
-            .times(1)
-            .returning(|_, _| Box::pin(async { Ok(unsorted_review_comment_snapshot()) }));
-
-        // Act
-        let comment_snapshot = TaskService::load_requested_review_comment_snapshot(
-            PathBuf::from("/tmp/project"),
-            "#42".to_string(),
-            &mock_git_client,
-            &mock_review_request_client,
-        )
-        .await
-        .expect("comments should load");
-
-        // Assert
-        let threads = &comment_snapshot.threads;
-        assert_eq!(threads[0].path, "crates/agentty/src/app.rs");
-        assert_eq!(threads[1].path, "crates/agentty/src/ui.rs");
     }
 
     #[tokio::test]
@@ -1366,23 +1161,6 @@ mod tests {
         }
     }
 
-    /// Builds one requested review fixture for task tests.
-    fn requested_review(display_id: &str) -> RequestedReview {
-        RequestedReview {
-            audience: RequestedReviewAudience::Personal,
-            author: "octocat".to_string(),
-            body: Some("Implements requested-review detail comments.".to_string()),
-            comment_snapshot: None,
-            display_id: display_id.to_string(),
-            forge_kind: ForgeKind::GitHub,
-            repository: "agentty-xyz/agentty".to_string(),
-            status_summary: None,
-            title: "Show requested-review comments".to_string(),
-            updated_at: Some("2026-06-10T04:00:00Z".to_string()),
-            web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
-        }
-    }
-
     /// Builds one review-comment snapshot fixture for task tests.
     fn review_comment_snapshot() -> ReviewCommentSnapshot {
         ReviewCommentSnapshot {
@@ -1391,34 +1169,6 @@ mod tests {
                 body: "Looks ready.".to_string(),
             }],
             threads: Vec::new(),
-        }
-    }
-
-    /// Builds one unsorted review-comment snapshot fixture for task tests.
-    fn unsorted_review_comment_snapshot() -> ReviewCommentSnapshot {
-        ReviewCommentSnapshot {
-            pr_level_comments: Vec::new(),
-            threads: vec![
-                review_comment_thread("crates/agentty/src/ui.rs"),
-                review_comment_thread("crates/agentty/src/app.rs"),
-            ],
-        }
-    }
-
-    /// Builds one inline review-comment thread fixture for task tests.
-    fn review_comment_thread(path: &str) -> ReviewCommentThread {
-        ReviewCommentThread {
-            anchor_side: ReviewCommentAnchorSide::New,
-            comments: vec![ReviewComment {
-                author: "alice".to_string(),
-                body: "Please check this.".to_string(),
-            }],
-            id: "thread-id".to_string(),
-            is_outdated: Some(false),
-            is_resolved: false,
-            line: Some(7),
-            path: path.to_string(),
-            start_line: None,
         }
     }
 
