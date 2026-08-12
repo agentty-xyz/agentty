@@ -3962,6 +3962,7 @@ fn review_request_creation_queues_during_running_turn() -> E2eResult {
                     .write_text("Queue the review request")
                     .wait_for_text("Queue the review request", 3000)
                     .press_key("Enter")
+                    .wait_for_text("Ctrl+c: stop", 5000)
                     .wait_for_text("p: PR", 5000)
                     .press_key("p")
                     .wait_for_text("Publish Review Request", 5000)
@@ -4113,6 +4114,7 @@ fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResult {
                     .write_text("Queue mixed work")
                     .wait_for_text("Queue mixed work", 3000)
                     .press_key("Enter")
+                    .wait_for_text("Ctrl+c: stop", 5000)
                     .wait_for_text("p: PR", 5000)
                     .press_key("Enter")
                     .wait_for_text("Type your message", 5000)
@@ -4130,6 +4132,10 @@ fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResult {
                     )
                     .wait_for_text(QUEUED_REVIEW_REQUEST_TURN_ANSWER, 30000)
                     .wait_for_text(QUEUED_REVIEW_FOLLOW_UP_ANSWER, 10000)
+                    .capture_labeled(
+                        "mixed_queue_chat_execution_order",
+                        "Active chat completes before the queued chat message",
+                    )
                     .wait_for_text("[Review Request] Created PR", 15000)
                     .capture_labeled(
                         "mixed_queue_execution_order",
@@ -4152,12 +4158,21 @@ fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResult {
                     .row;
                 assert!(queued_chat_row < queued_publish_row);
 
-                let active_answer_row = frame
+                let chat_execution_frame = common::frame_from_capture(&report.captures[1]);
+                let active_answer_row = chat_execution_frame
                     .find_text(QUEUED_REVIEW_REQUEST_TURN_ANSWER)
                     .first()
                     .expect("missing active turn answer")
                     .rect
                     .row;
+                let queued_answer_row = chat_execution_frame
+                    .find_text(QUEUED_REVIEW_FOLLOW_UP_ANSWER)
+                    .first()
+                    .expect("missing queued chat answer")
+                    .rect
+                    .row;
+                assert!(active_answer_row < queued_answer_row);
+
                 let queued_answer_row = frame
                     .find_text(QUEUED_REVIEW_FOLLOW_UP_ANSWER)
                     .first()
@@ -4170,7 +4185,6 @@ fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResult {
                     .expect("missing created review request")
                     .rect
                     .row;
-                assert!(active_answer_row < queued_answer_row);
                 assert!(queued_answer_row < review_request_row);
             },
         )?;
@@ -4946,11 +4960,11 @@ fn build_orchestration_scenario(scenario: Scenario) -> Scenario {
             "orchestration_sessions",
             "Workers stay grouped with their controller",
         )
-        .sleep_ms(6000)
+        .wait_for_text("Phase: AwaitingIntegration", 30000)
         .press_key("j")
         .wait_for_stable_frame(300, 5000)
         .press_key("Enter")
-        .wait_for_stable_frame(500, 5000)
+        .wait_for_text("Rolled up both worker results.", 5000)
         .capture_labeled(
             "orchestration_rollup",
             "Review worker summaries and merge order",
