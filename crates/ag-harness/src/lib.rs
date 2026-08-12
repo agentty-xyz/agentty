@@ -13,6 +13,8 @@ mod tool;
 pub use model::{
     Model, ModelClient, ModelError, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,
 };
-pub use provider::{KimiConfig, QwenConfig};
+pub use provider::{
+    KimiConfig, MUSE_SPARK_1_2, MUSE_SPARK_1_2_CONTRIBUTOR, MuseConfig, QwenConfig,
+};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use tool::{ReadArguments, ToolCall, ToolDefinition};

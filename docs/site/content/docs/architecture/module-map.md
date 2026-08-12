@@ -30,9 +30,10 @@ For file-level detail, read the module docstrings directly.
   metadata, commit/diff/push/pull sync, rebase/conflict handling, and squash-merge
   workflows behind the `GitClient` boundary.
 - `crates/ag-harness/`: Application-facing LLM harness crate with the provider-neutral
-  object-safe `Model` boundary, its `ModelClient` implementation, private Qwen and Kimi
-  policies, a shared Chat Completions JSON Object backend, and backend-neutral
-  request-duration telemetry. Application binaries own telemetry setup.
+  object-safe `Model` boundary, its `ModelClient` implementation, private Qwen, Kimi,
+  and Muse policies, a shared Chat Completions backend with JSON Object and JSON Schema
+  modes, and backend-neutral request-duration telemetry. Application binaries own
+  telemetry setup.
 - `crates/ag-protocol/`: Shared structured response protocol library crate with
   transport-neutral response models, schema generation, parser diagnostics, protocol
   prompt envelopes, repair prompts, review-comment outcomes, and turn prompt payload

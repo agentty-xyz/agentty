@@ -1,9 +1,10 @@
 use crate::chat_completion;
 
 pub(crate) const PROVIDER_NAME: &str = "moonshot_ai";
-pub(crate) const POLICY: chat_completion::JsonObjectProviderPolicy =
-    chat_completion::JsonObjectProviderPolicy {
+pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
+    chat_completion::ChatCompletionProviderPolicy {
         display_name: "Kimi",
+        structured_output: chat_completion::StructuredOutputMode::JsonObject,
         telemetry_name: PROVIDER_NAME,
         unsupported_schema_reason: "Kimi JSON Object mode requires an explicit object root schema",
     };

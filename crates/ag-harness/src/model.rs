@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::provider::{self, KimiConfig, QwenConfig};
+use crate::provider::{self, KimiConfig, MuseConfig, QwenConfig};
 use crate::schema_contract::{OutputSchema, OutputValidationError};
 use crate::{chat_completion, telemetry, tool};
 
@@ -29,7 +29,7 @@ pub trait Model: Send + Sync {
 /// [`ModelClient::complete`], which owns telemetry and structured-output
 /// validation.
 pub struct ModelClient {
-    backend: chat_completion::JsonObjectBackend,
+    backend: chat_completion::ChatCompletionBackend,
     metadata: ModelMetadata,
 }
 
@@ -46,6 +46,21 @@ impl ModelClient {
             config.base_url,
             config.model,
             provider::KIMI_POLICY,
+        )
+    }
+
+    /// Creates a client backed by Meta's Model API for Muse models.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelMetadataError`] when the configured model identifier is
+    /// empty or contains only whitespace.
+    pub fn muse(config: MuseConfig) -> Result<Self, ModelMetadataError> {
+        Self::chat_completion(
+            config.api_key,
+            config.base_url,
+            config.model,
+            provider::MUSE_POLICY,
         )
     }
 
@@ -97,9 +112,9 @@ impl ModelClient {
         api_key: String,
         base_url: String,
         model: String,
-        policy: chat_completion::JsonObjectProviderPolicy,
+        policy: chat_completion::ChatCompletionProviderPolicy,
     ) -> Result<Self, ModelMetadataError> {
-        let backend = chat_completion::JsonObjectBackend::new(api_key, base_url, model, policy);
+        let backend = chat_completion::ChatCompletionBackend::new(api_key, base_url, model, policy);
         let (provider, model) = backend.identity();
         let metadata = ModelMetadata::new(provider, model)?;
 

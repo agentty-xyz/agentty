@@ -27,8 +27,10 @@ flowchart LR
     M --> L["ModelClient lifecycle"]
     L --> Q["Qwen policy"]
     L --> K["Kimi policy"]
-    Q --> J["JSON Object backend"]
+    L --> U["Muse policy"]
+    Q --> J["Structured backend"]
     K --> J
+    U --> J
     J --> O["Chat Completions"]
 ```
 
@@ -65,19 +67,30 @@ Provider-owned adapters and compatibility rules live under the private `provider
 module. API-family clients remain separate so multiple providers can reuse a wire
 protocol without sharing provider policy.
 
-Qwen and Kimi share Chat Completions request execution and bounded response decoding.
-Both providers request JSON Object output, include the requested `OutputSchema` in the
-system instruction, and rely on shared local schema validation before returning a
-successful response. Schemas without an explicit object root and unsupported
+Qwen, Kimi, and Muse share Chat Completions request execution and bounded response
+decoding. Qwen and Kimi request JSON Object output and include the requested
+`OutputSchema` in the system instruction. Muse uses Meta Model API's native JSON Schema
+response format instead. Every provider retains shared local schema validation before
+returning a successful response. Schemas without an explicit object root and unsupported
 configurations fail explicitly rather than falling back to unstructured output.
 
+Muse intentionally omits Meta's optional `strict` flag, whose documented default is
+`false`. That keeps standard JSON Schema available while Meta enforces service limits,
+such as schema depth and size, through bounded provider HTTP errors.
+
+Muse exposes both `MUSE_SPARK_1_2` and `MUSE_SPARK_1_2_CONTRIBUTOR`. The contributor
+model uses discounted pricing in exchange for permission to use its prompts and
+completions to train future Meta models; the standard model does not use that data for
+training. The Muse example defaults to the standard model and accepts an explicit
+`MODEL_API_MODEL` override so applications must opt in to the contributor terms.
+
 The current wire-only tool foundation lets callers explicitly advertise the native
-`read` function on an individual `ModelRequest`. Qwen and Kimi translate the shared
-`ToolDefinition` into their Chat Completions payload and decode exactly one validated
-`ToolCall` with typed `ReadArguments`. A tool call remains distinct from terminal
-`ModelResponse` output, which continues through local `OutputSchema` validation. This
-slice stops at decoding: tool execution, filesystem access, tool-result messages, and
-the continuation loop remain future work.
+`read` function on an individual `ModelRequest`. Qwen, Kimi, and Muse translate the
+shared `ToolDefinition` into their Chat Completions payload and decode exactly one
+validated `ToolCall` with typed `ReadArguments`. A tool call remains distinct from
+terminal `ModelResponse` output, which continues through local `OutputSchema`
+validation. This slice stops at decoding: tool execution, filesystem access, tool-result
+messages, and the continuation loop remain future work.
 
 ## Session management
 
@@ -171,12 +184,12 @@ unstructured text.
 
 The shared `ModelClient` lifecycle records `gen_ai.client.operation.duration` for every
 backend request, including failures and cancellations. Application binaries own
-OpenTelemetry SDK setup, export, and shutdown. The Qwen and Kimi examples configure
-OTLP/HTTP metrics through the standard `OTEL_EXPORTER_OTLP_ENDPOINT` and
+OpenTelemetry SDK setup, export, and shutdown. The Qwen, Kimi, and Muse examples
+configure OTLP/HTTP metrics through the standard `OTEL_EXPORTER_OTLP_ENDPOINT` and
 `OTEL_EXPORTER_OTLP_HEADERS` environment variables. Each histogram observation is one
 model call; aggregate its count by `gen_ai.provider.name` to separate providers. Their
-default service names are `ag-harness-qwen` and `ag-harness-kimi`, while
-`OTEL_SERVICE_NAME` remains an application-level override.
+default service names are `ag-harness-qwen`, `ag-harness-kimi`, and `ag-harness-muse`,
+while `OTEL_SERVICE_NAME` remains an application-level override.
 
 ```mermaid
 flowchart LR
