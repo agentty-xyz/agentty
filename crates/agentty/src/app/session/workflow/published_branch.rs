@@ -185,7 +185,7 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
         PublishBranchAction::Push,
         &input.session_id,
         Some(remote_branch_name.as_str()),
-        Some(&input.published_upstream_ref),
+        branch_publish::BranchPushRemote::Tracking(Some(&input.published_upstream_ref)),
     )
     .await;
 

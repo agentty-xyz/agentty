@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agentty::db::{DB_DIR, DB_FILE, Database};
+use agentty::db::{DB_DIR, DB_FILE, Database, DbError};
 use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
@@ -886,8 +886,27 @@ fn seed_successful_review_request_publish(
     create_delay_seconds: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session_worktree = env.agentty_root.join("wt").join("review-s");
+    let base_commit_hash = run_git_stdout(&session_worktree, &["rev-parse", "HEAD"])?;
+    run_git(
+        &session_worktree,
+        &["update-ref", "refs/remotes/origin/main", &base_commit_hash],
+    )?;
+    run_git(&session_worktree, &["add", "."])?;
+    run_git(
+        &session_worktree,
+        &["commit", "-m", "Add review-ready change"],
+    )?;
     run_git(&session_worktree, &["branch", "-m", "wt/review-s"])?;
-    run_git(&session_worktree, &["branch", "main", "HEAD"])?;
+    run_git(&session_worktree, &["branch", "main", &base_commit_hash])?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_base_commit_hash("review-shortcut-0001", base_commit_hash)
+            .await
+    })?;
 
     let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|path| path.join("git"))
@@ -896,6 +915,9 @@ fn seed_successful_review_request_publish(
     let git_path = env.stub_bin.join("git");
     let script = format!(
         r#"#!/bin/sh
+if [ "$1" = "fetch" ]; then
+  exit 0
+fi
 if [ "$1" = "push" ]; then
   sleep {push_delay_seconds}
   exit 0
@@ -942,6 +964,107 @@ esac
     std::fs::write(&gh_path, gh_script)?;
     #[cfg(unix)]
     std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
+/// Seeds a session that inherited one local-only base commit before making no
+/// changes of its own, matching the unsafe first-publish ancestry case.
+fn seed_unsynchronized_base_publish(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_inherited_base_publish(env, true)
+}
+
+/// Seeds the same inherited-commit case without a recorded ownership boundary.
+fn seed_missing_base_publish(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_inherited_base_publish(env, false)
+}
+
+/// Seeds an inherited branch commit with optional base metadata.
+fn seed_inherited_base_publish(
+    env: &BuilderEnv,
+    record_base_commit: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    std::fs::remove_dir(&session_worktree)?;
+    let session_worktree_text = session_worktree.to_string_lossy().into_owned();
+    run_git(
+        &env.workdir,
+        &[
+            "worktree",
+            "add",
+            session_worktree_text.as_str(),
+            "wt/review-s",
+        ],
+    )?;
+    run_git(
+        &session_worktree,
+        &["config", "user.email", "test@test.com"],
+    )?;
+    run_git(&session_worktree, &["config", "user.name", "Test"])?;
+    let remote_base_hash = run_git_stdout(&env.workdir, &["rev-parse", "HEAD"])?;
+    run_git(
+        &session_worktree,
+        &["update-ref", "refs/remotes/origin/main", &remote_base_hash],
+    )?;
+
+    std::fs::write(
+        session_worktree.join("inherited.txt"),
+        "local-only base change\n",
+    )?;
+    run_git(&session_worktree, &["add", "."])?;
+    run_git(
+        &session_worktree,
+        &["commit", "-m", "Inherited local commit"],
+    )?;
+    let local_base_hash = run_git_stdout(&session_worktree, &["rev-parse", "HEAD"])?;
+    run_git(
+        &session_worktree,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/agentty-xyz/agentty.git",
+        ],
+    )?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        if record_base_commit {
+            database
+                .sessions()
+                .update_session_base_commit_hash("review-shortcut-0001", local_base_hash)
+                .await?;
+        }
+
+        Ok::<(), DbError>(())
+    })?;
+
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
+    let git_path = env.stub_bin.join("git");
+    let script = format!(
+        r#"#!/bin/sh
+case "$1" in
+  fetch)
+    exit 0
+    ;;
+  push)
+    echo "unsafe push attempted" >&2
+    exit 91
+    ;;
+esac
+exec '{}' "$@"
+"#,
+        real_git.display()
+    );
+    std::fs::write(&git_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
 
     Ok(())
 }
@@ -1927,6 +2050,7 @@ if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 sleep 8
+printf '%s\n' 'queued review change' > queued-review-change.txt
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}"}}]}}}}'
 printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
@@ -1943,12 +2067,18 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
     let git_path = env.stub_bin.join("git");
     let git_script = format!(
         r#"#!/bin/sh
+if [ "$1" = "fetch" ] && [ "$2" = "origin" ]; then
+  base_commit=$("{}" rev-parse main) || exit 1
+  exec "{}" update-ref refs/remotes/origin/main "$base_commit"
+fi
 if [ "$1" = "push" ]; then
   sleep 2
   exit 0
 fi
-exec '{}' "$@"
+exec "{}" "$@"
 "#,
+        real_git.display(),
+        real_git.display(),
         real_git.display()
     );
     std::fs::write(&git_path, git_script)?;
@@ -4001,7 +4131,7 @@ fn review_request_creation_queues_during_running_turn() -> E2eResult {
                         "Review-request creation queued behind the active turn",
                     )
                     .wait_for_text(QUEUED_REVIEW_REQUEST_TURN_ANSWER, 30000)
-                    .wait_for_text("Publishing review request...", 5000)
+                    .wait_for_text("Publishing review request...", 15000)
                     .capture_labeled(
                         "review_request_started",
                         "Queued review-request creation starts after the turn completes",
@@ -6206,6 +6336,105 @@ fn review_request_publish_shortcut_opens_publish_popup() -> E2eResult {
                     "Leave blank to push as `wt/review-s`",
                     &full,
                 );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that first publication blocks a session whose base contains commits
+/// absent from the remote review target, and session sync does not reclassify
+/// those inherited commits as publishable session work.
+#[test]
+fn review_request_unsynchronized_base_is_blocked() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_unsynced_base_guard")
+        .with_git()
+        .setup(seed_unsynchronized_base_publish)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Review request publish blocked", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "review_request_unsynced_base_guard",
+                        "Publish blocked before inherited base commits reach the remote",
+                    )
+                    .press_key("r")
+                    .wait_for_text("[Sync] Successfully synced", 10000)
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Nothing to publish", 5000)
+            },
+            |frame, report| {
+                let blocked_frame = common::frame_from_capture(&report.captures[0]);
+                let blocked_full = Region::full(blocked_frame.cols(), blocked_frame.rows());
+                assertion::assert_text_in_region(
+                    &blocked_frame,
+                    "Review request publish blocked",
+                    &blocked_full,
+                );
+                assertion::assert_text_in_region(
+                    &blocked_frame,
+                    "contains 1 commit not present",
+                    &blocked_full,
+                );
+                assertion::assert_text_in_region(
+                    &blocked_frame,
+                    "predate the session",
+                    &blocked_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Nothing to publish", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that syncing a missing-base session with an inherited commit does
+/// not reclassify that commit as publishable session work.
+#[test]
+fn review_request_missing_base_stays_blocked_after_sync() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_missing_base_sync_guard")
+        .with_git()
+        .setup(seed_missing_base_publish)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("r")
+                    .wait_for_text("[Sync] Successfully synced", 10000)
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Review request publish blocked", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "review_request_missing_base_sync_guard",
+                        "Missing base remains blocked after sync preserves a commit",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Review request publish blocked", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "not recorded. Sync this session with r",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "no branch-only commits", &full);
             },
         )?;
 

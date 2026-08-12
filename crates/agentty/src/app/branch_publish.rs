@@ -13,6 +13,8 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::clock::Clock;
 use crate::infra::db;
 
+const REVIEW_REQUEST_REMOTE_NAME: &str = "origin";
+
 /// Session snapshot cloned into a branch-publish background task.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BranchPublishTaskSession {
@@ -56,6 +58,12 @@ pub(crate) struct BranchPublishTaskContext {
     pub(crate) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
     /// Immutable session data used throughout the background workflow.
     pub(crate) session: BranchPublishTaskSession,
+}
+
+/// Git and forge identities for the remote that owns review requests.
+struct ReviewRequestTarget {
+    forge_remote: forge::ForgeRemote,
+    git_remote_name: &'static str,
 }
 
 /// Final reducer payload for a completed branch-publish background action.
@@ -393,7 +401,7 @@ pub(crate) async fn push_session_branch(
         publish_branch_action,
         &branch_publish_session.id,
         remote_branch_name,
-        branch_publish_session.published_upstream_ref.as_deref(),
+        BranchPushRemote::Tracking(branch_publish_session.published_upstream_ref.as_deref()),
     )
     .await?;
     let review_request_creation =
@@ -423,6 +431,20 @@ async fn publish_pull_request(
         ));
     }
 
+    let review_request_target = review_request_target(
+        branch_publish_session,
+        git_client.clone(),
+        review_request_client.as_ref(),
+    )
+    .await?;
+    validate_new_review_request_publish(
+        branch_publish_session,
+        &db,
+        git_client.as_ref(),
+        review_request_target.git_remote_name,
+    )
+    .await?;
+
     let branch_name = remote_branch_name.map_or_else(
         || session::session_branch(&branch_publish_session.id),
         str::to_string,
@@ -434,13 +456,10 @@ async fn publish_pull_request(
         PublishBranchAction::PublishPullRequest,
         &branch_publish_session.id,
         remote_branch_name,
-        branch_publish_session.published_upstream_ref.as_deref(),
-    )
-    .await?;
-    let remote = review_request_remote(
-        branch_publish_session,
-        git_client.clone(),
-        review_request_client.as_ref(),
+        BranchPushRemote::Named {
+            name: review_request_target.git_remote_name,
+            published_upstream_ref: branch_publish_session.published_upstream_ref.as_deref(),
+        },
     )
     .await?;
     let review_request = create_or_refresh_review_request(
@@ -449,7 +468,7 @@ async fn publish_pull_request(
         &db,
         git_client.clone(),
         review_request_client,
-        remote,
+        review_request_target.forge_remote,
         branch_name.clone(),
     )
     .await?;
@@ -461,14 +480,189 @@ async fn publish_pull_request(
     })
 }
 
+/// Validates that a new review request contains only intended review commits.
+///
+/// The saved base commit is compared with the freshly fetched remote target
+/// before any branch push. This prevents local commits that predate the
+/// session from leaking into a review request and rejects branches with no
+/// commits above the saved boundary. Forks intentionally preserve the source
+/// session's boundary, so inherited source commits remain publishable. Linked
+/// review requests already passed this gate on creation and continue through
+/// the refresh path.
+async fn validate_new_review_request_publish(
+    branch_publish_session: &BranchPublishTaskSession,
+    db: &db::AppRepositories,
+    git_client: &dyn GitClient,
+    target_remote_name: &str,
+) -> Result<(), BranchPublishTaskFailure> {
+    if branch_publish_session.review_request.is_some() {
+        return Ok(());
+    }
+
+    let base_commit_hash = db
+        .sessions()
+        .get_session_base_commit_hash(&branch_publish_session.id)
+        .await
+        .map_err(|error| {
+            BranchPublishTaskFailure::failed(
+                PublishBranchAction::PublishPullRequest,
+                format!("Failed to load the session base commit: {error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            BranchPublishTaskFailure::blocked(
+                PublishBranchAction::PublishPullRequest,
+                "Cannot verify which commits belong to this session because its base commit was \
+                 not recorded. Sync this session with `r`. Base recovery succeeds only when the \
+                 session has no branch-only commits. If publishing remains blocked, preserve any \
+                 session work and create a new session."
+                    .to_string(),
+            )
+        })?;
+
+    git_client
+        .fetch_named_remote(
+            branch_publish_session.folder.clone(),
+            target_remote_name.to_string(),
+        )
+        .await
+        .map_err(|error| {
+            BranchPublishTaskFailure::failed(
+                PublishBranchAction::PublishPullRequest,
+                format!("Failed to fetch the remote target before publishing: {error}"),
+            )
+        })?;
+
+    let remote_base_ref = format!(
+        "{target_remote_name}/{}",
+        branch_publish_session.base_branch
+    );
+    let (base_ahead, base_behind) = git_client
+        .get_ref_ahead_behind(
+            branch_publish_session.folder.clone(),
+            base_commit_hash.clone(),
+            remote_base_ref.clone(),
+        )
+        .await
+        .map_err(|error| {
+            BranchPublishTaskFailure::failed(
+                PublishBranchAction::PublishPullRequest,
+                format!(
+                    "Failed to compare the session base with `{remote_base_ref}` before \
+                     publishing: {error}"
+                ),
+            )
+        })?;
+
+    validate_base_relationship(
+        branch_publish_session,
+        &remote_base_ref,
+        base_ahead,
+        base_behind,
+    )?;
+
+    let (session_ahead, session_behind) = git_client
+        .get_ref_ahead_behind(
+            branch_publish_session.folder.clone(),
+            "HEAD".to_string(),
+            base_commit_hash,
+        )
+        .await
+        .map_err(|error| {
+            BranchPublishTaskFailure::failed(
+                PublishBranchAction::PublishPullRequest,
+                format!("Failed to inspect session commits before publishing: {error}"),
+            )
+        })?;
+
+    if session_ahead == 0 && session_behind == 0 {
+        return Err(BranchPublishTaskFailure::blocked(
+            PublishBranchAction::PublishPullRequest,
+            "Nothing to publish: this session has no commits after its synchronized base."
+                .to_string(),
+        ));
+    }
+    if session_behind > 0 {
+        return Err(BranchPublishTaskFailure::blocked(
+            PublishBranchAction::PublishPullRequest,
+            "Cannot publish this review request because the session branch no longer contains its \
+             recorded base commit. Sync the session onto the remote target, then retry."
+                .to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Rejects every saved-base relationship except equality with the remote.
+fn validate_base_relationship(
+    branch_publish_session: &BranchPublishTaskSession,
+    remote_base_ref: &str,
+    base_ahead: u32,
+    base_behind: u32,
+) -> Result<(), BranchPublishTaskFailure> {
+    match (base_ahead, base_behind) {
+        (0, 0) => Ok(()),
+        (ahead, 0) => Err(BranchPublishTaskFailure::blocked(
+            PublishBranchAction::PublishPullRequest,
+            format!(
+                "Cannot publish this review request because the session started from a local `{}` \
+                 that contains {ahead} {} not present in `{remote_base_ref}`. Publishing would \
+                 include changes that predate the session. Synchronize the base branch, create a \
+                 new session, then retry.",
+                branch_publish_session.base_branch,
+                commit_count_label(ahead),
+            ),
+        )),
+        (0, behind) => Err(BranchPublishTaskFailure::blocked(
+            PublishBranchAction::PublishPullRequest,
+            format!(
+                "Cannot publish this review request because `{remote_base_ref}` advanced by \
+                 {behind} {} after the session started. Sync the session onto the remote target, \
+                 then retry.",
+                commit_count_label(behind),
+            ),
+        )),
+        (ahead, behind) => Err(BranchPublishTaskFailure::blocked(
+            PublishBranchAction::PublishPullRequest,
+            format!(
+                "Cannot publish this review request because the saved session base and \
+                 `{remote_base_ref}` diverged ({ahead} local-only, {behind} remote-only commits). \
+                 Reconcile the base branch and sync the session, then retry."
+            ),
+        )),
+    }
+}
+
+/// Returns the singular or plural label for one commit count.
+fn commit_count_label(count: u32) -> &'static str {
+    if count == 1 {
+        return "commit";
+    }
+
+    "commits"
+}
+
+/// Selects whether a branch push follows Git tracking configuration or uses
+/// one explicit remote.
+pub(crate) enum BranchPushRemote<'a> {
+    Named {
+        name: &'a str,
+        published_upstream_ref: Option<&'a str>,
+    },
+    Tracking(Option<&'a str>),
+}
+
 /// Pushes the session branch to the configured remote and persists the
 /// resulting upstream reference.
 ///
-/// When `remote_branch_name` is supplied and the session has no prior
-/// `published_upstream_ref`, a pre-flight `git ls-remote` check blocks
+/// When `remote_branch_name` is supplied and the session has not previously
+/// published to the target remote, a pre-flight `git ls-remote` check blocks
 /// the push if the remote branch already exists. Without a caller-supplied
 /// branch name, the default session branch name is still pushed explicitly so
 /// Git does not reuse an inherited base-branch upstream such as `origin/main`.
+/// With [`BranchPushRemote::Named`], both lookup and push are pinned to that
+/// remote instead of consulting the branch's tracking configuration.
 pub(crate) async fn push_session_branch_to_remote(
     db: &db::AppRepositories,
     folder: PathBuf,
@@ -476,11 +670,26 @@ pub(crate) async fn push_session_branch_to_remote(
     publish_branch_action: PublishBranchAction,
     session_id: &str,
     remote_branch_name: Option<&str>,
-    published_upstream_ref: Option<&str>,
+    branch_push_remote: BranchPushRemote<'_>,
 ) -> Result<String, BranchPublishTaskFailure> {
+    let (published_upstream_ref, target_remote_name) = match branch_push_remote {
+        BranchPushRemote::Named {
+            name,
+            published_upstream_ref,
+        } => (published_upstream_ref, Some(name)),
+        BranchPushRemote::Tracking(published_upstream_ref) => (published_upstream_ref, None),
+    };
     let retry_text = retry_action_text(publish_branch_action);
     let target_branch =
         remote_branch_name.map_or_else(|| session::session_branch(session_id), str::to_string);
+    let is_published_to_target = target_remote_name.map_or_else(
+        || published_upstream_ref.is_some(),
+        |target_remote_name| {
+            published_upstream_ref
+                .and_then(|upstream_reference| upstream_reference.split_once('/'))
+                .is_some_and(|(remote_name, _)| remote_name == target_remote_name)
+        },
+    );
 
     ensure_session_branch_push_safe(
         git_client.as_ref(),
@@ -491,64 +700,47 @@ pub(crate) async fn push_session_branch_to_remote(
     .await?;
 
     if let Some(target_branch) = remote_branch_name
-        && published_upstream_ref.is_none()
+        && !is_published_to_target
     {
-        let already_exists = git_client
-            .remote_branch_exists(folder.clone(), target_branch.to_string())
-            .await
-            .map_err(|error| {
-                let detail = error.to_string();
-                let normalized = detail.to_ascii_lowercase();
-
-                if has_authentication_error_keywords(&normalized) {
-                    BranchPublishTaskFailure::blocked(
-                        publish_branch_action,
-                        git_push_authentication_message(
-                            detected_forge_kind_from_git_push_error(&detail),
-                            retry_text,
-                        ),
-                    )
-                } else {
-                    BranchPublishTaskFailure::failed(
-                        publish_branch_action,
-                        format!("Failed to check remote branch existence: {error}"),
-                    )
-                }
-            })?;
-
-        if already_exists {
-            return Err(BranchPublishTaskFailure::blocked(
-                publish_branch_action,
-                format!(
-                    "Remote branch `{target_branch}` already exists. Choose a different name or \
-                     use the default session branch."
-                ),
-            ));
-        }
+        ensure_remote_branch_available(
+            git_client.as_ref(),
+            folder.clone(),
+            publish_branch_action,
+            retry_text,
+            target_branch,
+            target_remote_name,
+        )
+        .await?;
     }
 
-    let upstream_reference = git_client
-        .push_current_branch_to_remote_branch(folder, target_branch)
-        .await
-        .map_err(|error| {
-            let detail = error.to_string();
-            let normalized = detail.to_ascii_lowercase();
+    let push_branch = if let Some(target_remote_name) = target_remote_name {
+        git_client.push_current_branch_to_named_remote_branch(
+            folder,
+            target_remote_name.to_string(),
+            target_branch,
+        )
+    } else {
+        git_client.push_current_branch_to_remote_branch(folder, target_branch)
+    };
+    let upstream_reference = push_branch.await.map_err(|error| {
+        let detail = error.to_string();
+        let normalized = detail.to_ascii_lowercase();
 
-            if has_authentication_error_keywords(&normalized) {
-                BranchPublishTaskFailure::blocked(
-                    publish_branch_action,
-                    git_push_authentication_message(
-                        detected_forge_kind_from_git_push_error(&detail),
-                        retry_text,
-                    ),
-                )
-            } else {
-                BranchPublishTaskFailure::failed(
-                    publish_branch_action,
-                    format!("Failed to publish session branch: {error}"),
-                )
-            }
-        })?;
+        if has_authentication_error_keywords(&normalized) {
+            BranchPublishTaskFailure::blocked(
+                publish_branch_action,
+                git_push_authentication_message(
+                    detected_forge_kind_from_git_push_error(&detail),
+                    retry_text,
+                ),
+            )
+        } else {
+            BranchPublishTaskFailure::failed(
+                publish_branch_action,
+                format!("Failed to publish session branch: {error}"),
+            )
+        }
+    })?;
 
     db.sessions()
         .update_session_published_upstream_ref(session_id, Some(upstream_reference.clone()))
@@ -621,12 +813,64 @@ async fn ensure_session_branch_push_safe(
     Ok(())
 }
 
-/// Resolves one forge remote for review-request publishing.
-async fn review_request_remote(
+/// Blocks a first custom-branch push when that branch already exists on its
+/// selected remote.
+async fn ensure_remote_branch_available(
+    git_client: &dyn GitClient,
+    folder: PathBuf,
+    publish_branch_action: PublishBranchAction,
+    retry_text: &str,
+    target_branch: &str,
+    target_remote_name: Option<&str>,
+) -> Result<(), BranchPublishTaskFailure> {
+    let remote_branch_exists = if let Some(target_remote_name) = target_remote_name {
+        git_client.remote_branch_exists_on_named_remote(
+            folder,
+            target_remote_name.to_string(),
+            target_branch.to_string(),
+        )
+    } else {
+        git_client.remote_branch_exists(folder, target_branch.to_string())
+    };
+    let already_exists = remote_branch_exists.await.map_err(|error| {
+        let detail = error.to_string();
+        let normalized = detail.to_ascii_lowercase();
+
+        if has_authentication_error_keywords(&normalized) {
+            BranchPublishTaskFailure::blocked(
+                publish_branch_action,
+                git_push_authentication_message(
+                    detected_forge_kind_from_git_push_error(&detail),
+                    retry_text,
+                ),
+            )
+        } else {
+            BranchPublishTaskFailure::failed(
+                publish_branch_action,
+                format!("Failed to check remote branch existence: {error}"),
+            )
+        }
+    })?;
+
+    if already_exists {
+        return Err(BranchPublishTaskFailure::blocked(
+            publish_branch_action,
+            format!(
+                "Remote branch `{target_branch}` already exists. Choose a different name or use \
+                 the default session branch."
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Resolves the Git and forge identities for review-request publishing.
+async fn review_request_target(
     branch_publish_session: &BranchPublishTaskSession,
     git_client: Arc<dyn GitClient>,
     review_request_client: &dyn forge::ReviewRequestClient,
-) -> Result<forge::ForgeRemote, BranchPublishTaskFailure> {
+) -> Result<ReviewRequestTarget, BranchPublishTaskFailure> {
     let repo_url = git_client
         .repo_url(branch_publish_session.folder.clone())
         .await
@@ -637,7 +881,7 @@ async fn review_request_remote(
             )
         })?;
 
-    review_request_client
+    let forge_remote = review_request_client
         .detect_remote(repo_url)
         .map(|remote| remote.with_command_working_directory(branch_publish_session.folder.clone()))
         .map_err(|error| {
@@ -645,7 +889,12 @@ async fn review_request_remote(
                 PublishBranchAction::PublishPullRequest,
                 error.detail_message(),
             )
-        })
+        })?;
+
+    Ok(ReviewRequestTarget {
+        forge_remote,
+        git_remote_name: REVIEW_REQUEST_REMOTE_NAME,
+    })
 }
 
 /// Creates or refreshes one review request for the published session branch and
@@ -923,6 +1172,526 @@ mod tests {
         assert_eq!(label, "review request — publish after this turn");
     }
 
+    async fn database_with_session_base_commit(base_commit_hash: Option<&str>) -> AppRepositories {
+        let database = AppRepositories::in_memory().await.expect("db should open");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        database
+            .sessions()
+            .insert_session("session-id", "gpt-5.6-sol", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        if let Some(base_commit_hash) = base_commit_hash {
+            database
+                .sessions()
+                .update_session_base_commit_hash("session-id", base_commit_hash.to_string())
+                .await
+                .expect("failed to persist session base commit");
+        }
+
+        database
+    }
+
+    fn unpublished_review_session() -> BranchPublishTaskSession {
+        BranchPublishTaskSession {
+            base_branch: "main".to_string(),
+            folder: PathBuf::from("/tmp/session-worktree"),
+            id: "session-id".into(),
+            published_upstream_ref: None,
+            review_request: None,
+            status: Status::Review,
+        }
+    }
+
+    fn expect_fetched_remote_base_comparison(
+        mock_git_client: &mut git::MockGitClient,
+        remote_base_ref: &'static str,
+        result: Result<(u32, u32), git::GitError>,
+    ) {
+        mock_git_client
+            .expect_fetch_named_remote()
+            .once()
+            .withf(|_, remote_name| remote_name == REVIEW_REQUEST_REMOTE_NAME)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_get_ref_ahead_behind()
+            .once()
+            .withf(move |_, left_ref, right_ref| {
+                left_ref == "base-commit" && right_ref == remote_base_ref
+            })
+            .return_once(move |_, _, _| Box::pin(async move { result }));
+    }
+
+    fn expect_session_commit_comparison(
+        mock_git_client: &mut git::MockGitClient,
+        result: Result<(u32, u32), git::GitError>,
+    ) {
+        mock_git_client
+            .expect_get_ref_ahead_behind()
+            .once()
+            .withf(|_, left_ref, right_ref| left_ref == "HEAD" && right_ref == "base-commit")
+            .return_once(move |_, _, _| Box::pin(async move { result }));
+    }
+
+    #[tokio::test]
+    async fn publish_pull_request_uses_resolved_target_instead_of_prior_upstream() {
+        // Arrange
+        let database = database_with_session_base_commit(Some("base-commit")).await;
+        let mut branch_publish_session = unpublished_review_session();
+        branch_publish_session.published_upstream_ref =
+            Some("review-remote/feature/review".to_string());
+        let expected_branch = "feature/review".to_string();
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client.expect_repo_url().once().returning(|_| {
+            Box::pin(async { Ok("https://github.com/agentty/repo.git".to_string()) })
+        });
+        expect_fetched_remote_base_comparison(&mut mock_git_client, "origin/main", Ok((0, 0)));
+        expect_session_commit_comparison(&mut mock_git_client, Ok((2, 0)));
+        expect_safe_session_branch_push(&mut mock_git_client, "session-id");
+        mock_git_client
+            .expect_remote_branch_exists_on_named_remote()
+            .once()
+            .withf(|_, remote_name, remote_branch_name| {
+                remote_name == REVIEW_REQUEST_REMOTE_NAME && remote_branch_name == "feature/review"
+            })
+            .returning(|_, _, _| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_push_current_branch_to_named_remote_branch()
+            .once()
+            .withf({
+                let expected_branch = expected_branch.clone();
+
+                move |_, remote_name, remote_branch_name| {
+                    remote_name == REVIEW_REQUEST_REMOTE_NAME
+                        && remote_branch_name == &expected_branch
+                }
+            })
+            .returning(|_, _, _| Box::pin(async { Ok("origin/feature/review".to_string()) }));
+        let review_request_summary = forge::ReviewRequestSummary {
+            display_id: "#42".to_string(),
+            forge_kind: forge::ForgeKind::GitHub,
+            source_branch: expected_branch.clone(),
+            state: forge::ReviewRequestState::Open,
+            status_summary: None,
+            target_branch: "main".to_string(),
+            title: "Session review".to_string(),
+            web_url: "https://github.com/agentty/repo/pull/42".to_string(),
+        };
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .once()
+            .withf(|repo_url| repo_url == "https://github.com/agentty/repo.git")
+            .returning(|repo_url| {
+                Ok(forge::ForgeRemote {
+                    command_working_directory: None,
+                    forge_kind: forge::ForgeKind::GitHub,
+                    host: "github.com".to_string(),
+                    namespace: "agentty".to_string(),
+                    project: "repo".to_string(),
+                    repo_url,
+                    web_url: "https://github.com/agentty/repo".to_string(),
+                })
+            });
+        mock_review_request_client
+            .expect_find_by_source_branch()
+            .once()
+            .withf({
+                let expected_branch = expected_branch.clone();
+
+                move |remote, source_branch| {
+                    remote.command_working_directory == Some(PathBuf::from("/tmp/session-worktree"))
+                        && source_branch == &expected_branch
+                }
+            })
+            .returning({
+                let review_request_summary = review_request_summary.clone();
+
+                move |_, _| {
+                    let review_request_summary = review_request_summary.clone();
+
+                    Box::pin(async move { Ok(Some(review_request_summary)) })
+                }
+            });
+        mock_review_request_client
+            .expect_refresh_review_request()
+            .once()
+            .withf(|_, display_id| display_id == "#42")
+            .return_once({
+                let review_request_summary = review_request_summary.clone();
+
+                move |_, _| Box::pin(async move { Ok(review_request_summary) })
+            });
+
+        // Act
+        let result = publish_pull_request(
+            &branch_publish_session,
+            database,
+            Arc::new(crate::infra::clock::RealClock),
+            Arc::new(mock_git_client),
+            Arc::new(mock_review_request_client),
+            Some(&expected_branch),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Ok(BranchPublishTaskSuccess::PullRequestPublished {
+                branch_name,
+                review_request: ReviewRequest { summary, .. },
+                upstream_reference,
+            }) if branch_name == expected_branch
+                && summary == review_request_summary
+                && upstream_reference == "origin/feature/review"
+        ));
+    }
+
+    #[tokio::test]
+    async fn new_review_request_requires_recorded_base_commit() {
+        // Arrange
+        let database = database_with_session_base_commit(None).await;
+        let branch_publish_session = unpublished_review_session();
+        let mock_git_client = git::MockGitClient::new();
+
+        // Act
+        let result = validate_new_review_request_publish(
+            &branch_publish_session,
+            &database,
+            &mock_git_client,
+            REVIEW_REQUEST_REMOTE_NAME,
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("missing base metadata should block publication");
+        assert_eq!(failure.title, "Review request publish blocked");
+        assert!(failure.message.contains("base commit was not recorded"));
+        assert!(failure.message.contains("Sync this session with `r`"));
+        assert!(failure.message.contains("no branch-only commits"));
+        assert!(failure.message.contains("create a new session"));
+    }
+
+    #[tokio::test]
+    async fn new_review_request_reports_base_commit_lookup_failure() {
+        // Arrange
+        let (database, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        pool.close().await;
+        let branch_publish_session = unpublished_review_session();
+        let mock_git_client = git::MockGitClient::new();
+
+        // Act
+        let result = validate_new_review_request_publish(
+            &branch_publish_session,
+            &database,
+            &mock_git_client,
+            REVIEW_REQUEST_REMOTE_NAME,
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("closed database should stop publication");
+        assert_eq!(failure.title, "Review request publish failed");
+        assert!(
+            failure
+                .message
+                .contains("Failed to load the session base commit")
+        );
+    }
+
+    #[tokio::test]
+    async fn new_review_request_reports_remote_fetch_failure() {
+        // Arrange
+        let database = database_with_session_base_commit(Some("base-commit")).await;
+        let branch_publish_session = unpublished_review_session();
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_fetch_named_remote()
+            .once()
+            .withf(|_, remote_name| remote_name == REVIEW_REQUEST_REMOTE_NAME)
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(git::GitError::OutputParse("remote unavailable".to_string()))
+                })
+            });
+
+        // Act
+        let result = validate_new_review_request_publish(
+            &branch_publish_session,
+            &database,
+            &mock_git_client,
+            REVIEW_REQUEST_REMOTE_NAME,
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("fetch failure should stop publication");
+        assert_eq!(failure.title, "Review request publish failed");
+        assert!(
+            failure
+                .message
+                .contains("Failed to fetch the remote target")
+        );
+    }
+
+    #[tokio::test]
+    async fn new_review_request_blocks_unsynchronized_base_relationships() {
+        // Arrange
+        let cases = [
+            ((1, 0), "contains 1 commit not present"),
+            ((6, 0), "contains 6 commits not present"),
+            ((0, 2), "advanced by 2 commits"),
+            ((2, 3), "diverged (2 local-only, 3 remote-only commits)"),
+        ];
+
+        for (relationship, expected_message) in cases {
+            let database = database_with_session_base_commit(Some("base-commit")).await;
+            let branch_publish_session = unpublished_review_session();
+            let mut mock_git_client = git::MockGitClient::new();
+            expect_fetched_remote_base_comparison(
+                &mut mock_git_client,
+                "origin/main",
+                Ok(relationship),
+            );
+
+            // Act
+            let result = validate_new_review_request_publish(
+                &branch_publish_session,
+                &database,
+                &mock_git_client,
+                REVIEW_REQUEST_REMOTE_NAME,
+            )
+            .await;
+
+            // Assert
+            let failure = result.expect_err("unsynchronized base should block publication");
+            assert_eq!(failure.title, "Review request publish blocked");
+            assert!(failure.message.contains(expected_message));
+        }
+    }
+
+    #[tokio::test]
+    async fn new_review_request_reports_base_comparison_failure() {
+        // Arrange
+        let database = database_with_session_base_commit(Some("base-commit")).await;
+        let branch_publish_session = unpublished_review_session();
+        let mut mock_git_client = git::MockGitClient::new();
+        expect_fetched_remote_base_comparison(
+            &mut mock_git_client,
+            "origin/main",
+            Err(git::GitError::OutputParse("missing target".to_string())),
+        );
+
+        // Act
+        let result = validate_new_review_request_publish(
+            &branch_publish_session,
+            &database,
+            &mock_git_client,
+            REVIEW_REQUEST_REMOTE_NAME,
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("comparison failure should stop publication");
+        assert_eq!(failure.title, "Review request publish failed");
+        assert!(
+            failure
+                .message
+                .contains("Failed to compare the session base")
+        );
+    }
+
+    #[tokio::test]
+    async fn new_review_request_blocks_session_without_commits() {
+        // Arrange
+        let database = database_with_session_base_commit(Some("base-commit")).await;
+        let branch_publish_session = unpublished_review_session();
+        let mut mock_git_client = git::MockGitClient::new();
+        expect_fetched_remote_base_comparison(&mut mock_git_client, "origin/main", Ok((0, 0)));
+        expect_session_commit_comparison(&mut mock_git_client, Ok((0, 0)));
+
+        // Act
+        let result = validate_new_review_request_publish(
+            &branch_publish_session,
+            &database,
+            &mock_git_client,
+            REVIEW_REQUEST_REMOTE_NAME,
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("unchanged session should not publish");
+        assert_eq!(failure.title, "Review request publish blocked");
+        assert!(failure.message.contains("Nothing to publish"));
+    }
+
+    #[tokio::test]
+    async fn new_review_request_blocks_session_that_lost_its_base() {
+        // Arrange
+        let database = database_with_session_base_commit(Some("base-commit")).await;
+        let branch_publish_session = unpublished_review_session();
+        let mut mock_git_client = git::MockGitClient::new();
+        expect_fetched_remote_base_comparison(&mut mock_git_client, "origin/main", Ok((0, 0)));
+        expect_session_commit_comparison(&mut mock_git_client, Ok((2, 1)));
+
+        // Act
+        let result = validate_new_review_request_publish(
+            &branch_publish_session,
+            &database,
+            &mock_git_client,
+            REVIEW_REQUEST_REMOTE_NAME,
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("rewritten session base should block publication");
+        assert_eq!(failure.title, "Review request publish blocked");
+        assert!(
+            failure
+                .message
+                .contains("no longer contains its recorded base commit")
+        );
+    }
+
+    #[tokio::test]
+    async fn new_review_request_reports_session_comparison_failure() {
+        // Arrange
+        let database = database_with_session_base_commit(Some("base-commit")).await;
+        let branch_publish_session = unpublished_review_session();
+        let mut mock_git_client = git::MockGitClient::new();
+        expect_fetched_remote_base_comparison(&mut mock_git_client, "origin/main", Ok((0, 0)));
+        expect_session_commit_comparison(
+            &mut mock_git_client,
+            Err(git::GitError::OutputParse("invalid head".to_string())),
+        );
+
+        // Act
+        let result = validate_new_review_request_publish(
+            &branch_publish_session,
+            &database,
+            &mock_git_client,
+            REVIEW_REQUEST_REMOTE_NAME,
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("session comparison failure should stop publication");
+        assert_eq!(failure.title, "Review request publish failed");
+        assert!(
+            failure
+                .message
+                .contains("Failed to inspect session commits")
+        );
+    }
+
+    #[tokio::test]
+    async fn new_review_request_uses_review_target_instead_of_prior_upstream_remote() {
+        // Arrange
+        let database = database_with_session_base_commit(Some("base-commit")).await;
+        let mut branch_publish_session = unpublished_review_session();
+        branch_publish_session.published_upstream_ref =
+            Some("review-remote/wt/session-id".to_string());
+        let mut mock_git_client = git::MockGitClient::new();
+        expect_fetched_remote_base_comparison(&mut mock_git_client, "origin/main", Ok((0, 0)));
+        expect_session_commit_comparison(&mut mock_git_client, Ok((2, 0)));
+
+        // Act
+        let result = validate_new_review_request_publish(
+            &branch_publish_session,
+            &database,
+            &mock_git_client,
+            REVIEW_REQUEST_REMOTE_NAME,
+        )
+        .await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn forked_review_request_accepts_inherited_source_and_followup_commits() {
+        // Arrange
+        let database = AppRepositories::in_memory().await.expect("db should open");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        database
+            .sessions()
+            .insert_session("source-id", "gpt-5.6-sol", "main", "Review", project_id)
+            .await
+            .expect("failed to insert source session");
+        database
+            .sessions()
+            .update_session_base_commit_hash("source-id", "base-commit".to_string())
+            .await
+            .expect("failed to persist source base commit");
+        database
+            .sessions()
+            .fork_session_snapshot(db::ForkSessionSnapshot {
+                new_session_id: "session-id",
+                source_session_id: "source-id",
+                status: "Review",
+            })
+            .await
+            .expect("failed to fork source session");
+        let branch_publish_session = unpublished_review_session();
+        let mut mock_git_client = git::MockGitClient::new();
+        expect_fetched_remote_base_comparison(&mut mock_git_client, "origin/main", Ok((0, 0)));
+        expect_session_commit_comparison(&mut mock_git_client, Ok((3, 0)));
+
+        // Act
+        let result = validate_new_review_request_publish(
+            &branch_publish_session,
+            &database,
+            &mock_git_client,
+            REVIEW_REQUEST_REMOTE_NAME,
+        )
+        .await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn linked_review_request_skips_creation_safety_gate() {
+        // Arrange
+        let database = database_with_session_base_commit(None).await;
+        let mut branch_publish_session = unpublished_review_session();
+        branch_publish_session.review_request = Some(ReviewRequest {
+            last_refreshed_at: 1,
+            summary: forge::ReviewRequestSummary {
+                display_id: "#1".to_string(),
+                forge_kind: forge::ForgeKind::GitHub,
+                source_branch: "wt/session-id".to_string(),
+                state: forge::ReviewRequestState::Open,
+                status_summary: None,
+                target_branch: "main".to_string(),
+                title: "Existing review".to_string(),
+                web_url: "https://github.com/agentty/repo/pull/1".to_string(),
+            },
+        });
+        let mock_git_client = git::MockGitClient::new();
+
+        // Act
+        let result = validate_new_review_request_publish(
+            &branch_publish_session,
+            &database,
+            &mock_git_client,
+            REVIEW_REQUEST_REMOTE_NAME,
+        )
+        .await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
     fn expect_safe_session_branch_push(mock_git_client: &mut git::MockGitClient, session_id: &str) {
         let expected_branch = session::session_branch(session_id);
         mock_git_client
@@ -961,13 +1730,13 @@ mod tests {
             PublishBranchAction::Push,
             "session-id",
             None,
-            Some("origin/wt/session-id"),
+            BranchPushRemote::Tracking(Some("origin/wt/session-id")),
         )
         .await
     }
 
     #[tokio::test]
-    async fn review_request_remote_attaches_session_worktree_to_detected_remote() {
+    async fn review_request_target_binds_origin_to_detected_forge_remote() {
         // Arrange
         let session_folder = PathBuf::from("/tmp/session-worktree");
         let branch_publish_session = BranchPublishTaskSession {
@@ -1007,7 +1776,7 @@ mod tests {
             });
 
         // Act
-        let remote = review_request_remote(
+        let target = review_request_target(
             &branch_publish_session,
             Arc::new(mock_git_client),
             &mock_review_request_client,
@@ -1016,8 +1785,44 @@ mod tests {
         .expect("remote should resolve");
 
         // Assert
-        assert_eq!(remote.command_working_directory, Some(session_folder));
-        assert_eq!(remote.forge_kind, forge::ForgeKind::GitLab);
+        assert_eq!(target.git_remote_name, "origin");
+        assert_eq!(
+            target.forge_remote.command_working_directory,
+            Some(session_folder)
+        );
+        assert_eq!(target.forge_remote.forge_kind, forge::ForgeKind::GitLab);
+    }
+
+    #[tokio::test]
+    async fn review_request_target_reports_forge_detection_failure() {
+        // Arrange
+        let branch_publish_session = unpublished_review_session();
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client.expect_repo_url().once().returning(|_| {
+            Box::pin(async { Ok("ssh://unsupported.example/repo.git".to_string()) })
+        });
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .once()
+            .returning(|repo_url| Err(forge::ReviewRequestError::UnsupportedRemote { repo_url }));
+
+        // Act
+        let result = review_request_target(
+            &branch_publish_session,
+            Arc::new(mock_git_client),
+            &mock_review_request_client,
+        )
+        .await;
+
+        // Assert
+        let failure = result.err().expect("unsupported forge remote should fail");
+        assert_eq!(failure.title, "Review request publish failed");
+        assert!(
+            failure
+                .message
+                .contains("only supported for GitHub and GitLab")
+        );
     }
 
     #[tokio::test]
@@ -1058,7 +1863,7 @@ mod tests {
             PublishBranchAction::Push,
             "session-id",
             Some("wt/session-id"),
-            None,
+            BranchPushRemote::Tracking(None),
         )
         .await
         .expect("branch push should succeed");
@@ -1226,7 +2031,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn push_blocks_when_custom_remote_branch_already_exists() {
+    async fn push_checks_custom_branch_on_explicit_target_remote() {
         // Arrange
         let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
@@ -1243,9 +2048,12 @@ mod tests {
         let mut mock_git_client = git::MockGitClient::new();
         expect_safe_session_branch_push(&mut mock_git_client, "session-id");
         mock_git_client
-            .expect_remote_branch_exists()
+            .expect_remote_branch_exists_on_named_remote()
             .once()
-            .returning(|_, _| Box::pin(async { Ok(true) }));
+            .withf(|_, remote_name, branch_name| {
+                remote_name == REVIEW_REQUEST_REMOTE_NAME && branch_name == "feature/existing"
+            })
+            .returning(|_, _, _| Box::pin(async { Ok(true) }));
 
         // Act
         let result = push_session_branch_to_remote(
@@ -1255,7 +2063,10 @@ mod tests {
             PublishBranchAction::Push,
             "session-id",
             Some("feature/existing"),
-            None,
+            BranchPushRemote::Named {
+                name: REVIEW_REQUEST_REMOTE_NAME,
+                published_upstream_ref: None,
+            },
         )
         .await;
 
@@ -1263,6 +2074,58 @@ mod tests {
         let failure = result.expect_err("push should be blocked");
         assert_eq!(failure.title, "Branch push blocked");
         assert!(failure.message.contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn push_reports_named_remote_branch_lookup_failure() {
+        // Arrange
+        let database = AppRepositories::in_memory().await.expect("db should open");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        database
+            .sessions()
+            .insert_session("session-id", "gpt-5.6-sol", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        let mut mock_git_client = git::MockGitClient::new();
+        expect_safe_session_branch_push(&mut mock_git_client, "session-id");
+        mock_git_client
+            .expect_remote_branch_exists_on_named_remote()
+            .once()
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Err(git::GitError::OutputParse(
+                        "remote lookup failed".to_string(),
+                    ))
+                })
+            });
+
+        // Act
+        let result = push_session_branch_to_remote(
+            &database,
+            PathBuf::from("/tmp/session-worktree"),
+            Arc::new(mock_git_client),
+            PublishBranchAction::PublishPullRequest,
+            "session-id",
+            Some("feature/review"),
+            BranchPushRemote::Named {
+                name: REVIEW_REQUEST_REMOTE_NAME,
+                published_upstream_ref: None,
+            },
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("named remote lookup should fail");
+        assert_eq!(failure.title, "Review request publish failed");
+        assert!(
+            failure
+                .message
+                .contains("Failed to check remote branch existence")
+        );
     }
 
     #[tokio::test]
@@ -1297,7 +2160,7 @@ mod tests {
             PublishBranchAction::Push,
             "session-id",
             Some("feature/existing"),
-            Some("origin/feature/existing"),
+            BranchPushRemote::Tracking(Some("origin/feature/existing")),
         )
         .await;
 
@@ -1345,7 +2208,7 @@ mod tests {
             PublishBranchAction::Push,
             "session-id",
             None,
-            None,
+            BranchPushRemote::Tracking(None),
         )
         .await;
 
@@ -1388,7 +2251,7 @@ mod tests {
             PublishBranchAction::Push,
             "session-id",
             Some("feature/new-branch"),
-            None,
+            BranchPushRemote::Tracking(None),
         )
         .await;
 
@@ -1500,7 +2363,7 @@ mod tests {
             PublishBranchAction::Push,
             "session-id",
             None,
-            Some("origin/wt/session-id"),
+            BranchPushRemote::Tracking(Some("origin/wt/session-id")),
         )
         .await;
 
@@ -1579,7 +2442,7 @@ mod tests {
             PublishBranchAction::Push,
             "session-id",
             Some("feature/new-branch"),
-            None,
+            BranchPushRemote::Tracking(None),
         )
         .await;
 
@@ -1636,7 +2499,7 @@ mod tests {
             PublishBranchAction::Push,
             "session-id",
             None,
-            None,
+            BranchPushRemote::Tracking(None),
         )
         .await;
 

@@ -326,7 +326,10 @@ published branch state, linked review-request metadata, stack parent links, acti
 timing, and token usage are reset on the fork so future replies and publishing are
 tracked separately from the source session. Diff availability is recomputed from the
 fork's new worktree, so uncommitted source-worktree changes are not advertised on the
-fork.
+fork. The fork retains the source session's recorded review base, so its first review
+request can intentionally include both the source branch changes and the fork's own
+follow-up commits. If that inherited base metadata is missing, sync the fork with `r`
+before publishing.
 
 ### Commit and Merge Behavior
 
@@ -359,11 +362,14 @@ session remains in Active until a successful manual main sync moves it to **Done
 
 When a session syncs (`r`), Agentty rebases the session branch: published sessions fetch
 first and rebase onto the remote base ref, unpublished sessions rebase onto the stored
-local base branch. In **InProgress**, the sync request is queued behind the running turn
-before the session enters **Rebasing**. If the rebase stops on conflicts, Agentty asks
-the existing agent session to resolve only the conflicted files, then stages the edits
-and continues the rebase itself. The completed conversation and summary remain in their
-existing order while the rebase or merge status animates below them.
+local base branch. When the session's starting commit is known, sync replays only
+commits created after that boundary, so local commits inherited before the session
+started are left behind instead of becoming session work. In **InProgress**, the sync
+request is queued behind the running turn before the session enters **Rebasing**. If the
+rebase stops on conflicts, Agentty asks the existing agent session to resolve only the
+conflicted files, then stages the edits and continues the rebase itself. The completed
+conversation and summary remain in their existing order while the rebase or merge status
+animates below them.
 
 During normal turns, the agent prompt names the session worktree as the only writable
 root. After a turn, if Agentty detects that the main checkout's tracked-file status
@@ -560,6 +566,20 @@ can retry without reporting a false terminal cancellation.
   active.
 - When no review request is linked yet, only an open request for the same branch is
   reused; merged or closed requests are left alone.
+- Before the first review request is pushed, Agentty resolves the `origin`-backed forge
+  target, fetches and pushes that same remote, and compares its base branch with the
+  exact commit recorded when the session worktree was based. A previously pushed branch
+  that tracks another remote does not change the review target or receive the new
+  review-request push. The publish is blocked when the local base contains commits
+  absent from the remote target, the remote target advanced, the histories diverged, or
+  the session has no commits of its own. Sessions created before base tracking was
+  available, or whose creation was interrupted before the base was recorded, are also
+  blocked safely. Press `r` to sync the session. Agentty records the resolved target as
+  the recovered base only when the synchronized branch exactly matches that target and
+  therefore has no branch-only commits. If any commits remain, the base stays unknown
+  and publishing remains blocked because Agentty cannot prove whether those commits
+  predate the session. Preserve any work you need, then create a new session so
+  unrelated commits cannot enter the review request.
 - After the first publish, later completed turns push the same remote branch
   automatically in the background when no chat message or sync is already queued. After
   each successful push, Agentty reads the current remote title and description and

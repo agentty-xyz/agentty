@@ -5088,6 +5088,18 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Box::pin(async { Ok(RebaseStepResult::Completed) }));
+        mock_git_client
+            .expect_ref_hash()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|_, reference| reference == "main")
+            .returning(|_, _| Box::pin(async { Ok("main-tip".to_string()) }));
+        mock_git_client
+            .expect_ref_hash()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|_, reference| reference == "HEAD")
+            .returning(|_, _| Box::pin(async { Ok("session-tip".to_string()) }));
 
         mock_git_client
     }
@@ -5145,7 +5157,10 @@ mod tests {
     #[tokio::test]
     /// Verifies session rebase conflict assistance runs through the existing
     /// session channel, preserving provider conversation identifiers while
-    /// Agentty owns staging and `git rebase --continue`.
+    /// Agentty owns staging and `git rebase --continue`. The seeded row has no
+    /// base hash, matching both a migrated session and creation interrupted
+    /// after its row was inserted. Because the rebased branch still has its
+    /// own commit, successful sync must leave that ownership boundary unknown.
     async fn test_run_rebase_command_uses_existing_session_channel_for_conflicts() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
@@ -5153,6 +5168,12 @@ mod tests {
         let db = AppRepositories::in_memory().await.expect("db should open");
         seed_existing_session_rebase_metadata(&db).await;
         let harness = rebase_assist_worker_harness(base_dir.path().to_path_buf(), db);
+        let missing_base_commit_hash = harness
+            .db
+            .sessions()
+            .get_session_base_commit_hash("sess1")
+            .await
+            .expect("failed to load missing base commit hash");
 
         // Act
         SessionWorkerService::run_rebase_command(
@@ -5174,10 +5195,18 @@ mod tests {
             .get_session_instruction_conversation_id("sess1")
             .await
             .expect("failed to load instruction conversation id");
+        let base_commit_hash_after_sync = harness
+            .db
+            .sessions()
+            .get_session_base_commit_hash("sess1")
+            .await
+            .expect("failed to load base commit hash after sync");
         let output_text = transcript_text(&harness.context.transcript);
         let final_status = *harness.status.lock().expect("status lock");
 
         // Assert
+        assert_eq!(missing_base_commit_hash, None);
+        assert_eq!(base_commit_hash_after_sync, None);
         assert_eq!(provider_conversation_id.as_deref(), Some("thread-after"));
         assert_eq!(
             instruction_conversation_id,

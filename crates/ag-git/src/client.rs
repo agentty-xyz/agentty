@@ -13,15 +13,16 @@ use super::sync::{
 use super::{
     abort_rebase, branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
     commit_all_preserving_single_commit, create_worktree, current_upstream_reference,
-    delete_branch, detect_git_info, diff, diff_changed_files, fetch_remote, find_git_repo_root,
-    get_ahead_behind, get_ref_ahead_behind, has_commits_since, has_unmerged_paths,
-    head_commit_message, head_hash, head_short_hash, in_progress_operation, is_rebase_in_progress,
-    is_worktree_clean, list_conflicted_files, list_local_commit_titles,
+    delete_branch, detect_git_info, diff, diff_changed_files, fetch_named_remote, fetch_remote,
+    find_git_repo_root, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
+    has_unmerged_paths, head_commit_message, head_hash, head_short_hash, in_progress_operation,
+    is_rebase_in_progress, is_worktree_clean, list_conflicted_files, list_local_commit_titles,
     list_staged_conflict_marker_files, list_upstream_commit_titles, main_checkout_working_tree,
-    main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_remote_branch, rebase,
-    rebase_continue, rebase_onto_start, rebase_start, ref_hash, remote_branch_exists,
-    remove_worktree, repo_url, squash_merge, squash_merge_diff, stage_all, sync,
-    tracked_worktree_status, worktree_status,
+    main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_named_remote_branch,
+    push_current_branch_to_remote_branch, rebase, rebase_continue, rebase_onto_start, rebase_start,
+    ref_hash, remote_branch_exists, remote_branch_exists_on_named_remote, remove_worktree,
+    repo_url, squash_merge, squash_merge_diff, stage_all, sync, tracked_worktree_status,
+    worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -339,6 +340,17 @@ pub trait GitClient: Send + Sync {
         remote_branch_name: String,
     ) -> GitFuture<Result<String, GitError>>;
 
+    /// Pushes the current branch to `remote_branch_name` on `remote_name`.
+    ///
+    /// # Errors
+    /// Returns an error when the named remote push fails.
+    fn push_current_branch_to_named_remote_branch(
+        &self,
+        repo_path: PathBuf,
+        remote_name: String,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<String, GitError>>;
+
     /// Checks whether `remote_branch_name` already exists on the remote for
     /// the repository at `repo_path`.
     ///
@@ -350,12 +362,33 @@ pub trait GitClient: Send + Sync {
         remote_branch_name: String,
     ) -> GitFuture<Result<bool, GitError>>;
 
+    /// Checks whether `remote_branch_name` exists on `remote_name`.
+    ///
+    /// # Errors
+    /// Returns an error when the named remote lookup fails.
+    fn remote_branch_exists_on_named_remote(
+        &self,
+        repo_path: PathBuf,
+        remote_name: String,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<bool, GitError>>;
+
     /// Resolves the current upstream reference for `repo_path`.
     ///
     /// # Errors
     /// Returns an error when upstream tracking information is unavailable.
     fn current_upstream_reference(&self, repo_path: PathBuf)
     -> GitFuture<Result<String, GitError>>;
+
+    /// Fetches refs from `remote_name` for `repo_path`.
+    ///
+    /// # Errors
+    /// Returns an error when the named remote cannot be fetched.
+    fn fetch_named_remote(
+        &self,
+        repo_path: PathBuf,
+        remote_name: String,
+    ) -> GitFuture<Result<(), GitError>>;
 
     /// Fetches remote refs for `repo_path`.
     ///
@@ -676,6 +709,18 @@ impl GitClient for RealGitClient {
         })
     }
 
+    fn push_current_branch_to_named_remote_branch(
+        &self,
+        repo_path: PathBuf,
+        remote_name: String,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<String, GitError>> {
+        Box::pin(async move {
+            push_current_branch_to_named_remote_branch(repo_path, remote_name, remote_branch_name)
+                .await
+        })
+    }
+
     fn remote_branch_exists(
         &self,
         repo_path: PathBuf,
@@ -684,11 +729,30 @@ impl GitClient for RealGitClient {
         Box::pin(async move { remote_branch_exists(repo_path, remote_branch_name).await })
     }
 
+    fn remote_branch_exists_on_named_remote(
+        &self,
+        repo_path: PathBuf,
+        remote_name: String,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<bool, GitError>> {
+        Box::pin(async move {
+            remote_branch_exists_on_named_remote(repo_path, remote_name, remote_branch_name).await
+        })
+    }
+
     fn current_upstream_reference(
         &self,
         repo_path: PathBuf,
     ) -> GitFuture<Result<String, GitError>> {
         Box::pin(async move { current_upstream_reference(repo_path).await })
+    }
+
+    fn fetch_named_remote(
+        &self,
+        repo_path: PathBuf,
+        remote_name: String,
+    ) -> GitFuture<Result<(), GitError>> {
+        Box::pin(async move { fetch_named_remote(repo_path, remote_name).await })
     }
 
     fn fetch_remote(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>> {
@@ -1580,6 +1644,47 @@ mod tests {
 
         // Assert
         assert_eq!(upstream_reference, "origin/review/custom-branch");
+    }
+
+    #[tokio::test]
+    async fn test_real_git_client_named_remote_operations() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let remote_dir = tempdir().expect("failed to create remote temp dir");
+        setup_test_git_repo(dir.path());
+        run_git_command(remote_dir.path(), &["init", "--bare"]);
+        let remote_path = remote_dir.path().to_string_lossy().to_string();
+        run_git_command(
+            dir.path(),
+            &["remote", "add", "review-remote", &remote_path],
+        );
+        let client = RealGitClient;
+
+        // Act
+        let upstream_reference = client
+            .push_current_branch_to_named_remote_branch(
+                dir.path().to_path_buf(),
+                "review-remote".to_string(),
+                "review/custom-branch".to_string(),
+            )
+            .await
+            .expect("named remote push should succeed");
+        let remote_branch_exists = client
+            .remote_branch_exists_on_named_remote(
+                dir.path().to_path_buf(),
+                "review-remote".to_string(),
+                "review/custom-branch".to_string(),
+            )
+            .await
+            .expect("named remote lookup should succeed");
+        client
+            .fetch_named_remote(dir.path().to_path_buf(), "review-remote".to_string())
+            .await
+            .expect("named remote fetch should succeed");
+
+        // Assert
+        assert_eq!(upstream_reference, "review-remote/review/custom-branch");
+        assert!(remote_branch_exists);
     }
 
     #[test]

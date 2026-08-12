@@ -288,6 +288,9 @@ pub trait SessionRepository: Send + Sync {
     /// Returns the persisted base branch for a session, when present.
     async fn get_session_base_branch(&self, id: &str) -> Result<Option<String>, DbError>;
 
+    /// Returns the exact commit used as the session branch base, when known.
+    async fn get_session_base_commit_hash(&self, id: &str) -> Result<Option<String>, DbError>;
+
     /// Returns the parent session id for a stacked session, when present.
     async fn get_session_parent_session_id(&self, id: &str) -> Result<Option<String>, DbError>;
 
@@ -534,6 +537,13 @@ pub trait SessionRepository: Send + Sync {
         &self,
         id: &str,
         stack_base_commit_hash: Option<String>,
+    ) -> Result<(), DbError>;
+
+    /// Persists the exact commit currently used as the session branch base.
+    async fn update_session_base_commit_hash(
+        &self,
+        id: &str,
+        base_commit_hash: String,
     ) -> Result<(), DbError>;
 
     /// Updates the saved prompt for a session row.
@@ -1109,6 +1119,22 @@ WHERE id = ?
         .await?;
 
         Ok(row.map(|row| row.value))
+    }
+
+    async fn get_session_base_commit_hash(&self, id: &str) -> Result<Option<String>, DbError> {
+        let value = sqlx::query_scalar::<_, Option<String>>(
+            r"
+SELECT base_commit_hash
+FROM session
+WHERE id = ?
+",
+        )
+        .bind(id)
+        .fetch_optional(&self.0)
+        .await?
+        .flatten();
+
+        Ok(value)
     }
 
     async fn get_session_parent_session_id(&self, id: &str) -> Result<Option<String>, DbError> {
@@ -2187,6 +2213,30 @@ WHERE id = ?
         Ok(())
     }
 
+    async fn update_session_base_commit_hash(
+        &self,
+        id: &str,
+        base_commit_hash: String,
+    ) -> Result<(), DbError> {
+        let now = self.now();
+
+        sqlx::query(
+            r"
+UPDATE session
+SET base_commit_hash = ?,
+    updated_at = ?
+WHERE id = ?
+",
+        )
+        .bind(base_commit_hash)
+        .bind(now)
+        .bind(id)
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
     async fn update_session_prompt(&self, id: &str, prompt: &str) -> Result<(), DbError> {
         let now = self.now();
 
@@ -2749,6 +2799,43 @@ mod tests {
     use super::*;
     use crate::AppRepositories;
 
+    #[tokio::test]
+    async fn session_base_commit_hash_round_trips() {
+        // Arrange
+        let database = AppRepositories::in_memory().await.expect("db should open");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        database
+            .sessions()
+            .insert_session("session-id", "gpt-5.6-sol", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+
+        // Act
+        let missing_hash = database
+            .sessions()
+            .get_session_base_commit_hash("session-id")
+            .await
+            .expect("failed to load empty base hash");
+        database
+            .sessions()
+            .update_session_base_commit_hash("session-id", "base-commit".to_string())
+            .await
+            .expect("failed to update base hash");
+        let saved_hash = database
+            .sessions()
+            .get_session_base_commit_hash("session-id")
+            .await
+            .expect("failed to load saved base hash");
+
+        // Assert
+        assert_eq!(missing_hash, None);
+        assert_eq!(saved_hash.as_deref(), Some("base-commit"));
+    }
+
     /// Session columns that must be reset when snapshotting a fork.
     struct ForkResetRow {
         applied_personality_id: Option<String>,
@@ -2913,6 +3000,11 @@ WHERE id = ?
             .expect("failed to insert source session");
 
         seed_fork_snapshot_source_linkage(database).await;
+        database
+            .sessions()
+            .update_session_base_commit_hash("source-session", "reviewbase123".to_string())
+            .await
+            .expect("failed to update review base commit hash");
         seed_fork_snapshot_source_timing(database, pool).await;
 
         let source_reset_row = load_fork_reset_row(pool, "source-session").await;
@@ -3362,6 +3454,16 @@ WHERE id IN ('a-older', 'z-newer')
             .load_session_review_request("fork-session")
             .await
             .expect("failed to load fork review request");
+        let source_base_commit_hash = database
+            .sessions()
+            .get_session_base_commit_hash("source-session")
+            .await
+            .expect("failed to load source base commit hash");
+        let fork_base_commit_hash = database
+            .sessions()
+            .get_session_base_commit_hash("fork-session")
+            .await
+            .expect("failed to load fork base commit hash");
 
         assert_source_reset_state(
             source_row,
@@ -3369,6 +3471,8 @@ WHERE id IN ('a-older', 'z-newer')
             source_review_request.as_ref(),
         );
         assert_fork_reset_state(fork_row, &fork_reset_row, fork_review_request.as_ref());
+        assert_eq!(source_base_commit_hash.as_deref(), Some("reviewbase123"));
+        assert_eq!(fork_base_commit_hash, source_base_commit_hash);
     }
 
     #[tokio::test]

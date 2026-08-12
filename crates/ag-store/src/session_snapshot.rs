@@ -40,7 +40,7 @@ impl SessionSnapshotStore {
         let insert_result = sqlx::query(
             r"
 INSERT INTO session (
-    id, agent, model, base_branch, status, project_id, prompt, summary,
+    id, agent, model, base_branch, base_commit_hash, status, project_id, prompt, summary,
     title, reasoning_level, speed_mode, added_lines, deleted_lines, has_diff, size,
     input_tokens, output_tokens, is_draft, parent_session_id, personality_id,
     provider_conversation_id, applied_personality_id, applied_personality_prompt_hash,
@@ -49,7 +49,7 @@ INSERT INTO session (
     stack_base_commit_hash, in_progress_total_seconds, in_progress_started_at,
     created_at, updated_at
 )
-SELECT ?, agent, model, base_branch, ?, project_id, prompt, summary,
+SELECT ?, agent, model, base_branch, base_commit_hash, ?, project_id, prompt, summary,
        title, reasoning_level, speed_mode, 0, 0, NULL, 'XS', 0, 0, 0, NULL, personality_id,
        NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL,
        ?, ?

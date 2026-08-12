@@ -760,11 +760,22 @@ orchestration paths:
 - Session sync: assisted rebase onto the local base branch (unpublished) or the
   published upstream's remote base ref (published). Rebase-conflict prompts run through
   the existing session channel so the provider keeps conversation context while Agentty
-  owns staging and `git rebase --continue`.
+  owns staging and `git rebase --continue`. When a migrated or interrupted session has
+  no recorded base, the rebase plan retains that unknown boundary and records the target
+  only if the resulting `HEAD` exactly matches it; preserved branch commits leave the
+  base unknown.
 - Review-request publish: push with `--force-with-lease`, then create or refresh the
   forge review request through `ReviewRequestClient`; only open same-branch requests are
-  reused. The task does not own the active app mode, so its completion cannot interrupt
-  later navigation. It holds the same branch-operation lock as post-turn auto-push, so
+  reused. Materialized sessions persist the exact commit used as their current base,
+  including updates after successful rebases; fork snapshots preserve the source
+  session's base so inherited source changes remain intentional review content. Before a
+  first review request, the publish task resolves the `origin`-backed forge target,
+  fetches and pushes that same remote regardless of prior branch tracking, compares it
+  with the saved base, and requires at least one review-content commit before pushing. A
+  successful session sync fills missing base metadata only when the resulting branch
+  exactly matches its target, after which the same remote comparison still applies. The
+  task does not own the active app mode, so its completion cannot interrupt later
+  navigation. It holds the same branch-operation lock as post-turn auto-push, so
   overlapping requests queue rather than running concurrent force-pushes.
 - Background review-request sync: review-ready sessions with a published branch or
   linked request are polled; merged requests persist the reviewed session-head hash and

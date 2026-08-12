@@ -504,8 +504,9 @@ impl SessionManager {
     ///
     /// The fork creates a new worktree branch from the source session branch,
     /// snapshots persisted transcript messages, clears provider-native
-    /// conversation and publish/review-request linkage, and marks the new
-    /// session for one-time history replay on its first reply.
+    /// conversation and publish/review-request linkage, preserves the source
+    /// session's review base, and marks the new session for one-time history
+    /// replay on its first reply.
     ///
     /// # Errors
     /// Returns an error if the source session is missing, not root
@@ -530,17 +531,6 @@ impl SessionManager {
 
             (source_branch, source_session.agent)
         };
-        services
-            .db()
-            .sessions()
-            .load_session_project_id(source_session_id)
-            .await?
-            .ok_or_else(|| {
-                SessionError::Workflow(
-                    "Source session has no project association for session forking".to_string(),
-                )
-            })?;
-
         let repo_root = self
             .load_session_repo_root(services, source_session_id)
             .await?;
@@ -711,6 +701,15 @@ impl SessionManager {
             )));
         }
 
+        self.persist_new_session_base_commits(
+            services,
+            &folder,
+            &repo_root,
+            &session_id,
+            &worktree_branch,
+        )
+        .await?;
+
         Self::record_session_creation_activity(services, &session_id).await;
 
         if let Err(error) = agent::create_backend(session_agent.kind()).setup(&folder) {
@@ -830,7 +829,7 @@ impl SessionManager {
                 .map_err(|error| {
                     SessionError::Workflow(format!("Failed to setup session backend: {error}"))
                 })?;
-            self.persist_stack_base_for_stacked_draft_worktree(
+            self.persist_session_base_commits(
                 services,
                 &folder,
                 parent_session_id.as_ref(),
@@ -876,7 +875,7 @@ impl SessionManager {
                 "Failed to setup session backend: {error}"
             )));
         }
-        self.persist_stack_base_for_stacked_draft_worktree(
+        self.persist_session_base_commits(
             services,
             &folder,
             parent_session_id.as_ref(),
@@ -921,28 +920,54 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Persists the parent tip used by a stacked draft's newly materialized
-    /// worktree.
+    /// Records a new root session's base or rolls back its materialization.
+    async fn persist_new_session_base_commits(
+        &self,
+        services: &AppServices,
+        folder: &Path,
+        repo_root: &Path,
+        session_id: &str,
+        worktree_branch: &str,
+    ) -> Result<(), SessionError> {
+        if let Err(error) = self
+            .persist_session_base_commits(services, folder, None, session_id)
+            .await
+        {
+            self.rollback_failed_session_creation(
+                services,
+                folder,
+                repo_root,
+                session_id,
+                worktree_branch,
+                true,
+            )
+            .await;
+
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    /// Persists the exact base commit used by a newly materialized worktree.
     ///
-    /// The stored hash lets later stacked-child rebases use
+    /// Every session stores the starting commit so first publication can prove
+    /// that its base matches the remote target. Stacked children also keep the
+    /// same hash in their stack metadata so later rebases can use
     /// `git rebase --onto` to replay only the child's commits when the parent
     /// branch moves or squash-merges.
     ///
     /// # Errors
     /// Returns an error when the worktree `HEAD` cannot be resolved or stack
     /// metadata cannot be persisted.
-    async fn persist_stack_base_for_stacked_draft_worktree(
+    async fn persist_session_base_commits(
         &self,
         services: &AppServices,
         folder: &Path,
         parent_session_id: Option<&SessionId>,
         session_id: &str,
     ) -> Result<(), SessionError> {
-        if parent_session_id.is_none() {
-            return Ok(());
-        }
-
-        let stack_base_commit_hash = services
+        let base_commit_hash = services
             .git_client()
             .head_hash(folder.to_path_buf())
             .await
@@ -950,9 +975,18 @@ impl SessionManager {
         services
             .db()
             .sessions()
-            .update_session_stack_base_commit_hash(session_id, Some(stack_base_commit_hash))
+            .update_session_base_commit_hash(session_id, base_commit_hash.clone())
             .await
             .map_err(SessionError::Db)?;
+
+        if parent_session_id.is_some() {
+            services
+                .db()
+                .sessions()
+                .update_session_stack_base_commit_hash(session_id, Some(base_commit_hash))
+                .await
+                .map_err(SessionError::Db)?;
+        }
 
         Ok(())
     }
@@ -4102,6 +4136,10 @@ mod tests {
             .expect_main_checkout_working_tree()
             .once()
             .returning(|_| Box::pin(async { Ok(Some(PathBuf::from("/tmp/project"))) }));
+        mock_git_client
+            .expect_head_hash()
+            .once()
+            .returning(|_| Box::pin(async { Ok("draft-base".to_string()) }));
         mock_git_client.expect_create_worktree().times(0);
         mock_git_client.expect_find_git_repo_root().times(0);
         let services = test_services_with_fs_client(
@@ -4166,6 +4204,76 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_persist_new_session_base_commits_rolls_back_failed_base_lookup() {
+        // Arrange
+        let session = test_session("", Status::Draft, None, "");
+        let database = database_with_session(&session).await;
+        let session_manager = session_manager_with_one_session(session);
+        let folder = PathBuf::from("/tmp/session-worktree");
+        let repo_root = PathBuf::from("/tmp/project");
+        let mut mock_fs_client = fs::MockFsClient::new();
+        mock_fs_client
+            .expect_remove_dir_all()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client.expect_head_hash().once().returning(|_| {
+            Box::pin(async {
+                Err(git::GitError::OutputParse(
+                    "simulated base lookup failure".to_string(),
+                ))
+            })
+        });
+        mock_git_client
+            .expect_remove_worktree()
+            .once()
+            .withf({
+                let folder = folder.clone();
+
+                move |candidate_folder| candidate_folder == &folder
+            })
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_delete_branch()
+            .once()
+            .withf({
+                let repo_root = repo_root.clone();
+
+                move |candidate_repo_root, worktree_branch| {
+                    candidate_repo_root == &repo_root && worktree_branch == "wt/session-id"
+                }
+            })
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        let services = test_services_with_fs_client(
+            &database,
+            Arc::new(crate::infra::clock::RealClock),
+            Arc::new(mock_fs_client),
+            Arc::new(mock_git_client),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let result = session_manager
+            .persist_new_session_base_commits(
+                &services,
+                &folder,
+                &repo_root,
+                "session-id",
+                "wt/session-id",
+            )
+            .await;
+        let persisted_sessions = database
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions after rollback");
+
+        // Assert
+        assert!(matches!(result, Err(SessionError::Git(_))));
+        assert!(persisted_sessions.is_empty());
     }
 
     #[tokio::test]

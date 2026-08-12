@@ -40,10 +40,11 @@ pub use sync::{
 pub(crate) use sync::{
     branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
     commit_all_preserving_single_commit, current_upstream_reference, delete_branch, diff,
-    diff_changed_files, fetch_remote, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
-    head_commit_message, head_hash, head_short_hash, is_worktree_clean, list_local_commit_titles,
-    list_upstream_commit_titles, pull_rebase, push_current_branch,
-    push_current_branch_to_remote_branch, ref_hash, remote_branch_exists, stage_all,
-    tracked_worktree_status, worktree_status,
+    diff_changed_files, fetch_named_remote, fetch_remote, get_ahead_behind, get_ref_ahead_behind,
+    has_commits_since, head_commit_message, head_hash, head_short_hash, is_worktree_clean,
+    list_local_commit_titles, list_upstream_commit_titles, pull_rebase, push_current_branch,
+    push_current_branch_to_named_remote_branch, push_current_branch_to_remote_branch, ref_hash,
+    remote_branch_exists, remote_branch_exists_on_named_remote, stage_all, tracked_worktree_status,
+    worktree_status,
 };
 pub(crate) use worktree::{create_worktree, detect_git_info, find_git_repo_root, remove_worktree};

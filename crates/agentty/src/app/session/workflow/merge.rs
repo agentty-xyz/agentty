@@ -113,8 +113,14 @@ enum RebasePlan {
         /// Branch or ref that receives the current branch commits.
         target: String,
     },
+    /// Runs a standard rebase without treating its target as a recovered
+    /// ownership boundary unless the rebased branch exactly matches it.
+    UnknownBase {
+        /// Branch or ref that receives the current branch commits.
+        target: String,
+    },
     /// Runs `git rebase --onto <new_base> <old_base>` to replay only commits
-    /// after a recorded stack base.
+    /// after a recorded session or stack base.
     Onto {
         /// Ref that receives the replayed commits.
         new_base: String,
@@ -129,11 +135,17 @@ impl RebasePlan {
         Self::Target { target }
     }
 
+    /// Builds a target rebase plan for a session whose original base is
+    /// unknown.
+    fn unknown_base(target: String) -> Self {
+        Self::UnknownBase { target }
+    }
+
     /// Returns the destination ref shown to users and used for pre-rebase
     /// auto-commit base detection.
     fn target_label(&self) -> &str {
         match self {
-            Self::Target { target } => target,
+            Self::Target { target } | Self::UnknownBase { target } => target,
             Self::Onto { new_base, .. } => new_base,
         }
     }
@@ -141,7 +153,7 @@ impl RebasePlan {
     /// Returns the recorded stack base for `--onto` rebases, when present.
     fn old_base(&self) -> Option<&str> {
         match self {
-            Self::Target { .. } => None,
+            Self::Target { .. } | Self::UnknownBase { .. } => None,
             Self::Onto { old_base, .. } => Some(old_base),
         }
     }
@@ -1921,12 +1933,16 @@ impl SessionManager {
     /// a session branch is published, the rebase first fetches and targets the
     /// remote base ref from the same remote as the published upstream so the
     /// pull request comparison is updated against the forge-visible base. When
-    /// the session has a recorded stack-base commit, the plan uses
-    /// `git rebase --onto` so parent commits are left behind deterministically.
+    /// the session has a recorded base commit, the plan uses
+    /// `git rebase --onto` so commits inherited before the session started are
+    /// left behind deterministically. A stack-specific base takes precedence
+    /// while the parent relationship is active.
     ///
     /// # Errors
-    /// Returns an error when the published-session fetch fails or stack-base
-    /// metadata cannot be loaded.
+    /// Returns an error when the published-session fetch fails or base-commit
+    /// metadata cannot be loaded. A missing base remains explicit in the plan
+    /// so a normal rebase cannot silently claim preserved commits as session
+    /// work.
     async fn resolve_session_rebase_plan(
         db: &AppRepositories,
         git_client: &dyn GitClient,
@@ -1942,13 +1958,18 @@ impl SessionManager {
             .get_session_stack_base_commit_hash(session_id)
             .await
             .map_err(SessionError::Db)?;
+        let base_commit_hash = db
+            .sessions()
+            .get_session_base_commit_hash(session_id)
+            .await
+            .map_err(SessionError::Db)?;
 
-        Ok(match stack_base_commit_hash {
+        Ok(match stack_base_commit_hash.or(base_commit_hash) {
             Some(old_base) => RebasePlan::Onto {
                 new_base: rebase_target,
                 old_base,
             },
-            None => RebasePlan::target(rebase_target),
+            None => RebasePlan::unknown_base(rebase_target),
         })
     }
 
@@ -2066,7 +2087,7 @@ impl SessionManager {
 
             return Err(SessionError::Workflow(format!("Failed to sync: {error}")));
         }
-        Self::persist_stack_base_after_successful_rebase(&input).await?;
+        Self::persist_base_commits_after_successful_rebase(&input).await?;
 
         let source_branch = session_branch(&input.id);
         let rebase_target = input.rebase_plan.target_label();
@@ -2076,18 +2097,47 @@ impl SessionManager {
         ))
     }
 
-    /// Updates stack-base metadata after a successful child rebase.
+    /// Updates base-commit metadata after a successful session rebase.
     ///
-    /// Stacked children keep the resolved target hash so the next parent
-    /// movement can use `git rebase --onto <new-parent> <old-parent-tip>`.
-    /// Restacked children whose parent link has already been cleared drop the
-    /// hash after the deterministic `--onto` completes.
+    /// Sessions with a known ownership boundary keep the resolved target hash
+    /// for first-publish safety. When that boundary is unknown, recovery is
+    /// safe only if the rebased branch has no commits of its own and its
+    /// `HEAD` exactly matches the target. Stacked children also retain the
+    /// resolved hash as their stack base so the next parent movement can use
+    /// `git rebase --onto <new-parent> <old-parent-tip>`; restacked children
+    /// whose parent link is already cleared drop only that stack-specific copy.
     ///
     /// # Errors
-    /// Returns an error when stack metadata cannot be loaded or persisted.
-    async fn persist_stack_base_after_successful_rebase(
+    /// Returns an error when commit hashes or stack metadata cannot be loaded
+    /// or persisted.
+    async fn persist_base_commits_after_successful_rebase(
         input: &RebaseAssistInput,
     ) -> Result<(), SessionError> {
+        let target_hash = input
+            .git_client
+            .ref_hash(
+                input.folder.clone(),
+                input.rebase_plan.target_label().to_string(),
+            )
+            .await?;
+
+        if matches!(&input.rebase_plan, RebasePlan::UnknownBase { .. }) {
+            let head_hash = input
+                .git_client
+                .ref_hash(input.folder.clone(), "HEAD".to_string())
+                .await?;
+            if head_hash != target_hash {
+                return Ok(());
+            }
+        }
+
+        input
+            .db
+            .sessions()
+            .update_session_base_commit_hash(&input.id, target_hash.clone())
+            .await
+            .map_err(SessionError::Db)?;
+
         let parent_session_id = input
             .db
             .sessions()
@@ -2096,13 +2146,6 @@ impl SessionManager {
             .map_err(SessionError::Db)?;
 
         if parent_session_id.is_some() {
-            let target_hash = input
-                .git_client
-                .ref_hash(
-                    input.folder.clone(),
-                    input.rebase_plan.target_label().to_string(),
-                )
-                .await?;
             input
                 .db
                 .sessions()
@@ -2761,7 +2804,9 @@ impl SessionManager {
         rebase_plan: &RebasePlan,
     ) -> Result<git::RebaseStepResult, git::GitError> {
         match rebase_plan {
-            RebasePlan::Target { target } => git_client.rebase_start(folder, target.clone()).await,
+            RebasePlan::Target { target } | RebasePlan::UnknownBase { target } => {
+                git_client.rebase_start(folder, target.clone()).await
+            }
             RebasePlan::Onto { new_base, old_base } => {
                 git_client
                     .rebase_onto_start(folder, new_base.clone(), old_base.clone())
@@ -3324,6 +3369,40 @@ mod tests {
         )
     }
 
+    /// Inserts the session row used by base-persistence workflow tests.
+    async fn seed_rebase_assist_test_session(db: &AppRepositories) {
+        let project_id = db
+            .projects()
+            .upsert_project("test-project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session("session-123", "gpt-5.6-sol", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+    }
+
+    /// Builds the ordered commit-hash expectations used by unknown-base
+    /// recovery tests.
+    fn base_recovery_git_client(head_hash: &'static str) -> git::MockGitClient {
+        let mut mock_git_client = git::MockGitClient::new();
+        let mut sequence = Sequence::new();
+        mock_git_client
+            .expect_ref_hash()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf(|_, reference| reference == "main")
+            .returning(|_, _| Box::pin(async { Ok("target-tip".to_string()) }));
+        mock_git_client
+            .expect_ref_hash()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf(|_, reference| reference == "HEAD")
+            .returning(move |_, _| Box::pin(async move { Ok(head_hash.to_string()) }));
+
+        mock_git_client
+    }
+
     /// Builds merge-task input with injected git client for deterministic
     /// workflow tests.
     async fn build_merge_task_input_for_test(
@@ -3807,6 +3886,11 @@ mod tests {
             .in_sequence(&mut sequence)
             .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
         mock_git_client
+            .expect_ref_hash()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Box::pin(async { Ok("main-tip".to_string()) }));
+        mock_git_client
             .expect_head_hash()
             .times(1)
             .in_sequence(&mut sequence)
@@ -3911,6 +3995,11 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        mock_git_client
+            .expect_ref_hash()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Box::pin(async { Ok("main-tip".to_string()) }));
         mock_git_client
             .expect_head_hash()
             .times(1)
@@ -4101,6 +4190,10 @@ mod tests {
             .update_session_stack_base_commit_hash("child-session", Some("parent-tip".to_string()))
             .await
             .expect("failed to set stack base hash");
+        db.sessions()
+            .update_session_base_commit_hash("child-session", "session-base".to_string())
+            .await
+            .expect("failed to set session base hash");
         let mut mock_git_client = git::MockGitClient::new();
         mock_git_client.expect_fetch_remote().times(0);
         let folder = temp_dir.path().join("child-session");
@@ -4122,6 +4215,83 @@ mod tests {
             RebasePlan::Onto {
                 new_base: "main".to_string(),
                 old_base: "parent-tip".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_session_rebase_plan_leaves_inherited_base_commits_behind() {
+        // Arrange
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let project_path = temp_dir.path().to_string_lossy().to_string();
+        let project_id = db
+            .projects()
+            .upsert_project(&project_path, Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session(
+                "regular-session",
+                "gpt-5.6-sol",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .update_session_base_commit_hash("regular-session", "local-base-tip".to_string())
+            .await
+            .expect("failed to set session base hash");
+        let mock_git_client = git::MockGitClient::new();
+        let folder = temp_dir.path().join("regular-session");
+
+        // Act
+        let rebase_plan = SessionManager::resolve_session_rebase_plan(
+            &db,
+            &mock_git_client,
+            &folder,
+            "regular-session",
+            "main",
+        )
+        .await
+        .expect("failed to resolve rebase plan");
+
+        // Assert
+        assert_eq!(
+            rebase_plan,
+            RebasePlan::Onto {
+                new_base: "main".to_string(),
+                old_base: "local-base-tip".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_session_rebase_plan_preserves_unknown_base() {
+        // Arrange
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        seed_rebase_assist_test_session(&db).await;
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let mock_git_client = git::MockGitClient::new();
+
+        // Act
+        let rebase_plan = SessionManager::resolve_session_rebase_plan(
+            &db,
+            &mock_git_client,
+            temp_dir.path(),
+            "session-123",
+            "main",
+        )
+        .await
+        .expect("failed to resolve rebase plan");
+
+        // Assert
+        assert_eq!(
+            rebase_plan,
+            RebasePlan::UnknownBase {
+                target: "main".to_string(),
             }
         );
     }
@@ -4173,6 +4343,54 @@ mod tests {
                 .contains("Failed to fetch `origin` before rebasing published session branch"),
             "error should name the published upstream remote"
         );
+    }
+
+    #[tokio::test]
+    async fn test_persist_base_commits_recovers_unknown_base_at_exact_target() {
+        // Arrange
+        let mock_git_client = base_recovery_git_client("target-tip");
+        let (_temp_dir, mut input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+        seed_rebase_assist_test_session(&input.db).await;
+        input.rebase_plan = RebasePlan::unknown_base("main".to_string());
+
+        // Act
+        SessionManager::persist_base_commits_after_successful_rebase(&input)
+            .await
+            .expect("exact target should recover the base commit");
+        let base_commit_hash = input
+            .db
+            .sessions()
+            .get_session_base_commit_hash(&input.id)
+            .await
+            .expect("failed to load recovered base commit");
+
+        // Assert
+        assert_eq!(base_commit_hash.as_deref(), Some("target-tip"));
+    }
+
+    #[tokio::test]
+    async fn test_persist_base_commits_keeps_unknown_base_for_branch_commits() {
+        // Arrange
+        let mock_git_client = base_recovery_git_client("session-tip");
+        let (_temp_dir, mut input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+        seed_rebase_assist_test_session(&input.db).await;
+        input.rebase_plan = RebasePlan::unknown_base("main".to_string());
+
+        // Act
+        SessionManager::persist_base_commits_after_successful_rebase(&input)
+            .await
+            .expect("branch commits should keep base recovery blocked");
+        let base_commit_hash = input
+            .db
+            .sessions()
+            .get_session_base_commit_hash(&input.id)
+            .await
+            .expect("failed to load base commit");
+
+        // Assert
+        assert_eq!(base_commit_hash, None);
     }
 
     #[tokio::test]

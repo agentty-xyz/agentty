@@ -246,6 +246,9 @@ fn create_mock_git_client_for_successful_noop_merges(
     mock.expect_rebase_start()
         .times(expected_merge_count)
         .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+    mock.expect_ref_hash()
+        .times(expected_merge_count)
+        .returning(|_, _| Box::pin(async { Ok("main-tip".to_string()) }));
     mock.expect_squash_merge_diff()
         .times(expected_merge_count)
         .returning(|_, _, _| Box::pin(async { Ok(String::new()) }));
@@ -5361,9 +5364,14 @@ async fn test_rebase_session_updates_session_worktree_to_base_head() {
         .times(1)
         .returning(|_| Box::pin(async { Ok(false) }));
     mock_git_client
-        .expect_rebase_start()
+        .expect_rebase_onto_start()
         .times(1)
-        .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        .withf(|_, new_base, old_base| new_base == "main" && old_base == "main-before")
+        .returning(|_, _, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+    mock_git_client
+        .expect_ref_hash()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok("main-tip".to_string()) }));
     install_mock_git_client(&mut app, mock_git_client);
 
     let session_id = app
@@ -5573,9 +5581,14 @@ async fn test_rebase_session_auto_commits_uncommitted_changes() {
         .times(1)
         .returning(|_| Box::pin(async { Ok(false) }));
     mock_git_client
-        .expect_rebase_start()
+        .expect_rebase_onto_start()
         .times(1)
-        .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        .withf(|_, new_base, old_base| new_base == "main" && old_base == "main-before")
+        .returning(|_, _, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+    mock_git_client
+        .expect_ref_hash()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok("main-tip".to_string()) }));
     install_mock_git_client(&mut app, mock_git_client);
 
     let session_id = app
