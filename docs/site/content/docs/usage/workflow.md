@@ -439,15 +439,16 @@ independent pieces of implementation work:
    transcript messages. Worker rows remain grouped with their controller in the
    **Sessions** list. Workers restrict direct Agentty actions: open one to inspect its
    transcript, press `d` for its diff, or press `D` and confirm **Detach** to
-   permanently transfer it into an ordinary user-owned session. A worker in **Review**
-   also exposes `o` to open its materialized worktree. The confirmation warns that the
-   shell has normal write access and edits can invalidate orchestration verification.
-   Temporary research children expose transcript and discarded-diff evidence but hide
-   `D` and `o`, because their worktree must be reclaimed after report capture. Direct
-   reply, question-answer, cancel, merge, publish, fork, review-comment addressing,
-   `Ctrl+c` turn interruption, and slash-command actions are unavailable while it is
-   managed. The controller conversation below the monitor uses the same line-by-line
-   transcript scrolling as a regular session.
+   permanently transfer it into an ordinary user-owned session. When Agentty runs inside
+   `tmux`, a worker in **Review** also exposes `o` to open its materialized worktree.
+   The confirmation warns that the shell has normal write access and edits can
+   invalidate orchestration verification. Temporary research children expose transcript
+   and discarded-diff evidence but hide `D` and `o`, because their worktree must be
+   reclaimed after report capture. Direct reply, question-answer, cancel, merge,
+   publish, fork, review-comment addressing, `Ctrl+c` turn interruption, and
+   slash-command actions are unavailable while it is managed. The controller
+   conversation below the monitor uses the same line-by-line transcript scrolling as a
+   regular session.
 1. When a worker asks a blocking question, Agentty mirrors it into the controller's
    question panel only when the controller has no question of its own. The relay durably
    records the exact task that owns the mirrored question, so concurrent worker
@@ -763,8 +764,9 @@ field. Use `a` to add an entry, `e` or `Enter` to edit the selected entry, `d` t
 it, and `J` / `K` to reorder entries. Add/edit mode uses a single-line input; `Enter`
 saves the command, `Esc` cancels the input, and the shared word-editing, paste,
 undo/redo, and cursor shortcuts remain available. Agentty trims commands and drops empty
-entries when saving. When multiple `Launch Configurations` entries are configured,
-pressing `o` in a session opens a selector popup.
+entries when saving. When Agentty runs inside `tmux` and multiple
+`Launch Configurations` entries are configured, pressing `o` in a session opens a
+selector popup.
 
 ## Auto-Update
 

@@ -2235,6 +2235,29 @@ async fn open_session_worktree_in_tmux_runs_configured_launch_configuration_when
 }
 
 #[tokio::test]
+async fn open_session_worktree_in_tmux_is_disabled_outside_tmux() {
+    // Arrange
+    let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let session_folder = temp_dir.path().join("session-worktree");
+    let mut mock_tmux_client = MockTmuxClient::new();
+    mock_tmux_client.expect_open_window_for_folder().times(0);
+    mock_tmux_client.expect_run_command_in_window().times(0);
+    let mut app = new_test_app_with_selected_session(
+        session_folder,
+        "cargo test",
+        Arc::new(mock_tmux_client),
+    )
+    .await;
+    app.is_tmux_session = false;
+
+    // Act
+    app.open_session_worktree_in_tmux().await;
+
+    // Assert
+    // Expectations are validated by `mockall`.
+}
+
+#[tokio::test]
 async fn open_session_worktree_in_tmux_skips_launch_configuration_when_setting_is_blank() {
     // Arrange
     let session_folder = PathBuf::from("/tmp/session-empty-launch-configuration");

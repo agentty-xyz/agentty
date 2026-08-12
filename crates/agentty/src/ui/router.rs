@@ -97,6 +97,7 @@ enum SessionSurfaceMode<'a> {
 struct SessionChatRenderContext<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
+    is_tmux_session: bool,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     mode: &'a AppMode,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
@@ -119,6 +120,7 @@ struct FrameResources<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
     diff_layout_cache: &'a page::diff::DiffLayoutCache,
+    is_tmux_session: bool,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
@@ -144,6 +146,7 @@ impl<'a> FrameResources<'a> {
         SessionChatRenderContext {
             active_prompt_outputs: self.active_prompt_outputs,
             default_reasoning_level: self.default_reasoning_level,
+            is_tmux_session: self.is_tmux_session,
             markdown_render_cache: self.markdown_render_cache,
             mode,
             output_layout_cache: self.output_layout_cache,
@@ -181,6 +184,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         sessions,
         table_state,
         frame_time,
+        is_tmux_session,
         ..
     } = context;
 
@@ -202,6 +206,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         active_prompt_outputs,
         default_reasoning_level,
         diff_layout_cache: render_cache_store.diff_layout_cache(),
+        is_tmux_session,
         markdown_render_cache: render_cache_store.markdown_render_cache(),
         output_layout_cache: render_cache_store.session_output_layout_cache(),
         review_snapshot: session_review_snapshot,
@@ -609,6 +614,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
     let SessionChatRenderContext {
         active_prompt_outputs,
         default_reasoning_level,
+        is_tmux_session,
         markdown_render_cache,
         mode,
         output_layout_cache,
@@ -653,9 +659,10 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         sessions,
         frame_time,
     };
-    let can_open_worktree = *session_worktree_availability
-        .get(session_id)
-        .unwrap_or(&false);
+    let can_open_worktree = is_tmux_session
+        && *session_worktree_availability
+            .get(session_id)
+            .unwrap_or(&false);
     if sessions[session_index].role == crate::domain::session::SessionRole::Orchestrator {
         page::orchestration::OrchestrationPage::new(page_input)
             .can_open_worktree(can_open_worktree)
@@ -881,6 +888,7 @@ mod tests {
                         active_prompt_outputs: &active_prompt_outputs,
                         default_reasoning_level: ReasoningLevel::High,
                         diff_layout_cache: &diff_layout_cache,
+                        is_tmux_session: true,
                         markdown_render_cache: &markdown_render_cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
@@ -899,6 +907,7 @@ mod tests {
                         active_prompt_outputs: &active_prompt_outputs,
                         default_reasoning_level: ReasoningLevel::High,
                         diff_layout_cache: &diff_layout_cache,
+                        is_tmux_session: true,
                         markdown_render_cache: &markdown_render_cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
@@ -1183,6 +1192,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
+                        is_tmux_session: true,
                         markdown_render_cache: &markdown_render_cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
@@ -1201,6 +1211,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
+                        is_tmux_session: true,
                         markdown_render_cache: &markdown_render_cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
@@ -1406,12 +1417,16 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
+                        is_tmux_session: false,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
-                        session_worktree_availability: &HashMap::new(),
+                        session_worktree_availability: &HashMap::from([(
+                            session_id.to_string().into(),
+                            true,
+                        )]),
                         frame_time: FrameTime::new(0, 0, 0),
                     },
                 );
@@ -1422,6 +1437,7 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Router Session"));
         assert!(text.contains("Captured output"));
+        assert!(!text.contains("o: open"));
     }
 
     #[test]
@@ -1456,6 +1472,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
+                        is_tmux_session: true,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
@@ -1509,6 +1526,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
+                        is_tmux_session: true,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
@@ -1559,6 +1577,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
+                        is_tmux_session: true,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
@@ -1605,6 +1624,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
+                        is_tmux_session: true,
                         markdown_render_cache: &markdown_render_cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
@@ -1656,6 +1676,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         diff_layout_cache: &diff_layout_cache,
+                        is_tmux_session: true,
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
@@ -1700,6 +1721,7 @@ mod tests {
             active_prompt_outputs: &active_prompt_outputs,
             default_reasoning_level: ReasoningLevel::default(),
             diff_layout_cache: &diff_layout_cache,
+            is_tmux_session: true,
             markdown_render_cache: &markdown_render_cache,
             output_layout_cache: &output_layout_cache,
             review_snapshot: None,

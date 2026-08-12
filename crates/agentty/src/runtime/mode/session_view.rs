@@ -688,7 +688,8 @@ async fn open_or_regenerate_review(
 fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSessionSnapshot> {
     let session = app.sessions.session_at(view_context.session_index)?;
     let session_status = session.status;
-    let can_open_worktree = session.allows_worktree_open_action()
+    let can_open_worktree = app.is_tmux_session()
+        && session.allows_worktree_open_action()
         && *app
             .sessions
             .session_worktree_availability()
@@ -1551,6 +1552,34 @@ mod tests {
         // Assert
         assert!(snapshot.can_open_worktree());
         assert!(!snapshot.can_open_review_comments());
+    }
+
+    #[tokio::test]
+    async fn managed_review_session_snapshot_hides_open_outside_tmux() {
+        // Arrange
+        let clients = crate::test_support::test_app_clients_with_mock_app_server()
+            .with_tmux_client(Arc::new(MockTmuxClient::new()))
+            .with_tmux_session(false);
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_clients(clients).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let session = &mut app.sessions.sessions_mut()[0];
+        session.role = SessionRole::OrchestrationWorker;
+        session.status = Status::Review;
+        app.mode = AppMode::View {
+            session_id: session_id.into(),
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert!(!snapshot.can_open_worktree());
     }
 
     #[tokio::test]

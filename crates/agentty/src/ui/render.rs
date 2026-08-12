@@ -56,6 +56,8 @@ pub struct RenderContext<'a> {
     pub git_upstream_ref: Option<&'a str>,
     /// Latest ahead/behind counts for the active project branch.
     pub git_status: Option<(u32, u32)>,
+    /// Whether tmux-only worktree actions can be rendered.
+    pub is_tmux_session: bool,
     /// Newer stable version when one is available.
     pub latest_available_version: Option<&'a str>,
     /// Current app mode and its transient state.

@@ -81,7 +81,7 @@ impl TerminalOperation for CrosstermTerminalOperation {
     }
 
     fn is_tmux_session(&self) -> bool {
-        has_tmux_environment(|name| env::var_os(name))
+        crate::infra::tmux::is_tmux_session()
     }
 
     fn enter_alternate_screen(
@@ -289,11 +289,6 @@ fn has_ssh_environment(mut get_var: impl FnMut(&str) -> Option<OsString>) -> boo
     ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
         .iter()
         .any(|name| get_var(name).is_some())
-}
-
-/// Returns whether the `TMUX` pane environment variable is present.
-fn has_tmux_environment(mut get_var: impl FnMut(&str) -> Option<OsString>) -> bool {
-    get_var("TMUX").is_some()
 }
 
 /// Restores terminal modes and ignores failures so drop paths do not panic.
@@ -581,35 +576,6 @@ mod tests {
 
         // Assert
         assert!(!is_ssh_session);
-    }
-
-    /// Verifies tmux detection accepts the pane environment variable set by
-    /// the multiplexer.
-    #[test]
-    fn tmux_environment_detects_tmux_variable() {
-        // Arrange
-        let variables = [("TMUX", Some("/tmp/tmux-501/default,123,0"))];
-
-        // Act
-        let is_tmux_session = has_tmux_environment(|name| {
-            variables
-                .iter()
-                .find(|(variable_name, _)| *variable_name == name)
-                .and_then(|(_, value)| value.map(OsString::from))
-        });
-
-        // Assert
-        assert!(is_tmux_session);
-    }
-
-    /// Verifies tmux detection stays false when the pane marker is absent.
-    #[test]
-    fn tmux_environment_rejects_without_tmux_variable() {
-        // Arrange & Act
-        let is_tmux_session = has_tmux_environment(|_| None);
-
-        // Assert
-        assert!(!is_tmux_session);
     }
 
     /// Verifies the xterm modified-key commands request CSI-u encoding and

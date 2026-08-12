@@ -852,6 +852,7 @@ fn test_managed_worker_restricted_view() -> E2eResult {
 fn test_managed_worker_review_open_action() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("managed_worker_review_open_action")
+        .env("TMUX", "/tmp/tmux-agentty-test/default,1,0")
         .with_git()
         .setup(seed_review_ready_managed_worker)
         .run(
@@ -888,6 +889,46 @@ fn test_managed_worker_review_open_action() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
                 assertion::assert_text_in_region(frame, "Open Managed Worktree", &full);
                 assertion::assert_text_in_region(frame, "This opens a writable", &full);
+            },
+        )
+}
+
+#[test]
+fn managed_worker_review_hides_open_outside_tmux() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("managed_worker_review_hides_open_outside_tmux")
+        .env("TMUX", "")
+        .with_git()
+        .setup(seed_review_ready_managed_worker)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Managed by controller-0001", 5000)
+                    .compose(&common::open_help_overlay())
+                    .capture_labeled(
+                        "managed_worker_review_help",
+                        "Worktree open is hidden outside tmux",
+                    )
+                    .press_key("q")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("o")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "managed_worker_review_after_o",
+                        "Worktree open key is ignored outside tmux",
+                    )
+            },
+            |frame, report| {
+                let help_frame = common::frame_from_capture(&report.captures[0]);
+                assertion::assert_not_visible(&help_frame, "o: Open worktree");
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
+                assertion::assert_not_visible(frame, "Open Managed Worktree");
             },
         )
 }

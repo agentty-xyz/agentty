@@ -37,6 +37,7 @@ pub(crate) fn render_app(
             git_branch: snapshot.git_branch,
             git_upstream_ref: snapshot.git_upstream_ref,
             git_status: snapshot.git_status,
+            is_tmux_session: snapshot.is_tmux_session,
             latest_available_version: snapshot.latest_available_version,
             update_status: snapshot.update_status,
             mode: snapshot.mode,
