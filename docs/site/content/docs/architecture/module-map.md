@@ -24,9 +24,8 @@ For file-level detail, read the module docstrings directly.
   transport wiring.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
   review-request and comment-thread types, GitHub/GitLab remote detection, thread
-  reply/resolution, and the `gh`/`glab` adapters and project-scoped assigned GitHub
-  issue list/detail loading behind the `ReviewRequestClient` and `ForgeCommandRunner`
-  boundaries.
+  reply/resolution, and the `gh`/`glab` adapters behind the `ReviewRequestClient` and
+  `ForgeCommandRunner` boundaries.
 - `crates/ag-git/`: Shared git library crate with worktree creation, repository
   metadata, commit/diff/push/pull sync, rebase/conflict handling, and squash-merge
   workflows behind the `GitClient` boundary.
@@ -90,7 +89,7 @@ For file-level detail, read the module docstrings directly.
   `crates/ag-agent/`.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
-  for common interactions such as issue/review detail navigation, session-output
+  for common interactions such as review-request detail navigation, session-output
   metrics, transcript scrolling, `KeyEvent` mapping to domain input commands, and
   session review-comment navigation, address/deny marking, and batch submission. Runtime
   owns `PresentationState`, including the shared `RenderCacheStore` used by input

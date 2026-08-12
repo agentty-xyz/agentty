@@ -23,9 +23,9 @@ pub(crate) use command::{
 pub(crate) use github::GitHubReviewRequestAdapter;
 pub(crate) use gitlab::GitLabReviewRequestAdapter;
 pub use model::{
-    AssignedIssue, CreateReviewRequestInput, ForgeFuture, ForgeKind, ForgeRemote, IssueDetail,
-    RequestedReview, RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide,
-    ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestError, ReviewRequestMetadata,
+    CreateReviewRequestInput, ForgeFuture, ForgeKind, ForgeRemote, RequestedReview,
+    RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
+    ReviewCommentThread, ReviewRequestError, ReviewRequestMetadata,
     ReviewRequestMetadataFieldUpdate, ReviewRequestState, ReviewRequestSummary,
     UpdateReviewRequestInput, is_gitlab_host,
 };

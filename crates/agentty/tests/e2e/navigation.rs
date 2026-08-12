@@ -124,78 +124,6 @@ exit 1
     Ok(())
 }
 
-/// Seeds a GitHub remote and `gh` stub that returns issues assigned in that
-/// project.
-fn seed_assigned_github_issues(env: &BuilderEnv) -> E2eResult {
-    let output = Command::new("git")
-        .args([
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/agentty-xyz/agentty.git",
-        ])
-        .current_dir(&env.workdir)
-        .output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "git remote add origin failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-
-    let gh_stub = env.stub_bin.join("gh");
-    std::fs::write(
-        &gh_stub,
-        r#"#!/bin/sh
-if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
-  exit 0
-fi
-
-if [ "$1" = "search" ] && [ "$2" = "issues" ]; then
-  cat <<'JSON'
-[
-  {
-    "number": 124,
-    "title": "Keep issue list compact",
-    "updatedAt": "2026-07-09T18:30:00Z",
-    "url": "https://github.com/agentty-xyz/agentty/issues/124",
-    "repository": {"nameWithOwner": "agentty-xyz/agentty"}
-  }
-]
-JSON
-  exit 0
-fi
-
-if [ "$1" = "issue" ] && [ "$2" = "view" ] && [ "$3" = "124" ]; then
-  cat <<'JSON'
-{
-  "assignees": [{"login": "octocat"}],
-  "author": {"login": "hubot"},
-  "body": "<!-- hidden issue template --><h2>Implementation notes</h2><ul><li>Show the selected issue's base information without loading comments.</li><li>Use <code>shared</code> rendering.</li></ul><p><a title=\"x > y\">Quoted attribute link</a></p><p>Literal relation: a < b > c.</p><p>Control sample: &#x1b;[2J stays visible.</p>\n\nInline sample: `<span>literal inline HTML</span>`.\n\n```html\n<div>literal fenced HTML</div>\n```",
-  "createdAt": "2026-07-01T10:00:00Z",
-  "labels": [{"name": "enhancement"}, {"name": "ui"}],
-  "number": 124,
-  "state": "OPEN",
-  "title": "Keep issue list compact",
-  "updatedAt": "2026-07-09T18:30:00Z",
-  "url": "https://github.com/agentty-xyz/agentty/issues/124"
-}
-JSON
-  exit 0
-fi
-
-echo "unexpected gh args: $*" >&2
-exit 1
-"#,
-    )?;
-
-    #[cfg(unix)]
-    std::fs::set_permissions(&gh_stub, std::fs::Permissions::from_mode(0o755))?;
-
-    Ok(())
-}
-
 /// Seeds the canonical project as the persisted active project.
 fn seed_active_project_setting(env: &BuilderEnv) -> E2eResult {
     let runtime = common::seed_runtime()?;
@@ -288,7 +216,7 @@ fn tab_key_switches_tabs() -> E2eResult {
 /// Verify that pressing Tab cycles through all primary tabs in order.
 ///
 /// Starts on Projects and asserts each successive tab becomes selected:
-/// Sessions, Inbox, Issues, Settings.
+/// Sessions, Inbox, Settings.
 #[test]
 fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange, Act, Assert
@@ -310,9 +238,6 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                     .compose(&common::switch_to_tab("Inbox"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("inbox", "Inbox tab selected")
-                    .compose(&common::switch_to_tab("Issues"))
-                    .viewing_pause_ms(2000)
-                    .capture_labeled("issues", "Issues tab selected")
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2500)
                     .capture_labeled("settings", "Settings tab selected")
@@ -323,8 +248,8 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
 
                 assert_eq!(
                     report.captures.len(),
-                    4,
-                    "Expected 4 captures (sessions, inbox, issues, settings)"
+                    3,
+                    "Expected 3 captures (sessions, inbox, settings)"
                 );
 
                 let sessions_frame = common::frame_from_capture(&report.captures[0]);
@@ -335,11 +260,7 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                 let inbox_full = Region::full(inbox_frame.cols(), inbox_frame.rows());
                 assertion::assert_text_in_region(&inbox_frame, "Review Requests", &inbox_full);
 
-                let issues_frame = common::frame_from_capture(&report.captures[2]);
-                let issues_full = Region::full(issues_frame.cols(), issues_frame.rows());
-                assertion::assert_text_in_region(&issues_frame, "Issues", &issues_full);
-
-                let settings_frame = common::frame_from_capture(&report.captures[3]);
+                let settings_frame = common::frame_from_capture(&report.captures[2]);
                 let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
                 assertion::assert_text_in_region(
                     &settings_frame,
@@ -447,135 +368,6 @@ fn inbox_tab_shows_requested_reviews_page() -> E2eResult {
     Ok(())
 }
 
-/// Verify the Issues tab loads base details for a selected assigned issue.
-#[test]
-fn test_assigned_github_issues() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("assigned_github_issues")
-        .with_git()
-        .with_terminal_size(120, 36)
-        .setup(seed_assigned_github_issues)
-        .zola(
-            "Assigned GitHub issues",
-            "Browse assigned GitHub issues and inspect their base details.",
-            45,
-        )
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
-                    .compose(&common::switch_to_tab("Issues"))
-                    .wait_for_text("Keep issue list compact", 5000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("issues", "Assigned GitHub issue list")
-                    .press_key("Enter")
-                    .wait_for_text("Description", 5000)
-                    .wait_for_text("Implementation notes", 5000)
-                    .wait_for_text("Use shared rendering.", 5000)
-                    .wait_for_text("Quoted attribute link", 5000)
-                    .wait_for_text("Literal relation: a < b > c.", 5000)
-                    .wait_for_text("Control sample: &#x1b;[2J stays visible.", 5000)
-                    .wait_for_text("<span>literal inline HTML</span>", 5000)
-                    .wait_for_text("<div>literal fenced HTML</div>", 5000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("issue_detail", "Selected GitHub issue details")
-            },
-            |frame, report| {
-                assert_eq!(report.captures.len(), 2);
-                let issues_frame = common::frame_from_capture(&report.captures[0]);
-                let issues_full = Region::full(issues_frame.cols(), issues_frame.rows());
-                assertion::assert_text_in_region(&issues_frame, "Issues", &issues_full);
-                assertion::assert_text_in_region(&issues_frame, "Assigned to you", &issues_full);
-                assertion::assert_text_in_region(
-                    &issues_frame,
-                    "#124 Keep issue list compact",
-                    &issues_full,
-                );
-
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Issue #124", &full);
-                assertion::assert_text_in_region(frame, "Author: hubot", &full);
-                assertion::assert_text_in_region(frame, "Assignees: octocat", &full);
-                assertion::assert_text_in_region(frame, "Labels: enhancement, ui", &full);
-                assertion::assert_text_in_region(frame, "agentty-xyz/agentty", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Show the selected issue's base information",
-                    &full,
-                );
-                assertion::assert_text_in_region(frame, "Implementation notes", &full);
-                assertion::assert_text_in_region(frame, "Use shared rendering.", &full);
-                assertion::assert_text_in_region(frame, "Quoted attribute link", &full);
-                assertion::assert_text_in_region(frame, "Literal relation: a < b > c.", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Control sample: &#x1b;[2J stays visible.",
-                    &full,
-                );
-                assertion::assert_text_in_region(frame, "<span>literal inline HTML</span>", &full);
-                assertion::assert_text_in_region(frame, "<div>literal fenced HTML</div>", &full);
-                assertion::assert_not_visible(frame, "hidden issue template");
-                assertion::assert_not_visible(frame, "<h2>");
-                assertion::assert_not_visible(frame, "y\">Quoted attribute link");
-                assertion::assert_not_visible(frame, "```html");
-            },
-        )?;
-
-    Ok(())
-}
-
-/// Verify an assigned GitHub issue can start a session with its link.
-#[test]
-fn test_address_assigned_github_issue() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("address_assigned_github_issue")
-        .with_git()
-        .with_terminal_size(120, 36)
-        .setup(seed_assigned_github_issues)
-        .zola(
-            "Address an assigned GitHub issue",
-            "Start an agent session from an assigned issue with its link included.",
-            46,
-        )
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
-                    .compose(&common::switch_to_tab("Issues"))
-                    .wait_for_text("Keep issue list compact", 5000)
-                    .press_key("Enter")
-                    .wait_for_text("Description", 5000)
-                    .capture_labeled("issue_detail", "Issue detail with address action")
-                    .press_key("a")
-                    .wait_for_text(
-                        "Address this issue: https://github.com/agentty-xyz/agentty/issues/124",
-                        10000,
-                    )
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("issue_session", "New session addressing the issue")
-            },
-            |frame, report| {
-                assert_eq!(report.captures.len(), 2);
-                let issue_frame = common::frame_from_capture(&report.captures[0]);
-                let issue_full = Region::full(issue_frame.cols(), issue_frame.rows());
-                assertion::assert_text_in_region(&issue_frame, "a: address", &issue_full);
-
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "Address this issue: https://github.com/agentty-xyz/agentty/issues/124",
-                    &full,
-                );
-            },
-        )?;
-
-    Ok(())
-}
-
 /// Verify that pressing `q` opens a quit confirmation dialog.
 ///
 /// The dialog should display the title "Confirm Quit" and the message
@@ -641,7 +433,7 @@ fn startup_shows_footer_hints() -> E2eResult {
 /// Verify that `BackTab` (Shift+Tab) cycles tabs in reverse order.
 ///
 /// Starts on Projects (first tab), then presses `BackTab` to cycle back
-/// through Settings, Issues, Inbox, Sessions, and Projects.
+/// through Settings, Inbox, Sessions, and Projects.
 #[test]
 fn backtab_cycles_tabs_reverse() -> E2eResult {
     // Arrange, Act, Assert
@@ -659,9 +451,6 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     .compose(&common::switch_to_tab_reverse("Settings"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("back_to_settings", "Settings tab after first BackTab")
-                    .compose(&common::switch_to_tab_reverse("Issues"))
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_issues", "Issues tab after second BackTab")
                     .compose(&common::switch_to_tab_reverse("Inbox"))
                     .viewing_pause_ms(1500)
                     .capture_labeled("back_to_inbox", "Inbox tab after third BackTab")
@@ -684,19 +473,15 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     &settings_full,
                 );
 
-                let issues_frame = common::frame_from_capture(&report.captures[1]);
-                let issues_full = Region::full(issues_frame.cols(), issues_frame.rows());
-                assertion::assert_text_in_region(&issues_frame, "Issues", &issues_full);
-
-                let inbox_frame = common::frame_from_capture(&report.captures[2]);
+                let inbox_frame = common::frame_from_capture(&report.captures[1]);
                 let inbox_full = Region::full(inbox_frame.cols(), inbox_frame.rows());
                 assertion::assert_text_in_region(&inbox_frame, "Review Requests", &inbox_full);
 
-                let sessions_frame = common::frame_from_capture(&report.captures[3]);
+                let sessions_frame = common::frame_from_capture(&report.captures[2]);
                 let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
                 assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
 
-                let projects_frame = common::frame_from_capture(&report.captures[4]);
+                let projects_frame = common::frame_from_capture(&report.captures[3]);
                 let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
                 assertion::assert_text_in_region(&projects_frame, "test-project", &projects_full);
             },

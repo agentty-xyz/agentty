@@ -13,7 +13,6 @@ use crate::ui::{self, RenderCacheStore};
 /// details.
 #[derive(Default)]
 pub(crate) struct PresentationState {
-    assigned_issue_table_state: RefCell<TableState>,
     project_table_state: RefCell<TableState>,
     render_cache_store: RenderCacheStore,
     /// Base page from the last successful draw. It is compared before each
@@ -44,7 +43,6 @@ impl PresentationState {
     /// Renders one immutable application snapshot through the single runtime
     /// presentation boundary.
     pub(crate) fn render(&self, snapshot: &AppViewSnapshot<'_>, frame: &mut Frame) {
-        let mut assigned_issue_table_state = self.assigned_issue_table_state.borrow_mut();
         let mut project_table_state = self.project_table_state.borrow_mut();
         let mut requested_review_table_state = self.requested_review_table_state.borrow_mut();
         let mut session_table_state = self.session_table_state.borrow_mut();
@@ -52,7 +50,6 @@ impl PresentationState {
         ui::render_app(
             snapshot,
             frame,
-            &mut assigned_issue_table_state,
             &mut project_table_state,
             &self.render_cache_store,
             &mut requested_review_table_state,

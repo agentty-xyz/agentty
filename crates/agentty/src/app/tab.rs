@@ -22,24 +22,15 @@ pub enum Tab {
     Sessions,
     /// Requested forge reviews belonging to the active project.
     Review,
-    /// Assigned forge issues belonging to the active project.
-    Issues,
     /// Settings for the active project.
     Settings,
 }
 
 impl Tab {
     /// Tabs in the order they are rendered.
-    pub const ALL: [Self; 5] = [
-        Self::Projects,
-        Self::Sessions,
-        Self::Review,
-        Self::Issues,
-        Self::Settings,
-    ];
+    pub const ALL: [Self; 4] = [Self::Projects, Self::Sessions, Self::Review, Self::Settings];
     /// Project-scoped tabs in display order.
-    pub const PROJECT_SCOPED: [Self; 4] =
-        [Self::Sessions, Self::Review, Self::Issues, Self::Settings];
+    pub const PROJECT_SCOPED: [Self; 3] = [Self::Sessions, Self::Review, Self::Settings];
 
     /// Returns the available top-level tabs.
     pub fn available_tabs() -> &'static [Self] {
@@ -57,7 +48,6 @@ impl Tab {
             Tab::Projects => "Projects",
             Tab::Sessions => "Sessions",
             Tab::Review => "Inbox",
-            Tab::Issues => "Issues",
             Tab::Settings => "Settings",
         }
     }
@@ -73,7 +63,6 @@ impl Tab {
             "Projects" => Some(Self::Projects),
             "Sessions" => Some(Self::Sessions),
             "Inbox" => Some(Self::Review),
-            "Issues" => Some(Self::Issues),
             "Settings" => Some(Self::Settings),
             _ => None,
         }
@@ -84,7 +73,7 @@ impl Tab {
     pub fn scope(self) -> TabScope {
         match self {
             Tab::Projects => TabScope::Global,
-            Tab::Sessions | Tab::Review | Tab::Issues | Tab::Settings => TabScope::Project,
+            Tab::Sessions | Tab::Review | Tab::Settings => TabScope::Project,
         }
     }
 
@@ -167,10 +156,7 @@ mod tests {
         let titles = Tab::ALL.map(Tab::title);
 
         // Assert
-        assert_eq!(
-            titles,
-            ["Projects", "Sessions", "Inbox", "Issues", "Settings"]
-        );
+        assert_eq!(titles, ["Projects", "Sessions", "Inbox", "Settings"]);
     }
 
     #[test]
@@ -187,7 +173,6 @@ mod tests {
                 TabScope::Global,
                 TabScope::Project,
                 TabScope::Project,
-                TabScope::Project,
                 TabScope::Project
             ]
         );
@@ -200,7 +185,6 @@ mod tests {
             ("Projects", Some(Tab::Projects)),
             ("Sessions", Some(Tab::Sessions)),
             ("Inbox", Some(Tab::Review)),
-            ("Issues", Some(Tab::Issues)),
             ("Settings", Some(Tab::Settings)),
             ("Invalid", None),
         ];
@@ -219,10 +203,7 @@ mod tests {
         let values = Tab::ALL.map(Tab::as_str);
 
         // Assert
-        assert_eq!(
-            values,
-            ["Projects", "Sessions", "Inbox", "Issues", "Settings"]
-        );
+        assert_eq!(values, ["Projects", "Sessions", "Inbox", "Settings"]);
     }
 
     #[test]
@@ -235,13 +216,7 @@ mod tests {
         // Assert
         assert_eq!(
             next_tabs,
-            [
-                Tab::Sessions,
-                Tab::Review,
-                Tab::Issues,
-                Tab::Settings,
-                Tab::Projects
-            ]
+            [Tab::Sessions, Tab::Review, Tab::Settings, Tab::Projects]
         );
     }
 
@@ -255,13 +230,7 @@ mod tests {
         // Assert
         assert_eq!(
             previous_tabs,
-            [
-                Tab::Settings,
-                Tab::Projects,
-                Tab::Sessions,
-                Tab::Review,
-                Tab::Issues
-            ]
+            [Tab::Settings, Tab::Projects, Tab::Sessions, Tab::Review]
         );
     }
 
@@ -275,7 +244,7 @@ mod tests {
         // Assert
         assert_eq!(
             project_scoped_tabs,
-            &[Tab::Sessions, Tab::Review, Tab::Issues, Tab::Settings]
+            &[Tab::Sessions, Tab::Review, Tab::Settings]
         );
     }
 
@@ -317,8 +286,6 @@ mod tests {
         observed_tabs.push(manager.current());
         manager.next();
         observed_tabs.push(manager.current());
-        manager.next();
-        observed_tabs.push(manager.current());
 
         // Assert
         assert_eq!(
@@ -327,7 +294,6 @@ mod tests {
                 Tab::Projects,
                 Tab::Sessions,
                 Tab::Review,
-                Tab::Issues,
                 Tab::Settings,
                 Tab::Projects
             ]
@@ -350,8 +316,6 @@ mod tests {
         observed_tabs.push(manager.current());
         manager.previous();
         observed_tabs.push(manager.current());
-        manager.previous();
-        observed_tabs.push(manager.current());
 
         // Assert
         assert_eq!(
@@ -359,7 +323,6 @@ mod tests {
             vec![
                 Tab::Projects,
                 Tab::Settings,
-                Tab::Issues,
                 Tab::Review,
                 Tab::Sessions,
                 Tab::Projects

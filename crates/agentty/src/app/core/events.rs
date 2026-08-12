@@ -65,26 +65,6 @@ pub(crate) enum AppRuntimeEvent {
 /// [`App::apply_app_events`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AppEvent {
-    /// Indicates completion of one assigned GitHub issue list refresh.
-    AssignedIssuesLoaded {
-        /// Refresh generation assigned when the task was spawned.
-        generation: u64,
-        /// Project id whose assigned issues were loaded.
-        project_id: i64,
-        /// GitHub CLI result from the background issue task.
-        result: Result<Vec<ag_forge::AssignedIssue>, String>,
-    },
-    /// Indicates completion of one selected GitHub issue detail load.
-    IssueDetailLoaded {
-        /// Provider display id such as GitHub `#123`.
-        display_id: String,
-        /// Assigned-issue list generation visible when loading began.
-        generation: u64,
-        /// Project id whose selected issue was loaded.
-        project_id: i64,
-        /// Base issue detail result, excluding comments.
-        result: Result<ag_forge::IssueDetail, String>,
-    },
     /// Indicates background-loaded prompt at-mention entries for one session.
     AtMentionEntriesLoaded {
         entries: Vec<FileEntry>,
@@ -273,10 +253,6 @@ pub(crate) enum AppEvent {
 /// Reduced representation of all app events currently queued for one tick.
 #[derive(Default)]
 pub(super) struct AppEventBatch {
-    /// Latest assigned-issue task result collected for this reducer batch.
-    pub(super) assigned_issues: Option<(u64, i64, Result<Vec<ag_forge::AssignedIssue>, String>)>,
-    /// Ordered selected issue-detail results collected for this reducer batch.
-    pub(super) issue_details: Vec<IssueDetailUpdate>,
     pub(super) applied_turns: HashMap<SessionId, TurnAppliedState>,
     pub(super) agent_cli_updates: Option<Vec<AgentCliInfo>>,
     pub(super) at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
@@ -340,14 +316,6 @@ struct AppEventReductionPlan {
     after_snapshot_effects: Vec<AppEventEffect>,
     before_snapshot_effects: Vec<AppEventEffect>,
     changes_observable_state: bool,
-}
-
-/// Completed selected issue-detail load ready for reducer application.
-pub(super) struct IssueDetailUpdate {
-    pub(super) display_id: String,
-    pub(super) generation: u64,
-    pub(super) project_id: i64,
-    pub(super) result: Result<ag_forge::IssueDetail, String>,
 }
 
 /// Completed diff-preview file read ready for stale-safe reducer application.
@@ -422,9 +390,7 @@ impl AppEventBatch {
         let changes_observable_state = self.should_reload_sessions
             || self.should_reload_projects
             || self.agent_cli_updates.is_some()
-            || self.assigned_issues.is_some()
             || self.git_status_update.is_some()
-            || !self.issue_details.is_empty()
             || self.latest_available_version_update.is_some()
             || self.update_status.is_some()
             || !self.applied_turns.is_empty()
@@ -476,24 +442,6 @@ impl AppEventBatch {
     /// tick preserves cumulative usage from multiple completed turns.
     pub(super) fn collect_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::AssignedIssuesLoaded {
-                generation,
-                project_id,
-                result,
-            } => {
-                self.collect_assigned_issues_loaded(generation, project_id, result);
-            }
-            AppEvent::IssueDetailLoaded {
-                display_id,
-                generation,
-                project_id,
-                result,
-            } => self.issue_details.push(IssueDetailUpdate {
-                display_id,
-                generation,
-                project_id,
-                result,
-            }),
             AppEvent::GitStatusUpdated {
                 generation,
                 session_statuses,
@@ -642,9 +590,7 @@ impl AppEventBatch {
             | AppEvent::SessionOrchestrationProgressUpdated { .. }
             | AppEvent::PublishedBranchSyncUpdated { .. }
             | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_workflow_event(event),
-            AppEvent::AssignedIssuesLoaded { .. }
-            | AppEvent::IssueDetailLoaded { .. }
-            | AppEvent::GitStatusUpdated { .. }
+            AppEvent::GitStatusUpdated { .. }
             | AppEvent::VersionAvailabilityUpdated { .. }
             | AppEvent::AgentCliVersionsUpdated { .. }
             | AppEvent::UpdateStatusChanged { .. }
@@ -726,9 +672,7 @@ impl AppEventBatch {
                 result,
                 session_id,
             } => self.collect_review_request_status_updated(generation, result, session_id),
-            AppEvent::AssignedIssuesLoaded { .. }
-            | AppEvent::IssueDetailLoaded { .. }
-            | AppEvent::AtMentionEntriesLoaded { .. }
+            AppEvent::AtMentionEntriesLoaded { .. }
             | AppEvent::DiffPreviewLoaded { .. }
             | AppEvent::GitStatusUpdated { .. }
             | AppEvent::VersionAvailabilityUpdated { .. }
@@ -751,23 +695,6 @@ impl AppEventBatch {
             | AppEvent::SessionTitleGenerationFinished { .. } => {
                 unreachable!("top-level app event should be collected before runtime events")
             }
-        }
-    }
-
-    /// Keeps the freshest assigned-issue result when one batch contains
-    /// overlapping loads.
-    fn collect_assigned_issues_loaded(
-        &mut self,
-        generation: u64,
-        project_id: i64,
-        result: Result<Vec<ag_forge::AssignedIssue>, String>,
-    ) {
-        if self
-            .assigned_issues
-            .as_ref()
-            .is_none_or(|(current_generation, _, _)| generation >= *current_generation)
-        {
-            self.assigned_issues = Some((generation, project_id, result));
         }
     }
 
@@ -1311,28 +1238,6 @@ impl App {
                 .replace_session_git_statuses(event_batch.session_git_status_updates.clone());
         }
 
-        if let Some((generation, project_id, result)) = event_batch.assigned_issues.take()
-            && project_id == self.projects.active_project_id()
-            && self
-                .assigned_issues
-                .matches_loading_request(project_id, generation)
-        {
-            match result {
-                Ok(items) => self.replace_assigned_issues(project_id, items),
-                Err(message) => {
-                    self.assigned_issue_selected_index = None;
-                    self.assigned_issues = app::AssignedIssueState::Failed {
-                        message,
-                        project_id,
-                    };
-                }
-            }
-        }
-
-        for issue_detail in std::mem::take(&mut event_batch.issue_details) {
-            self.apply_issue_detail_update(issue_detail);
-        }
-
         for diff_preview_update in std::mem::take(&mut event_batch.diff_preview_updates) {
             self.apply_diff_preview_update(&diff_preview_update);
         }
@@ -1368,39 +1273,6 @@ impl App {
             event_batch.latest_available_version_update.as_ref(),
             event_batch.update_status.take(),
         );
-    }
-
-    /// Applies one issue-detail result only to the matching visible page.
-    fn apply_issue_detail_update(&mut self, update: IssueDetailUpdate) {
-        if update.project_id != self.projects.active_project_id()
-            || update.generation != self.assigned_issue_generation
-        {
-            return;
-        }
-
-        let AppMode::IssueDetail {
-            detail,
-            error,
-            issue,
-            ..
-        } = &mut self.mode
-        else {
-            return;
-        };
-        if issue.display_id != update.display_id {
-            return;
-        }
-
-        match update.result {
-            Ok(issue_detail) => {
-                *detail = Some(issue_detail);
-                *error = None;
-            }
-            Err(message) => {
-                *detail = None;
-                *error = Some(format!("Failed to load issue details: {message}"));
-            }
-        }
     }
 
     /// Applies a worktree read only to its still-loading diff selection.
@@ -1818,7 +1690,6 @@ impl App {
                 ..
             } => view_id == session_id,
             AppMode::List
-            | AppMode::IssueDetail { .. }
             | AppMode::ReviewDetail { .. }
             | AppMode::SessionCreation { .. }
             | AppMode::PreCommitHookWarning { .. }
@@ -2753,58 +2624,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_issue_detail_success_preserves_action_error() {
-        // Arrange
-        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-        let project_id = app.projects.active_project_id();
-        let generation = app.assigned_issue_generation;
-        app.mode = AppMode::IssueDetail {
-            action_error: Some("Failed to start issue session: unavailable".to_string()),
-            detail: None,
-            error: None,
-            issue: ag_forge::AssignedIssue {
-                display_id: "#124".to_string(),
-                repository: "agentty-xyz/agentty".to_string(),
-                title: "Keep issue details reachable".to_string(),
-                updated_at: None,
-                web_url: "https://github.com/agentty-xyz/agentty/issues/124".to_string(),
-            },
-            scroll_offset: 0,
-        };
-
-        // Act
-        app.apply_issue_detail_update(IssueDetailUpdate {
-            display_id: "#124".to_string(),
-            generation,
-            project_id,
-            result: Ok(ag_forge::IssueDetail {
-                assignees: Vec::new(),
-                author: "octocat".to_string(),
-                body: Some("Loaded after the action failed.".to_string()),
-                created_at: None,
-                display_id: "#124".to_string(),
-                labels: Vec::new(),
-                repository: "agentty-xyz/agentty".to_string(),
-                state: "OPEN".to_string(),
-                title: "Keep issue details reachable".to_string(),
-                updated_at: None,
-                web_url: "https://github.com/agentty-xyz/agentty/issues/124".to_string(),
-            }),
-        });
-
-        // Assert
-        assert!(matches!(
-            app.mode,
-            AppMode::IssueDetail {
-                action_error: Some(ref action_error),
-                detail: Some(_),
-                error: None,
-                ..
-            } if action_error == "Failed to start issue session: unavailable"
-        ));
-    }
-
-    #[tokio::test]
     async fn test_session_review_comment_result_updates_matching_open_page() {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
@@ -3048,66 +2867,6 @@ mod tests {
         assert_eq!(generation, 2);
         assert_eq!(project_id, 42);
         assert_eq!(result.expect("newer result should be successful").len(), 0);
-    }
-
-    #[test]
-    fn test_issue_detail_batch_retains_same_generation_results_in_arrival_order() {
-        // Arrange
-        let mut event_batch = AppEventBatch::default();
-        let visible_issue_event = AppEvent::IssueDetailLoaded {
-            display_id: "#124".to_string(),
-            generation: 1,
-            project_id: 42,
-            result: Err("visible issue result".to_string()),
-        };
-        let previous_issue_event = AppEvent::IssueDetailLoaded {
-            display_id: "#123".to_string(),
-            generation: 1,
-            project_id: 42,
-            result: Err("previous issue result".to_string()),
-        };
-
-        // Act
-        event_batch.collect_event(visible_issue_event);
-        event_batch.collect_event(previous_issue_event);
-
-        // Assert
-        assert_eq!(event_batch.issue_details.len(), 2);
-        assert_eq!(event_batch.issue_details[0].display_id, "#124");
-        assert_eq!(event_batch.issue_details[1].display_id, "#123");
-    }
-
-    #[test]
-    fn test_assigned_issues_batch_changes_observable_state() {
-        // Arrange
-        let mut event_batch = AppEventBatch::default();
-
-        // Act
-        event_batch.collect_event(AppEvent::AssignedIssuesLoaded {
-            generation: 1,
-            project_id: 42,
-            result: Ok(Vec::new()),
-        });
-
-        // Assert
-        assert!(event_batch.drain_reduction_plan().changes_observable_state);
-    }
-
-    #[test]
-    fn test_issue_detail_batch_changes_observable_state() {
-        // Arrange
-        let mut event_batch = AppEventBatch::default();
-
-        // Act
-        event_batch.collect_event(AppEvent::IssueDetailLoaded {
-            display_id: "#124".to_string(),
-            generation: 1,
-            project_id: 42,
-            result: Err("issue detail failure".to_string()),
-        });
-
-        // Assert
-        assert!(event_batch.drain_reduction_plan().changes_observable_state);
     }
 
     #[test]

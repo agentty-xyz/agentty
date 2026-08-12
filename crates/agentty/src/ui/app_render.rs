@@ -10,7 +10,6 @@ use crate::ui::{RenderCacheStore, RenderContext, SessionReviewSnapshot, style};
 pub(crate) fn render_app(
     snapshot: &AppViewSnapshot<'_>,
     frame: &mut Frame,
-    assigned_issue_table_state: &mut TableState,
     project_table_state: &mut TableState,
     render_cache_store: &RenderCacheStore,
     requested_review_table_state: &mut TableState,
@@ -31,9 +30,6 @@ pub(crate) fn render_app(
     super::render(
         frame,
         RenderContext {
-            assigned_issue_selected_index: snapshot.assigned_issue_selected_index,
-            assigned_issue_table_state,
-            assigned_issues: snapshot.assigned_issues,
             active_project_id: snapshot.active_project_id,
             available_agent_clis: &snapshot.available_agent_clis,
             current_tab: snapshot.current_tab,

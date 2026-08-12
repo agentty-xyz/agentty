@@ -65,81 +65,6 @@ fn test_view_app_mode(session_id: &str) -> AppMode {
     }
 }
 
-#[tokio::test]
-async fn open_selected_assigned_issue_clears_action_error() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    let project_id = app.projects.active_project_id();
-    let issue = crate::test_support::assigned_issue_fixture();
-    app.replace_assigned_issues(project_id, vec![issue.clone()]);
-
-    // Act
-    app.open_selected_assigned_issue();
-
-    // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::IssueDetail {
-            action_error: None,
-            detail: None,
-            error: None,
-            issue: opened_issue,
-            scroll_offset: 0,
-        } if opened_issue == issue
-    ));
-}
-
-#[tokio::test]
-async fn start_created_issue_session_opens_session_when_command_persistence_fails() {
-    // Arrange
-    let (mut app, _base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
-    let created_session_id = app
-        .create_session()
-        .await
-        .expect("issue session should be created");
-    sqlx::query!("DROP TABLE session_operation")
-        .execute(&pool)
-        .await
-        .expect("session operation table should be removed");
-
-    // Act
-    app.start_created_issue_session(
-        &created_session_id,
-        "https://github.com/agentty-xyz/agentty/issues/124",
-    )
-    .await;
-
-    // Assert
-    let transcript = app
-        .sessions
-        .session_handles()
-        .get(created_session_id.as_str())
-        .and_then(|handles| handles.transcript.lock().ok())
-        .and_then(|transcript| transcript.replay_text())
-        .expect("failed issue start should remain visible in the transcript");
-    assert!(transcript.contains("[Error]"));
-    assert!(transcript.contains("no such table: session_operation"));
-    assert!(matches!(
-        app.mode,
-        AppMode::View {
-            ref session_id,
-            scroll_offset: None,
-        } if session_id == &SessionId::from(created_session_id.as_str())
-    ));
-}
-
-#[test]
-fn issue_session_prompt_renders_issue_url() {
-    // Arrange
-    let issue_url = "https://github.com/agentty-xyz/agentty/issues/124";
-
-    // Act
-    let prompt = App::issue_session_prompt(issue_url);
-
-    // Assert
-    assert_eq!(prompt, format!("Address this issue: {issue_url}"));
-}
-
 /// Builds one restorable prompt snapshot without attachments.
 fn test_prompt_mode_snapshot(session_id: SessionId) -> PromptModeSnapshot {
     PromptModeSnapshot {
@@ -1311,6 +1236,54 @@ async fn test_new_with_clients_restores_persisted_active_tab() {
 
     // Assert
     assert_eq!(app.tabs.current(), Tab::Review);
+}
+
+#[tokio::test]
+async fn test_new_with_clients_replaces_obsolete_issues_tab() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    let agentty_home = temp_dir.path().join("agentty-home");
+    let project_path = temp_dir.path().join("project");
+    fs::create_dir_all(&agentty_home).expect("failed to create agentty home");
+    fs::create_dir_all(project_path.join(".git")).expect("failed to create project git marker");
+    let database = AppRepositories::in_memory().await;
+    let project_id = database
+        .projects()
+        .upsert_project(&project_path.to_string_lossy(), Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    database
+        .settings()
+        .set_active_project_id(project_id)
+        .await
+        .expect("failed to persist active project");
+    database
+        .settings()
+        .upsert_setting(SettingName::ActiveTab, "Issues")
+        .await
+        .expect("failed to persist obsolete active tab");
+
+    // Act
+    let app = App::new_with_clients(
+        agentty_home,
+        project_path,
+        Some("main".to_string()),
+        database,
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("failed to build app");
+    let persisted_tab = app
+        .services
+        .db()
+        .settings()
+        .get_setting(SettingName::ActiveTab)
+        .await
+        .expect("failed to load active tab");
+
+    // Assert
+    assert_eq!(app.tabs.current(), Tab::Sessions);
+    assert_eq!(persisted_tab.as_deref(), Some(Tab::Sessions.as_str()));
 }
 
 #[tokio::test]

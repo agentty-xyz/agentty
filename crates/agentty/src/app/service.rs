@@ -308,8 +308,6 @@ async fn wait_for_cleanup_task_handles(
 /// Returns a stable instrumentation label for one app event variant.
 fn app_event_label(event: &AppEvent) -> &'static str {
     match event {
-        AppEvent::AssignedIssuesLoaded { .. } => "AssignedIssuesLoaded",
-        AppEvent::IssueDetailLoaded { .. } => "IssueDetailLoaded",
         AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",
         AppEvent::DiffPreviewLoaded { .. } => "DiffPreviewLoaded",
         AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",

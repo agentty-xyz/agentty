@@ -8,8 +8,8 @@ use ag_agent::{AgentAvailabilityProbe, AppServerClient, RealAgentAvailabilityPro
 #[cfg(test)]
 use ag_forge as forge;
 use ag_forge::{
-    AssignedIssue, RealReviewRequestClient, RequestedReview, RequestedReviewAudience,
-    ReviewCommentSnapshot, ReviewRequestClient,
+    RealReviewRequestClient, RequestedReview, RequestedReviewAudience, ReviewCommentSnapshot,
+    ReviewRequestClient,
 };
 use ag_git::{GitClient, GitError, RealGitClient};
 #[cfg(test)]
@@ -33,7 +33,6 @@ use app::setting::SettingsManager;
 use app::sync::SyncMainRunner;
 use app::tab::{Tab, TabManager};
 use app::{sync, task};
-use askama::Template;
 use session::StatusTransition;
 #[cfg(test)]
 use session::{SyncMainOutcome, SyncSessionStartError, TurnAppliedState};
@@ -44,7 +43,7 @@ use super::events::AppEvent;
 #[cfg(test)]
 use super::events::{AppEventBatch, ReviewRequestStatusUpdate};
 use crate::app;
-use crate::app::{AppError, AssignedIssueState, RequestedReviewState, session};
+use crate::app::{AppError, RequestedReviewState, session};
 #[cfg(test)]
 use crate::domain::agent::AgentCliInfo;
 #[cfg(test)]
@@ -99,13 +98,6 @@ pub enum UpdateStatus {
 pub(super) struct SyncPopupContext {
     pub(super) default_branch: String,
     pub(super) project_name: String,
-}
-
-/// Askama view model for the initial prompt of an issue-backed session.
-#[derive(Template)]
-#[template(path = "issue_session_prompt.md", escape = "none")]
-struct IssueSessionPromptTemplate<'a> {
-    issue_url: &'a str,
 }
 
 /// Source-session context needed to create a seeded continuation draft.
@@ -260,13 +252,6 @@ pub struct App {
     pub(crate) settings_presentation: SettingsPresentationState,
     /// Manages the selected top-level list tab.
     pub tabs: TabManager,
-    /// Monotonic assigned-issue refresh generation for rejecting stale task
-    /// results.
-    pub(super) assigned_issue_generation: u64,
-    /// Selected assigned-issue item index for the top-level `Issues` tab.
-    pub(super) assigned_issue_selected_index: Option<usize>,
-    /// Caches open GitHub issues assigned to the authenticated user.
-    pub(crate) assigned_issues: AssignedIssueState,
     /// Saves prompt composers per session so leaving chat focus with `q` and
     /// reopening the session restores the complete typed draft. Entries are
     /// consumed on restore and removed when their session is deleted.
@@ -373,14 +358,12 @@ impl App {
     pub fn next_tab(&mut self) {
         self.tabs.next();
         self.refresh_requested_reviews_if_inbox_tab(false);
-        self.refresh_assigned_issues_if_issues_tab(false);
     }
 
     /// Cycles the active list tab backward.
     pub fn previous_tab(&mut self) {
         self.tabs.previous();
         self.refresh_requested_reviews_if_inbox_tab(false);
-        self.refresh_assigned_issues_if_issues_tab(false);
     }
 
     /// Persists the active list tab for startup restoration.
@@ -396,11 +379,6 @@ impl App {
     /// Refreshes requested reviews when the `Inbox` tab is visible.
     pub fn refresh_requested_reviews_for_current_project(&mut self) {
         self.refresh_requested_reviews_if_inbox_tab(true);
-    }
-
-    /// Refreshes assigned GitHub issues when the `Issues` tab is visible.
-    pub fn refresh_assigned_issues(&mut self) {
-        self.refresh_assigned_issues_if_issues_tab(true);
     }
 
     /// Replaces the requested-review list for `project_id`, normalizes rows to
@@ -420,86 +398,6 @@ impl App {
     /// section headers.
     pub(crate) fn requested_review_selected_index(&self) -> Option<usize> {
         self.requested_review_selected_index
-    }
-
-    /// Replaces the assigned-issue list and selects the first issue when
-    /// available.
-    pub(crate) fn replace_assigned_issues(&mut self, project_id: i64, items: Vec<AssignedIssue>) {
-        self.assigned_issue_selected_index = (!items.is_empty()).then_some(0);
-        self.assigned_issues = AssignedIssueState::Loaded { items, project_id };
-    }
-
-    /// Returns the currently selected assigned-issue index.
-    pub(crate) fn assigned_issue_selected_index(&self) -> Option<usize> {
-        self.assigned_issue_selected_index
-    }
-
-    /// Moves selection to the next assigned issue.
-    pub(crate) fn next_assigned_issue(&mut self) {
-        let Some(item_count) = self.assigned_issue_item_count() else {
-            self.assigned_issue_selected_index = None;
-
-            return;
-        };
-
-        self.assigned_issue_selected_index = Some(match self.assigned_issue_selected_index {
-            Some(index) => (index + 1) % item_count,
-            None => 0,
-        });
-    }
-
-    /// Moves selection to the previous assigned issue.
-    pub(crate) fn previous_assigned_issue(&mut self) {
-        let Some(item_count) = self.assigned_issue_item_count() else {
-            self.assigned_issue_selected_index = None;
-
-            return;
-        };
-
-        self.assigned_issue_selected_index = Some(match self.assigned_issue_selected_index {
-            Some(0) | None => item_count - 1,
-            Some(index) => index - 1,
-        });
-    }
-
-    /// Opens the selected assigned issue and loads its base details in the
-    /// background without requesting comments.
-    pub(crate) fn open_selected_assigned_issue(&mut self) {
-        let Some(issue) = self.selected_assigned_issue().cloned() else {
-            return;
-        };
-
-        let project_id = self.projects.active_project_id();
-        task::TaskService::spawn_issue_detail_task(
-            issue.display_id.clone(),
-            self.assigned_issue_generation,
-            project_id,
-            self.projects.working_dir().to_path_buf(),
-            self.services.event_sender(),
-            self.services.git_client(),
-            self.services.review_request_client(),
-        );
-        self.mode = AppMode::IssueDetail {
-            action_error: None,
-            detail: None,
-            error: None,
-            issue,
-            scroll_offset: 0,
-        };
-    }
-
-    /// Creates and starts a regular session instructed to address the linked
-    /// issue, then opens that session.
-    ///
-    /// # Errors
-    /// Returns an error if session creation fails. Initial prompt submission
-    /// failures are appended to the created session before it is opened.
-    pub(crate) async fn start_issue_session(&mut self, issue_url: &str) -> Result<(), AppError> {
-        let session_id = self.create_session().await?;
-        self.start_created_issue_session(&session_id, issue_url)
-            .await;
-
-        Ok(())
     }
 
     /// Moves selection to the next requested review in the `Inbox` tab.
@@ -799,54 +697,6 @@ impl App {
             self.services.review_request_client(),
         );
         self.mark_dirty();
-    }
-
-    /// Starts an assigned-issue fetch when the visible tab needs one.
-    pub(super) fn refresh_assigned_issues_if_issues_tab(&mut self, force: bool) {
-        if self.tabs.current() != Tab::Issues {
-            return;
-        }
-
-        let project_id = self.projects.active_project_id();
-        if !force && self.assigned_issues.is_current_for_project(project_id) {
-            return;
-        }
-
-        self.assigned_issue_generation = self.assigned_issue_generation.saturating_add(1);
-        let generation = self.assigned_issue_generation;
-        self.assigned_issue_selected_index = None;
-        self.assigned_issues = AssignedIssueState::Loading {
-            generation,
-            project_id,
-        };
-        task::TaskService::spawn_assigned_issues_task(
-            generation,
-            project_id,
-            self.projects.working_dir().to_path_buf(),
-            self.services.event_sender(),
-            self.services.git_client(),
-            self.services.review_request_client(),
-        );
-        self.mark_dirty();
-    }
-
-    /// Returns the loaded assigned-issue row count when a row can be selected.
-    fn assigned_issue_item_count(&self) -> Option<usize> {
-        let AssignedIssueState::Loaded { items, .. } = &self.assigned_issues else {
-            return None;
-        };
-
-        (!items.is_empty()).then_some(items.len())
-    }
-
-    /// Returns the selected assigned-issue row when the list is loaded.
-    fn selected_assigned_issue(&self) -> Option<&AssignedIssue> {
-        let AssignedIssueState::Loaded { items, .. } = &self.assigned_issues else {
-            return None;
-        };
-
-        self.assigned_issue_selected_index
-            .and_then(|index| items.get(index))
     }
 
     /// Invalidates pending requested-review comment loads for `project_id`
@@ -1999,27 +1849,6 @@ impl App {
             position,
             launched_session_id,
         );
-    }
-
-    /// Starts one already-created issue session and opens it even when prompt
-    /// submission fails, keeping the recoverable session visible to the user.
-    async fn start_created_issue_session(&mut self, session_id: &str, issue_url: &str) {
-        let prompt = Self::issue_session_prompt(issue_url);
-        let start_result = self
-            .start_session(session_id, TurnPrompt::from_text(prompt))
-            .await;
-        if let Err(error) = start_result {
-            self.append_output_for_session(session_id, &TranscriptNotice::Error.format(error))
-                .await;
-        }
-        self.open_session(session_id);
-    }
-
-    /// Renders the initial prompt for an issue-backed session.
-    fn issue_session_prompt(issue_url: &str) -> String {
-        let template = IssueSessionPromptTemplate { issue_url };
-
-        template.render().unwrap_or_default().trim_end().to_string()
     }
 
     /// Opens one linked sibling session when it still exists in memory.
