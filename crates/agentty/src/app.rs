@@ -3,7 +3,6 @@
 //! This parent module intentionally exposes child modules and re-exports app
 //! orchestration types and functions.
 
-mod assigned_issue;
 mod assist;
 pub(crate) mod at_mention_task;
 mod branch_publish;
@@ -35,7 +34,6 @@ pub(crate) use core::AppClients;
 pub use core::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
 pub(crate) use core::{AppEvent, AppRuntimeEvent};
 
-pub(crate) use assigned_issue::AssignedIssueState;
 pub use error::AppError;
 pub(crate) use orchestration::{
     OrchestrationApprovalOutcome, OrchestrationCoordinator, OrchestrationSchedule,

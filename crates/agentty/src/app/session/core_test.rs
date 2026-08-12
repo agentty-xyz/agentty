@@ -4642,8 +4642,6 @@ async fn test_next_tab() {
     app.next_tab();
     assert_eq!(app.tabs.current(), Tab::Review);
     app.next_tab();
-    assert_eq!(app.tabs.current(), Tab::Issues);
-    app.next_tab();
     assert_eq!(app.tabs.current(), Tab::Settings);
     app.next_tab();
     assert_eq!(app.tabs.current(), Tab::Projects);
@@ -4668,8 +4666,6 @@ async fn test_next_tab_includes_tasks_when_active_project_has_roadmap() {
     assert_eq!(app.tabs.current(), Tab::Sessions);
     app.next_tab();
     assert_eq!(app.tabs.current(), Tab::Review);
-    app.next_tab();
-    assert_eq!(app.tabs.current(), Tab::Issues);
     app.next_tab();
     assert_eq!(app.tabs.current(), Tab::Settings);
     app.next_tab();

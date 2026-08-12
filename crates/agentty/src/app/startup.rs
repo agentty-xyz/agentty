@@ -265,23 +265,29 @@ impl AppStartup {
         db: &AppRepositories,
         had_active_project_setting: bool,
     ) -> Tab {
-        if let Some(tab) = db
+        let persisted_tab = db
             .settings()
             .get_setting(SettingName::ActiveTab)
             .await
             .ok()
-            .flatten()
-            .as_deref()
-            .and_then(Tab::from_str)
-        {
+            .flatten();
+        if let Some(tab) = persisted_tab.as_deref().and_then(Tab::from_str) {
             return tab;
         }
 
-        if had_active_project_setting {
-            return Tab::Sessions;
+        let fallback_tab = if had_active_project_setting {
+            Tab::Sessions
+        } else {
+            Tab::Projects
+        };
+        if persisted_tab.as_deref() == Some("Issues") {
+            let _ = db
+                .settings()
+                .upsert_setting(SettingName::ActiveTab, fallback_tab.as_str())
+                .await;
         }
 
-        Tab::Projects
+        fallback_tab
     }
 
     /// Spawns app-wide background tasks that are not owned by the sync

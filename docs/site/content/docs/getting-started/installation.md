@@ -94,9 +94,6 @@ for third-party invocation through Agentty.
 1. Run `agentty`.
 1. Start a new session and let the agent work in its dedicated worktree branch.
 
-The optional **Issues** tab also requires the GitHub CLI. Install `gh` and run
-`gh auth login` to show open GitHub issues assigned to you in the active project.
-
 ## Review Changes
 
 <a id="installation-review-changes"></a> Inside `agentty`, open the diff view (`d`) to

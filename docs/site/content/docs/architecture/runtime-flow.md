@@ -770,17 +770,6 @@ orchestration paths:
   posts every accepted reply and resolves only outcomes reported as `fixed` through
   `ReviewRequestClient`; `no_change_needed` outcomes remain open, and failed pushes
   never mutate forge thread state.
-- Assigned-issue refresh: the Issues tab resolves the active project remote and runs a
-  repository-scoped, generation-scoped `gh search issues` task through
-  `ReviewRequestClient`; stale completions are discarded before the list cache is
-  rendered. Opening a selected row starts a generation-scoped `gh issue view` task for
-  base metadata and the description; the detail query does not request comments. The
-  issue-detail `a` action creates a regular session, submits an initial prompt
-  containing the issue URL, and opens the new session view. Creation failures restore
-  the issue-detail mode with a distinct inline action error that survives a late detail
-  result. Submission failures after creation append a transcript error and open the
-  recoverable session instead of hiding it or escaping through the runtime key-handler
-  boundary.
 
 ## Persistence and Recovery Boundaries
 

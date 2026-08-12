@@ -1,4 +1,4 @@
-use ag_forge::{AssignedIssue, IssueDetail, RequestedReview, ReviewCommentSnapshot};
+use ag_forge::{RequestedReview, ReviewCommentSnapshot};
 
 use super::help_action::{
     self, HelpAction, ViewActionAvailability, ViewHelpState, ViewSessionState,
@@ -337,20 +337,6 @@ pub enum ChatFocus {
 pub enum AppMode {
     /// Displays the active top-level list tab.
     List,
-    /// Displays a selected assigned issue while its base details load and
-    /// after the detail request completes.
-    IssueDetail {
-        /// User-facing issue-session action failure.
-        action_error: Option<String>,
-        /// Loaded base details, excluding comments.
-        detail: Option<IssueDetail>,
-        /// User-facing detail-load failure.
-        error: Option<String>,
-        /// Assigned-issue row opened from the top-level issue list.
-        issue: AssignedIssue,
-        /// Vertical offset applied to the rendered issue detail page.
-        scroll_offset: u16,
-    },
     /// Displays the selected forge review request title, description, comment
     /// loading state, loaded comments, and any comment-load failure.
     ReviewDetail {

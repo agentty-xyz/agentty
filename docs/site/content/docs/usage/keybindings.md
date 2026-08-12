@@ -132,23 +132,6 @@ On the read-only detail page, use `j` / `k` or `Up` / `Down` to scroll, `Ctrl+d`
 `Ctrl+u` to move by half pages, `g` / `G` to jump to the top or bottom, and `q` / `Esc`
 to return to the review list.
 
-## Issues
-
-| Key                 | Action                                                           |
-| ------------------- | ---------------------------------------------------------------- |
-| `q`                 | Quit                                                             |
-| `j` / `k`           | Navigate assigned issues                                         |
-| `Enter`             | Open base details for the selected issue                         |
-| `s`                 | Refresh open GitHub issues assigned to you in the active project |
-| `Tab` / `Shift+Tab` | Switch to next / previous tab                                    |
-| `?`                 | Help                                                             |
-
-On the detail page, press `a` to start a new session instructed to address the issue,
-with its URL included in the first prompt. Use `j` / `k` or `Up` / `Down` to scroll,
-`Ctrl+d` / `Ctrl+u` to move by half pages, `g` / `G` to jump to the top or bottom, and
-`q` / `Esc` to return to the issue list. Issue comments are not loaded in this
-iteration.
-
 ## Session View
 
 <a id="usage-session-view-actions"></a> Available actions depend on the session state.

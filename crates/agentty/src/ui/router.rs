@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
-use crate::app::{AssignedIssueState, RequestedReviewState, Tab};
+use crate::app::{RequestedReviewState, Tab};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
@@ -19,9 +19,6 @@ use crate::ui::{
 struct RouteSharedContext<'a> {
     /// Identifier for the active project shared across list-mode renders.
     active_project_id: i64,
-    assigned_issue_selected_index: Option<usize>,
-    assigned_issue_table_state: &'a mut TableState,
-    assigned_issues: &'a AssignedIssueState,
     /// Locally available agent CLI executables and detected versions.
     available_agent_clis: &'a [AgentCliInfo],
     current_tab: Tab,
@@ -61,7 +58,6 @@ enum Surface<'a> {
         scroll_offset: u16,
         session_id: &'a str,
     },
-    IssueDetail(&'a AppMode),
     List,
     ReviewComments(&'a AppMode),
     ReviewDetail(&'a AppMode),
@@ -77,7 +73,6 @@ impl Surface<'_> {
     fn kind(self) -> SurfaceKind {
         match self {
             Self::Diff { .. } => SurfaceKind::Diff,
-            Self::IssueDetail(_) => SurfaceKind::IssueDetail,
             Self::List => SurfaceKind::List,
             Self::ReviewComments(_) => SurfaceKind::ReviewComments,
             Self::ReviewDetail(_) => SurfaceKind::ReviewDetail,
@@ -90,7 +85,6 @@ impl Surface<'_> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SurfaceKind {
     Diff,
-    IssueDetail,
     List,
     ReviewComments,
     ReviewDetail,
@@ -175,9 +169,6 @@ impl<'a> FrameResources<'a> {
 pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     let RenderContext {
         active_project_id,
-        assigned_issue_selected_index,
-        assigned_issue_table_state,
-        assigned_issues,
         active_prompt_outputs,
         available_agent_clis,
         current_tab,
@@ -204,9 +195,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
 
     let mut shared = RouteSharedContext {
         active_project_id,
-        assigned_issue_selected_index,
-        assigned_issue_table_state,
-        assigned_issues,
         available_agent_clis,
         current_tab,
         default_reasoning_level,
@@ -272,7 +260,6 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
         | AppMode::ProjectSwitcher { .. }
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::Confirmation { .. } => Surface::List,
-        AppMode::IssueDetail { .. } => Surface::IssueDetail(mode),
         AppMode::ReviewDetail { .. } => Surface::ReviewDetail(mode),
         AppMode::Help { context, .. } => surface_for_help_context(context),
         AppMode::View {
@@ -387,7 +374,7 @@ fn render_surface(
             shared.sessions,
             resources,
         ),
-        Surface::IssueDetail(mode) | Surface::ReviewDetail(mode) => {
+        Surface::ReviewDetail(mode) => {
             render_detail_mode(f, area, mode, resources.markdown_render_cache);
         }
         Surface::ReviewComments(mode) => {
@@ -406,7 +393,6 @@ fn render_mode_overlay(
 ) {
     match mode {
         AppMode::List
-        | AppMode::IssueDetail { .. }
         | AppMode::ReviewDetail { .. }
         | AppMode::View { .. }
         | AppMode::Prompt { .. }
@@ -499,42 +485,23 @@ fn render_mode_overlay(
     }
 }
 
-/// Routes issue and requested-review snapshots to their detail page renderers.
+/// Routes requested-review snapshots to the detail page renderer.
 fn render_detail_mode(
     f: &mut Frame,
     area: Rect,
     mode: &AppMode,
     markdown_render_cache: &markdown::MarkdownRenderCache,
 ) {
-    match mode {
-        AppMode::IssueDetail {
-            action_error,
-            detail,
-            error,
-            issue,
-            scroll_offset,
-        } => page::issue_detail::IssueDetailPage::new(
-            issue,
-            detail.as_ref(),
-            error.as_deref(),
-            action_error.as_deref(),
-            markdown_render_cache,
-            *scroll_offset,
-        )
-        .render(f, area),
-        AppMode::ReviewDetail {
-            comment_error,
-            is_loading_comments,
-            review,
-            scroll_offset,
-        } => page::review_detail::ReviewDetailPage::new(
-            review,
-            markdown_render_cache,
-            *scroll_offset,
-        )
-        .with_comment_status(comment_error.as_deref(), *is_loading_comments)
-        .render(f, area),
-        _ => {}
+    if let AppMode::ReviewDetail {
+        comment_error,
+        is_loading_comments,
+        review,
+        scroll_offset,
+    } = mode
+    {
+        page::review_detail::ReviewDetailPage::new(review, markdown_render_cache, *scroll_offset)
+            .with_comment_status(comment_error.as_deref(), *is_loading_comments)
+            .render(f, area);
     }
 }
 
@@ -787,14 +754,6 @@ fn render_list_background(
             )
             .render(f, chunks[1]);
         }
-        Tab::Issues => {
-            page::issue_list::IssueListPage::new(
-                shared.assigned_issues,
-                shared.assigned_issue_selected_index,
-                &mut *shared.assigned_issue_table_state,
-            )
-            .render(f, chunks[1]);
-        }
         Tab::Settings => {
             let active_project_name =
                 active_project_name(shared.active_project_id, shared.projects);
@@ -912,8 +871,6 @@ mod tests {
     ) -> (String, ReasoningLevel) {
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let mut assigned_issue_table_state = TableState::default();
-        let assigned_issues = AssignedIssueState::default();
         let available_agent_clis = Vec::new();
         let mut project_table_state = TableState::default();
         let projects = Vec::new();
@@ -924,9 +881,6 @@ mod tests {
         let mut table_state = TableState::default();
         let mut shared = RouteSharedContext {
             active_project_id: 1,
-            assigned_issue_selected_index: None,
-            assigned_issue_table_state: &mut assigned_issue_table_state,
-            assigned_issues: &assigned_issues,
             available_agent_clis: &available_agent_clis,
             current_tab,
             default_reasoning_level: ReasoningLevel::Max,
@@ -959,8 +913,6 @@ mod tests {
     fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
         let backend = ratatui::backend::TestBackend::new(120, 40);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let mut assigned_issue_table_state = TableState::default();
-        let assigned_issues = AssignedIssueState::default();
         let mut project_table_state = TableState::default();
         let mut requested_review_table_state = TableState::default();
         let requested_reviews = RequestedReviewState::default();
@@ -968,9 +920,6 @@ mod tests {
         let mut table_state = TableState::default();
         let mut shared = RouteSharedContext {
             active_project_id: 1,
-            assigned_issue_selected_index: None,
-            assigned_issue_table_state: &mut assigned_issue_table_state,
-            assigned_issues: &assigned_issues,
             available_agent_clis: &[],
             current_tab: Tab::Sessions,
             default_reasoning_level: ReasoningLevel::High,
@@ -1093,7 +1042,6 @@ mod tests {
                 scroll_offset: 0,
                 session_id: "session-surface-kind",
             },
-            Surface::IssueDetail(&mode),
             Surface::List,
             Surface::ReviewComments(&mode),
             Surface::ReviewDetail(&mode),
@@ -1112,7 +1060,6 @@ mod tests {
             surface_kinds,
             [
                 SurfaceKind::Diff,
-                SurfaceKind::IssueDetail,
                 SurfaceKind::List,
                 SurfaceKind::ReviewComments,
                 SurfaceKind::ReviewDetail,
@@ -1156,13 +1103,6 @@ mod tests {
     #[test]
     fn surface_for_mode_classifies_primary_page_modes() {
         // Arrange
-        let issue_mode = AppMode::IssueDetail {
-            action_error: None,
-            detail: None,
-            error: None,
-            issue: crate::test_support::assigned_issue_fixture(),
-            scroll_offset: 0,
-        };
         let review_mode = AppMode::ReviewDetail {
             comment_error: None,
             is_loading_comments: false,
@@ -1224,7 +1164,6 @@ mod tests {
         };
 
         // Act
-        let issue_is_detail = matches!(surface_for_mode(&issue_mode), Surface::IssueDetail(_));
         let review_is_detail = matches!(surface_for_mode(&review_mode), Surface::ReviewDetail(_));
         let help_is_list = matches!(surface_for_mode(&help_mode), Surface::List);
         let view_is_session = matches!(surface_for_mode(&view_mode), Surface::Session { .. });
@@ -1236,12 +1175,10 @@ mod tests {
             surface_for_mode(&review_comments_mode),
             Surface::ReviewComments(_)
         );
-        let (_, issue_text) = render_list_backed_mode(&issue_mode);
         let (_, review_text) = render_list_backed_mode(&review_mode);
         let (_, comments_text) = render_list_backed_mode(&review_comments_mode);
 
         // Assert
-        assert!(issue_is_detail);
         assert!(review_is_detail);
         assert!(help_is_list);
         assert!(view_is_session);
@@ -1249,7 +1186,6 @@ mod tests {
         assert!(question_is_session);
         assert!(diff_is_diff);
         assert!(comments_are_review);
-        assert!(issue_text.contains("Issue #124"));
         assert!(review_text.contains("Review router surfaces"));
         assert!(comments_text.contains("Comment — Router Session"));
     }
@@ -1300,17 +1236,12 @@ mod tests {
             },
             scroll_offset: 0,
         };
-        let mut assigned_issue_table_state = TableState::default();
-        let assigned_issues = AssignedIssueState::default();
         let mut project_table_state = TableState::default();
         let mut requested_review_table_state = TableState::default();
         let requested_reviews = RequestedReviewState::default();
         let mut table_state = TableState::default();
         let mut shared = RouteSharedContext {
             active_project_id: 1,
-            assigned_issue_selected_index: None,
-            assigned_issue_table_state: &mut assigned_issue_table_state,
-            assigned_issues: &assigned_issues,
             available_agent_clis: &[],
             current_tab: Tab::Sessions,
             default_reasoning_level: ReasoningLevel::default(),
@@ -1683,34 +1614,6 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("sentinel"));
-    }
-
-    #[test]
-    fn render_detail_mode_renders_issue_action_error() {
-        // Arrange
-        let backend = ratatui::backend::TestBackend::new(80, 20);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let mode = AppMode::IssueDetail {
-            action_error: Some("Failed to start issue session".to_string()),
-            detail: None,
-            error: None,
-            issue: crate::test_support::assigned_issue_fixture(),
-            scroll_offset: 0,
-        };
-        let markdown_render_cache = markdown::MarkdownRenderCache::default();
-
-        // Act
-        terminal
-            .draw(|frame| {
-                render_detail_mode(frame, frame.area(), &mode, &markdown_render_cache);
-            })
-            .expect("failed to draw issue detail");
-
-        // Assert
-        let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("Issue #124"));
-        assert!(text.contains("Failed to start issue session"));
-        assert!(text.contains("Loading issue details..."));
     }
 
     #[test]

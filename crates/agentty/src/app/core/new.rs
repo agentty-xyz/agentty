@@ -41,7 +41,7 @@ impl App {
     ) -> Result<Self, AppError> {
         let clients = AppClients::new();
 
-        let mut app = Self::new_with_options(
+        let app = Self::new_with_options(
             auto_update,
             base_path,
             working_dir,
@@ -50,7 +50,6 @@ impl App {
             clients,
         )
         .await?;
-        app.refresh_assigned_issues_if_issues_tab(false);
 
         Ok(app)
     }
@@ -168,9 +167,6 @@ impl App {
             settings_presentation:
                 crate::presentation::settings::SettingsPresentationState::default(),
             tabs: crate::app::tab::TabManager::new(initial_tab),
-            assigned_issue_generation: 0,
-            assigned_issue_selected_index: None,
-            assigned_issues: crate::app::AssignedIssueState::default(),
             prompt_progress: std::collections::HashMap::new(),
             projects,
             services,

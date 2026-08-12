@@ -701,18 +701,6 @@ pub(crate) fn set_review_detail_mode(app: &mut App, review: ag_forge::RequestedR
     };
 }
 
-/// Builds one deterministic assigned-issue fixture for cross-module tests.
-#[cfg(test)]
-pub(crate) fn assigned_issue_fixture() -> ag_forge::AssignedIssue {
-    ag_forge::AssignedIssue {
-        display_id: "#124".to_string(),
-        repository: "agentty-xyz/agentty".to_string(),
-        title: "Keep issue details reachable".to_string(),
-        updated_at: None,
-        web_url: "https://github.com/agentty-xyz/agentty/issues/124".to_string(),
-    }
-}
-
 /// Returns the first rendered cell for a contiguous text match in a test
 /// buffer.
 pub fn rendered_text_start_cell<'a>(buffer: &'a Buffer, needle: &str) -> Option<&'a Cell> {

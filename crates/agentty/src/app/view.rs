@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{App, AssignedIssueState, RequestedReviewState, Tab, UpdateStatus, session};
+use crate::app::{App, RequestedReviewState, Tab, UpdateStatus, session};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
@@ -24,8 +24,6 @@ pub(crate) struct SessionReviewView<'a> {
 pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) active_project_id: i64,
     pub(crate) active_prompt_outputs: &'a HashMap<SessionId, String>,
-    pub(crate) assigned_issue_selected_index: Option<usize>,
-    pub(crate) assigned_issues: &'a AssignedIssueState,
     pub(crate) available_agent_clis: Vec<AgentCliInfo>,
     pub(crate) current_tab: Tab,
     pub(crate) default_reasoning_level: ReasoningLevel,
@@ -85,8 +83,6 @@ impl App {
         AppViewSnapshot {
             active_project_id: project.active_project_id,
             active_prompt_outputs: sessions.active_prompt_outputs,
-            assigned_issue_selected_index: self.assigned_issue_selected_index(),
-            assigned_issues: &self.assigned_issues,
             available_agent_clis: self.services.available_agent_clis(),
             current_tab,
             default_reasoning_level: self.settings.default_smart_reasoning_level,
@@ -140,7 +136,6 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::PublishBranchInput { restore_view, .. }
         | AppMode::ViewInfoPopup { restore_view, .. } => Some(&restore_view.session_id),
         AppMode::List
-        | AppMode::IssueDetail { .. }
         | AppMode::ReviewDetail { .. }
         | AppMode::SessionCreation { .. }
         | AppMode::PreCommitHookWarning { .. }

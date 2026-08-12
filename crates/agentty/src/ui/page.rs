@@ -5,10 +5,6 @@ pub mod diff;
 pub mod fyi;
 /// Requested forge-review list page.
 pub mod inbox;
-/// Assigned forge-issue detail page.
-pub mod issue_detail;
-/// Assigned forge-issue list page.
-pub mod issue_list;
 /// Board-first orchestration campaign and controller conversation page.
 pub mod orchestration;
 /// Project selection and activity list page.
