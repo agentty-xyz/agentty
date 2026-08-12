@@ -167,48 +167,6 @@ pub struct ReviewRequestSummary {
     pub web_url: String,
 }
 
-/// Review audience that caused one PR or MR to require the current user's
-/// attention.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RequestedReviewAudience {
-    /// The current user was directly requested as a reviewer.
-    Personal,
-    /// A group or team containing the current user was requested as reviewer.
-    Group,
-}
-
-/// Normalized row for one open PR or MR requesting the current user's
-/// attention.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RequestedReview {
-    /// Whether the review request targets the user directly or through a
-    /// group membership.
-    pub audience: RequestedReviewAudience,
-    /// Login or display name of the user who opened the review request.
-    pub author: String,
-    /// Optional PR body or MR description text for detail rendering.
-    pub body: Option<String>,
-    /// Optional review-request comments fetched for detail rendering.
-    ///
-    /// `None` means the caller listed the requested review without loading
-    /// the heavier comment snapshot yet.
-    pub comment_snapshot: Option<ReviewCommentSnapshot>,
-    /// Provider display id such as GitHub `#123` or GitLab `!123`.
-    pub display_id: String,
-    /// Forge family that owns the review request.
-    pub forge_kind: ForgeKind,
-    /// Repository path shown for the requested review, such as `owner/repo`.
-    pub repository: String,
-    /// Provider-specific condensed status text for UI display.
-    pub status_summary: Option<String>,
-    /// Remote review-request title.
-    pub title: String,
-    /// Provider update timestamp, when the CLI returns one.
-    pub updated_at: Option<String>,
-    /// Browser-openable review-request URL.
-    pub web_url: String,
-}
-
 /// Boxed async result used by review-request trait methods.
 pub type ForgeFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
@@ -296,9 +254,9 @@ pub enum ReviewCommentAnchorSide {
 /// One review thread anchored to a line of the review request diff.
 ///
 /// Threads group chronological `comments` that share the same anchor. Agentty
-/// renders these in requested-review detail, grouped by file and sorted by
-/// `(path, line)` before display. Session-linked review workflows also use the
-/// native `id` to reply and resolve a thread after its fix is pushed.
+/// renders these in session-linked review comments, grouped by file and sorted
+/// by `(path, line)` before display. The workflow also uses the native `id` to
+/// reply and resolve a thread after its fix is pushed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewCommentThread {
     /// Diff side used with `line` when placing this thread inline.

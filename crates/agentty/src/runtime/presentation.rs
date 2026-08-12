@@ -19,7 +19,6 @@ pub(crate) struct PresentationState {
     /// draw to invalidate the terminal buffer when routing selects another
     /// page.
     rendered_surface: Cell<Option<ui::router::SurfaceKind>>,
-    requested_review_table_state: RefCell<TableState>,
     session_table_state: RefCell<TableState>,
 }
 
@@ -44,7 +43,6 @@ impl PresentationState {
     /// presentation boundary.
     pub(crate) fn render(&self, snapshot: &AppViewSnapshot<'_>, frame: &mut Frame) {
         let mut project_table_state = self.project_table_state.borrow_mut();
-        let mut requested_review_table_state = self.requested_review_table_state.borrow_mut();
         let mut session_table_state = self.session_table_state.borrow_mut();
 
         ui::render_app(
@@ -52,7 +50,6 @@ impl PresentationState {
             frame,
             &mut project_table_state,
             &self.render_cache_store,
-            &mut requested_review_table_state,
             &mut session_table_state,
         );
     }

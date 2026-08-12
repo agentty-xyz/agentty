@@ -76,13 +76,11 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Char('j') | KeyCode::Down => match app.tabs.current() {
             Tab::Projects => app.next_project(),
             Tab::Sessions => app.next(),
-            Tab::Review => app.next_requested_review(),
             Tab::Settings => apply_settings_action(app, SettingsAction::Next).await,
         },
         KeyCode::Char('k') | KeyCode::Up => match app.tabs.current() {
             Tab::Projects => app.previous_project(),
             Tab::Sessions => app.previous(),
-            Tab::Review => app.previous_requested_review(),
             Tab::Settings => apply_settings_action(app, SettingsAction::Previous).await,
         },
         KeyCode::Enter => return handle_enter_key(app).await,
@@ -203,9 +201,6 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         Tab::Settings => {
             apply_settings_action(app, SettingsAction::Activate).await;
         }
-        Tab::Review => {
-            app.open_selected_requested_review();
-        }
     }
 
     Ok(EventResult::Continue)
@@ -227,12 +222,6 @@ async fn apply_settings_action(app: &mut App, action: SettingsAction) {
 
 /// Starts the sync action that applies to the visible list tab.
 fn sync_list_context(app: &mut App) {
-    if app.tabs.current() == Tab::Review {
-        app.refresh_requested_reviews_for_current_project();
-
-        return;
-    }
-
     app.start_sync_main();
 }
 
@@ -254,10 +243,6 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
 
     if app.tabs.current() == Tab::Settings {
         return settings_actions();
-    }
-
-    if app.tabs.current() == Tab::Review {
-        return crate::presentation::help_action::review_actions();
     }
 
     let is_sessions_tab = app.tabs.current() == Tab::Sessions;
@@ -289,7 +274,6 @@ pub(crate) fn open_session_prompt(app: &mut App, session_id: String) {
 
 #[cfg(test)]
 mod tests {
-    use ag_forge::{ForgeKind, RequestedReview, RequestedReviewAudience};
     use crossterm::event::KeyModifiers;
 
     use super::*;
@@ -790,96 +774,6 @@ mod tests {
             } if restored_session_id == &session_id
         ));
         assert!(app.prompt_progress.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_inbox_tab_navigation_selects_loaded_reviews() {
-        // Arrange
-        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
-        app.tabs.set(Tab::Review);
-        app.replace_requested_reviews(
-            app.projects.active_project_id(),
-            vec![
-                requested_review("First review body"),
-                requested_review("Second body"),
-            ],
-        );
-
-        // Act
-        let event_result = handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to handle key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.requested_review_selected_index(), Some(1));
-    }
-
-    #[tokio::test]
-    async fn test_inbox_tab_enter_opens_selected_review_detail() {
-        // Arrange
-        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
-        app.tabs.set(Tab::Review);
-        app.replace_requested_reviews(
-            app.projects.active_project_id(),
-            vec![
-                requested_review("First review body"),
-                requested_review("Second body"),
-            ],
-        );
-        app.next_requested_review();
-
-        // Act
-        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await
-            .expect("failed to handle key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert!(matches!(
-            app.mode,
-            AppMode::ReviewDetail {
-                ref review,
-                scroll_offset,
-                ..
-            } if review.body.as_deref() == Some("Second body")
-                && scroll_offset == 0
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_inbox_tab_enter_uses_grouped_selection_order_after_mixed_provider_order() {
-        // Arrange
-        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
-        app.tabs.set(Tab::Review);
-        app.replace_requested_reviews(
-            app.projects.active_project_id(),
-            vec![
-                requested_review_with_audience(RequestedReviewAudience::Group, "Group body"),
-                requested_review_with_audience(RequestedReviewAudience::Personal, "Personal body"),
-            ],
-        );
-
-        // Act
-        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await
-            .expect("failed to handle key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert!(matches!(
-            app.mode,
-            AppMode::ReviewDetail {
-                ref review,
-                scroll_offset,
-                ..
-            } if review.audience == RequestedReviewAudience::Personal
-                && review.body.as_deref() == Some("Personal body")
-                && scroll_offset == 0
-        ));
     }
 
     #[tokio::test]
@@ -1862,30 +1756,5 @@ mod tests {
                 && default_branch.as_deref() == Some("main")
                 && project_name.is_some()
         ));
-    }
-
-    /// Builds one requested review fixture for review-list navigation tests.
-    fn requested_review(body: &str) -> RequestedReview {
-        requested_review_with_audience(RequestedReviewAudience::Personal, body)
-    }
-
-    /// Builds one requested review fixture with the requested audience.
-    fn requested_review_with_audience(
-        audience: RequestedReviewAudience,
-        body: &str,
-    ) -> RequestedReview {
-        RequestedReview {
-            audience,
-            author: "octocat".to_string(),
-            body: Some(body.to_string()),
-            comment_snapshot: None,
-            display_id: "#42".to_string(),
-            forge_kind: ForgeKind::GitHub,
-            repository: "agentty-xyz/agentty".to_string(),
-            status_summary: None,
-            title: "Add review detail page".to_string(),
-            updated_at: Some("2026-04-27T21:30:00Z".to_string()),
-            web_url: "https://example.com/42".to_string(),
-        }
     }
 }

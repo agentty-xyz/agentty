@@ -584,156 +584,6 @@ async fn test_switch_project_updates_active_git_upstream_reference() {
 }
 
 #[tokio::test]
-async fn open_selected_requested_review_surfaces_comment_load_error() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    app.replace_requested_reviews(app.projects.active_project_id(), vec![requested_review()]);
-
-    let mut mock_git_client = ag_git::MockGitClient::new();
-    mock_git_client.expect_repo_url().once().returning(|_| {
-        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
-    });
-    install_mock_git_client(&mut app, mock_git_client);
-
-    let mut mock_review_request_client = forge::MockReviewRequestClient::new();
-    mock_review_request_client
-        .expect_detect_remote()
-        .once()
-        .returning(|_| Ok(forge_remote()));
-    mock_review_request_client
-        .expect_fetch_review_comment_snapshot()
-        .once()
-        .returning(|_, _| {
-            Box::pin(async {
-                Err(forge::ReviewRequestError::OperationFailed {
-                    forge_kind: forge::ForgeKind::GitHub,
-                    message: "authentication failed".to_string(),
-                })
-            })
-        });
-    install_mock_review_request_client(&mut app, mock_review_request_client);
-
-    // Act
-    app.open_selected_requested_review();
-
-    // Assert
-    assert_eq!(app.requested_review_comment_fetches.len(), 1);
-    assert!(matches!(
-        app.mode,
-        AppMode::ReviewDetail {
-            comment_error: None,
-            is_loading_comments: true,
-            ref review,
-            scroll_offset: 0,
-        } if review.comment_snapshot.is_none()
-    ));
-
-    // Act
-    wait_for_app_condition(&mut app, |app| {
-        matches!(
-            app.mode,
-            AppMode::ReviewDetail {
-                comment_error: Some(_),
-                is_loading_comments: false,
-                ..
-            }
-        )
-    })
-    .await;
-
-    // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::ReviewDetail {
-            comment_error: Some(ref comment_error),
-            is_loading_comments: false,
-            ref review,
-            scroll_offset: 0,
-        } if comment_error.contains("Failed to load review comments:")
-            && comment_error.contains("authentication failed")
-            && review.comment_snapshot.is_none()
-    ));
-    assert!(app.requested_review_comment_fetches.is_empty());
-}
-
-#[tokio::test]
-async fn open_selected_requested_review_applies_background_comment_snapshot() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    app.replace_requested_reviews(app.projects.active_project_id(), vec![requested_review()]);
-
-    let mut mock_git_client = ag_git::MockGitClient::new();
-    mock_git_client.expect_repo_url().once().returning(|_| {
-        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
-    });
-    install_mock_git_client(&mut app, mock_git_client);
-
-    let mut mock_review_request_client = forge::MockReviewRequestClient::new();
-    mock_review_request_client
-        .expect_detect_remote()
-        .once()
-        .returning(|_| Ok(forge_remote()));
-    mock_review_request_client
-        .expect_fetch_review_comment_snapshot()
-        .once()
-        .returning(|_, _| Box::pin(async { Ok(review_comment_snapshot()) }));
-    install_mock_review_request_client(&mut app, mock_review_request_client);
-
-    // Act
-    app.open_selected_requested_review();
-
-    // Assert
-    assert_eq!(app.requested_review_comment_fetches.len(), 1);
-    assert!(matches!(
-        app.mode,
-        AppMode::ReviewDetail {
-            comment_error: None,
-            is_loading_comments: true,
-            ref review,
-            scroll_offset: 0,
-        } if review.comment_snapshot.is_none()
-    ));
-
-    // Act
-    wait_for_app_condition(&mut app, |app| {
-        matches!(
-            app.mode,
-            AppMode::ReviewDetail {
-                comment_error: None,
-                is_loading_comments: false,
-                ref review,
-                ..
-            } if review.comment_snapshot.is_some()
-        )
-    })
-    .await;
-
-    // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::ReviewDetail {
-            comment_error: None,
-            is_loading_comments: false,
-            ref review,
-            scroll_offset: 0,
-        } if review.comment_snapshot == Some(review_comment_snapshot())
-    ));
-    let expected_comment_snapshot = review_comment_snapshot();
-    assert_eq!(
-        app.selected_requested_review()
-            .and_then(|review| review.comment_snapshot.as_ref()),
-        Some(&expected_comment_snapshot)
-    );
-    assert!(app.requested_review_comment_fetches.is_empty());
-}
-
-#[tokio::test]
 async fn open_session_review_comments_requires_link_and_applies_background_snapshot() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
@@ -819,175 +669,6 @@ async fn open_session_review_comments_requires_link_and_applies_background_snaps
             && snapshot == &review_comment_snapshot()
             && diff == "review diff"
             && session_id == "session-review-comments"
-    ));
-}
-
-/// Verifies reopening a loading requested-review detail reuses the
-/// existing background comment fetch.
-#[tokio::test]
-async fn open_selected_requested_review_reuses_in_flight_comment_fetch() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    app.replace_requested_reviews(app.projects.active_project_id(), vec![requested_review()]);
-
-    let mut mock_git_client = ag_git::MockGitClient::new();
-    mock_git_client.expect_repo_url().once().returning(|_| {
-        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
-    });
-    install_mock_git_client(&mut app, mock_git_client);
-
-    let mut mock_review_request_client = forge::MockReviewRequestClient::new();
-    mock_review_request_client
-        .expect_detect_remote()
-        .once()
-        .returning(|_| Ok(forge_remote()));
-    mock_review_request_client
-        .expect_fetch_review_comment_snapshot()
-        .once()
-        .returning(|_, _| Box::pin(async { Ok(review_comment_snapshot()) }));
-    install_mock_review_request_client(&mut app, mock_review_request_client);
-
-    // Act
-    app.open_selected_requested_review();
-    app.mode = AppMode::List;
-    app.open_selected_requested_review();
-
-    // Assert
-    assert_eq!(app.requested_review_comment_fetches.len(), 1);
-    assert!(matches!(
-        app.mode,
-        AppMode::ReviewDetail {
-            comment_error: None,
-            is_loading_comments: true,
-            ref review,
-            scroll_offset: 0,
-        } if review.comment_snapshot.is_none()
-    ));
-
-    // Act
-    wait_for_app_condition(&mut app, |app| {
-        matches!(
-            app.mode,
-            AppMode::ReviewDetail {
-                comment_error: None,
-                is_loading_comments: false,
-                ref review,
-                ..
-            } if review.comment_snapshot.is_some()
-        )
-    })
-    .await;
-
-    // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::ReviewDetail {
-            comment_error: None,
-            is_loading_comments: false,
-            ref review,
-            scroll_offset: 0,
-        } if review.comment_snapshot == Some(review_comment_snapshot())
-    ));
-    assert!(app.requested_review_comment_fetches.is_empty());
-}
-
-/// Verifies an explicit Inbox tab refresh prevents older in-flight
-/// comment snapshots from repopulating the refreshed list row.
-#[tokio::test]
-async fn refresh_requested_reviews_ignores_stale_comment_snapshot_completion() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    app.tabs.set(Tab::Review);
-    let project_id = app.projects.active_project_id();
-    let review = requested_review();
-    let display_id = review.display_id.clone();
-    let web_url = review.web_url.clone();
-    app.replace_requested_reviews(project_id, vec![review]);
-    let stale_generation = app.requested_review_generation;
-    assert!(
-        app.requested_review_comment_fetches
-            .insert(RequestedReviewCommentFetchKey {
-                display_id: display_id.clone(),
-                generation: stale_generation,
-                project_id,
-                web_url: web_url.clone(),
-            })
-    );
-
-    let mut mock_git_client = ag_git::MockGitClient::new();
-    mock_git_client.expect_repo_url().once().returning(|_| {
-        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
-    });
-    install_mock_git_client(&mut app, mock_git_client);
-
-    let mut mock_review_request_client = forge::MockReviewRequestClient::new();
-    mock_review_request_client
-        .expect_detect_remote()
-        .once()
-        .returning(|_| Ok(forge_remote()));
-    mock_review_request_client
-        .expect_list_requested_reviews()
-        .once()
-        .returning(|_| Box::pin(async { Ok(vec![requested_review()]) }));
-    install_mock_review_request_client(&mut app, mock_review_request_client);
-
-    // Act
-    app.refresh_requested_reviews_for_current_project();
-
-    // Assert
-    assert!(app.requested_review_comment_fetches.is_empty());
-
-    // Act
-    wait_for_app_condition(&mut app, |app| {
-        matches!(
-            app.requested_reviews,
-            RequestedReviewState::Loaded {
-                ref items,
-                project_id: loaded_project_id,
-            } if loaded_project_id == project_id
-                && items.len() == 1
-                && items[0].comment_snapshot.is_none()
-        )
-    })
-    .await;
-    let current_generation_fetch_key = RequestedReviewCommentFetchKey {
-        display_id: display_id.clone(),
-        generation: app.requested_review_generation,
-        project_id,
-        web_url: web_url.clone(),
-    };
-    assert!(
-        app.requested_review_comment_fetches
-            .insert(current_generation_fetch_key.clone())
-    );
-    app.apply_app_events(AppEvent::RequestedReviewCommentSnapshotLoaded {
-        display_id,
-        generation: stale_generation,
-        project_id,
-        result: Ok(review_comment_snapshot()),
-        web_url,
-    })
-    .await;
-
-    // Assert
-    assert!(
-        app.requested_review_comment_fetches
-            .contains(&current_generation_fetch_key)
-    );
-    assert!(matches!(
-        app.requested_reviews,
-        RequestedReviewState::Loaded {
-            ref items,
-            project_id: loaded_project_id,
-        } if loaded_project_id == project_id
-            && items.len() == 1
-            && items[0].comment_snapshot.is_none()
     ));
 }
 
@@ -1219,7 +900,7 @@ async fn test_new_with_clients_restores_persisted_active_tab() {
     let database = AppRepositories::in_memory().await;
     database
         .settings()
-        .upsert_setting(SettingName::ActiveTab, Tab::Review.as_str())
+        .upsert_setting(SettingName::ActiveTab, Tab::Issues.as_str())
         .await
         .expect("failed to persist active tab");
 
@@ -1235,7 +916,7 @@ async fn test_new_with_clients_restores_persisted_active_tab() {
     .expect("failed to build app");
 
     // Assert
-    assert_eq!(app.tabs.current(), Tab::Review);
+    assert_eq!(app.tabs.current(), Tab::Issues);
 }
 
 #[tokio::test]
@@ -5107,7 +4788,7 @@ fn install_mock_review_request_client(
     );
 }
 
-/// Builds one GitHub remote fixture for requested-review state tests.
+/// Builds one GitHub remote fixture for session review-comment state tests.
 fn forge_remote() -> forge::ForgeRemote {
     forge::ForgeRemote {
         command_working_directory: None,
@@ -5120,25 +4801,7 @@ fn forge_remote() -> forge::ForgeRemote {
     }
 }
 
-/// Builds one requested-review fixture for app-state detail tests.
-fn requested_review() -> RequestedReview {
-    RequestedReview {
-        audience: RequestedReviewAudience::Personal,
-        author: "octocat".to_string(),
-        body: Some("Review body".to_string()),
-        comment_snapshot: None,
-        display_id: "#42".to_string(),
-        forge_kind: forge::ForgeKind::GitHub,
-        repository: "agentty-xyz/agentty".to_string(),
-        status_summary: None,
-        title: "Add review detail page".to_string(),
-        updated_at: Some("2026-04-27T21:30:00Z".to_string()),
-        web_url: "https://example.com/42".to_string(),
-    }
-}
-
-/// Builds one requested-review comment snapshot fixture for app-state
-/// detail tests.
+/// Builds one session review-comment snapshot fixture for app-state tests.
 fn review_comment_snapshot() -> forge::ReviewCommentSnapshot {
     forge::ReviewCommentSnapshot {
         pr_level_comments: vec![forge::ReviewComment {

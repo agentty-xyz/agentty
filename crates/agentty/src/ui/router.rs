@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
-use crate::app::{RequestedReviewState, Tab};
+use crate::app::Tab;
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
@@ -27,9 +27,6 @@ struct RouteSharedContext<'a> {
     mru_project_order: &'a [usize],
     project_table_state: &'a mut TableState,
     projects: &'a [ProjectListItem],
-    requested_review_selected_index: Option<usize>,
-    requested_review_table_state: &'a mut TableState,
-    requested_reviews: &'a RequestedReviewState,
     sessions: &'a [Session],
     settings_screen: Option<&'a SettingsScreenSnapshot>,
     stats_activity: &'a [DailyActivity],
@@ -60,7 +57,6 @@ enum Surface<'a> {
     },
     List,
     ReviewComments(&'a AppMode),
-    ReviewDetail(&'a AppMode),
     Session {
         mode: SessionSurfaceMode<'a>,
         scroll_offset: Option<u16>,
@@ -75,7 +71,6 @@ impl Surface<'_> {
             Self::Diff { .. } => SurfaceKind::Diff,
             Self::List => SurfaceKind::List,
             Self::ReviewComments(_) => SurfaceKind::ReviewComments,
-            Self::ReviewDetail(_) => SurfaceKind::ReviewDetail,
             Self::Session { .. } => SurfaceKind::Session,
         }
     }
@@ -87,7 +82,6 @@ pub(crate) enum SurfaceKind {
     Diff,
     List,
     ReviewComments,
-    ReviewDetail,
     Session,
 }
 
@@ -178,9 +172,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         render_cache_store,
         project_table_state,
         projects,
-        requested_review_selected_index,
-        requested_review_table_state,
-        requested_reviews,
         session_review_snapshot,
         session_progress_messages,
         session_update_versions,
@@ -201,9 +192,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         mru_project_order,
         project_table_state,
         projects,
-        requested_review_selected_index,
-        requested_review_table_state,
-        requested_reviews,
         sessions,
         settings_screen,
         stats_activity,
@@ -260,7 +248,6 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
         | AppMode::ProjectSwitcher { .. }
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::Confirmation { .. } => Surface::List,
-        AppMode::ReviewDetail { .. } => Surface::ReviewDetail(mode),
         AppMode::Help { context, .. } => surface_for_help_context(context),
         AppMode::View {
             session_id,
@@ -374,9 +361,6 @@ fn render_surface(
             shared.sessions,
             resources,
         ),
-        Surface::ReviewDetail(mode) => {
-            render_detail_mode(f, area, mode, resources.markdown_render_cache);
-        }
         Surface::ReviewComments(mode) => {
             render_review_comments_surface(f, area, mode, shared.sessions, resources);
         }
@@ -393,7 +377,6 @@ fn render_mode_overlay(
 ) {
     match mode {
         AppMode::List
-        | AppMode::ReviewDetail { .. }
         | AppMode::View { .. }
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }
@@ -482,26 +465,6 @@ fn render_mode_overlay(
             locked_upstream_ref.as_deref(),
         )
         .render(f, area),
-    }
-}
-
-/// Routes requested-review snapshots to the detail page renderer.
-fn render_detail_mode(
-    f: &mut Frame,
-    area: Rect,
-    mode: &AppMode,
-    markdown_render_cache: &markdown::MarkdownRenderCache,
-) {
-    if let AppMode::ReviewDetail {
-        comment_error,
-        is_loading_comments,
-        review,
-        scroll_offset,
-    } = mode
-    {
-        page::review_detail::ReviewDetailPage::new(review, markdown_render_cache, *scroll_offset)
-            .with_comment_status(comment_error.as_deref(), *is_loading_comments)
-            .render(f, area);
     }
 }
 
@@ -746,14 +709,6 @@ fn render_list_background(
             )
             .render(f, chunks[1]);
         }
-        Tab::Review => {
-            page::inbox::InboxPage::new(
-                shared.requested_reviews,
-                shared.requested_review_selected_index,
-                &mut *shared.requested_review_table_state,
-            )
-            .render(f, chunks[1]);
-        }
         Tab::Settings => {
             let active_project_name =
                 active_project_name(shared.active_project_id, shared.projects);
@@ -777,7 +732,6 @@ fn active_project_name(active_project_id: i64, projects: &[ProjectListItem]) -> 
 mod tests {
     use std::path::PathBuf;
 
-    use ag_forge::{ForgeKind, RequestedReview, RequestedReviewAudience};
     use ratatui::widgets::Paragraph;
 
     use super::*;
@@ -814,23 +768,6 @@ mod tests {
         session.transcript = Some(transcript);
 
         session
-    }
-
-    /// Builds one deterministic requested-review fixture for router tests.
-    fn requested_review_fixture() -> RequestedReview {
-        RequestedReview {
-            audience: RequestedReviewAudience::Personal,
-            author: "octocat".to_string(),
-            body: Some("Review body".to_string()),
-            comment_snapshot: None,
-            display_id: "#42".to_string(),
-            forge_kind: ForgeKind::GitHub,
-            repository: "agentty-xyz/agentty".to_string(),
-            status_summary: Some("Review requested".to_string()),
-            title: "Review router surfaces".to_string(),
-            updated_at: Some("2026-04-27T21:30:00Z".to_string()),
-            web_url: "https://example.com/42".to_string(),
-        }
     }
 
     /// Flattens a rendered test buffer into a plain string for text assertions.
@@ -874,8 +811,6 @@ mod tests {
         let available_agent_clis = Vec::new();
         let mut project_table_state = TableState::default();
         let projects = Vec::new();
-        let mut requested_review_table_state = TableState::default();
-        let requested_reviews = RequestedReviewState::default();
         let sessions = Vec::new();
         let stats_activity = Vec::new();
         let mut table_state = TableState::default();
@@ -887,9 +822,6 @@ mod tests {
             mru_project_order: &[],
             project_table_state: &mut project_table_state,
             projects: &projects,
-            requested_review_selected_index: None,
-            requested_review_table_state: &mut requested_review_table_state,
-            requested_reviews: &requested_reviews,
             sessions: &sessions,
             settings_screen,
             stats_activity: &stats_activity,
@@ -914,8 +846,6 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(120, 40);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut project_table_state = TableState::default();
-        let mut requested_review_table_state = TableState::default();
-        let requested_reviews = RequestedReviewState::default();
         let sessions = vec![session_fixture("session-overlay")];
         let mut table_state = TableState::default();
         let mut shared = RouteSharedContext {
@@ -926,9 +856,6 @@ mod tests {
             mru_project_order: &[],
             project_table_state: &mut project_table_state,
             projects: &[],
-            requested_review_selected_index: None,
-            requested_review_table_state: &mut requested_review_table_state,
-            requested_reviews: &requested_reviews,
             sessions: &sessions,
             settings_screen: None,
             stats_activity: &[],
@@ -1044,7 +971,6 @@ mod tests {
             },
             Surface::List,
             Surface::ReviewComments(&mode),
-            Surface::ReviewDetail(&mode),
             Surface::Session {
                 mode: SessionSurfaceMode::View,
                 scroll_offset: None,
@@ -1062,7 +988,6 @@ mod tests {
                 SurfaceKind::Diff,
                 SurfaceKind::List,
                 SurfaceKind::ReviewComments,
-                SurfaceKind::ReviewDetail,
                 SurfaceKind::Session,
             ]
         );
@@ -1103,12 +1028,6 @@ mod tests {
     #[test]
     fn surface_for_mode_classifies_primary_page_modes() {
         // Arrange
-        let review_mode = AppMode::ReviewDetail {
-            comment_error: None,
-            is_loading_comments: false,
-            review: requested_review_fixture(),
-            scroll_offset: 0,
-        };
         let help_mode = AppMode::Help {
             context: HelpContext::List {
                 keybindings: vec![],
@@ -1164,7 +1083,6 @@ mod tests {
         };
 
         // Act
-        let review_is_detail = matches!(surface_for_mode(&review_mode), Surface::ReviewDetail(_));
         let help_is_list = matches!(surface_for_mode(&help_mode), Surface::List);
         let view_is_session = matches!(surface_for_mode(&view_mode), Surface::Session { .. });
         let prompt_is_session = matches!(surface_for_mode(&prompt_mode), Surface::Session { .. });
@@ -1175,18 +1093,15 @@ mod tests {
             surface_for_mode(&review_comments_mode),
             Surface::ReviewComments(_)
         );
-        let (_, review_text) = render_list_backed_mode(&review_mode);
         let (_, comments_text) = render_list_backed_mode(&review_comments_mode);
 
         // Assert
-        assert!(review_is_detail);
         assert!(help_is_list);
         assert!(view_is_session);
         assert!(prompt_is_session);
         assert!(question_is_session);
         assert!(diff_is_diff);
         assert!(comments_are_review);
-        assert!(review_text.contains("Review router surfaces"));
         assert!(comments_text.contains("Comment — Router Session"));
     }
 
@@ -1237,8 +1152,6 @@ mod tests {
             scroll_offset: 0,
         };
         let mut project_table_state = TableState::default();
-        let mut requested_review_table_state = TableState::default();
-        let requested_reviews = RequestedReviewState::default();
         let mut table_state = TableState::default();
         let mut shared = RouteSharedContext {
             active_project_id: 1,
@@ -1248,9 +1161,6 @@ mod tests {
             mru_project_order: &[],
             project_table_state: &mut project_table_state,
             projects: &[],
-            requested_review_selected_index: None,
-            requested_review_table_state: &mut requested_review_table_state,
-            requested_reviews: &requested_reviews,
             sessions: &sessions,
             settings_screen: None,
             stats_activity: &[],

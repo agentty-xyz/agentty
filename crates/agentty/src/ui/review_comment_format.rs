@@ -22,7 +22,7 @@ pub(crate) fn append_comment_bodies(
 }
 
 /// Renders the anchor, side, comment count, resolution, and optional outdated
-/// metadata shared by review-detail and diff comment panels.
+/// metadata for an inline thread in the session review-comment detail pane.
 pub(crate) fn thread_header_line(
     thread: &ReviewCommentThread,
     anchor_style: Style,

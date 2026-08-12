@@ -117,21 +117,6 @@ then choose and save its reasoning level with `Enter`. Other selectors save dire
 The `Launch Configurations` row opens a list browser where each command is added,
 edited, deleted, or reordered as its own entry.
 
-## Inbox
-
-| Key                 | Action                                 |
-| ------------------- | -------------------------------------- |
-| `q`                 | Quit                                   |
-| `j` / `k`           | Navigate reviews                       |
-| `Enter`             | Open review details                    |
-| `s`                 | Refresh PRs/MRs requesting your review |
-| `Tab` / `Shift+Tab` | Switch to next / previous tab          |
-| `?`                 | Help                                   |
-
-On the read-only detail page, use `j` / `k` or `Up` / `Down` to scroll, `Ctrl+d` /
-`Ctrl+u` to move by half pages, `g` / `G` to jump to the top or bottom, and `q` / `Esc`
-to return to the review list.
-
 ## Session View
 
 <a id="usage-session-view-actions"></a> Available actions depend on the session state.

@@ -89,11 +89,10 @@ For file-level detail, read the module docstrings directly.
   `crates/ag-agent/`.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
-  for common interactions such as review-request detail navigation, session-output
-  metrics, transcript scrolling, `KeyEvent` mapping to domain input commands, and
-  session review-comment navigation, address/deny marking, and batch submission. Runtime
-  owns `PresentationState`, including the shared `RenderCacheStore` used by input
-  metrics and frame rendering.
+  for common interactions such as session-output metrics, transcript scrolling,
+  `KeyEvent` mapping to domain input commands, and session review-comment navigation,
+  address/deny marking, and batch submission. Runtime owns `PresentationState`,
+  including the shared `RenderCacheStore` used by input metrics and frame rendering.
 - `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
   runtime input and UI output. They expose mode, help-action, prompt, settings-screen
   actions, editor, scroll, viewport, semantic list-selection contracts, and one coherent

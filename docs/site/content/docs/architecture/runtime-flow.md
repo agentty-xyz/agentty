@@ -754,20 +754,19 @@ orchestration paths:
   completion popup for retry. A failed sync or a successful sync of another branch
   leaves the merged stack unchanged. Cleanup-critical git subprocesses are cancellable
   and bounded to 30 seconds; confirmed shutdown shares a five-second grace period across
-  all tracked cleanup tasks before canceling unfinished work. The Inbox tab loads
-  comment snapshots on demand with generation-scoped deduplication. Session view also
-  loads comments on demand for its linked review request: `AppMode::ReviewComments`
-  renders immediately with a loading state, `TaskService` resolves the session worktree
-  remote through the injected git/forge boundaries, falls back to the persisted
-  review-request URL after terminal-session worktree cleanup, and uses the matching
-  `AppEvent` to update only the still-open comments page. Inline code context is derived
-  from the already loaded current diff. From a reply-capable session, `a` marks an
-  actionable thread to address, `d` marks it to deny, and `Enter` renders every marked
-  thread plus its requested action into one `TurnPrompt`; outdated threads include an
-  explicit stale-anchor marker. The selected forge thread IDs are recorded in turn
-  metadata. Post-turn handling accepts deduplicated outcomes with an allowlisted ID and
-  nonblank reply. After auto-commit and a successful published-branch push, the worker
-  posts every accepted reply and resolves only outcomes reported as `fixed` through
+  all tracked cleanup tasks before canceling unfinished work. Session view loads
+  comments on demand for its linked review request: `AppMode::ReviewComments` renders
+  immediately with a loading state, `TaskService` resolves the session worktree remote
+  through the injected git/forge boundaries, falls back to the persisted review-request
+  URL after terminal-session worktree cleanup, and uses the matching `AppEvent` to
+  update only the still-open comments page. Inline code context is derived from the
+  already loaded current diff. From a reply-capable session, `a` marks an actionable
+  thread to address, `d` marks it to deny, and `Enter` renders every marked thread plus
+  its requested action into one `TurnPrompt`; outdated threads include an explicit
+  stale-anchor marker. The selected forge thread IDs are recorded in turn metadata.
+  Post-turn handling accepts deduplicated outcomes with an allowlisted ID and nonblank
+  reply. After auto-commit and a successful published-branch push, the worker posts
+  every accepted reply and resolves only outcomes reported as `fixed` through
   `ReviewRequestClient`; `no_change_needed` outcomes remain open, and failed pushes
   never mutate forge thread state.
 

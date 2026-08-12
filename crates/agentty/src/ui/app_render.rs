@@ -12,7 +12,6 @@ pub(crate) fn render_app(
     frame: &mut Frame,
     project_table_state: &mut TableState,
     render_cache_store: &RenderCacheStore,
-    requested_review_table_state: &mut TableState,
     session_table_state: &mut TableState,
 ) {
     project_table_state.select(snapshot.project_selected_index);
@@ -46,9 +45,6 @@ pub(crate) fn render_app(
             project_table_state,
             projects: snapshot.projects,
             session_review_snapshot: session_review_snapshot.as_ref(),
-            requested_reviews: snapshot.requested_reviews,
-            requested_review_selected_index: snapshot.requested_review_selected_index,
-            requested_review_table_state,
             active_prompt_outputs: snapshot.active_prompt_outputs,
             session_branch_names: snapshot.session_branch_names,
             session_git_statuses: snapshot.session_git_statuses,

@@ -13,7 +13,6 @@ mod orchestration;
 mod project;
 pub(crate) mod prompt_intent;
 mod reducer;
-mod requested_review;
 mod review;
 mod review_request;
 mod service;
@@ -39,7 +38,6 @@ pub(crate) use orchestration::{
     OrchestrationApprovalOutcome, OrchestrationCoordinator, OrchestrationSchedule,
 };
 pub use project::ProjectManager;
-pub(crate) use requested_review::RequestedReviewState;
 #[cfg(test)]
 pub(crate) use review::review_loading_message;
 pub(crate) use review::{ReviewCacheEntry, diff_content_hash};

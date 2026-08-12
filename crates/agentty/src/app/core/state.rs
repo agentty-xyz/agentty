@@ -7,10 +7,7 @@ use std::sync::Arc;
 use ag_agent::{AgentAvailabilityProbe, AppServerClient, RealAgentAvailabilityProbe};
 #[cfg(test)]
 use ag_forge as forge;
-use ag_forge::{
-    RealReviewRequestClient, RequestedReview, RequestedReviewAudience, ReviewCommentSnapshot,
-    ReviewRequestClient,
-};
+use ag_forge::{RealReviewRequestClient, ReviewRequestClient};
 use ag_git::{GitClient, GitError, RealGitClient};
 #[cfg(test)]
 use app::branch_publish::detected_forge_kind_from_git_push_error;
@@ -31,7 +28,9 @@ use app::session::SessionManager;
 use app::session_runtime::SessionRuntime;
 use app::setting::SettingsManager;
 use app::sync::SyncMainRunner;
-use app::tab::{Tab, TabManager};
+#[cfg(test)]
+use app::tab::Tab;
+use app::tab::TabManager;
 use app::{sync, task};
 use session::StatusTransition;
 #[cfg(test)]
@@ -43,7 +42,7 @@ use super::events::AppEvent;
 #[cfg(test)]
 use super::events::{AppEventBatch, ReviewRequestStatusUpdate};
 use crate::app;
-use crate::app::{AppError, RequestedReviewState, session};
+use crate::app::{AppError, session};
 #[cfg(test)]
 use crate::domain::agent::AgentCliInfo;
 #[cfg(test)]
@@ -109,19 +108,6 @@ struct TerminalContinuationDraft {
     project_id: i64,
     /// Initial draft message that gives the new session prior context.
     prompt_seed: String,
-}
-
-/// Identity for one background requested-review comment snapshot load.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(super) struct RequestedReviewCommentFetchKey {
-    /// Provider display id such as GitHub `#123` or GitLab `!123`.
-    pub(super) display_id: String,
-    /// Requested-review list generation visible when the comment load began.
-    pub(super) generation: u64,
-    /// Project id that owns the requested-review row.
-    pub(super) project_id: i64,
-    /// Browser-openable review-request URL used to disambiguate rows.
-    pub(super) web_url: String,
 }
 
 /// Background sync task result carrying the normalized summary for
@@ -285,18 +271,6 @@ pub struct App {
     /// Owns the active-project sync orchestrator command and context
     /// channels.
     pub(crate) sync_handle: sync::SyncHandle,
-    /// Monotonic requested-review refresh generation for rejecting stale task
-    /// results.
-    pub(super) requested_review_generation: u64,
-    /// Tracks requested-review comment snapshot loads currently running in
-    /// background tasks so reopening the same detail page does not duplicate
-    /// forge API calls.
-    pub(super) requested_review_comment_fetches: HashSet<RequestedReviewCommentFetchKey>,
-    /// Selected requested-review item index for the active project's
-    /// top-level `Review` tab, excluding non-selectable section headers.
-    pub(crate) requested_review_selected_index: Option<usize>,
-    /// Caches requested PR/MR reviews for the active project's `Review` tab.
-    pub(crate) requested_reviews: RequestedReviewState,
     /// Receives app events emitted by background tasks and workflows.
     pub(super) event_rx: mpsc::UnboundedReceiver<AppEvent>,
     /// Stores the latest available stable `agentty` version when one is
@@ -357,13 +331,11 @@ impl App {
     /// Cycles the active list tab forward.
     pub fn next_tab(&mut self) {
         self.tabs.next();
-        self.refresh_requested_reviews_if_inbox_tab(false);
     }
 
     /// Cycles the active list tab backward.
     pub fn previous_tab(&mut self) {
         self.tabs.previous();
-        self.refresh_requested_reviews_if_inbox_tab(false);
     }
 
     /// Persists the active list tab for startup restoration.
@@ -374,101 +346,6 @@ impl App {
             .settings()
             .upsert_setting(SettingName::ActiveTab, self.tabs.current().as_str())
             .await;
-    }
-
-    /// Refreshes requested reviews when the `Inbox` tab is visible.
-    pub fn refresh_requested_reviews_for_current_project(&mut self) {
-        self.refresh_requested_reviews_if_inbox_tab(true);
-    }
-
-    /// Replaces the requested-review list for `project_id`, normalizes rows to
-    /// the render order, and selects the first review when the list is
-    /// non-empty.
-    pub(crate) fn replace_requested_reviews(
-        &mut self,
-        project_id: i64,
-        mut items: Vec<RequestedReview>,
-    ) {
-        items.sort_by_key(|item| Self::requested_review_audience_order(item.audience));
-        self.requested_review_selected_index = (!items.is_empty()).then_some(0);
-        self.requested_reviews = RequestedReviewState::Loaded { items, project_id };
-    }
-
-    /// Returns the currently selected requested-review item index, excluding
-    /// section headers.
-    pub(crate) fn requested_review_selected_index(&self) -> Option<usize> {
-        self.requested_review_selected_index
-    }
-
-    /// Moves selection to the next requested review in the `Inbox` tab.
-    pub(crate) fn next_requested_review(&mut self) {
-        let Some(item_count) = self.requested_review_item_count() else {
-            self.requested_review_selected_index = None;
-
-            return;
-        };
-
-        self.requested_review_selected_index = Some(match self.requested_review_selected_index {
-            Some(index) => (index + 1) % item_count,
-            None => 0,
-        });
-    }
-
-    /// Moves selection to the previous requested review in the `Inbox` tab.
-    pub(crate) fn previous_requested_review(&mut self) {
-        let Some(item_count) = self.requested_review_item_count() else {
-            self.requested_review_selected_index = None;
-
-            return;
-        };
-
-        self.requested_review_selected_index = Some(match self.requested_review_selected_index {
-            Some(0) | None => item_count - 1,
-            Some(index) => index - 1,
-        });
-    }
-
-    /// Opens the selected requested-review detail page immediately and starts
-    /// one background comment snapshot load when the review has no cached
-    /// snapshot and no matching load is already in flight.
-    pub(crate) fn open_selected_requested_review(&mut self) {
-        let Some(review) = self.selected_requested_review().cloned() else {
-            return;
-        };
-
-        let is_loading_comments = review.comment_snapshot.is_none();
-        if is_loading_comments {
-            let comment_fetch_key = RequestedReviewCommentFetchKey {
-                display_id: review.display_id.clone(),
-                generation: self.requested_review_generation,
-                project_id: self.projects.active_project_id(),
-                web_url: review.web_url.clone(),
-            };
-            if self
-                .requested_review_comment_fetches
-                .insert(comment_fetch_key.clone())
-            {
-                task::TaskService::spawn_requested_review_comment_snapshot_task(
-                    task::RequestedReviewCommentSnapshotTask {
-                        display_id: comment_fetch_key.display_id,
-                        generation: comment_fetch_key.generation,
-                        project_id: comment_fetch_key.project_id,
-                        web_url: comment_fetch_key.web_url,
-                        working_dir: self.projects.working_dir().to_path_buf(),
-                    },
-                    self.services.event_sender(),
-                    self.services.git_client(),
-                    self.services.review_request_client(),
-                );
-            }
-        }
-
-        self.mode = AppMode::ReviewDetail {
-            comment_error: None,
-            is_loading_comments,
-            review,
-            scroll_offset: 0,
-        };
     }
 
     /// Opens the read-only comment page for a session's linked review request
@@ -516,39 +393,6 @@ impl App {
         );
 
         true
-    }
-
-    /// Caches a lazily loaded requested-review comment snapshot back onto the
-    /// loaded Inbox tab row so reopening the same detail page avoids another
-    /// comment API call.
-    pub(super) fn cache_requested_review_comment_snapshot(
-        &mut self,
-        display_id: &str,
-        web_url: &str,
-        comment_snapshot: &ReviewCommentSnapshot,
-    ) {
-        let RequestedReviewState::Loaded { items, .. } = &mut self.requested_reviews else {
-            return;
-        };
-
-        let Some(item) = items
-            .iter_mut()
-            .find(|item| item.web_url == web_url && item.display_id == display_id)
-        else {
-            return;
-        };
-
-        item.comment_snapshot = Some(comment_snapshot.clone());
-    }
-
-    /// Returns the currently selected requested review, when the review list
-    /// is loaded and the selection points at a row.
-    pub(crate) fn selected_requested_review(&self) -> Option<&RequestedReview> {
-        let RequestedReviewState::Loaded { items, .. } = &self.requested_reviews else {
-            return None;
-        };
-
-        items.get(self.requested_review_selected_index?)
     }
 
     /// Moves selection to the next session in the list.
@@ -640,7 +484,6 @@ impl App {
             git_upstream_ref,
             project.path,
         );
-        self.refresh_requested_reviews_if_inbox_tab(true);
         self.settings = SettingsManager::from_repositories(
             self.services.db().clone(),
             self.services.available_agent_kinds(),
@@ -667,62 +510,6 @@ impl App {
         self.refresh_sessions_now().await;
 
         Ok(())
-    }
-
-    /// Starts a requested-review list fetch when the visible tab needs one.
-    fn refresh_requested_reviews_if_inbox_tab(&mut self, force: bool) {
-        if self.tabs.current() != Tab::Review {
-            return;
-        }
-
-        let project_id = self.projects.active_project_id();
-        if !force && self.requested_reviews.is_current_for_project(project_id) {
-            return;
-        }
-
-        self.requested_review_generation = self.requested_review_generation.saturating_add(1);
-        let generation = self.requested_review_generation;
-        self.requested_review_selected_index = None;
-        self.clear_requested_review_comment_fetches_for_project(project_id);
-        self.requested_reviews = RequestedReviewState::Loading {
-            generation,
-            project_id,
-        };
-        task::TaskService::spawn_requested_reviews_task(
-            generation,
-            project_id,
-            self.projects.working_dir().to_path_buf(),
-            self.services.event_sender(),
-            self.services.git_client(),
-            self.services.review_request_client(),
-        );
-        self.mark_dirty();
-    }
-
-    /// Invalidates pending requested-review comment loads for `project_id`
-    /// because a list refresh supersedes snapshots fetched from the old list
-    /// generation.
-    fn clear_requested_review_comment_fetches_for_project(&mut self, project_id: i64) {
-        self.requested_review_comment_fetches
-            .retain(|fetch_key| fetch_key.project_id != project_id);
-    }
-
-    /// Returns the loaded requested-review row count when at least one review
-    /// can be selected.
-    fn requested_review_item_count(&self) -> Option<usize> {
-        let RequestedReviewState::Loaded { items, .. } = &self.requested_reviews else {
-            return None;
-        };
-
-        (!items.is_empty()).then_some(items.len())
-    }
-
-    /// Returns the display-order rank for one requested-review audience.
-    fn requested_review_audience_order(audience: RequestedReviewAudience) -> u8 {
-        match audience {
-            RequestedReviewAudience::Personal => 0,
-            RequestedReviewAudience::Group => 1,
-        }
     }
 
     /// Creates a blank session and schedules list refresh through events.
