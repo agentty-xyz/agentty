@@ -7,7 +7,7 @@ use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{RequestedReviewState, Tab, UpdateStatus};
+use crate::app::{Tab, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
@@ -72,13 +72,6 @@ pub struct RenderContext<'a> {
     /// Focused-review state for the visible session, projected from the app
     /// cache for this render pass.
     pub session_review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
-    /// Project-scoped requested PR/MR review list state.
-    pub requested_reviews: &'a RequestedReviewState,
-    /// Selected requested-review item index for the review list, excluding
-    /// section headers.
-    pub requested_review_selected_index: Option<usize>,
-    /// Table selection and viewport state for the review list.
-    pub requested_review_table_state: &'a mut TableState,
     /// Detected session worktree branch names keyed by session id.
     pub session_branch_names: &'a HashMap<SessionId, String>,
     /// Latest session-branch ahead/behind snapshots keyed by session id,

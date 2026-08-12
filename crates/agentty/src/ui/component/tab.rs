@@ -147,7 +147,7 @@ mod tests {
         // Assert
         assert_eq!(
             rendered_tabs,
-            " Projects | Project: None | Sessions | Inbox | Settings "
+            " Projects | Project: None | Sessions | Settings "
         );
     }
 
@@ -163,10 +163,9 @@ mod tests {
         assert_eq!(spans[0].style.fg, Some(style::palette::text_muted()));
         assert_eq!(spans[2].style.fg, Some(style::palette::text_subtle()));
         assert_eq!(spans[4].style.fg, Some(style::palette::text_muted()));
-        assert_eq!(spans[6].style.fg, Some(style::palette::text_muted()));
-        assert_eq!(spans[8].style.fg, Some(style::palette::warning()));
-        assert_eq!(spans[8].style.bg, Some(style::palette::surface()));
-        assert!(spans[8].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(spans[6].style.fg, Some(style::palette::warning()));
+        assert_eq!(spans[6].style.bg, Some(style::palette::surface()));
+        assert!(spans[6].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -189,7 +188,7 @@ mod tests {
         // Assert
         assert_eq!(
             rendered_tabs,
-            " Projects | Project: Primary | Sessions | Inbox | Settings "
+            " Projects | Project: Primary | Sessions | Settings "
         );
         assert_eq!(spans[2].style.fg, Some(style::palette::accent_soft()));
         assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
@@ -209,11 +208,9 @@ mod tests {
         assert_eq!(spans[1].content.as_ref(), "|");
         assert_eq!(spans[3].content.as_ref(), "|");
         assert_eq!(spans[5].content.as_ref(), "|");
-        assert_eq!(spans[7].content.as_ref(), "|");
         assert_eq!(spans[1].style.fg, Some(style::palette::border()));
         assert_eq!(spans[3].style.fg, Some(style::palette::border()));
         assert_eq!(spans[5].style.fg, Some(style::palette::border()));
-        assert_eq!(spans[7].style.fg, Some(style::palette::border()));
     }
 
     #[test]

@@ -7,16 +7,12 @@ use url::{Url, form_urlencoded};
 
 use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandRunner, ForgeFuture, ForgeKind,
-    ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide,
-    ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAdapter, ReviewRequestError,
-    ReviewRequestMetadata, ReviewRequestMetadataEdit, ReviewRequestOperations, ReviewRequestState,
-    ReviewRequestSummary, SyncReviewRequestMetadataConfig, UpdateReviewRequestInput,
-    is_gitlab_host, map_parse_error, normalize_provider_label, parse_remote_url,
-    status_summary_parts, strip_port,
+    ForgeRemote, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
+    ReviewCommentThread, ReviewRequestAdapter, ReviewRequestError, ReviewRequestMetadata,
+    ReviewRequestMetadataEdit, ReviewRequestOperations, ReviewRequestState, ReviewRequestSummary,
+    SyncReviewRequestMetadataConfig, UpdateReviewRequestInput, is_gitlab_host, map_parse_error,
+    normalize_provider_label, parse_remote_url, status_summary_parts, strip_port,
 };
-
-/// Maximum requested-review rows loaded from `glab` for one refresh.
-const REQUESTED_REVIEW_LIMIT: usize = 100;
 
 /// GitLab merge-request adapter that normalizes `glab` command output.
 #[derive(Clone)]
@@ -203,20 +199,6 @@ impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
 
             Ok(())
         })
-    }
-
-    /// Lists open merge requests in `remote` that request review from the
-    /// current authenticated GitLab user.
-    fn list_authenticated_requested_reviews(
-        &self,
-        remote: ForgeRemote,
-    ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>> {
-        self.operations.list_requested_reviews_future(
-            remote,
-            requested_reviews_command,
-            "list requested merge-request reviews",
-            parse_requested_reviews_response,
-        )
     }
 }
 
@@ -632,73 +614,6 @@ fn review_comment_from_note(note: GitLabDiscussionNote) -> ReviewComment {
     }
 }
 
-/// Builds the `glab mr list` command for MRs requesting the current user's
-/// review in the selected repository.
-fn requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
-    gitlab_command(
-        remote,
-        "glab",
-        vec![
-            "mr".to_string(),
-            "list".to_string(),
-            "--repo".to_string(),
-            remote.web_url.clone(),
-            "--reviewer".to_string(),
-            "@me".to_string(),
-            "--per-page".to_string(),
-            REQUESTED_REVIEW_LIMIT.to_string(),
-            "--output".to_string(),
-            "json".to_string(),
-        ],
-    )
-}
-
-/// Parses GitLab list rows into normalized requested-review rows.
-///
-/// The current `glab mr list --reviewer @me` surface filters by user reviewer
-/// and does not expose a separate reviewer-group audience for listed rows, so
-/// GitLab requested reviews are normalized as personal requests.
-fn parse_requested_reviews_response(
-    stdout: &str,
-    remote: &ForgeRemote,
-) -> Result<Vec<RequestedReview>, String> {
-    let merge_requests: Vec<GitLabRequestedReviewResponse> = serde_json::from_str(stdout)
-        .map_err(|error| format!("invalid GitLab requested-review response: {error}"))?;
-
-    Ok(merge_requests
-        .into_iter()
-        .map(|merge_request| {
-            let status_summary = if merge_request.draft {
-                Some("Draft".to_string())
-            } else {
-                None
-            };
-
-            RequestedReview {
-                audience: RequestedReviewAudience::Personal,
-                author: merge_request.author.map_or_else(
-                    || "unknown".to_string(),
-                    |author| {
-                        author
-                            .username
-                            .or(author.name)
-                            .unwrap_or_else(|| "unknown".to_string())
-                    },
-                ),
-                body: merge_request.description,
-                comment_snapshot: None,
-                display_id: format!("!{}", merge_request.iid),
-                forge_kind: ForgeKind::GitLab,
-                repository: remote.project_path(),
-                status_summary,
-                title: merge_request.title,
-                updated_at: merge_request.updated_at,
-                web_url: merge_request.web_url,
-            }
-        })
-        .collect())
-}
-
 /// Builds one base `glab` command with deterministic color settings and the
 /// optional session worktree for repository-aware host detection.
 fn gitlab_command(
@@ -717,29 +632,6 @@ fn gitlab_command(
 #[derive(Deserialize)]
 struct GitLabLookupResponse {
     iid: u64,
-}
-
-/// GitLab list row returned by `glab mr list --output json`.
-#[derive(Deserialize)]
-struct GitLabRequestedReviewResponse {
-    author: Option<GitLabRequestedReviewAuthor>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    draft: bool,
-    iid: u64,
-    title: String,
-    #[serde(rename = "updated_at")]
-    updated_at: Option<String>,
-    #[serde(rename = "web_url")]
-    web_url: String,
-}
-
-/// GitLab list author data for the user who opened a requested review.
-#[derive(Deserialize)]
-struct GitLabRequestedReviewAuthor {
-    name: Option<String>,
-    username: Option<String>,
 }
 
 /// GitLab merge-request JSON payload returned by `glab mr view --output json`.
@@ -1232,72 +1124,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn list_authenticated_requested_reviews_builds_list_command_and_returns_rows() {
-        // Arrange
-        let remote = gitlab_remote();
-        let mut sequence = Sequence::new();
-        let mut command_runner = MockForgeCommandRunner::new();
-        command_runner
-            .expect_run()
-            .once()
-            .in_sequence(&mut sequence)
-            .withf({
-                let remote = remote.clone();
-
-                move |command| command == &requested_reviews_command(&remote)
-            })
-            .returning(|_| Box::pin(async { Ok(success_output(gitlab_requested_reviews_json())) }));
-        let adapter = GitLabReviewRequestAdapter::new(Arc::new(command_runner));
-
-        // Act
-        let requested_reviews = adapter
-            .list_authenticated_requested_reviews(remote)
-            .await
-            .expect("GitLab requested reviews should load");
-
-        // Assert
-        assert_eq!(
-            requested_reviews,
-            vec![RequestedReview {
-                audience: RequestedReviewAudience::Personal,
-                author: "octocat".to_string(),
-                body: Some("Implements the GitLab provider.".to_string()),
-                comment_snapshot: None,
-                display_id: "!42".to_string(),
-                forge_kind: ForgeKind::GitLab,
-                repository: "agentty-xyz/agentty".to_string(),
-                status_summary: Some("Draft".to_string()),
-                title: "Add forge review support".to_string(),
-                updated_at: Some("2026-04-27T21:30:00Z".to_string()),
-                web_url: "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/42".to_string(),
-            }]
-        );
-    }
-
-    #[test]
-    fn parse_requested_reviews_response_defaults_optional_fields() {
-        // Arrange
-        let remote = gitlab_remote();
-        let stdout = r#"[{
-            "iid": 43,
-            "title": "Review parser defaults",
-            "web_url": "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/43"
-        }]"#;
-
-        // Act
-        let requested_reviews = parse_requested_reviews_response(stdout, &remote)
-            .expect("requested-review defaults should parse");
-
-        // Assert
-        assert_eq!(requested_reviews.len(), 1);
-        let requested_review = &requested_reviews[0];
-        assert_eq!(requested_review.author, "unknown");
-        assert_eq!(requested_review.body, None);
-        assert_eq!(requested_review.status_summary, None);
-        assert_eq!(requested_review.updated_at, None);
-    }
-
     #[test]
     fn gitlab_view_response_maps_terminal_states() {
         // Arrange
@@ -1616,22 +1442,6 @@ mod tests {
             current: current.to_string(),
             desired: desired.to_string(),
         }
-    }
-
-    /// Returns one `glab mr list --output json` fixture for requested reviews.
-    fn gitlab_requested_reviews_json() -> String {
-        r#"[
-            {
-                "draft": true,
-                "description": "Implements the GitLab provider.",
-                "author": {"name": "Octo Cat", "username": "octocat"},
-                "iid": 42,
-                "title": "Add forge review support",
-                "updated_at": "2026-04-27T21:30:00Z",
-                "web_url": "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/42"
-            }
-        ]"#
-        .to_string()
     }
 
     /// Returns one representative GitLab discussions API response.

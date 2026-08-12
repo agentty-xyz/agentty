@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use super::{
     ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner, ForgeFuture,
-    ForgeKind, ForgeRemote, RequestedReview, ReviewCommentSnapshot, ReviewRequestError,
-    ReviewRequestMetadata, ReviewRequestSummary, UpdateReviewRequestInput, command_output_detail,
+    ForgeKind, ForgeRemote, ReviewCommentSnapshot, ReviewRequestError, ReviewRequestMetadata,
+    ReviewRequestSummary, UpdateReviewRequestInput, command_output_detail,
 };
 
 /// Provider-neutral partial edit produced after a best-effort recheck that the
@@ -314,30 +314,6 @@ impl ReviewRequestOperations {
                 .await?;
 
             map_parse_error(remote.forge_kind, parse_snapshot_response(&output.stdout))
-        })
-    }
-
-    /// Runs one requested-review list command and parses normalized rows in an
-    /// owned future for adapter trait implementations.
-    pub(crate) fn list_requested_reviews_future(
-        &self,
-        remote: ForgeRemote,
-        command: fn(&ForgeRemote) -> ForgeCommand,
-        operation: &'static str,
-        parse_requested_reviews: fn(&str, &ForgeRemote) -> Result<Vec<RequestedReview>, String>,
-    ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>> {
-        let operations = self.clone();
-
-        Box::pin(async move {
-            let command = command(&remote);
-            let output = operations
-                .run_review_command(&remote, command, operation)
-                .await?;
-
-            map_parse_error(
-                remote.forge_kind,
-                parse_requested_reviews(&output.stdout, &remote),
-            )
         })
     }
 

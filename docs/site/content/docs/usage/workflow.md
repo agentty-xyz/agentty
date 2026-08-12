@@ -27,11 +27,6 @@ tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
   press `a` to start one. Press `p` to open a project switcher popup that lists
   registered projects in most-recently-opened order and switches the active project
   without leaving the Sessions view.
-- **Inbox**: Read-only list of open GitHub pull requests or GitLab merge requests that
-  request your review in the active project, including drafts. Press `s` to refresh and
-  `Enter` to open a read-only detail page with the description and comment threads.
-  Description and comment bodies render Markdown plus common embedded HTML, while HTML
-  comments remain hidden.
 - **Settings**: Configure the color theme, orchestrator parallelism, automatic approval
   for read-only research waves, per-role smart/fast/review model and reasoning defaults,
   the optional `Last used model as default` mode, the session commit coauthor trailer,

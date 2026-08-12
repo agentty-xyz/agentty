@@ -50,18 +50,6 @@ where
     } else {
         match &app.mode {
             AppMode::List => mode::list::handle(app, key).await,
-            AppMode::ReviewDetail { .. } => {
-                let size = terminal.size().map_err(backend_err)?;
-                let terminal_rect = Rect::new(0, 0, size.width, size.height);
-                let content_area = content_area_for_terminal(terminal_rect);
-
-                Ok(mode::detail::handle_with_cache(
-                    app,
-                    presentation.render_cache_store(),
-                    content_area,
-                    key,
-                ))
-            }
             AppMode::SessionCreation { .. } => {
                 unreachable!("session creation mode is handled before dispatch matching")
             }
@@ -955,7 +943,6 @@ async fn handle_regenerate_review_confirmation(
 mod tests {
     use std::sync::Arc;
 
-    use ag_forge::{ForgeKind, RequestedReview, RequestedReviewAudience};
     use crossterm::event::KeyModifiers;
     use mockall::predicate::eq;
 
@@ -971,22 +958,6 @@ mod tests {
             .as_ref()
             .and_then(SessionTranscript::replay_text)
             .unwrap_or_default()
-    }
-
-    fn requested_review() -> RequestedReview {
-        RequestedReview {
-            audience: RequestedReviewAudience::Personal,
-            author: "octocat".to_string(),
-            body: Some("Review body".to_string()),
-            comment_snapshot: None,
-            display_id: "#42".to_string(),
-            forge_kind: ForgeKind::GitHub,
-            repository: "agentty-xyz/agentty".to_string(),
-            status_summary: None,
-            title: "Add review detail page".to_string(),
-            updated_at: Some("2026-04-27T21:30:00Z".to_string()),
-            web_url: "https://example.com/42".to_string(),
-        }
     }
 
     #[test]
@@ -1778,28 +1749,6 @@ mod tests {
                 scroll_offset: None,
             } if session_id == "session-id"
         ));
-    }
-
-    #[tokio::test]
-    async fn test_handle_key_event_routes_review_detail_back_shortcut() {
-        // Arrange
-        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-        crate::test_support::set_review_detail_mode(&mut app, requested_review());
-        let backend = ratatui::backend::TestBackend::new(120, 30);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        let event_result = handle_key_event(
-            &mut app,
-            &PresentationState::default(),
-            &mut terminal,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-        )
-        .await;
-
-        // Assert
-        assert!(matches!(event_result, Ok(EventResult::Continue)));
-        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]

@@ -141,7 +141,6 @@ fn settings_tab_shows_content() {
                     .compose(&common::wait_for_agentty_startup())
                     .viewing_pause_ms(1500)
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(3000)
                     .capture_labeled("settings_tab", "Settings tab with all rows")
@@ -188,7 +187,6 @@ fn settings_jk_navigation() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("initial", "Settings tab at first row")
@@ -282,7 +280,6 @@ fn settings_dropdown_selects_value() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
                     .compose(&move_to_settings_row(
@@ -358,7 +355,6 @@ fn settings_model_selector_uses_two_steps() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .compose(&move_to_settings_row(
                         "default_smart_model",
@@ -423,7 +419,6 @@ fn settings_launch_configurations_list_editor() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(1500)
                     .compose(&move_to_settings_row(
@@ -528,7 +523,6 @@ fn test_input_undo_redo() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .compose(&move_to_settings_row(
                         "launch_configurations",
@@ -591,7 +585,6 @@ fn settings_theme_switch() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("before_theme_switch", "Theme setting before switching")
@@ -687,7 +680,6 @@ fn settings_help_shows_edit_hint() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
                     .compose(&common::open_help_overlay())

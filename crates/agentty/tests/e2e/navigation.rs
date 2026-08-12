@@ -1,131 +1,15 @@
 //! Navigation E2E tests: tab cycling, reverse tab cycling, and help overlay.
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-use std::process::Command;
-
 use testty::assertion;
 use testty::region::Region;
 
 use crate::common;
-use crate::common::{BuilderEnv, FeatureTest};
+use crate::common::FeatureTest;
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
-/// Seeds a GitHub remote and `gh` stub that returns personal and group-sourced
-/// requested reviews for the Inbox tab feature scenario.
-fn seed_inbox_tab_requested_reviews(env: &BuilderEnv) -> E2eResult {
-    let output = Command::new("git")
-        .args([
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/agentty-xyz/agentty.git",
-        ])
-        .current_dir(&env.workdir)
-        .output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "git remote add origin failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-
-    let gh_stub = env.stub_bin.join("gh");
-    std::fs::write(
-        &gh_stub,
-        r###"#!/bin/sh
-if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
-  exit 0
-fi
-
-if [ "$1" = "search" ] && [ "$2" = "prs" ] && [ "$3" = "--review-requested" ]; then
-  cat <<'JSON'
-[
-  {
-    "isDraft": false,
-    "number": 42,
-    "title": "Review personal parser",
-    "author": {"login": "octocat"},
-    "body": "## Details\n- **Personal parser** review description.\n<details>\n<summary>Release notes</summary>\n<h2>v1.0.0</h2>\n<ul>\n<li>Fix <code>parser</code> output.</li>\n</ul>\n</details>",
-    "updatedAt": "2026-04-27T21:30:00Z",
-    "url": "https://github.com/agentty-xyz/agentty/pull/42"
-  },
-  {
-    "isDraft": false,
-    "number": 43,
-    "title": "Review team parser",
-    "author": {"login": "team-lead"},
-    "body": "Team parser review description.",
-    "updatedAt": "2026-04-28T21:30:00Z",
-    "url": "https://github.com/agentty-xyz/agentty/pull/43"
-  }
-]
-JSON
-  exit 0
-fi
-
-if [ "$1" = "search" ] && [ "$2" = "prs" ] && [ "$3" = "user-review-requested:@me" ]; then
-  cat <<'JSON'
-[
-  {
-    "isDraft": false,
-    "number": 42,
-    "title": "Review personal parser",
-    "author": {"login": "octocat"},
-    "body": "## Details\n- **Personal parser** review description.\n<details>\n<summary>Release notes</summary>\n<h2>v1.0.0</h2>\n<ul>\n<li>Fix <code>parser</code> output.</li>\n</ul>\n</details>",
-    "updatedAt": "2026-04-27T21:30:00Z",
-    "url": "https://github.com/agentty-xyz/agentty/pull/42"
-  }
-]
-JSON
-  exit 0
-fi
-
-if [ "$1" = "api" ] && [ "$2" = "--hostname" ] && [ "$4" = "graphql" ]; then
-  case "$*" in
-    *"reviewThreads(first:"*"number=42"*)
-      sleep 3
-      cat <<'JSON'
-[{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-navigation","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":7,"path":"crates/agentty/src/ui/page/review_detail.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Please show this selected review comment."}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
-JSON
-      exit 0
-      ;;
-    *"reviewThreads(first:"*"number=43"*)
-      cat <<'JSON'
-[{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
-JSON
-      exit 0
-      ;;
-    *"comments(first:"*"number=42"*)
-      cat <<'JSON'
-[{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"alice"},"body":"General **review** comment."}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
-JSON
-      exit 0
-      ;;
-    *"comments(first:"*"number=43"*)
-      cat <<'JSON'
-[{"data":{"repository":{"pullRequest":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
-JSON
-      exit 0
-      ;;
-  esac
-fi
-
-echo "unexpected gh args: $*" >&2
-exit 1
-"###,
-    )?;
-
-    #[cfg(unix)]
-    std::fs::set_permissions(&gh_stub, std::fs::Permissions::from_mode(0o755))?;
-
-    Ok(())
-}
-
 /// Seeds the canonical project as the persisted active project.
-fn seed_active_project_setting(env: &BuilderEnv) -> E2eResult {
+fn seed_active_project_setting(env: &crate::common::BuilderEnv) -> E2eResult {
     let runtime = common::seed_runtime()?;
 
     runtime.block_on(async {
@@ -216,7 +100,7 @@ fn tab_key_switches_tabs() -> E2eResult {
 /// Verify that pressing Tab cycles through all primary tabs in order.
 ///
 /// Starts on Projects and asserts each successive tab becomes selected:
-/// Sessions, Inbox, Settings.
+/// Sessions and Settings.
 #[test]
 fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange, Act, Assert
@@ -235,9 +119,6 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("sessions", "Sessions tab selected")
-                    .compose(&common::switch_to_tab("Inbox"))
-                    .viewing_pause_ms(2000)
-                    .capture_labeled("inbox", "Inbox tab selected")
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2500)
                     .capture_labeled("settings", "Settings tab selected")
@@ -248,119 +129,20 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
 
                 assert_eq!(
                     report.captures.len(),
-                    3,
-                    "Expected 3 captures (sessions, inbox, settings)"
+                    2,
+                    "Expected 2 captures (sessions, settings)"
                 );
 
                 let sessions_frame = common::frame_from_capture(&report.captures[0]);
                 let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
                 assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
 
-                let inbox_frame = common::frame_from_capture(&report.captures[1]);
-                let inbox_full = Region::full(inbox_frame.cols(), inbox_frame.rows());
-                assertion::assert_text_in_region(&inbox_frame, "Review Requests", &inbox_full);
-
-                let settings_frame = common::frame_from_capture(&report.captures[2]);
+                let settings_frame = common::frame_from_capture(&report.captures[1]);
                 let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
                 assertion::assert_text_in_region(
                     &settings_frame,
                     "Default Smart Model",
                     &settings_full,
-                );
-            },
-        )?;
-
-    Ok(())
-}
-
-/// Verify that the Inbox tab renders requested PR/MR review state at a
-/// width that leaves grouped review headings and titles inspectable.
-#[test]
-fn inbox_tab_shows_requested_reviews_page() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("inbox_tab")
-        .with_git()
-        .with_terminal_size(120, 36)
-        .setup(seed_inbox_tab_requested_reviews)
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Inbox"))
-                    .wait_for_text("Requested from you", 5000)
-                    .wait_for_text("Requested from your groups", 5000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("inbox", "Inbox tab selected")
-                    .press_key("Enter")
-                    .wait_for_text("Review Request", 5000)
-                    .wait_for_text("Loading comments...", 5000)
-                    .capture_labeled("loading", "Review request detail while comments load")
-                    .wait_for_text("Personal parser review description.", 5000)
-                    .wait_for_text("Release notes", 5000)
-                    .wait_for_text("General discussion", 5000)
-                    .wait_for_text("Please show this selected review comment.", 5000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("detail", "Review request detail after Enter")
-            },
-            |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Review Request", &full);
-                assertion::assert_text_in_region(frame, "Title", &full);
-                assertion::assert_text_in_region(frame, "Review personal parser", &full);
-                assertion::assert_text_in_region(frame, "Author", &full);
-                assertion::assert_text_in_region(frame, "octocat", &full);
-                assertion::assert_text_in_region(frame, "Description", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Personal parser review description.",
-                    &full,
-                );
-                assertion::assert_text_in_region(frame, "Release notes", &full);
-                assertion::assert_text_in_region(frame, "v1.0.0", &full);
-                assertion::assert_text_in_region(frame, "Fix parser output.", &full);
-                assertion::assert_text_in_region(frame, "Comments", &full);
-                assertion::assert_text_in_region(frame, "General discussion", &full);
-                assertion::assert_text_in_region(frame, "General review comment.", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "crates/agentty/src/ui/page/review_detail.rs:7",
-                    &full,
-                );
-                assertion::assert_text_in_region(
-                    frame,
-                    "Please show this selected review comment.",
-                    &full,
-                );
-
-                let inbox_frame = common::frame_from_capture(&report.captures[0]);
-                let inbox_full = Region::full(inbox_frame.cols(), inbox_frame.rows());
-                assertion::assert_text_in_region(&inbox_frame, "Review Requests", &inbox_full);
-                assertion::assert_text_in_region(&inbox_frame, "Requested from you", &inbox_full);
-                assertion::assert_text_in_region(
-                    &inbox_frame,
-                    "PR #42 Review personal parser",
-                    &inbox_full,
-                );
-                assertion::assert_text_in_region(&inbox_frame, "octocat", &inbox_full);
-                assertion::assert_text_in_region(
-                    &inbox_frame,
-                    "Requested from your groups",
-                    &inbox_full,
-                );
-                assertion::assert_text_in_region(
-                    &inbox_frame,
-                    "PR #43 Review team parser",
-                    &inbox_full,
-                );
-                assertion::assert_text_in_region(&inbox_frame, "team-lead", &inbox_full);
-
-                let loading_frame = common::frame_from_capture(&report.captures[1]);
-                let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());
-                assertion::assert_text_in_region(
-                    &loading_frame,
-                    "Loading comments...",
-                    &loading_full,
                 );
             },
         )?;
@@ -433,7 +215,7 @@ fn startup_shows_footer_hints() -> E2eResult {
 /// Verify that `BackTab` (Shift+Tab) cycles tabs in reverse order.
 ///
 /// Starts on Projects (first tab), then presses `BackTab` to cycle back
-/// through Settings, Inbox, Sessions, and Projects.
+/// through Settings, Sessions, and Projects.
 #[test]
 fn backtab_cycles_tabs_reverse() -> E2eResult {
     // Arrange, Act, Assert
@@ -451,15 +233,12 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     .compose(&common::switch_to_tab_reverse("Settings"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("back_to_settings", "Settings tab after first BackTab")
-                    .compose(&common::switch_to_tab_reverse("Inbox"))
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_inbox", "Inbox tab after third BackTab")
                     .compose(&common::switch_to_tab_reverse("Sessions"))
                     .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_sessions", "Sessions tab after fourth BackTab")
+                    .capture_labeled("back_to_sessions", "Sessions tab after second BackTab")
                     .compose(&common::switch_to_tab_reverse("Projects"))
                     .viewing_pause_ms(2000)
-                    .capture_labeled("back_to_projects", "Projects tab after fifth BackTab")
+                    .capture_labeled("back_to_projects", "Projects tab after third BackTab")
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
@@ -473,15 +252,11 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     &settings_full,
                 );
 
-                let inbox_frame = common::frame_from_capture(&report.captures[1]);
-                let inbox_full = Region::full(inbox_frame.cols(), inbox_frame.rows());
-                assertion::assert_text_in_region(&inbox_frame, "Review Requests", &inbox_full);
-
-                let sessions_frame = common::frame_from_capture(&report.captures[2]);
+                let sessions_frame = common::frame_from_capture(&report.captures[1]);
                 let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
                 assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
 
-                let projects_frame = common::frame_from_capture(&report.captures[3]);
+                let projects_frame = common::frame_from_capture(&report.captures[2]);
                 let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
                 assertion::assert_text_in_region(&projects_frame, "test-project", &projects_full);
             },

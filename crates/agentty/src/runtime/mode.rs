@@ -3,7 +3,6 @@
 pub(crate) mod at_mention;
 pub(crate) mod chat_scroll;
 pub(crate) mod confirmation;
-pub(crate) mod detail;
 pub(crate) mod diff;
 pub(crate) mod help;
 pub(crate) mod input_key;
