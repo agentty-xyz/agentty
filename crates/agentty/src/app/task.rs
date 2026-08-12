@@ -1,4 +1,4 @@
-//! App-wide background task helpers for requested-review loads, version
+//! App-wide background task helpers for session review-comment loads, version
 //! checks, and review-assist generation.
 //!
 //! Recurring git-status and review-request polling lives in the sync
@@ -1148,7 +1148,7 @@ mod tests {
         assert!(prompt.contains("+```\n"));
     }
 
-    /// Builds one GitHub remote fixture for requested-review task tests.
+    /// Builds one GitHub remote fixture for review-comment task tests.
     fn forge_remote() -> ForgeRemote {
         ForgeRemote {
             command_working_directory: None,

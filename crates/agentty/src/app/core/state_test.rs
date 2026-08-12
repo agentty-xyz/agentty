@@ -963,60 +963,6 @@ async fn test_new_with_clients_restores_persisted_active_tab() {
 }
 
 #[tokio::test]
-async fn test_new_with_clients_replaces_obsolete_tabs() {
-    // Arrange
-    let temp_dir = tempdir().expect("failed to create temp dir");
-    let agentty_home = temp_dir.path().join("agentty-home");
-    let project_path = temp_dir.path().join("project");
-    fs::create_dir_all(&agentty_home).expect("failed to create agentty home");
-    fs::create_dir_all(project_path.join(".git")).expect("failed to create project git marker");
-    let database = AppRepositories::in_memory().await;
-    let project_id = database
-        .projects()
-        .upsert_project(&project_path.to_string_lossy(), Some("main".to_string()))
-        .await
-        .expect("failed to insert project");
-    database
-        .settings()
-        .set_active_project_id(project_id)
-        .await
-        .expect("failed to persist active project");
-    for obsolete_tab in ["Inbox", "Issues"] {
-        database
-            .settings()
-            .upsert_setting(SettingName::ActiveTab, obsolete_tab)
-            .await
-            .expect("failed to persist obsolete active tab");
-
-        // Act
-        let app = App::new_with_clients(
-            agentty_home.clone(),
-            project_path.clone(),
-            Some("main".to_string()),
-            database.clone(),
-            crate::test_support::test_app_clients(),
-        )
-        .await
-        .expect("failed to build app");
-        let persisted_tab = app
-            .services
-            .db()
-            .settings()
-            .get_setting(SettingName::ActiveTab)
-            .await
-            .expect("failed to load active tab");
-
-        // Assert
-        assert_eq!(app.tabs.current(), Tab::Sessions, "{obsolete_tab}");
-        assert_eq!(
-            persisted_tab.as_deref(),
-            Some(Tab::Sessions.as_str()),
-            "{obsolete_tab}"
-        );
-    }
-}
-
-#[tokio::test]
 async fn test_new_with_clients_defaults_to_sessions_when_active_project_exists() {
     // Arrange
     let temp_dir = tempdir().expect("failed to create temp dir");
@@ -4972,7 +4918,7 @@ fn install_mock_review_request_client(
     );
 }
 
-/// Builds one GitHub remote fixture for requested-review state tests.
+/// Builds one GitHub remote fixture for review-comment state tests.
 fn forge_remote() -> forge::ForgeRemote {
     forge::ForgeRemote {
         command_working_directory: None,
@@ -4985,8 +4931,7 @@ fn forge_remote() -> forge::ForgeRemote {
     }
 }
 
-/// Builds one requested-review comment snapshot fixture for app-state
-/// detail tests.
+/// Builds one review-comment snapshot fixture for app-state detail tests.
 fn review_comment_snapshot() -> forge::ReviewCommentSnapshot {
     forge::ReviewCommentSnapshot {
         pr_level_comments: vec![forge::ReviewComment {
