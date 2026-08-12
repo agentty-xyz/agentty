@@ -116,8 +116,7 @@ fn quit_confirm_yes_exits() {
     let scenario = Scenario::new("quit_yes")
         .compose(&common::wait_for_agentty_startup())
         .compose(&common::open_quit_dialog())
-        .press_key("y")
-        .sleep(Duration::from_millis(500));
+        .press_key("y");
 
     // Act
     scenario
