@@ -1,9 +1,10 @@
 use crate::chat_completion;
 
 pub(crate) const PROVIDER_NAME: &str = "alibaba_cloud";
-pub(crate) const POLICY: chat_completion::JsonObjectProviderPolicy =
-    chat_completion::JsonObjectProviderPolicy {
+pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
+    chat_completion::ChatCompletionProviderPolicy {
         display_name: "Qwen",
+        structured_output: chat_completion::StructuredOutputMode::JsonObject,
         telemetry_name: PROVIDER_NAME,
         unsupported_schema_reason: "Qwen JSON Object mode requires an explicit object root schema",
     };
@@ -30,8 +31,8 @@ mod tests {
 
     use super::*;
     use crate::chat_completion::{
-        ChatCompletion, ChatCompletionClient, ChatCompletionError, ChatCompletionRequest,
-        ERROR_BODY_LIMIT_BYTES, JsonObjectBackend, RESPONSE_ENVELOPE_LIMIT_BYTES,
+        ChatCompletion, ChatCompletionBackend, ChatCompletionClient, ChatCompletionError,
+        ChatCompletionRequest, ERROR_BODY_LIMIT_BYTES, RESPONSE_ENVELOPE_LIMIT_BYTES,
         STRUCTURED_OUTPUT_INSTRUCTION, SUCCESS_BODY_LIMIT_BYTES,
     };
     use crate::{model, schema_contract, tool};
@@ -371,7 +372,7 @@ mod tests {
     #[tokio::test]
     async fn completes_through_injected_client() {
         // Arrange
-        let model = JsonObjectBackend::with_client(
+        let model = ChatCompletionBackend::with_client(
             "stub-key".to_string(),
             "https://stub.example/v1/".to_string(),
             "qwen-stub".to_string(),

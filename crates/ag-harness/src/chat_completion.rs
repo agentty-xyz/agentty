@@ -22,10 +22,18 @@ pub(crate) const STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
     "Do not include Markdown fences or any other text.\n\nJSON Schema:\n",
 );
 
-/// Provider policy applied by the shared JSON Object backend.
+/// Structured-output representation selected by one Chat Completions provider.
 #[derive(Clone, Copy)]
-pub(crate) struct JsonObjectProviderPolicy {
+pub(crate) enum StructuredOutputMode {
+    JsonObject,
+    JsonSchema,
+}
+
+/// Provider policy applied by the shared Chat Completions backend.
+#[derive(Clone, Copy)]
+pub(crate) struct ChatCompletionProviderPolicy {
     pub(crate) display_name: &'static str,
+    pub(crate) structured_output: StructuredOutputMode,
     pub(crate) telemetry_name: &'static str,
     pub(crate) unsupported_schema_reason: &'static str,
 }
@@ -36,22 +44,23 @@ pub(crate) enum GeneratedResponse {
     ToolCall(tool::ToolCall),
 }
 
-/// Shared JSON Object backend for OpenAI-compatible Chat Completions APIs.
-pub(crate) struct JsonObjectBackend {
+/// Shared structured-output backend for OpenAI-compatible Chat Completions
+/// APIs.
+pub(crate) struct ChatCompletionBackend {
     api_key: String,
     base_url: String,
     client: Arc<dyn ChatCompletionClient>,
     model: String,
-    policy: JsonObjectProviderPolicy,
+    policy: ChatCompletionProviderPolicy,
 }
 
-impl JsonObjectBackend {
-    /// Creates a JSON Object backend with the production HTTP client.
+impl ChatCompletionBackend {
+    /// Creates a structured-output backend with the production HTTP client.
     pub(crate) fn new(
         api_key: String,
         base_url: String,
         model: String,
-        policy: JsonObjectProviderPolicy,
+        policy: ChatCompletionProviderPolicy,
     ) -> Self {
         Self::with_client(api_key, base_url, model, policy, default_client())
     }
@@ -61,7 +70,7 @@ impl JsonObjectBackend {
         (self.policy.telemetry_name, &self.model)
     }
 
-    /// Generates raw JSON Object output through the shared wire lifecycle.
+    /// Generates raw structured output through the shared wire lifecycle.
     pub(crate) async fn generate(
         &self,
         request: &model::ModelRequest,
@@ -71,26 +80,15 @@ impl JsonObjectBackend {
                 reason: self.policy.unsupported_schema_reason.to_string(),
             });
         }
-        let messages = vec![
-            JsonObjectMessage {
-                content: format!(
-                    "{STRUCTURED_OUTPUT_INSTRUCTION}{}",
-                    request.schema().value()
-                ),
-                role: "system",
-            },
-            JsonObjectMessage {
-                content: request.prompt().to_string(),
-                role: "user",
-            },
-        ];
-        let payload = JsonObjectRequest {
-            messages,
+        let payload = ChatCompletionPayload {
+            messages: self.messages(request),
             model: &self.model,
-            response_format: JsonObjectResponseFormat {
-                kind: "json_object",
-            },
-            tools: request.tools().iter().map(JsonObjectTool::from).collect(),
+            response_format: self.response_format(request.schema()),
+            tools: request
+                .tools()
+                .iter()
+                .map(ChatCompletionTool::from)
+                .collect(),
         };
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
         let completion = self
@@ -115,12 +113,12 @@ impl JsonObjectBackend {
         }
     }
 
-    /// Creates a JSON Object backend with an injected transport client.
+    /// Creates a structured-output backend with an injected transport client.
     pub(crate) fn with_client(
         api_key: String,
         base_url: String,
         model: String,
-        policy: JsonObjectProviderPolicy,
+        policy: ChatCompletionProviderPolicy,
         client: Arc<dyn ChatCompletionClient>,
     ) -> Self {
         Self {
@@ -129,6 +127,44 @@ impl JsonObjectBackend {
             client,
             model,
             policy,
+        }
+    }
+
+    fn messages(&self, request: &model::ModelRequest) -> Vec<ChatCompletionMessagePayload> {
+        let mut messages = Vec::with_capacity(2);
+        if matches!(
+            self.policy.structured_output,
+            StructuredOutputMode::JsonObject
+        ) {
+            messages.push(ChatCompletionMessagePayload {
+                content: format!(
+                    "{STRUCTURED_OUTPUT_INSTRUCTION}{}",
+                    request.schema().value()
+                ),
+                role: "system",
+            });
+        }
+        messages.push(ChatCompletionMessagePayload {
+            content: request.prompt().to_string(),
+            role: "user",
+        });
+
+        messages
+    }
+
+    fn response_format<'a>(&self, schema: &'a schema_contract::OutputSchema) -> ResponseFormat<'a> {
+        match self.policy.structured_output {
+            StructuredOutputMode::JsonObject => ResponseFormat {
+                json_schema: None,
+                kind: "json_object",
+            },
+            StructuredOutputMode::JsonSchema => ResponseFormat {
+                json_schema: Some(JsonSchemaResponseFormat {
+                    name: "ag_harness_output",
+                    schema: schema.value(),
+                }),
+                kind: "json_schema",
+            },
         }
     }
 
@@ -410,37 +446,45 @@ struct ProviderHttpError {
 }
 
 #[derive(Serialize)]
-struct JsonObjectRequest<'a> {
-    messages: Vec<JsonObjectMessage>,
+struct ChatCompletionPayload<'a> {
+    messages: Vec<ChatCompletionMessagePayload>,
     model: &'a str,
-    response_format: JsonObjectResponseFormat,
+    response_format: ResponseFormat<'a>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<JsonObjectTool<'a>>,
+    tools: Vec<ChatCompletionTool<'a>>,
 }
 
 #[derive(Serialize)]
-struct JsonObjectMessage {
+struct ChatCompletionMessagePayload {
     content: String,
     role: &'static str,
 }
 
 #[derive(Serialize)]
-struct JsonObjectResponseFormat {
+struct ResponseFormat<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    json_schema: Option<JsonSchemaResponseFormat<'a>>,
     #[serde(rename = "type")]
     kind: &'static str,
 }
 
 #[derive(Serialize)]
-struct JsonObjectTool<'a> {
-    function: JsonObjectFunction<'a>,
+struct JsonSchemaResponseFormat<'a> {
+    name: &'static str,
+    schema: &'a Value,
+}
+
+#[derive(Serialize)]
+struct ChatCompletionTool<'a> {
+    function: ChatCompletionFunction<'a>,
     #[serde(rename = "type")]
     kind: &'static str,
 }
 
-impl<'a> From<&'a tool::ToolDefinition> for JsonObjectTool<'a> {
+impl<'a> From<&'a tool::ToolDefinition> for ChatCompletionTool<'a> {
     fn from(definition: &'a tool::ToolDefinition) -> Self {
         Self {
-            function: JsonObjectFunction {
+            function: ChatCompletionFunction {
                 description: definition.description(),
                 name: definition.name(),
                 parameters: definition.parameters(),
@@ -451,7 +495,7 @@ impl<'a> From<&'a tool::ToolDefinition> for JsonObjectTool<'a> {
 }
 
 #[derive(Serialize)]
-struct JsonObjectFunction<'a> {
+struct ChatCompletionFunction<'a> {
     description: &'static str,
     name: &'static str,
     parameters: &'a Value,
