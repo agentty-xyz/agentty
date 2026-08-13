@@ -9,6 +9,10 @@ Owns the frontend-neutral programmatic API and shared models for Agentty session
 - `model.rs` owns stable session identity, lifecycle state, settings, and aggregate
   snapshots.
 - `message.rs` owns durable transcript message models and formatting.
+- `orchestration.rs` owns orchestration and task lifecycle policy, scheduling, and plan
+  validation.
+- `project.rs`, `personality.rs`, `question.rs`, `review.rs`, `setting.rs`, and
+  `transcript_notice.rs` own reusable session-adjacent models and pure helpers.
 - Keep TUI state, SQLite rows, Git worktree mechanics, agent workers, and forge clients
   out of this crate. Host adapters translate those implementation details through
   `SessionBackend`.
@@ -21,5 +25,5 @@ Owns the frontend-neutral programmatic API and shared models for Agentty session
 ## Tests
 
 - Exercise each public facade operation through a fake backend.
-- Keep model and transcript behavior covered with local unit tests using explicit
-  `Arrange`, `Act`, and `Assert` sections.
+- Keep model, policy, parsing, and transcript behavior covered with local unit tests
+  using explicit `Arrange`, `Act`, and `Assert` sections.

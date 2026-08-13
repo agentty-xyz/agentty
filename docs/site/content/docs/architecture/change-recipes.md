@@ -90,7 +90,8 @@ through the correct modules without crossing layer boundaries.
 
 1. Keep workflow/state transitions in `app/`, not in UI rendering modules.
 1. Keep external integrations in `infra/` behind traits.
-1. Keep business entities and enums in `domain/`.
+1. Keep frontend-neutral session entities, enums, and policies in `ag-session`; keep
+   Agentty-specific entities and interaction state in `domain/`.
 1. In `app/` and `runtime/` orchestration, avoid direct `Command::new`, `Instant::now`,
    `SystemTime::now`, and direct filesystem/process calls unless they run behind trait
    boundaries.

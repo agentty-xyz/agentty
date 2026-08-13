@@ -32,7 +32,7 @@ these constraints:
 | `crates/ag-git/`          | Shared git, worktree, sync, rebase, and merge library.               |
 | `crates/ag-agent/`        | Shared agent provider models plus channel and transport boundaries.  |
 | `crates/ag-protocol/`     | Shared structured response protocol and turn prompt payload library. |
-| `crates/ag-session/`      | Shared session models and frontend-neutral lifecycle API.            |
+| `crates/ag-session/`      | Shared session models, policies, and frontend-neutral lifecycle API. |
 | `crates/ag-tui-text/`     | Shared Markdown, HTML, mermaid, wrapping, and truncation helpers.    |
 | `crates/agentty/`         | Main TUI application crate.                                          |
 | `crates/testty/`          | TUI end-to-end testing framework.                                    |

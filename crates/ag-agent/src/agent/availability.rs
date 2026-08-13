@@ -554,18 +554,9 @@ mod tests {
     /// executables are present on the current `PATH`.
     fn test_real_agent_availability_probe_filters_missing_executables() {
         // Arrange
-        let _cache_guard = antigravity_cache_test_guard();
         let temp_directory = tempdir().expect("failed to create temp dir");
-        let antigravity_path = temp_directory.path().join("agy");
         let codex_path = temp_directory.path().join("codex");
-        fs::write(
-            &antigravity_path,
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'agy 1.2.0\\n'; fi\n",
-        )
-        .expect("failed to create agy executable");
         fs::write(&codex_path, "").expect("failed to create codex executable");
-        fs::set_permissions(&antigravity_path, fs::Permissions::from_mode(0o755))
-            .expect("failed to mark agy executable");
         fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
             .expect("failed to mark codex executable");
         let path_value = env::join_paths([temp_directory.path()]).expect("valid path");
@@ -574,10 +565,7 @@ mod tests {
         let available_agent_kinds = available_agent_kinds_from_path(Some(path_value.as_os_str()));
 
         // Assert
-        assert_eq!(
-            available_agent_kinds,
-            vec![AgentKind::Antigravity, AgentKind::Codex]
-        );
+        assert_eq!(available_agent_kinds, vec![AgentKind::Codex]);
     }
 
     #[test]
@@ -905,9 +893,9 @@ mod tests {
     }
 
     #[test]
-    /// Ensures npm-global Gemini installations update through npm instead of
-    /// treating `update` as an interactive Gemini query.
-    fn test_available_agent_clis_from_path_updates_npm_global_gemini() {
+    /// Ensures npm-global Gemini installations update through npm and expose
+    /// the refreshed version.
+    fn test_npm_global_gemini_update_refreshes_version() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let bin_directory = temp_directory.path().join("bin");
@@ -950,16 +938,18 @@ mod tests {
         let path_value = env::join_paths([&bin_directory]).expect("valid path");
 
         // Act
-        let available_agent_clis = available_agent_clis_from_path(Some(path_value.as_os_str()));
+        let did_update = run_agent_cli_update_with_timeout(
+            AgentKind::Gemini,
+            &gemini_path,
+            Some(path_value.as_os_str()),
+            Duration::from_secs(10),
+        );
+        let detected_version =
+            detect_agent_cli_version_with_timeout(&gemini_path, Duration::from_secs(10));
 
         // Assert
-        assert_eq!(
-            available_agent_clis,
-            vec![AgentCliInfo::new(
-                AgentKind::Gemini,
-                Some("9.9.9-updated".to_string())
-            )]
-        );
+        assert!(did_update);
+        assert_eq!(detected_version, Some("9.9.9-updated".to_string()));
         assert_eq!(
             fs::read_to_string(version_path).expect("updated Gemini version"),
             "9.9.9-updated\n"

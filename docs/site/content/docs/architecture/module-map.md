@@ -38,8 +38,9 @@ For file-level detail, read the module docstrings directly.
   prompt envelopes, repair prompts, review-comment outcomes, and turn prompt payload
   helpers.
 - `crates/ag-session/`: Frontend-neutral session library with stable identity,
-  lifecycle, review-link, and transcript models; complete session aggregates; and the
-  object-safe `SessionBackend` port exposed through the owned, cloneable
+  lifecycle, orchestration, project, personality, review-link, setting, clarification,
+  and transcript models; complete session aggregates; pure policy and parsing helpers;
+  and the object-safe `SessionBackend` port exposed through the owned, cloneable
   `SessionService` for creation, lookup, messaging, structured question answers, durable
   coordinator submissions, cancellation, merge, and review-request workflows.
 - `crates/ag-tui-text/`: Shared Ratatui text-rendering library crate with Markdown
@@ -69,16 +70,14 @@ For file-level detail, read the module docstrings directly.
   process, filesystem, or clock calls — everything external goes through `infra/`
   traits.
 - `domain/`: Pure Agentty-specific business entities and logic — render/runtime session
-  snapshots, projects, settings keys, themes, structured questions, explicit
-  transient-message slots and lifecycles, prompt-composer logic, the shared `InputState`
-  command and undo/redo model, stable input-revision and character-offset identities
-  used to bind prompt attachments to exact placeholder occurrences and history states,
-  session action-eligibility policies, orchestration and orchestration-task lifecycle
-  states with their transition graph, fuzzy file-entry ranking shared by runtime
-  selection and UI suggestions, personality definition parsing and prompt
-  fingerprinting, and thin re-export modules for `ag-agent` provider models,
-  `ag-session` identity/status/transcript models, and shared protocol question and turn
-  prompt payloads. No I/O.
+  snapshots, themes, clarification input progress, explicit transient-message slots and
+  lifecycles, prompt-composer logic, the shared `InputState` command and undo/redo
+  model, stable input-revision and character-offset identities used to bind prompt
+  attachments to exact placeholder occurrences and history states, session
+  action-eligibility and list-ordering policies, and fuzzy file-entry ranking shared by
+  runtime selection and UI suggestions. Thin compatibility modules re-export `ag-agent`
+  provider models, `ag-session` session and session-adjacent models, and shared protocol
+  turn prompt payloads. No I/O.
 - `infra/`: External integrations behind traits — Agentty data-root resolution, SQLite
   persistence (`infra/db/` repositories), git (`GitClient`, backed by `ag-git`),
   filesystem (`FsClient`), the session-worktree-only personality catalog, tmux,
@@ -134,7 +133,8 @@ For file-level detail, read the module docstrings directly.
   in `domain/` or `presentation.rs`, while application task registries belong in `app/`.
 - Runtime converts presentation-owned prompt state into typed app requests, then applies
   returned navigation and composer effects. `app/` must not inspect or mutate `AppMode`.
-- Business entities and enums live in `domain/`.
+- Frontend-neutral session entities, enums, and policies live in `ag-session`; keep only
+  Agentty-specific entities and interaction state in `domain/`.
 - External side effects live in `infra/` behind mockable traits; see
   [Testability Boundaries](@/docs/architecture/testability-boundaries.md).
 - `module.rs` files paired with a `module/` directory stay router-only.
