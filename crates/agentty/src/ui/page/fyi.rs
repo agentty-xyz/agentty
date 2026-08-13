@@ -21,7 +21,7 @@ const SESSION_CHAT_FYI_MESSAGES: [&str; 9] = [
     "Published sessions auto-push after queued replies drain.",
     "After publishing once, p refreshes the same review request.",
     "Focused review output stays visible until you submit the next prompt.",
-    "Done sessions can continue in a fresh draft with C.",
+    "Done and canceled sessions can continue in a fresh draft with c.",
     "Stacked child review requests target the parent's review branch.",
     "Use @ to attach files or project context to the next prompt.",
     "Type /apply after focused review completes to verify and apply suggestions.",
@@ -91,6 +91,9 @@ pub(crate) fn rotating_message<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation::help_action::{
+        self, ViewActionAvailability, ViewHelpState, ViewSessionState,
+    };
 
     #[test]
     fn rotating_message_cycles_through_messages() {
@@ -168,5 +171,45 @@ mod tests {
         // Assert
         assert_eq!(settings_page_fyis, None);
         assert_eq!(diff_page_fyis, None);
+    }
+
+    #[test]
+    fn terminal_continuation_fyi_matches_help_actions() {
+        // Arrange
+        let terminal_states = [ViewSessionState::Done, ViewSessionState::Canceled];
+
+        // Act
+        let continuation_keys = terminal_states.map(|session_state| {
+            let state = ViewHelpState {
+                can_fork_session: ViewActionAvailability::Disabled,
+                can_merge_session_branch: ViewActionAvailability::Disabled,
+                can_mutate_session_branch: ViewActionAvailability::Disabled,
+                can_open_worktree: ViewActionAvailability::Disabled,
+                can_rebase_session_branch: ViewActionAvailability::Disabled,
+                reply_to_session: ViewActionAvailability::Disabled,
+                can_start_staged_session: ViewActionAvailability::Disabled,
+                publish_pull_request_action: None,
+                session_state,
+            };
+
+            help_action::view_actions(state)
+                .into_iter()
+                .find(|action| action.popup_label == "Continue in new session")
+                .map(|action| action.key)
+                .expect("terminal session should expose a continuation action")
+        });
+        let expected_message = format!(
+            "Done and canceled sessions can continue in a fresh draft with {}.",
+            continuation_keys[0]
+        );
+        let continuation_messages = session_chat_messages()
+            .iter()
+            .filter(|message| message.contains("continue in a fresh draft"))
+            .copied()
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(continuation_keys[0], continuation_keys[1]);
+        assert_eq!(continuation_messages, [expected_message.as_str()]);
     }
 }
