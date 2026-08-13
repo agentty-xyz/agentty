@@ -5,6 +5,8 @@ automation, replacing fragile shell scripts with robust Rust code.
 
 ## Key Commands
 
+- `check-feature-artifacts` validates the one-to-one feature page, GIF, poster, and hash
+  inventory plus complete image decoding and canonical dimensions.
 - `check-migrations` validates SQL migration numbering across workspace crates.
 
 ## How to Extend

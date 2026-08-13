@@ -12,6 +12,69 @@ use std::time::Duration;
 use crate::assertion::MatchResult;
 use crate::frame::TerminalFrame;
 
+/// Validated key shared by PTY execution and VHS compilation.
+///
+/// The public [`Step`] payload remains a `String` for API compatibility, but
+/// every constructor and executor parses through this exhaustive model so the
+/// two backends cannot silently assign different meanings to one key name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Key {
+    AltEnter,
+    BackTab,
+    Backspace,
+    Ctrl(char),
+    Delete,
+    Down,
+    End,
+    Enter,
+    Escape,
+    Home,
+    Left,
+    PageDown,
+    PageUp,
+    Right,
+    Space,
+    Tab,
+    Text(String),
+    Up,
+}
+
+impl Key {
+    /// Parse one supported key name or printable character.
+    pub(crate) fn parse(raw: &str) -> Self {
+        let normalized = raw.to_ascii_lowercase();
+        match normalized.as_str() {
+            "alt+enter" | "altenter" => Self::AltEnter,
+            "enter" | "return" => Self::Enter,
+            "tab" => Self::Tab,
+            "backtab" | "shift+tab" => Self::BackTab,
+            "escape" | "esc" => Self::Escape,
+            "backspace" => Self::Backspace,
+            "up" => Self::Up,
+            "down" => Self::Down,
+            "right" => Self::Right,
+            "left" => Self::Left,
+            "home" => Self::Home,
+            "end" => Self::End,
+            "delete" => Self::Delete,
+            "pageup" => Self::PageUp,
+            "pagedown" => Self::PageDown,
+            "space" => Self::Space,
+            other => {
+                if let Some(character) = other.strip_prefix("ctrl+")
+                    && character.len() == 1
+                    && let Some(character) = character.chars().next()
+                    && character.is_ascii_lowercase()
+                {
+                    Self::Ctrl(character)
+                } else {
+                    Self::Text(raw.to_string())
+                }
+            }
+        }
+    }
+}
+
 /// Shared boxed predicate evaluated against a [`TerminalFrame`].
 ///
 /// Used as the payload of [`Step::Eventually`] so the same predicate value
@@ -58,7 +121,7 @@ pub enum Step {
     /// returns immediately, while a timeout surfaces the last
     /// [`crate::assertion::AssertionFailure`] the predicate produced so the
     /// proof report keeps its structured failure context. VHS recordings
-    /// have no equivalent semantics and skip this step.
+    /// have no equivalent predicate semantics and use a bounded fixed wait.
     Eventually {
         /// Maximum time to spend polling before surfacing the last failure.
         timeout: Duration,
@@ -231,6 +294,24 @@ mod tests {
             unreachable!("Expected WriteText variant");
         };
         assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn press_key_accepts_supported_names_and_characters() {
+        // Arrange / Act / Assert
+        assert!(matches!(Key::parse("BackTab"), Key::BackTab));
+        assert!(matches!(Key::parse("Alt+Enter"), Key::AltEnter));
+        assert!(matches!(Key::parse("Ctrl+z"), Key::Ctrl('z')));
+        assert!(matches!(Key::parse("?"), Key::Text(text) if text == "?"));
+    }
+
+    #[test]
+    fn key_parser_preserves_unknown_text_for_both_backends() {
+        // Arrange / Act
+        let key = Key::parse("BackTabb");
+
+        // Assert
+        assert_eq!(key, Key::Text("BackTabb".to_string()));
     }
 
     #[test]

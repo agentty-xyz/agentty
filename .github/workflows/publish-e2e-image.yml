@@ -70,7 +70,7 @@ jobs:
             container
           test "$(podman image inspect --format '{{.Architecture}}' "$candidate_image")" = "$ARCHITECTURE"
 
-      - name: Run end-to-end feature suite
+      - name: Run end-to-end suite and recorder smoke
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
           PLATFORM: ${{ matrix.platform }}
@@ -81,7 +81,11 @@ jobs:
             --mount type=bind,source="$GITHUB_WORKSPACE",target=/workspace,readonly=true \
             --env CARGO_TARGET_DIR=/tmp/target \
             "$candidate_image" \
-            prek run test-agentty-e2e --all-files --hook-stage manual
+            sh -c '
+              prek run test-agentty-e2e --all-files --hook-stage manual &&
+              cargo test --locked -p testty --test vhs_smoke \
+                recorder_image_generates_feature_artifacts -- --ignored --exact --nocapture
+            '
 
       - name: Authenticate with GHCR
         env:

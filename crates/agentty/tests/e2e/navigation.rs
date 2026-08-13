@@ -104,12 +104,13 @@ fn tab_key_switches_tabs() -> E2eResult {
 #[test]
 fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("tab_full_cycle")
+    FeatureTest::new("tab_tour")
         .with_git()
         .zola(
-            "Full tab cycle",
-            "Cycle through every workspace tab in order.",
-            70,
+            "Full workspace overview",
+            "Navigate between projects, sessions, review requests, and settings without leaving \
+             the terminal.",
+            50,
         )
         .run(
             |scenario| {
@@ -219,48 +220,41 @@ fn startup_shows_footer_hints() -> E2eResult {
 #[test]
 fn backtab_cycles_tabs_reverse() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("backtab_reverse")
-        .with_git()
-        .zola(
-            "Reverse tab navigation",
-            "Navigate tabs in reverse with Shift+Tab.",
-            80,
-        )
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab_reverse("Settings"))
-                    .viewing_pause_ms(2000)
-                    .capture_labeled("back_to_settings", "Settings tab after first BackTab")
-                    .compose(&common::switch_to_tab_reverse("Sessions"))
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_sessions", "Sessions tab after second BackTab")
-                    .compose(&common::switch_to_tab_reverse("Projects"))
-                    .viewing_pause_ms(2000)
-                    .capture_labeled("back_to_projects", "Projects tab after third BackTab")
-            },
-            |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "test-project", &full);
+    FeatureTest::new("backtab_reverse").with_git().run(
+        |scenario| {
+            scenario
+                .compose(&common::wait_for_agentty_startup())
+                .compose(&common::switch_to_tab_reverse("Settings"))
+                .viewing_pause_ms(2000)
+                .capture_labeled("back_to_settings", "Settings tab after first BackTab")
+                .compose(&common::switch_to_tab_reverse("Sessions"))
+                .viewing_pause_ms(1500)
+                .capture_labeled("back_to_sessions", "Sessions tab after second BackTab")
+                .compose(&common::switch_to_tab_reverse("Projects"))
+                .viewing_pause_ms(2000)
+                .capture_labeled("back_to_projects", "Projects tab after third BackTab")
+        },
+        |frame, report| {
+            let full = Region::full(frame.cols(), frame.rows());
+            assertion::assert_text_in_region(frame, "test-project", &full);
 
-                let settings_frame = common::frame_from_capture(&report.captures[0]);
-                let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
-                assertion::assert_text_in_region(
-                    &settings_frame,
-                    "Default Smart Model",
-                    &settings_full,
-                );
+            let settings_frame = common::frame_from_capture(&report.captures[0]);
+            let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
+            assertion::assert_text_in_region(
+                &settings_frame,
+                "Default Smart Model",
+                &settings_full,
+            );
 
-                let sessions_frame = common::frame_from_capture(&report.captures[1]);
-                let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
-                assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
+            let sessions_frame = common::frame_from_capture(&report.captures[1]);
+            let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
+            assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
 
-                let projects_frame = common::frame_from_capture(&report.captures[2]);
-                let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
-                assertion::assert_text_in_region(&projects_frame, "test-project", &projects_full);
-            },
-        )?;
+            let projects_frame = common::frame_from_capture(&report.captures[2]);
+            let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
+            assertion::assert_text_in_region(&projects_frame, "test-project", &projects_full);
+        },
+    )?;
 
     Ok(())
 }

@@ -182,7 +182,7 @@ repos:
         description: Postsubmit-only `agentty` integration tests from `crates/agentty/tests`.
         entry: >-
           env TESTTY_GIF_MODE=check cargo nextest run --locked --profile ci -p agentty
-          --test showcase --test protocol_compliance_e2e --test e2e
+          --test protocol_compliance_e2e --test e2e
         language: system
         always_run: true
         pass_filenames: false
@@ -231,6 +231,13 @@ repos:
         entry: cargo run -q --locked -p ag-xtask -- check-migrations
         language: system
         types: [sql]
+        pass_filenames: false
+      - id: check-feature-artifacts
+        name: check feature artifacts
+        description: Verify feature pages have matching GIF, poster, and freshness artifacts.
+        entry: cargo run -q --locked -p ag-xtask -- check-feature-artifacts
+        language: system
+        files: ^(docs/site/(content|static)/features/|crates/(agentty/tests/e2e|testty/src)/)
         pass_filenames: false
       - id: validate-prek-config
         name: validate prek config

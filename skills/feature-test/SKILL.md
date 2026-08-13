@@ -144,57 +144,24 @@ gif = "{name}.gif"
 The `features.html` template auto-discovers all pages in `content/features/` sorted by
 `weight`. No manual template edits are needed.
 
-### 4. Create or refresh the PNG poster
+### 4. Inspect the generated PNG poster
 
 Every feature GIF needs a same-named PNG poster for the site's `prefers-reduced-motion`
-and `noscript` fallbacks. Create the poster when adding a GIF, and regenerate it
-whenever the GIF changes. `TESTTY_GIF_MODE=check` verifies GIF freshness but does not
-verify or update the poster.
+and `noscript` fallbacks. `FeatureTest` decodes the final visible GIF frame into the
+poster, validates or publishes the Zola page under a rollback guard, and publishes the
+GIF, hash sidecar, and poster as one rollback-protected set. A failed or incomplete
+recording leaves the previous set untouched and removes any page created by that run.
 
-First inspect the finished GIF and choose a timestamp that clearly communicates the
-feature's result. Prefer a stable end state with the important UI visible. Do not
-automatically use the first or midpoint frame: it may show an empty, loading, or
-transitional state.
+Open both generated files and verify that the final frame is sharp, legible, free of
+transitional artifacts, and communicates the feature's result. If the poster is not a
+useful end state, adjust the scenario so its final capture is meaningful and regenerate
+the complete set; do not hand-edit one artifact independently.
 
-Check the GIF duration before choosing a timestamp:
-
-```sh
-ffprobe -v error \
-  -show_entries format=duration \
-  -of default=noprint_wrappers=1 \
-  docs/site/static/features/<name>.gif
-```
-
-Extract exactly one frame with `ffmpeg`, preserving the aspect ratio and capping the
-width at 1600 pixels without upscaling:
+Run the repository validator to enforce the one-to-one page, GIF, PNG, and hash
+inventory plus canonical dimensions:
 
 ```sh
-ffmpeg -y \
-  -i docs/site/static/features/<name>.gif \
-  -ss <timestamp> \
-  -vf "scale=w='min(1600\,iw)':h=-1" \
-  -frames:v 1 \
-  -compression_level 9 \
-  docs/site/static/features/<name>.png
-```
-
-Use a timestamp accepted by `ffmpeg`, such as `00:00:01.500`, that falls within the
-reported duration. Open the resulting PNG and verify that it is sharp, legible, free of
-transitional artifacts, and still represents the current GIF. If it does not, choose a
-better timestamp and rerun the command.
-
-Check that every GIF declared by a feature page has a nonempty poster before finalizing:
-
-```sh
-for feature_page in docs/site/content/features/*.md; do
-  gif_name=$(sed -n 's/^gif = "\(.*\)"/\1/p' "${feature_page}")
-  test -z "${gif_name}" && continue
-  poster_path="docs/site/static/features/${gif_name%.gif}.png"
-  test -s "${poster_path}" || {
-    echo "missing PNG poster: ${poster_path}"
-    exit 1
-  }
-done
+cargo run --locked -p ag-xtask -- check-feature-artifacts
 ```
 
 ### 5. Run and verify
@@ -226,11 +193,14 @@ variant for recording on ARM64 hosts. The host needs a running Podman environmen
 no local Chrome or VHS — and the localhost-socket sandbox restriction below does not
 apply inside the container.
 
-The canonical feature preset records at 1600×800 with an 18-point font, matching the
-site poster dimensions and avoiding the excessive VHS and FFmpeg memory use caused by
-larger canvases during long scenarios. Rendering settings participate in the freshness
-hash, so changing the canvas, font, theme, framerate, or padding makes existing
-recordings stale even when their captured terminal frames are unchanged.
+The canonical feature preset records an 80×24 terminal at 1600×800 with an 18-point
+font. Its padding, letter spacing, and line height calibrate VHS's xterm grid to the PTY
+proof geometry. Rendering settings, the canonical compiled tape, and the pinned
+recorder/poster identity participate in the freshness hash, so changing scenario timing,
+compiled commands, canvas, font metrics, theme, framerate, or recorder makes existing
+recordings stale even when their captured terminal frames are unchanged. Keep the
+fingerprint in `crates/testty/src/vhs.rs` aligned with the VHS version pinned by
+`container/e2e.Containerfile`.
 
 A published digest is multi-architecture only when it resolves to an image index or
 manifest list containing both `linux/amd64` and `linux/arm64`; the Containerfile's
@@ -296,15 +266,11 @@ run the other architecture through emulation because Rust compiler probes can cr
 before the test starts. The `--user` override is only for writable local recording. CI
 does not use it: the image retains its unprivileged UID 1001 default, and workflows
 mount the checkout read-only for `check` mode. Always perform the nonempty-file check
-after recording: VHS can exit successfully after creating its screenshots even when GIF
-finalization has not produced a usable artifact.
+after recording: a recorder process can exit without leaving a usable final artifact.
 
-Review the changed GIF and `.{name}.hash` sidecar, then refresh the PNG poster for every
-regenerated GIF (section 4) before committing all three together. Testty records to a
-hidden staging file and replaces the committed GIF only after the recording is nonempty.
-Successful generation removes the previous same-named PNG intentionally so a stale
-poster cannot pass the nonempty-poster integrity check; a failed recording preserves the
-last valid GIF, hash sidecar, and poster.
+Review the changed GIF, `.{name}.hash` sidecar, and generated PNG poster together.
+Testty records to hidden staging files and publishes all three only after the recording
+and poster are nonempty. A failed recording preserves the last valid artifact set.
 
 #### Refresh the canonical image
 
@@ -313,10 +279,10 @@ replacement image. Build both supported platforms into one manifest, run affecte
 focused feature tests against the native candidate for each available architecture, then
 push `latest`. The preferred path is the manual **Publish E2E Image** workflow in
 `.github/workflows/publish-e2e-image.yml`, dispatched from the repository's default
-branch. It builds and runs the E2E suite on native `ubuntu-24.04` AMD64 and
-`ubuntu-24.04-arm` ARM64 runners, publishes architecture-specific candidates, assembles
-the manifest, logs out of GHCR, verifies anonymous access to both variants, and reports
-the digest in the workflow summary.
+branch. It builds and runs the E2E suite plus a real GIF-generation smoke test on native
+`ubuntu-24.04` AMD64 and `ubuntu-24.04-arm` ARM64 runners, publishes
+architecture-specific candidates, assembles the manifest, logs out of GHCR, verifies
+anonymous access to both variants, and reports the digest in the workflow summary.
 
 Before its first run, a package administrator must connect the existing `agentty-e2e`
 package to this repository or grant this repository write access under the package's
@@ -407,17 +373,16 @@ because regeneration was explicitly requested.
 
 The `TESTTY_GIF_MODE` env var selects the freshness mode used by `FeatureTest`:
 
-- unset — leave GIF work off while still running the PTY scenario and assertions.
+- unset — run semantic assertions without inspecting or recording docs artifacts.
 - `generate` / `generate-if-stale` — regenerate when the on-disk hash sidecar is missing
-  or stale, otherwise reuse the committed GIF. Use only inside the canonical container.
+  or stale, otherwise reuse the committed artifact set. Use only inside the canonical
+  container.
 - `check` / `check-only` — compute the would-be hash and compare it to the on-disk
-  sidecar without invoking VHS or touching the GIF output directory. The harness fails
-  the test when a committed sidecar has drifted, an existing sidecar is invalid, or the
-  GIF itself is missing or empty, and surfaces the current/committed hashes plus sidecar
-  errors so CI catches drift. Existing GIFs that predate sidecars are tolerated until a
-  recording run creates their baseline. `.zola(...)` tests without any committed docs
-  page, GIF, or sidecar are treated as unpublished and skipped by check mode until a
-  recording run publishes their artifacts.
+  sidecar without invoking VHS or touching the GIF output directory. For every
+  `.zola(...)` test, the harness requires the GIF, poster, and valid sidecar and fails
+  on any missing, empty, invalid, or stale artifact. The workspace validator fully
+  decodes the GIF and PNG and separately rejects corrupt or orphaned artifacts and page
+  metadata drift.
 - `force` / `always` / `always-generate` — bypass the hash cache and re-run VHS
   unconditionally. VHS must be installed: a missing VHS binary fails the test instead of
   being silently skipped, because regeneration was explicitly requested. Do not use this
@@ -492,10 +457,9 @@ When using the legacy pattern, create the Zola page manually at
 - [ ] Test includes `// Arrange`, `// Act`, and `// Assert` comments (or combined
   `// Arrange, Act, Assert` for declarative builders).
 - [ ] Assertions verify visible UI text or state, not internal implementation details.
-- [ ] A same-named PNG poster exists, shows a meaningful stable frame, and was refreshed
-  after the latest GIF change.
-- [ ] The generated GIF exists and is nonempty before its hash sidecar is accepted; a
-  failed recording preserves the previous GIF, hash sidecar, and poster.
+- [ ] The generated PNG poster shows a meaningful stable final frame.
+- [ ] The generated GIF, hash sidecar, and poster are decodable and pass
+  `check-feature-artifacts`; a failed recording preserves the previous set.
 - [ ] Container recording selects `linux/amd64` or `linux/arm64` explicitly, and every
   pulled digest contains the selected platform.
 - [ ] Focused E2E workflow passes with

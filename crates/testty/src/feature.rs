@@ -14,11 +14,11 @@
 //!   behavior: skip VHS when the on-disk hash sidecar matches, otherwise
 //!   regenerate.
 //! - [`GifMode::CheckOnly`] — runs the scenario, computes the would-be hash,
-//!   and reports whether the nonempty on-disk GIF is [`GifStatus::Fresh`] or
-//!   [`GifStatus::Stale`] without invoking VHS. This path never mutates the
-//!   filesystem, so it is safe on read-only CI mounts and when the GIF output
-//!   directory does not exist yet. Useful for an agent or CI tool that wants to
-//!   detect drift without paying VHS cost.
+//!   and reports whether the nonempty on-disk GIF and PNG poster are
+//!   [`GifStatus::Fresh`] or [`GifStatus::Stale`] without invoking VHS. This
+//!   path never mutates the filesystem, so it is safe on read-only CI mounts
+//!   and when the GIF output directory does not exist yet. Useful for an agent
+//!   or CI tool that wants to detect drift without paying VHS cost.
 //! - [`GifMode::AlwaysGenerate`] — bypasses the hash cache and always re-runs
 //!   VHS.
 //!
@@ -36,7 +36,9 @@ use crate::frame::TerminalFrame;
 use crate::proof::report::ProofReport;
 use crate::scenario::Scenario;
 use crate::session::{PtySessionBuilder, PtySessionError};
-use crate::vhs::{VhsError, VhsTape, VhsTapeSettings, check_vhs_installed};
+use crate::vhs::{
+    VHS_RECORDER_FINGERPRINT, VhsError, VhsTape, VhsTapeSettings, check_vhs_installed,
+};
 
 /// Metadata describing a feature demonstration.
 ///
@@ -245,15 +247,16 @@ pub enum GifStatus {
     DirCreateFailed(std::io::Error),
     /// VHS tape execution failed.
     TapeExecutionFailed(VhsError),
-    /// [`GifMode::CheckOnly`]: the on-disk GIF matches the current capture
-    /// frame-and-render-settings hash. No VHS execution was attempted.
+    /// [`GifMode::CheckOnly`]: the on-disk GIF and PNG poster exist and the
+    /// sidecar matches the current capture frame-and-render-settings hash. No
+    /// VHS execution was attempted.
     Fresh {
         /// Expected GIF path (may or may not exist on disk).
         gif_path: PathBuf,
         /// Hash computed from the current scenario captures and VHS settings.
         hash: u64,
     },
-    /// [`GifMode::CheckOnly`]: the on-disk GIF is missing or empty, or its
+    /// [`GifMode::CheckOnly`]: a published image is missing or empty, or the
     /// hash sidecar does not match the current frame-and-settings hash. No VHS
     /// execution was attempted.
     Stale {
@@ -380,12 +383,10 @@ impl FeatureDemo {
 
     /// Set the directory where GIF output and hash sidecars are written.
     ///
-    /// When not set, GIF generation is skipped entirely. Regeneration records
-    /// to a staging file and replaces the existing GIF only after VHS produces
-    /// a nonempty file. A successful regeneration removes a same-named PNG so
-    /// callers cannot mistake a poster from the previous GIF for a current
-    /// artifact; a failed regeneration preserves the prior GIF, hash, and
-    /// poster.
+    /// When not set, GIF generation is skipped entirely. Regeneration stages
+    /// the GIF, hash, and final-capture PNG poster, then publishes the set with
+    /// rollback protection. A failed regeneration preserves the prior GIF,
+    /// hash, and poster.
     pub fn gif_output_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.gif_output_dir = Some(dir.into());
 
@@ -433,26 +434,91 @@ impl FeatureDemo {
         binary_path: &Path,
         env_pairs: &[(&str, &str)],
     ) -> Result<FeatureResult, PtySessionError> {
+        self.run_with_assertion(scenario, builder, binary_path, env_pairs, |_, _| {})
+    }
+
+    /// Run the feature demo and assert its proof before GIF processing.
+    ///
+    /// The assertion receives the final frame and complete proof report from
+    /// the same scenario execution whose captures determine GIF freshness.
+    /// It runs before cache checks or recording, so a failed assertion cannot
+    /// publish a demo that was not semantically verified.
+    ///
+    /// # Panics
+    ///
+    /// Panics from `assert` propagate to the caller before GIF processing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PtySessionError`] if scenario spawning or step execution
+    /// fails.
+    pub fn run_with_assertion(
+        self,
+        scenario: &Scenario,
+        builder: PtySessionBuilder,
+        binary_path: &Path,
+        env_pairs: &[(&str, &str)],
+        assert: impl FnOnce(&TerminalFrame, &ProofReport),
+    ) -> Result<FeatureResult, PtySessionError> {
+        self.run_with_assertion_and_recording_setup(
+            scenario,
+            builder,
+            binary_path,
+            env_pairs,
+            assert,
+            || Ok(()),
+        )
+    }
+
+    /// Run an asserted feature demo after preparing its recording fixture.
+    ///
+    /// `prepare_recording` runs after the PTY proof and assertion but before
+    /// any GIF freshness or recording work. A preparation failure becomes a
+    /// [`GifStatus::TapeExecutionFailed`] result without changing published
+    /// artifacts.
+    ///
+    /// # Panics
+    ///
+    /// Panics from `assert` propagate to the caller before GIF processing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PtySessionError`] if scenario spawning or step execution
+    /// fails.
+    pub fn run_with_assertion_and_recording_setup(
+        self,
+        scenario: &Scenario,
+        builder: PtySessionBuilder,
+        binary_path: &Path,
+        env_pairs: &[(&str, &str)],
+        assert: impl FnOnce(&TerminalFrame, &ProofReport),
+        prepare_recording: impl FnOnce() -> Result<(), VhsError>,
+    ) -> Result<FeatureResult, PtySessionError> {
         let (frame, report) = scenario.run_with_proof(builder)?;
+        assert(&frame, &report);
 
         let gif_status = match self.gif_output_dir.as_deref() {
-            Some(output_dir) => generate_gif(
-                scenario,
-                &report,
-                &self.meta.name,
-                output_dir,
-                GifContext {
-                    mode: self.gif_mode,
-                    redactions: &self.redactions,
-                },
-                VhsContext {
-                    binary_path,
-                    check_vhs: check_vhs_installed,
-                    env_pairs,
-                    execute_tape: VhsTape::execute,
-                    settings: &self.gif_settings,
-                },
-            ),
+            Some(output_dir) => match prepare_recording() {
+                Ok(()) => generate_gif(
+                    scenario,
+                    &report,
+                    &self.meta.name,
+                    output_dir,
+                    GifContext {
+                        mode: self.gif_mode,
+                        redactions: &self.redactions,
+                    },
+                    VhsContext {
+                        binary_path,
+                        check_vhs: check_vhs_installed,
+                        cleanup_after_recording: cleanup_recording_files,
+                        env_pairs,
+                        execute_tape: VhsTape::execute,
+                        settings: &self.gif_settings,
+                    },
+                ),
+                Err(error) => GifStatus::TapeExecutionFailed(error),
+            },
             None => GifStatus::NoOutputDir,
         };
 
@@ -470,8 +536,8 @@ impl FeatureDemo {
 /// Uses a fixed FNV-1a `u64` hash over the concatenated frame bytes of every
 /// capture in the report, after applying the built-in temp-root normalization
 /// and the caller's `redactions`. This is the frame-only component of the GIF
-/// freshness hash; use [`compute_gif_hash`] to reproduce the value written to
-/// an on-disk sidecar.
+/// freshness hash; use [`compute_recording_hash`] to reproduce the value
+/// written to an on-disk sidecar.
 pub fn compute_frame_hash(report: &ProofReport, redactions: &[Redaction]) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 
@@ -486,18 +552,18 @@ pub fn compute_frame_hash(report: &ProofReport, redactions: &[Redaction]) -> u64
     hash
 }
 
-/// Compute the deterministic hash written to a feature GIF sidecar.
+/// Compute the deterministic frame-and-render-settings hash for a feature GIF.
 ///
 /// Combines the normalized proof frames with every VHS rendering setting that
-/// affects the generated artifact. External freshness tooling must pass the
-/// same redactions and settings as [`FeatureDemo`] so frame or preset changes
-/// invalidate the cached GIF.
+/// affects the generated artifact. [`FeatureDemo`] extends this value with the
+/// canonical compiled recording specification and recorder fingerprint before
+/// writing its sidecar.
 pub fn compute_gif_hash(
     report: &ProofReport,
     redactions: &[Redaction],
     settings: &VhsTapeSettings,
 ) -> u64 {
-    const SETTINGS_HASH_DOMAIN: &[u8] = b"\0testty-vhs-settings-v1\0";
+    const SETTINGS_HASH_DOMAIN: &[u8] = b"\0testty-vhs-settings-v2\0";
 
     let mut hash = compute_frame_hash(report, redactions);
     update_fnv_hash(&mut hash, SETTINGS_HASH_DOMAIN);
@@ -513,6 +579,67 @@ pub fn compute_gif_hash(
     update_fnv_hash(&mut hash, settings.theme.as_bytes());
     update_fnv_hash(&mut hash, &settings.framerate.to_le_bytes());
     update_fnv_hash(&mut hash, &settings.padding.to_le_bytes());
+    update_fnv_hash(
+        &mut hash,
+        &settings.letter_spacing().to_bits().to_le_bytes(),
+    );
+    update_fnv_hash(&mut hash, &settings.line_height().to_bits().to_le_bytes());
+
+    hash
+}
+
+/// Compute the exact sidecar hash for one scenario and its compiled recording.
+///
+/// This is the supported freshness API for external tooling. It combines the
+/// normalized proof frames, all VHS rendering settings, the canonical compiled
+/// tape, and the recorder fingerprint. Callers must pass the same scenario,
+/// redactions, and settings as [`FeatureDemo`] to reproduce its sidecar value.
+pub fn compute_recording_hash(
+    scenario: &Scenario,
+    report: &ProofReport,
+    redactions: &[Redaction],
+    settings: &VhsTapeSettings,
+) -> u64 {
+    compute_recording_hash_with_identity(
+        scenario,
+        report,
+        redactions,
+        settings,
+        VHS_RECORDER_FINGERPRINT,
+    )
+}
+
+/// Compute a recording hash with an explicit recorder identity.
+fn compute_recording_hash_with_identity(
+    scenario: &Scenario,
+    report: &ProofReport,
+    redactions: &[Redaction],
+    settings: &VhsTapeSettings,
+    recorder_identity: &str,
+) -> u64 {
+    const RECORDING_HASH_DOMAIN: &[u8] = b"\0testty-vhs-recording-v3\0";
+    const CANONICAL_BINARY_PATH: &str = "testty-canonical/bin";
+    const CANONICAL_GIF_PATH: &str = "testty-canonical/output.gif";
+    const CANONICAL_POSTER_PATH: &str = "testty-canonical/output.png";
+    const CANONICAL_WORKDIR: &str = "testty-canonical/workdir";
+
+    let canonical_env = [
+        ("TESTTY_CANONICAL_ENV", "value"),
+        ("PWD", CANONICAL_WORKDIR),
+    ];
+    let tape = VhsTape::from_scenario_with_output_path(
+        scenario,
+        Path::new(CANONICAL_BINARY_PATH),
+        Path::new(CANONICAL_GIF_PATH),
+        Path::new(CANONICAL_POSTER_PATH),
+        &canonical_env,
+        settings,
+    );
+    let mut hash = compute_gif_hash(report, redactions, settings);
+
+    update_fnv_hash(&mut hash, RECORDING_HASH_DOMAIN);
+    update_fnv_hash(&mut hash, recorder_identity.as_bytes());
+    update_fnv_hash(&mut hash, tape.render().as_bytes());
 
     hash
 }
@@ -625,11 +752,13 @@ struct GifContext<'a> {
 /// Bundle of VHS-execution inputs threaded through [`generate_gif`].
 ///
 /// Grouped so the function signature stays small while still exposing the
-/// individual pieces (settings, binary, environment) that VHS needs.
+/// execution and cleanup boundaries plus the settings, binary, and environment
+/// that VHS needs.
 #[derive(Clone, Copy)]
 struct VhsContext<'a> {
     binary_path: &'a Path,
     check_vhs: fn() -> Result<(), VhsError>,
+    cleanup_after_recording: fn(&[&Path]) -> Result<(), VhsError>,
     env_pairs: &'a [(&'a str, &'a str)],
     execute_tape: fn(&VhsTape, &Path) -> Result<PathBuf, VhsError>,
     settings: &'a VhsTapeSettings,
@@ -683,8 +812,9 @@ fn generate_gif(
 
     let hash_path = hash_sidecar_path(output_dir, name);
     let gif_path = output_dir.join(format!("{name}.gif"));
+    let poster_path = output_dir.join(format!("{name}.png"));
 
-    let current_hash = compute_gif_hash(report, redactions, vhs.settings);
+    let current_hash = compute_recording_hash(scenario, report, redactions, vhs.settings);
     let committed_hash = read_committed_hash(&hash_path);
 
     // CheckOnly is a read-only verification path: never mutate the
@@ -692,10 +822,10 @@ fn generate_gif(
     // output directory does not exist yet — a missing directory simply
     // means the GIF is missing, which is `Stale`.
     if matches!(mode, GifMode::CheckOnly) {
-        let gif_present = is_nonempty_file(&gif_path);
+        let published_artifacts_present = published_artifacts_present(&gif_path, &poster_path);
         let hash_matches = committed_hash.value() == Some(current_hash);
 
-        return if gif_present && hash_matches {
+        return if published_artifacts_present && hash_matches {
             GifStatus::Fresh {
                 gif_path,
                 hash: current_hash,
@@ -727,7 +857,7 @@ fn generate_gif(
     }
 
     if matches!(mode, GifMode::GenerateIfStale)
-        && is_nonempty_file(&gif_path)
+        && published_artifacts_present(&gif_path, &poster_path)
         && committed_hash.value() == Some(current_hash)
     {
         return GifStatus::CacheHit(gif_path);
@@ -736,12 +866,19 @@ fn generate_gif(
     // Trailing newline so the sidecar is a well-formed text file and
     // end-of-file fixers do not rewrite it after every regeneration.
     let hash_string = format!("{current_hash}\n");
-    let poster_path = output_dir.join(format!("{name}.png"));
     let recording_path = output_dir.join(format!(".{name}.recording.gif"));
+    let recording_hash_path = output_dir.join(format!(".{name}.recording.hash"));
     let screenshot_path = output_dir.join(format!(".{name}.capture.png"));
     let tape_path = output_dir.join(format!("{name}.tape"));
 
-    cleanup_recording_files(&tape_path, &screenshot_path, &recording_path);
+    if let Err(err) = cleanup_recording_files(&[
+        &tape_path,
+        &screenshot_path,
+        &recording_path,
+        &recording_hash_path,
+    ]) {
+        return GifStatus::TapeExecutionFailed(err);
+    }
 
     let tape = VhsTape::from_scenario_with_output_path(
         scenario,
@@ -752,19 +889,67 @@ fn generate_gif(
         vhs.settings,
     );
 
-    let recording_result = (vhs.execute_tape)(&tape, &tape_path)
-        .and_then(|_| finalize_gif_recording(&recording_path, &gif_path));
-    cleanup_recording_files(&tape_path, &screenshot_path, &recording_path);
+    let recording_result = (vhs.execute_tape)(&tape, &tape_path).and_then(|_| {
+        if !is_nonempty_file(&recording_path) {
+            return Err(VhsError::ExecutionFailed(format!(
+                "VHS did not produce a nonempty GIF at {}",
+                recording_path.display(),
+            )));
+        }
+        if !is_nonempty_file(&screenshot_path) {
+            return Err(VhsError::ExecutionFailed(format!(
+                "VHS did not produce a nonempty PNG poster at {}",
+                screenshot_path.display(),
+            )));
+        }
 
+        stage_hash_sidecar(&recording_hash_path, &hash_string)?;
+
+        publish_gif_recording(
+            &recording_path,
+            &gif_path,
+            &recording_hash_path,
+            &hash_path,
+            &screenshot_path,
+            &poster_path,
+        )
+    });
+    let cleanup_result = (vhs.cleanup_after_recording)(&[
+        &tape_path,
+        &screenshot_path,
+        &recording_path,
+        &recording_hash_path,
+    ]);
+
+    recording_publication_status(gif_path, recording_result, cleanup_result)
+}
+
+/// Preserve a committed publication even when transient-file cleanup fails.
+fn recording_publication_status(
+    gif_path: PathBuf,
+    recording_result: Result<(), VhsError>,
+    cleanup_result: Result<(), VhsError>,
+) -> GifStatus {
     match recording_result {
         Ok(()) => {
-            let _ = std::fs::write(&hash_path, &hash_string);
-            let _ = std::fs::remove_file(&poster_path);
+            // Publication is committed. Cleanup cannot turn it into a failure
+            // because downstream callers would roll back only the feature page.
+            let _ = cleanup_result;
 
             GifStatus::Generated(gif_path)
         }
-        Err(err) => GifStatus::TapeExecutionFailed(err),
+        Err(recording_err) => match cleanup_result {
+            Ok(()) => GifStatus::TapeExecutionFailed(recording_err),
+            Err(cleanup_err) => GifStatus::TapeExecutionFailed(VhsError::IoError(format!(
+                "{recording_err}; cleanup also failed: {cleanup_err}"
+            ))),
+        },
     }
+}
+
+/// Return whether a published GIF and poster are both nonempty regular files.
+fn published_artifacts_present(gif_path: &Path, poster_path: &Path) -> bool {
+    is_nonempty_file(gif_path) && is_nonempty_file(poster_path)
 }
 
 /// Return whether `path` names a nonempty regular file.
@@ -772,29 +957,171 @@ fn is_nonempty_file(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
 
-/// Replace the committed GIF only after VHS produces a valid staging file.
-fn finalize_gif_recording(recording_path: &Path, gif_path: &Path) -> Result<(), VhsError> {
-    if !is_nonempty_file(recording_path) {
-        return Err(VhsError::ExecutionFailed(format!(
-            "VHS did not produce a nonempty GIF at {}",
-            recording_path.display(),
-        )));
-    }
-
-    std::fs::rename(recording_path, gif_path).map_err(|err| {
+/// Write a staged hash sidecar with publication-specific error context.
+fn stage_hash_sidecar(path: &Path, hash: &str) -> Result<(), VhsError> {
+    std::fs::write(path, hash).map_err(|err| {
         VhsError::IoError(format!(
-            "failed to replace GIF {} with recording {}: {err}",
-            gif_path.display(),
-            recording_path.display(),
+            "failed to stage hash sidecar {}: {err}",
+            path.display(),
         ))
     })
 }
 
+/// Publish a staged GIF and hash as one rollback-safe artifact transaction.
+fn publish_gif_recording(
+    recording_path: &Path,
+    gif_path: &Path,
+    recording_hash_path: &Path,
+    hash_path: &Path,
+    recording_poster_path: &Path,
+    poster_path: &Path,
+) -> Result<(), VhsError> {
+    publish_gif_recording_with_cleanup(
+        recording_path,
+        gif_path,
+        recording_hash_path,
+        hash_path,
+        recording_poster_path,
+        poster_path,
+        cleanup_recording_files,
+    )
+}
+
+/// Publish a staged artifact set with an injected post-commit cleanup step.
+fn publish_gif_recording_with_cleanup(
+    recording_path: &Path,
+    gif_path: &Path,
+    recording_hash_path: &Path,
+    hash_path: &Path,
+    recording_poster_path: &Path,
+    poster_path: &Path,
+    cleanup_backups: impl FnOnce(&[&Path]) -> Result<(), VhsError>,
+) -> Result<(), VhsError> {
+    let gif_backup_path = gif_path.with_extension("previous.gif");
+    let hash_backup_path = hash_path.with_extension("previous.hash");
+    let poster_backup_path = poster_path.with_extension("previous.png");
+    validate_artifact_target(gif_path)?;
+    validate_artifact_target(hash_path)?;
+    validate_artifact_target(poster_path)?;
+    let gif_existed = backup_artifact(gif_path, &gif_backup_path)?;
+    let hash_existed = backup_artifact(hash_path, &hash_backup_path)?;
+    let poster_existed = backup_artifact(poster_path, &poster_backup_path)?;
+
+    let publish_result = replace_artifact(recording_path, gif_path, "GIF")
+        .and_then(|()| replace_artifact(recording_hash_path, hash_path, "hash sidecar"))
+        .and_then(|()| replace_artifact(recording_poster_path, poster_path, "PNG poster"));
+
+    if let Err(publish_error) = publish_result {
+        let rollback_errors = [
+            restore_artifact(gif_path, &gif_backup_path, gif_existed),
+            restore_artifact(hash_path, &hash_backup_path, hash_existed),
+            restore_artifact(poster_path, &poster_backup_path, poster_existed),
+        ]
+        .into_iter()
+        .filter_map(Result::err)
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+
+        return Err(publication_error(publish_error, &rollback_errors));
+    }
+
+    // All replacements are committed at this point. Backup cleanup is
+    // best-effort because reporting an error now would make downstream
+    // publication roll back its page while retaining the new artifact set.
+    let _ = cleanup_backups(&[&gif_backup_path, &hash_backup_path, &poster_backup_path]);
+
+    Ok(())
+}
+
+/// Preserve a publication error and append any rollback failures.
+fn publication_error(publish_error: VhsError, rollback_errors: &[String]) -> VhsError {
+    if rollback_errors.is_empty() {
+        publish_error
+    } else {
+        let rollback_errors = rollback_errors.join("; ");
+
+        VhsError::IoError(format!(
+            "{publish_error}; rollback failed: {rollback_errors}"
+        ))
+    }
+}
+
+/// Reject a directory or special file where publication expects an artifact.
+fn validate_artifact_target(path: &Path) -> Result<(), VhsError> {
+    if path.exists() && !path.is_file() {
+        return Err(VhsError::IoError(format!(
+            "artifact target is not a regular file: {}",
+            path.display()
+        )));
+    }
+
+    Ok(())
+}
+
+/// Copy an existing artifact to a transaction backup.
+fn backup_artifact(path: &Path, backup_path: &Path) -> Result<bool, VhsError> {
+    remove_file_if_exists(backup_path)?;
+
+    if !path.exists() {
+        return Ok(false);
+    }
+    std::fs::copy(path, backup_path).map_err(|err| {
+        VhsError::IoError(format!(
+            "failed to back up {} to {}: {err}",
+            path.display(),
+            backup_path.display(),
+        ))
+    })?;
+
+    Ok(true)
+}
+
+/// Atomically replace one committed artifact with its staged file.
+fn replace_artifact(staged_path: &Path, target_path: &Path, label: &str) -> Result<(), VhsError> {
+    std::fs::rename(staged_path, target_path).map_err(|err| {
+        VhsError::IoError(format!(
+            "failed to replace {label} {} with staging file {}: {err}",
+            target_path.display(),
+            staged_path.display(),
+        ))
+    })
+}
+
+/// Restore one artifact from its transaction backup.
+fn restore_artifact(path: &Path, backup_path: &Path, existed: bool) -> Result<(), VhsError> {
+    if existed {
+        std::fs::copy(backup_path, path).map_err(|err| {
+            VhsError::IoError(format!(
+                "failed to restore {} from {}: {err}",
+                path.display(),
+                backup_path.display(),
+            ))
+        })?;
+    } else {
+        remove_file_if_exists(path)?;
+    }
+    remove_file_if_exists(backup_path)
+}
+
 /// Remove transient files produced while VHS records a staged GIF.
-fn cleanup_recording_files(tape_path: &Path, screenshot_path: &Path, recording_path: &Path) {
-    let _ = std::fs::remove_file(tape_path);
-    let _ = std::fs::remove_file(screenshot_path);
-    let _ = std::fs::remove_file(recording_path);
+fn cleanup_recording_files(paths: &[&Path]) -> Result<(), VhsError> {
+    for path in paths {
+        remove_file_if_exists(path)?;
+    }
+
+    Ok(())
+}
+
+/// Remove one file while treating an absent path as already clean.
+fn remove_file_if_exists(path: &Path) -> Result<(), VhsError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(VhsError::IoError(format!(
+            "failed to remove {}: {err}",
+            path.display()
+        ))),
+    }
 }
 
 /// Map a [`check_vhs_installed`] failure into a [`GifStatus`] based on the
@@ -898,6 +1225,77 @@ mod tests {
         // Assert
         assert!(matches!(result.gif_status, GifStatus::Stale { .. }));
         assert!(result.frame.all_text().contains("ready"));
+    }
+
+    #[test]
+    fn feature_demo_run_with_assertion_validates_before_gif_processing() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output_dir = temp.path();
+        let scenario = Scenario::new("validated_run")
+            .wait_for_text("ready", 3_000)
+            .capture_labeled("ready", "Shell is ready");
+        let builder = PtySessionBuilder::new("/bin/sh").args(["-c", "printf 'ready\\n'; sleep 60"]);
+        let settings = VhsTapeSettings::feature_demo();
+        let gif_path = output_dir.join("validated_run.gif");
+        let poster_path = output_dir.join("validated_run.png");
+        let hash_path = hash_sidecar_path(output_dir, "validated_run");
+        let demo = FeatureDemo::new("validated_run")
+            .gif_output_dir(output_dir)
+            .gif_mode(GifMode::CheckOnly);
+
+        // Act
+        let result = demo
+            .run_with_assertion(
+                &scenario,
+                builder,
+                Path::new("/bin/true"),
+                &[],
+                |frame, report| {
+                    assert!(frame.all_text().contains("ready"));
+                    let hash = compute_recording_hash(&scenario, report, &[], &settings);
+                    std::fs::write(&gif_path, b"validated gif").expect("write GIF");
+                    std::fs::write(&poster_path, b"validated poster").expect("write poster");
+                    std::fs::write(&hash_path, hash.to_string()).expect("write sidecar");
+                },
+            )
+            .expect("validated feature demo should run");
+
+        // Assert
+        assert!(matches!(result.gif_status, GifStatus::Fresh { .. }));
+    }
+
+    #[test]
+    fn feature_demo_recording_setup_failure_stops_gif_processing() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output_dir = temp.path();
+        let scenario = Scenario::new("failed_recording_setup")
+            .wait_for_text("ready", 3_000)
+            .capture_labeled("ready", "Shell is ready");
+        let builder = PtySessionBuilder::new("/bin/sh").args(["-c", "printf 'ready\\n'; sleep 60"]);
+        let gif_path = output_dir.join("failed_recording_setup.gif");
+
+        // Act
+        let result = FeatureDemo::new("failed_recording_setup")
+            .gif_output_dir(output_dir)
+            .run_with_assertion_and_recording_setup(
+                &scenario,
+                builder,
+                Path::new("/bin/true"),
+                &[],
+                |frame, _report| assert!(frame.all_text().contains("ready")),
+                || Err(VhsError::IoError("fixture restore failed".to_string())),
+            )
+            .expect("feature proof should run");
+
+        // Assert
+        assert!(matches!(
+            result.gif_status,
+            GifStatus::TapeExecutionFailed(VhsError::IoError(ref message))
+                if message == "fixture restore failed"
+        ));
+        assert!(!gif_path.exists());
     }
 
     #[test]
@@ -1110,6 +1508,39 @@ mod tests {
     }
 
     #[test]
+    fn recording_hash_includes_compiled_scenario() {
+        // Arrange
+        let report = ProofReport::new("scenario_hash");
+        let settings = VhsTapeSettings::feature_demo();
+        let short_pause = Scenario::new("scenario_hash").viewing_pause_ms(500);
+        let long_pause = Scenario::new("scenario_hash").viewing_pause_ms(1500);
+
+        // Act
+        let short_hash = compute_recording_hash(&short_pause, &report, &[], &settings);
+        let long_hash = compute_recording_hash(&long_pause, &report, &[], &settings);
+
+        // Assert
+        assert_ne!(short_hash, long_hash);
+    }
+
+    #[test]
+    fn recording_hash_includes_recorder_identity() {
+        // Arrange
+        let scenario = Scenario::new("recorder_hash").capture();
+        let report = ProofReport::new("recorder_hash");
+        let settings = VhsTapeSettings::feature_demo();
+
+        // Act
+        let first_hash =
+            compute_recording_hash_with_identity(&scenario, &report, &[], &settings, "vhs@first");
+        let second_hash =
+            compute_recording_hash_with_identity(&scenario, &report, &[], &settings, "vhs@second");
+
+        // Assert
+        assert_ne!(first_hash, second_hash);
+    }
+
+    #[test]
     fn redaction_replaces_every_matching_token() {
         // Arrange — the worktree path and the branch label both carry the hash.
         let redaction = Redaction::hex_after("wt/", 8, "<hash>");
@@ -1278,6 +1709,7 @@ mod tests {
         let vhs = VhsContext {
             binary_path: binary,
             check_vhs: check_vhs_installed,
+            cleanup_after_recording: cleanup_recording_files,
             env_pairs,
             execute_tape: VhsTape::execute,
             settings: &settings,
@@ -1327,20 +1759,23 @@ mod tests {
         let mut report = ProofReport::new(name);
         report.add_capture("snap", "Snapshot", &frame);
         let settings = VhsTapeSettings::feature_demo();
-        let expected_hash = compute_gif_hash(&report, &[], &settings);
+        let scenario = Scenario::new(name);
+        let expected_hash = compute_recording_hash(&scenario, &report, &[], &settings);
 
         let gif_path = output_dir.join(format!("{name}.gif"));
+        let poster_path = output_dir.join(format!("{name}.png"));
         std::fs::write(&gif_path, b"fake-gif-bytes").expect("write fake gif");
+        std::fs::write(&poster_path, b"fake-poster-bytes").expect("write fake poster");
 
         let sidecar = hash_sidecar_path(output_dir, name);
         std::fs::write(&sidecar, expected_hash.to_string()).expect("write sidecar");
 
-        let scenario = Scenario::new(name);
         let binary = Path::new("/usr/bin/true");
         let env_pairs: &[(&str, &str)] = &[];
         let vhs = VhsContext {
             binary_path: binary,
             check_vhs: check_vhs_installed,
+            cleanup_after_recording: cleanup_recording_files,
             env_pairs,
             execute_tape: VhsTape::execute,
             settings: &settings,
@@ -1387,16 +1822,16 @@ mod tests {
         previous_settings.width = 3200;
         previous_settings.height = 1600;
         previous_settings.font_size = 36;
-        let committed_hash = compute_gif_hash(&report, &[], &previous_settings);
+        let scenario = Scenario::new(name);
+        let committed_hash = compute_recording_hash(&scenario, &report, &[], &previous_settings);
         let current_settings = VhsTapeSettings::feature_demo();
-        let current_hash = compute_gif_hash(&report, &[], &current_settings);
+        let current_hash = compute_recording_hash(&scenario, &report, &[], &current_settings);
 
         let gif_path = output_dir.join(format!("{name}.gif"));
         std::fs::write(&gif_path, b"previous-preset-gif").expect("write GIF");
         let sidecar = hash_sidecar_path(output_dir, name);
         std::fs::write(&sidecar, committed_hash.to_string()).expect("write sidecar");
 
-        let scenario = Scenario::new(name);
         let vhs = test_vhs_context(&current_settings, vhs_available, failed_tape_execution);
 
         // Act
@@ -1436,12 +1871,12 @@ mod tests {
         let mut report = ProofReport::new(name);
         report.add_capture("snap", "Snapshot", &frame);
         let settings = VhsTapeSettings::feature_demo();
-        let expected_hash = compute_gif_hash(&report, &[], &settings);
+        let scenario = Scenario::new(name);
+        let expected_hash = compute_recording_hash(&scenario, &report, &[], &settings);
         let gif_path = output_dir.join(format!("{name}.gif"));
         let hash_path = hash_sidecar_path(output_dir, name);
         std::fs::write(&gif_path, []).expect("write empty gif");
         std::fs::write(&hash_path, expected_hash.to_string()).expect("write sidecar");
-        let scenario = Scenario::new(name);
         let vhs = test_vhs_context(&settings, vhs_available, failed_tape_execution);
 
         // Act
@@ -1493,6 +1928,7 @@ mod tests {
         let vhs = VhsContext {
             binary_path: binary,
             check_vhs: check_vhs_installed,
+            cleanup_after_recording: cleanup_recording_files,
             env_pairs,
             execute_tape: VhsTape::execute,
             settings: &settings,
@@ -1542,12 +1978,14 @@ mod tests {
         let mut report = ProofReport::new(name);
         report.add_capture("snap", "Snapshot", &frame);
         let settings = VhsTapeSettings::feature_demo();
-        let expected_hash = compute_gif_hash(&report, &[], &settings);
+        let scenario = Scenario::new(name);
+        let expected_hash = compute_recording_hash(&scenario, &report, &[], &settings);
         let gif_path = output_dir.join(format!("{name}.gif"));
+        let poster_path = output_dir.join(format!("{name}.png"));
         let hash_path = hash_sidecar_path(output_dir, name);
         std::fs::write(&gif_path, GENERATED_GIF_BYTES).expect("write cached gif");
+        std::fs::write(&poster_path, b"cached poster").expect("write cached poster");
         std::fs::write(&hash_path, expected_hash.to_string()).expect("write sidecar");
-        let scenario = Scenario::new(name);
         let vhs = test_vhs_context(&settings, vhs_available, failed_tape_execution);
 
         // Act
@@ -1581,12 +2019,12 @@ mod tests {
         let mut report = ProofReport::new(name);
         report.add_capture("snap", "Snapshot", &frame);
         let settings = VhsTapeSettings::feature_demo();
-        let expected_hash = compute_gif_hash(&report, &[], &settings);
+        let scenario = Scenario::new(name).capture();
+        let expected_hash = compute_recording_hash(&scenario, &report, &[], &settings);
         let gif_path = output_dir.join(format!("{name}.gif"));
         let hash_path = hash_sidecar_path(output_dir, name);
         std::fs::write(&gif_path, []).expect("write empty gif");
         std::fs::write(&hash_path, expected_hash.to_string()).expect("write sidecar");
-        let scenario = Scenario::new(name).capture();
         let vhs = test_vhs_context(&settings, vhs_available, successful_tape_execution);
 
         // Act
@@ -1611,7 +2049,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_gif_success_invalidates_poster_and_cleans_recording_files() {
+    fn generate_gif_success_publishes_poster_and_cleans_recording_files() {
         // Arrange
         let temp = tempfile::TempDir::new().expect("failed to create temp dir");
         let output_dir = temp.path();
@@ -1623,13 +2061,14 @@ mod tests {
         let hash_path = hash_sidecar_path(output_dir, name);
         let poster_path = output_dir.join(format!("{name}.png"));
         let recording_path = output_dir.join(format!(".{name}.recording.gif"));
+        let recording_hash_path = output_dir.join(format!(".{name}.recording.hash"));
         let screenshot_path = output_dir.join(format!(".{name}.capture.png"));
         let tape_path = output_dir.join(format!("{name}.tape"));
         let settings = VhsTapeSettings::feature_demo();
-        let expected_hash = compute_gif_hash(&report, &[], &settings);
+        let scenario = Scenario::new(name).capture();
+        let expected_hash = compute_recording_hash(&scenario, &report, &[], &settings);
         std::fs::write(&gif_path, b"previous gif").expect("write previous gif");
         std::fs::write(&poster_path, b"stale poster").expect("write poster");
-        let scenario = Scenario::new(name).capture();
         let vhs = test_vhs_context(&settings, vhs_available, successful_tape_execution);
 
         // Act
@@ -1655,10 +2094,97 @@ mod tests {
             std::fs::read(&gif_path).expect("read gif"),
             GENERATED_GIF_BYTES
         );
-        assert!(!poster_path.exists());
+        assert_eq!(
+            std::fs::read(&poster_path).expect("read poster"),
+            b"temporary screenshot"
+        );
         assert!(!recording_path.exists());
+        assert!(!recording_hash_path.exists());
         assert!(!screenshot_path.exists());
         assert!(!tape_path.exists());
+    }
+
+    #[test]
+    fn generate_gif_success_ignores_post_publication_tape_cleanup_failure() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output_dir = temp.path();
+        let name = "generated_with_cleanup_failure";
+        let frame = TerminalFrame::new(80, 24, b"Hello");
+        let mut report = ProofReport::new(name);
+        report.add_capture("snap", "Snapshot", &frame);
+        let gif_path = output_dir.join(format!("{name}.gif"));
+        let hash_path = hash_sidecar_path(output_dir, name);
+        let poster_path = output_dir.join(format!("{name}.png"));
+        let tape_path = output_dir.join(format!("{name}.tape"));
+        let settings = VhsTapeSettings::feature_demo();
+        let scenario = Scenario::new(name).capture();
+        let expected_hash = compute_recording_hash(&scenario, &report, &[], &settings);
+        let mut vhs = test_vhs_context(&settings, vhs_available, successful_tape_execution);
+        vhs.cleanup_after_recording = fail_recording_cleanup;
+
+        // Act
+        let status = generate_gif(
+            &scenario,
+            &report,
+            name,
+            output_dir,
+            GifContext {
+                mode: GifMode::AlwaysGenerate,
+                redactions: &[],
+            },
+            vhs,
+        );
+
+        // Assert
+        assert!(matches!(status, GifStatus::Generated(path) if path == gif_path));
+        assert_eq!(
+            std::fs::read_to_string(&hash_path).expect("read hash"),
+            format!("{expected_hash}\n")
+        );
+        assert_eq!(
+            std::fs::read(&gif_path).expect("read gif"),
+            GENERATED_GIF_BYTES
+        );
+        assert_eq!(
+            std::fs::read(&poster_path).expect("read poster"),
+            b"temporary screenshot"
+        );
+        assert!(tape_path.exists());
+    }
+
+    #[test]
+    fn generate_gif_failure_combines_recording_and_tape_cleanup_errors() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output_dir = temp.path();
+        let name = "failed_with_cleanup_failure";
+        let report = ProofReport::new(name);
+        let scenario = Scenario::new(name).capture();
+        let settings = VhsTapeSettings::feature_demo();
+        let mut vhs = test_vhs_context(&settings, vhs_available, failed_tape_execution);
+        vhs.cleanup_after_recording = fail_recording_cleanup;
+
+        // Act
+        let status = generate_gif(
+            &scenario,
+            &report,
+            name,
+            output_dir,
+            GifContext {
+                mode: GifMode::AlwaysGenerate,
+                redactions: &[],
+            },
+            vhs,
+        );
+
+        // Assert
+        assert!(matches!(
+            status,
+            GifStatus::TapeExecutionFailed(err)
+                if err.to_string().contains("simulated failure")
+                    && err.to_string().contains("simulated tape cleanup failure")
+        ));
     }
 
     #[test]
@@ -1764,21 +2290,322 @@ mod tests {
     }
 
     #[test]
-    fn finalize_gif_recording_reports_replacement_failure() {
+    fn generate_gif_rejects_an_unremovable_transient_path() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output_dir = temp.path();
+        let name = "blocked_transient_cleanup";
+        let tape_path = output_dir.join(format!("{name}.tape"));
+        std::fs::create_dir(&tape_path).expect("create conflicting tape directory");
+        let report = ProofReport::new(name);
+        let scenario = Scenario::new(name).capture();
+        let settings = VhsTapeSettings::feature_demo();
+        let vhs = test_vhs_context(&settings, vhs_available, successful_tape_execution);
+
+        // Act
+        let status = generate_gif(
+            &scenario,
+            &report,
+            name,
+            output_dir,
+            GifContext {
+                mode: GifMode::AlwaysGenerate,
+                redactions: &[],
+            },
+            vhs,
+        );
+
+        // Assert
+        assert!(matches!(
+            status,
+            GifStatus::TapeExecutionFailed(VhsError::IoError(ref message))
+                if message.contains("failed to remove") && message.contains(".tape")
+        ));
+    }
+
+    #[test]
+    fn generate_gif_rejects_a_missing_recording_poster() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output_dir = temp.path();
+        let name = "missing_recording_poster";
+        let report = ProofReport::new(name);
+        let scenario = Scenario::new(name).capture();
+        let settings = VhsTapeSettings::feature_demo();
+        let vhs = test_vhs_context(&settings, vhs_available, missing_poster_tape_execution);
+
+        // Act
+        let status = generate_gif(
+            &scenario,
+            &report,
+            name,
+            output_dir,
+            GifContext {
+                mode: GifMode::AlwaysGenerate,
+                redactions: &[],
+            },
+            vhs,
+        );
+
+        // Assert
+        assert!(matches!(
+            status,
+            GifStatus::TapeExecutionFailed(VhsError::ExecutionFailed(ref message))
+                if message.contains("did not produce a nonempty PNG poster")
+        ));
+    }
+
+    #[test]
+    fn stage_hash_sidecar_reports_write_failure() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let hash_path = temp.path().join("recording.hash");
+        std::fs::create_dir(&hash_path).expect("create conflicting hash directory");
+
+        // Act
+        let error = stage_hash_sidecar(&hash_path, "42\n")
+            .expect_err("hash staging should reject a directory");
+
+        // Assert
+        assert!(error.to_string().contains("failed to stage hash sidecar"));
+        assert!(error.to_string().contains("recording.hash"));
+    }
+
+    #[test]
+    fn publish_gif_recording_rejects_invalid_target_before_publication() {
         // Arrange
         let temp = tempfile::TempDir::new().expect("failed to create temp dir");
         let recording_path = temp.path().join("recording.gif");
         let gif_path = temp.path().join("feature.gif");
+        let recording_hash_path = temp.path().join("recording.hash");
+        let recording_poster_path = temp.path().join("recording.png");
+        let hash_path = temp.path().join("feature.hash");
+        let poster_path = temp.path().join("feature.png");
+        std::fs::write(&gif_path, b"previous gif").expect("write previous gif");
+        std::fs::write(&poster_path, b"previous poster").expect("write previous poster");
         std::fs::write(&recording_path, GENERATED_GIF_BYTES).expect("write recording");
-        std::fs::create_dir(&gif_path).expect("create conflicting GIF directory");
+        std::fs::write(&recording_hash_path, b"new hash\n").expect("write recording hash");
+        std::fs::write(&recording_poster_path, b"new poster").expect("write recording poster");
+        std::fs::create_dir(&hash_path).expect("create conflicting hash directory");
 
         // Act
-        let result = finalize_gif_recording(&recording_path, &gif_path);
+        let result = publish_gif_recording(
+            &recording_path,
+            &gif_path,
+            &recording_hash_path,
+            &hash_path,
+            &recording_poster_path,
+            &poster_path,
+        );
 
         // Assert
         assert!(matches!(result, Err(VhsError::IoError(_))));
+        assert_eq!(std::fs::read(&gif_path).expect("read gif"), b"previous gif");
+        assert_eq!(
+            std::fs::read(&poster_path).expect("read poster"),
+            b"previous poster"
+        );
         assert!(recording_path.exists());
-        assert!(gif_path.is_dir());
+        assert!(recording_hash_path.exists());
+        assert!(hash_path.is_dir());
+        assert!(!gif_path.with_extension("previous.gif").exists());
+    }
+
+    #[test]
+    fn publish_gif_recording_rolls_back_partial_publication() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let recording_path = temp.path().join("recording.gif");
+        let gif_path = temp.path().join("feature.gif");
+        let missing_recording_hash_path = temp.path().join("missing-recording.hash");
+        let recording_poster_path = temp.path().join("recording.png");
+        let hash_path = temp.path().join("feature.hash");
+        let poster_path = temp.path().join("feature.png");
+        std::fs::write(&recording_path, GENERATED_GIF_BYTES).expect("write recording");
+        std::fs::write(&gif_path, b"previous gif").expect("write previous gif");
+        std::fs::write(&hash_path, b"previous hash\n").expect("write previous hash");
+        std::fs::write(&poster_path, b"previous poster").expect("write previous poster");
+        std::fs::write(&recording_poster_path, b"new poster").expect("write recording poster");
+
+        // Act
+        let result = publish_gif_recording(
+            &recording_path,
+            &gif_path,
+            &missing_recording_hash_path,
+            &hash_path,
+            &recording_poster_path,
+            &poster_path,
+        );
+
+        // Assert
+        assert!(matches!(result, Err(VhsError::IoError(_))));
+        assert_eq!(std::fs::read(&gif_path).expect("read gif"), b"previous gif");
+        assert_eq!(
+            std::fs::read(&hash_path).expect("read hash"),
+            b"previous hash\n"
+        );
+        assert_eq!(
+            std::fs::read(&poster_path).expect("read poster"),
+            b"previous poster"
+        );
+        assert!(!gif_path.with_extension("previous.gif").exists());
+        assert!(!hash_path.with_extension("previous.hash").exists());
+        assert!(!poster_path.with_extension("previous.png").exists());
+    }
+
+    #[test]
+    fn publish_gif_recording_keeps_committed_set_when_backup_cleanup_fails() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let recording_path = temp.path().join("recording.gif");
+        let gif_path = temp.path().join("feature.gif");
+        let recording_hash_path = temp.path().join("recording.hash");
+        let hash_path = temp.path().join("feature.hash");
+        let recording_poster_path = temp.path().join("recording.png");
+        let poster_path = temp.path().join("feature.png");
+        std::fs::write(&recording_path, b"new gif").expect("write recording");
+        std::fs::write(&gif_path, b"previous gif").expect("write previous gif");
+        std::fs::write(&recording_hash_path, b"new hash\n").expect("write recording hash");
+        std::fs::write(&hash_path, b"previous hash\n").expect("write previous hash");
+        std::fs::write(&recording_poster_path, b"new poster").expect("write recording poster");
+        std::fs::write(&poster_path, b"previous poster").expect("write previous poster");
+
+        // Act
+        let result = publish_gif_recording_with_cleanup(
+            &recording_path,
+            &gif_path,
+            &recording_hash_path,
+            &hash_path,
+            &recording_poster_path,
+            &poster_path,
+            |_| {
+                Err(VhsError::IoError(
+                    "simulated backup cleanup failure".to_string(),
+                ))
+            },
+        );
+
+        // Assert
+        assert!(result.is_ok());
+        assert_eq!(std::fs::read(&gif_path).expect("read GIF"), b"new gif");
+        assert_eq!(std::fs::read(&hash_path).expect("read hash"), b"new hash\n");
+        assert_eq!(
+            std::fs::read(&poster_path).expect("read poster"),
+            b"new poster"
+        );
+        assert_eq!(
+            std::fs::read(gif_path.with_extension("previous.gif")).expect("read GIF backup"),
+            b"previous gif"
+        );
+        assert_eq!(
+            std::fs::read(hash_path.with_extension("previous.hash")).expect("read hash backup"),
+            b"previous hash\n"
+        );
+        assert_eq!(
+            std::fs::read(poster_path.with_extension("previous.png")).expect("read poster backup"),
+            b"previous poster"
+        );
+    }
+
+    #[test]
+    fn publication_error_combines_publish_and_rollback_failures() {
+        // Arrange
+        let publish_error = VhsError::IoError("publish failed".to_string());
+        let rollback_errors = vec![
+            "GIF restore failed".to_string(),
+            "poster restore failed".to_string(),
+        ];
+
+        // Act
+        let error = publication_error(publish_error, &rollback_errors);
+
+        // Assert
+        let message = error.to_string();
+        assert!(message.contains("publish failed"));
+        assert!(message.contains("GIF restore failed; poster restore failed"));
+    }
+
+    #[test]
+    fn backup_artifact_reports_copy_failure() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let artifact_path = temp.path().join("feature.gif");
+        let backup_path = temp.path().join("feature.previous.gif");
+        std::fs::create_dir(&artifact_path).expect("create invalid artifact directory");
+
+        // Act
+        let result = backup_artifact(&artifact_path, &backup_path);
+
+        // Assert
+        let error = result.expect_err("copying an artifact directory should fail");
+        assert!(error.to_string().contains("failed to back up"));
+    }
+
+    #[test]
+    fn restore_artifact_reports_missing_backup() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let artifact_path = temp.path().join("feature.gif");
+        let backup_path = temp.path().join("missing.previous.gif");
+
+        // Act
+        let error = restore_artifact(&artifact_path, &backup_path, true)
+            .expect_err("missing backup should fail restoration");
+
+        // Assert
+        assert!(error.to_string().contains("failed to restore"));
+        assert!(error.to_string().contains("missing.previous.gif"));
+    }
+
+    #[test]
+    fn restore_artifact_removes_new_target() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let artifact_path = temp.path().join("feature.gif");
+        let backup_path = temp.path().join("feature.previous.gif");
+        std::fs::write(&artifact_path, b"new gif").expect("write new artifact");
+
+        // Act
+        restore_artifact(&artifact_path, &backup_path, false)
+            .expect("remove newly published artifact");
+
+        // Assert
+        assert!(!artifact_path.exists());
+        assert!(!backup_path.exists());
+    }
+
+    #[test]
+    fn remove_file_if_exists_reports_non_file_target() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let directory = temp.path().join("artifact.gif");
+        std::fs::create_dir(&directory).expect("create artifact directory");
+
+        // Act
+        let error = remove_file_if_exists(&directory)
+            .expect_err("directory removal through file boundary should fail");
+
+        // Assert
+        assert!(error.to_string().contains("failed to remove"));
+        assert!(error.to_string().contains("artifact.gif"));
+    }
+
+    #[test]
+    fn read_committed_hash_reports_io_error() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let hash_path = temp.path().join("feature.hash");
+        std::fs::create_dir(&hash_path).expect("create hash directory");
+
+        // Act
+        let committed_hash = read_committed_hash(&hash_path);
+
+        // Assert
+        assert!(matches!(
+            committed_hash,
+            CommittedHash::Invalid(ref message)
+                if message.contains("failed to read hash sidecar")
+        ));
     }
 
     #[test]
@@ -1936,6 +2763,7 @@ mod tests {
         VhsContext {
             binary_path: Path::new("/usr/bin/true"),
             check_vhs,
+            cleanup_after_recording: cleanup_recording_files,
             env_pairs: &[],
             execute_tape,
             settings,
@@ -1966,6 +2794,24 @@ mod tests {
 
     fn empty_tape_execution(tape: &VhsTape, tape_path: &Path) -> Result<PathBuf, VhsError> {
         stage_tape_execution(tape, tape_path, &[])
+    }
+
+    fn missing_poster_tape_execution(
+        tape: &VhsTape,
+        tape_path: &Path,
+    ) -> Result<PathBuf, VhsError> {
+        tape.write_to(tape_path)
+            .map_err(|err| VhsError::IoError(err.to_string()))?;
+        std::fs::write(tape_gif_path(tape), GENERATED_GIF_BYTES)
+            .map_err(|err| VhsError::IoError(err.to_string()))?;
+
+        Ok(tape.screenshot_path().to_path_buf())
+    }
+
+    fn fail_recording_cleanup(_paths: &[&Path]) -> Result<(), VhsError> {
+        Err(VhsError::IoError(
+            "simulated tape cleanup failure".to_string(),
+        ))
     }
 
     fn stage_tape_execution(

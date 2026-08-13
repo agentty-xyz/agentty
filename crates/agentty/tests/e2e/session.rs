@@ -794,7 +794,7 @@ fn seed_published_session_output_chronology(
     run_git(&env.workdir, &["init", "--bare", remote_path_text.as_str()])?;
     run_git(
         &env.workdir,
-        &["remote", "add", "origin", remote_path_text.as_str()],
+        &["remote", "set-url", "origin", remote_path_text.as_str()],
     )?;
     run_git(&env.workdir, &["push", "--set-upstream", "origin", "main"])?;
 
@@ -1217,6 +1217,42 @@ WHERE id IN ('a-older', 'z-newer')
     })?;
 
     for session_id in ["a-older", "z-newer"] {
+        std::fs::create_dir_all(test_support::session_folder(
+            &env.agentty_root.join("wt"),
+            session_id,
+        ))?;
+    }
+
+    Ok(())
+}
+
+/// Seed a compact cross-status session fleet for the published overview.
+fn seed_session_management_overview(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let sessions = [
+        SessionSeed::regular("overview-review", "claude-fable-5", "main", "Review")
+            .with_title("Fix auth refresh"),
+        SessionSeed::regular("overview-active", "gpt-5.6-sol", "main", "InProgress")
+            .with_title("Add pagination"),
+        SessionSeed::regular(
+            "overview-question",
+            "gemini-3.1-pro-preview",
+            "main",
+            "Question",
+        )
+        .with_title("Clarify errors"),
+        SessionSeed::regular("overview-done", "gpt-5.6-terra", "main", "Done")
+            .with_title("Ship dark mode"),
+    ];
+
+    for session in sessions {
+        common::seed_session(env, session)?;
+    }
+    for session_id in [
+        "overview-review",
+        "overview-active",
+        "overview-question",
+        "overview-done",
+    ] {
         std::fs::create_dir_all(test_support::session_folder(
             &env.agentty_root.join("wt"),
             session_id,
@@ -1914,7 +1950,7 @@ fn install_queued_review_request_stubs(env: &BuilderEnv) -> Result<(), Box<dyn s
         &env.workdir,
         &[
             "remote",
-            "add",
+            "set-url",
             "origin",
             "https://github.com/agentty-xyz/agentty.git",
         ],
@@ -2441,7 +2477,7 @@ fn seed_review_comment_agent_resolution(
         &session_worktree,
         &[
             "remote",
-            "add",
+            "set-url",
             "origin",
             "https://github.com/agentty-xyz/agentty.git",
         ],
@@ -2493,7 +2529,7 @@ fn seed_slow_merged_review_request_status(
     let sync_origin_path = sync_origin.to_string_lossy().into_owned();
     run_git(
         &env.workdir,
-        &["remote", "add", "origin", sync_origin_path.as_str()],
+        &["remote", "set-url", "origin", sync_origin_path.as_str()],
     )?;
     run_git(&env.workdir, &["push", "--set-upstream", "origin", "main"])?;
 
@@ -2589,7 +2625,7 @@ fn seed_merged_stacked_review_requests(env: &BuilderEnv) -> Result<(), Box<dyn s
     let sync_origin_path = sync_origin.to_string_lossy().into_owned();
     run_git(
         &env.workdir,
-        &["remote", "add", "origin", sync_origin_path.as_str()],
+        &["remote", "set-url", "origin", sync_origin_path.as_str()],
     )?;
     run_git(&env.workdir, &["push", "--set-upstream", "origin", "main"])?;
 
@@ -3055,11 +3091,6 @@ fn test_session_pre_commit_hook_warning() -> E2eResult {
     FeatureTest::new("session_pre_commit_hook_warning")
         .with_git()
         .setup(seed_missing_pre_commit_hook_project)
-        .zola(
-            "Pre-commit hook warning",
-            "Warn about missing pre-commit hooks without blocking session creation.",
-            32,
-        )
         .run(
             |scenario| {
                 scenario
@@ -3118,6 +3149,40 @@ fn test_session_pre_commit_hook_warning() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Created pending worktree change", &full);
                 assertion::assert_text_in_region(frame, "prek install", &full);
                 assertion::assert_text_in_region(frame, "pre-commit install", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify the published Sessions overview shows work across lifecycle states.
+#[test]
+fn session_management_overview() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("sessions")
+        .with_git()
+        .setup(seed_session_management_overview)
+        .zola(
+            "Session management",
+            "Track sessions across models with color-coded statuses. Active, queued, and archived \
+             work at a glance.",
+            20,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Fix auth refresh", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("session_fleet", "Sessions across lifecycle states")
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Fix auth refresh", &full);
+                assertion::assert_text_in_region(frame, "Add pagination", &full);
+                assertion::assert_text_in_region(frame, "Clarify errors", &full);
+                assertion::assert_text_in_region(frame, "Ship dark mode", &full);
             },
         )?;
 
@@ -3973,11 +4038,6 @@ fn review_request_creation_queues_during_running_turn() -> E2eResult {
     FeatureTest::new("review_request_queued_creation")
         .with_git()
         .setup(install_queued_review_request_stubs)
-        .zola(
-            "Queued review-request creation",
-            "Queue review-request creation behind a running session turn and publish it next.",
-            41,
-        )
         .run(
             |scenario| {
                 scenario
@@ -4284,11 +4344,6 @@ fn test_session_output_chronology() -> E2eResult {
         .with_git()
         .with_terminal_size(120, 30)
         .setup(seed_published_session_output_chronology)
-        .zola(
-            "Chronological session output",
-            "Follow sync, commit, and auto-push progress in execution order.",
-            44,
-        )
         .run(
             |scenario| {
                 scenario
@@ -4762,11 +4817,6 @@ fn bare_repo_worktree_layout_supports_session_turn() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("bare_repo_worktree_layout")
         .setup(seed_bare_repo_worktree_project)
-        .zola(
-            "Bare repository worktree layout",
-            "Run sessions from a project that is a linked worktree of a bare shared repository.",
-            45,
-        )
         .run(
             |scenario| {
                 scenario
@@ -4912,11 +4962,6 @@ fn session_orchestration_runs_approved_parallel_wave() -> E2eResult {
     FeatureTest::new("session_orchestration")
         .with_git()
         .setup(install_orchestration_claude_stub)
-        .zola(
-            "Parallel orchestration",
-            "Approve an independent plan, watch workers run, and review the roll-up.",
-            35,
-        )
         .run(build_orchestration_scenario, |frame, report| {
             // Assert
             let picker_frame = common::frame_from_capture(&report.captures[0]);
@@ -5914,11 +5959,6 @@ fn session_output_scrollbar_is_visible() -> E2eResult {
         .with_git()
         .with_terminal_size(80, 20)
         .setup(seed_session_with_scrollable_output)
-        .zola(
-            "Session output scrollbar",
-            "Track your position while scrolling through long session transcripts.",
-            43,
-        )
         .run(
             |scenario| {
                 scenario
@@ -5998,12 +6038,6 @@ fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
     FeatureTest::new("terminal_session_continue")
         .with_git()
         .setup(seed_done_session_for_continuation)
-        .zola(
-            "Continue terminal session",
-            "Confirm continuation from a done session and stage a merged-commit context message \
-             before focusing an empty draft composer.",
-            45,
-        )
         .run(
             |scenario| {
                 scenario
@@ -6077,11 +6111,6 @@ fn canceled_session_continue_opens_seeded_prompt() -> E2eResult {
     FeatureTest::new("canceled_session_continue")
         .with_git()
         .setup(seed_canceled_session_for_continuation)
-        .zola(
-            "Continue canceled session",
-            "Continue a canceled session in a new draft with its saved summary staged as context.",
-            46,
-        )
         .run(
             |scenario| {
                 scenario
@@ -6219,11 +6248,6 @@ fn review_request_publish_runs_in_background() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_background_publish")
         .with_git()
-        .zola(
-            "Background review-request publish",
-            "Publish a review request in the background and receive its link in session chat.",
-            41,
-        )
         .setup(seed_slow_successful_review_request_publish)
         .run(
             |scenario| {
@@ -6603,11 +6627,6 @@ fn test_markdown_diff_preview() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("markdown_diff_preview")
         .with_git()
-        .zola(
-            "Rendered markdown diff preview",
-            "Preview changed markdown and Mermaid diagrams directly from the diff view.",
-            46,
-        )
         .setup(seed_markdown_diff_preview)
         .run(
             |scenario| {
@@ -6918,11 +6937,6 @@ fn session_review_comment_agent_resolution() -> E2eResult {
     FeatureTest::new("session_review_comment_agent_resolution")
         .with_git()
         .with_terminal_size(160, 60)
-        .zola(
-            "Batch review comment actions",
-            "Mark linked review comments to address or deny, then submit one agent batch.",
-            45,
-        )
         .setup(seed_review_comment_agent_resolution)
         .run(
             |scenario| {
@@ -7722,11 +7736,6 @@ fn test_session_personality() -> E2eResult {
     FeatureTest::new("session_personality")
         .with_git()
         .setup(seed_session_personality)
-        .zola(
-            "Session personality",
-            "Choose a worktree-local agent personality for a session.",
-            41,
-        )
         .run(
             |scenario| {
                 scenario
@@ -7957,8 +7966,8 @@ fn prompt_backspace_on_empty_input() -> E2eResult {
 /// Verify that Alt+Enter inserts a newline in the prompt input,
 /// producing multiline content.
 ///
-/// Alt+Enter is sent as ESC (0x1b) followed by CR (0x0d) which crossterm
-/// interprets as `KeyCode::Enter` with `KeyModifiers::ALT`.
+/// The shared key model lowers `Alt+Enter` to the native PTY bytes and the
+/// VHS modifier command, keeping semantic proof and recording replay aligned.
 #[test]
 fn prompt_multiline_via_alt_enter() -> E2eResult {
     // Arrange, Act, Assert
@@ -7983,8 +7992,7 @@ fn prompt_multiline_via_alt_enter() -> E2eResult {
                     .wait_for_text("first line", 3000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("first_line", "First line typed")
-                    // Alt+Enter: ESC (0x1b) followed by CR (0x0d).
-                    .write_text("\x1b\r")
+                    .press_key("Alt+Enter")
                     .wait_for_stable_frame(300, 3000)
                     .write_text("second line")
                     .wait_for_text("second line", 3000)

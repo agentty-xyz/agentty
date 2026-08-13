@@ -44,7 +44,7 @@ documentation maintainable as it grows.
 - Keep animated feature images behind the `data-motion-demo` loader so off-screen media
   remains deferred. Pair each GIF with a same-named PNG poster so
   `prefers-reduced-motion` users receive a meaningful static preview. Regenerate and
-  visually inspect the poster whenever its GIF changes.
+  visually inspect the generated poster whenever its GIF changes.
 
 ## Scale with Nested Sections
 
@@ -70,11 +70,10 @@ The `/features/` page auto-discovers entries from individual `.md` files in
 
 1. Add an E2E feature test with the `FeatureTest` builder in
    `crates/agentty/tests/e2e/`.
-1. Place the generated GIF in `static/features/`. `FeatureTest` writes this when VHS is
-   installed; if GIF generation is skipped, do not add or keep the feature page until
-   the matching asset exists. Successful GIF regeneration removes the previous
-   same-named PNG so it cannot remain as a stale poster; recreate and inspect the poster
-   before finalizing the feature.
+1. Generate the artifact set in `static/features/`. `FeatureTest` atomically publishes
+   the GIF, hash sidecar, and same-named PNG poster after the semantic assertions pass.
+   If generation is skipped, do not add or keep the feature page until the complete set
+   exists. Inspect the GIF and generated final-frame poster before finalizing.
 1. Create `content/features/<name>.md` with the following front matter:
    ```toml
    +++
@@ -88,6 +87,8 @@ The `/features/` page auto-discovers entries from individual `.md` files in
    ```
 1. Choose a `weight` that slots the entry into the desired display position (lower
    weights appear first).
+1. Run `cargo run --locked -p ag-xtask -- check-feature-artifacts` to reject missing,
+   orphaned, malformed, or noncanonical feature artifacts.
 1. Run `zola check` to verify the features page renders the new entry.
 
 The `features.html` template uses `get_section(path="features/_index.md")` and iterates

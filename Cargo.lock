@@ -137,6 +137,7 @@ name = "ag-xtask"
 version = "0.14.7"
 dependencies = [
  "clap",
+ "image",
  "tempfile",
  "tracing",
  "tracing-subscriber",

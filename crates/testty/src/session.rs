@@ -16,7 +16,7 @@ use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use crate::assertion::AssertionFailure;
 use crate::frame::TerminalFrame;
 use crate::scenario;
-use crate::step::Step;
+use crate::step::{Key, Step};
 
 /// Default number of terminal columns.
 const DEFAULT_COLS: u16 = 80;
@@ -481,38 +481,25 @@ fn read_pty_output(mut reader: Box<dyn Read + Send>, sender: &mpsc::Sender<Vec<u
 
 /// Convert a human-readable key name to terminal escape bytes.
 fn key_to_bytes(key: &str) -> Vec<u8> {
-    match key.to_lowercase().as_str() {
-        "enter" | "return" => vec![b'\r'],
-        "tab" => vec![b'\t'],
-        "backtab" | "shift+tab" => vec![0x1b, b'[', b'Z'],
-        "escape" | "esc" => vec![0x1b],
-        "backspace" => vec![0x7f],
-        "up" => vec![0x1b, b'[', b'A'],
-        "down" => vec![0x1b, b'[', b'B'],
-        "right" => vec![0x1b, b'[', b'C'],
-        "left" => vec![0x1b, b'[', b'D'],
-        "home" => vec![0x1b, b'[', b'H'],
-        "end" => vec![0x1b, b'[', b'F'],
-        "delete" => vec![0x1b, b'[', b'3', b'~'],
-        "pageup" => vec![0x1b, b'[', b'5', b'~'],
-        "pagedown" => vec![0x1b, b'[', b'6', b'~'],
-        "space" => vec![b' '],
-        other => {
-            // Check for ctrl+ combinations (exactly one a–z letter).
-            if let Some(character) = other.strip_prefix("ctrl+")
-                && character.len() == 1
-                && let Some(byte) = character.bytes().next()
-                && byte.to_ascii_lowercase().is_ascii_lowercase()
-            {
-                // Ctrl+A = 0x01, Ctrl+Z = 0x1a.
-                let ctrl_byte = byte.to_ascii_lowercase() - b'a' + 1;
-
-                return vec![ctrl_byte];
-            }
-
-            // Fall through: send the raw string bytes.
-            other.as_bytes().to_vec()
-        }
+    match Key::parse(key) {
+        Key::AltEnter => vec![0x1b, b'\r'],
+        Key::Enter => vec![b'\r'],
+        Key::Tab => vec![b'\t'],
+        Key::BackTab => vec![0x1b, b'[', b'Z'],
+        Key::Escape => vec![0x1b],
+        Key::Backspace => vec![0x7f],
+        Key::Up => vec![0x1b, b'[', b'A'],
+        Key::Down => vec![0x1b, b'[', b'B'],
+        Key::Right => vec![0x1b, b'[', b'C'],
+        Key::Left => vec![0x1b, b'[', b'D'],
+        Key::Home => vec![0x1b, b'[', b'H'],
+        Key::End => vec![0x1b, b'[', b'F'],
+        Key::Delete => vec![0x1b, b'[', b'3', b'~'],
+        Key::PageUp => vec![0x1b, b'[', b'5', b'~'],
+        Key::PageDown => vec![0x1b, b'[', b'6', b'~'],
+        Key::Space => vec![b' '],
+        Key::Ctrl(character) => vec![character as u8 - b'a' + 1],
+        Key::Text(text) => text.into_bytes(),
     }
 }
 
@@ -658,30 +645,34 @@ mod tests {
     }
 
     #[test]
-    fn key_to_bytes_ctrl_multi_char_falls_through() {
-        // Arrange / Act — "ctrl+ab" must not silently resolve to Ctrl+A.
-        let bytes = key_to_bytes("ctrl+ab");
-
-        // Assert
-        assert_eq!(bytes, "ctrl+ab".as_bytes());
+    fn key_to_bytes_ctrl_multi_char_is_text() {
+        // Arrange / Act / Assert
+        assert_eq!(key_to_bytes("ctrl+ab"), b"ctrl+ab");
     }
 
     #[test]
-    fn key_to_bytes_ctrl_non_alpha_falls_through() {
-        // Arrange / Act — ctrl+[ is not a valid ctrl+letter combination.
-        let bytes = key_to_bytes("ctrl+[");
-
-        // Assert — falls through to raw bytes instead of panicking.
-        assert_eq!(bytes, "ctrl+[".as_bytes());
+    fn key_to_bytes_ctrl_non_alpha_is_text() {
+        // Arrange / Act / Assert
+        assert_eq!(key_to_bytes("ctrl+["), b"ctrl+[");
     }
 
     #[test]
     fn key_to_bytes_known_keys() {
         // Arrange / Act / Assert
         assert_eq!(key_to_bytes("enter"), vec![b'\r']);
+        assert_eq!(key_to_bytes("alt+enter"), vec![0x1b, b'\r']);
         assert_eq!(key_to_bytes("tab"), vec![b'\t']);
         assert_eq!(key_to_bytes("escape"), vec![0x1b]);
         assert_eq!(key_to_bytes("backspace"), vec![0x7f]);
+        assert_eq!(key_to_bytes("up"), vec![0x1b, b'[', b'A']);
+        assert_eq!(key_to_bytes("down"), vec![0x1b, b'[', b'B']);
+        assert_eq!(key_to_bytes("right"), vec![0x1b, b'[', b'C']);
+        assert_eq!(key_to_bytes("left"), vec![0x1b, b'[', b'D']);
+        assert_eq!(key_to_bytes("home"), vec![0x1b, b'[', b'H']);
+        assert_eq!(key_to_bytes("end"), vec![0x1b, b'[', b'F']);
+        assert_eq!(key_to_bytes("delete"), vec![0x1b, b'[', b'3', b'~']);
+        assert_eq!(key_to_bytes("pageup"), vec![0x1b, b'[', b'5', b'~']);
+        assert_eq!(key_to_bytes("pagedown"), vec![0x1b, b'[', b'6', b'~']);
         assert_eq!(key_to_bytes("space"), vec![b' ']);
     }
 
@@ -693,12 +684,10 @@ mod tests {
     }
 
     #[test]
-    fn key_to_bytes_unknown_key_returns_raw_bytes() {
-        // Arrange / Act
-        let bytes = key_to_bytes("x");
-
-        // Assert
-        assert_eq!(bytes, vec![b'x']);
+    fn key_to_bytes_character_preserves_case() {
+        // Arrange / Act / Assert
+        assert_eq!(key_to_bytes("x"), vec![b'x']);
+        assert_eq!(key_to_bytes("X"), vec![b'X']);
     }
 
     #[test]

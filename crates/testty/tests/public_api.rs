@@ -25,7 +25,7 @@ use std::time::Duration;
 use testty::assertion::{self, AssertionFailure, Expected, MatchResult, SoftAssertions};
 use testty::feature::{
     self, FeatureDemo, FeatureMeta, FeatureResult, GifMode, GifStatus, Redaction,
-    compute_frame_hash, compute_gif_hash, hash_sidecar_path,
+    compute_frame_hash, compute_gif_hash, compute_recording_hash, hash_sidecar_path,
 };
 use testty::frame::{CellColor, CellStyle, TerminalFrame};
 use testty::journey::{Journey, StartupWait};
@@ -221,6 +221,8 @@ fn auxiliary_surface_is_stable() {
     // freshness reports without re-running VHS.
     let _: fn(&ProofReport, &[Redaction]) -> u64 = compute_frame_hash;
     let _: fn(&ProofReport, &[Redaction], &VhsTapeSettings) -> u64 = compute_gif_hash;
+    let _: fn(&Scenario, &ProofReport, &[Redaction], &VhsTapeSettings) -> u64 =
+        compute_recording_hash;
     let _: fn(&Path, &str) -> PathBuf = hash_sidecar_path;
     let _: GifMode = GifMode::default();
     let _: GifMode = GifMode::CheckOnly;
@@ -233,6 +235,25 @@ fn auxiliary_surface_is_stable() {
         .redact(Redaction::hex_after("wt/", 8, "<hash>"));
     let _: Option<FeatureMeta> = None;
     let _: Option<FeatureResult> = None;
+}
+
+/// Lock in the callback-bearing feature-demo run signature used by recording
+/// harnesses that must validate a proof before publishing its GIF.
+#[allow(dead_code)]
+fn feature_demo_assertion_run_is_stable(
+    demo: FeatureDemo,
+    scenario: &Scenario,
+    builder: PtySessionBuilder,
+    binary_path: &Path,
+    env_pairs: &[(&str, &str)],
+) -> Result<FeatureResult, PtySessionError> {
+    demo.run_with_assertion(
+        scenario,
+        builder,
+        binary_path,
+        env_pairs,
+        |_frame, _report| {},
+    )
 }
 
 /// Lock in the supported pattern for matching `GifStatus` variants.

@@ -349,8 +349,9 @@ mod tests {
         let content = tape.render();
 
         // Assert
-        assert!(content.contains("Screenshot"));
-        assert!(content.contains("Sleep"));
+        assert!(content.contains("Output \"/tmp/screenshot.gif\""));
+        assert!(content.contains("Show\n\nSleep 500ms\nSleep 100ms"));
+        assert!(!content.contains("Screenshot"));
     }
 
     #[test]

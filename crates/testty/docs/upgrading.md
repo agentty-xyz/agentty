@@ -79,10 +79,11 @@ items (`testty::recipe`, `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`,
   `FeatureDemo::gif_mode(GifMode::CheckOnly)`. `CheckOnly` is read-only — never invokes
   VHS, never mutates the filesystem. `committed_error` distinguishes a truly missing
   sidecar from a sidecar that exists but cannot be read or parsed.
-  `feature::compute_frame_hash`, `feature::compute_gif_hash`, and
-  `feature::hash_sidecar_path` are public so external tooling can inspect frame drift
-  and reproduce the on-disk sidecar hash. Use `compute_gif_hash` for sidecars because it
-  includes the VHS rendering settings as well as the normalized frames.
+  `feature::compute_frame_hash`, `feature::compute_gif_hash`,
+  `feature::compute_recording_hash`, and `feature::hash_sidecar_path` are public so
+  external tooling can inspect frame drift and reproduce the on-disk sidecar hash. Use
+  `compute_recording_hash` for sidecars because it includes the canonical compiled tape
+  and recorder fingerprint as well as the VHS rendering settings and normalized frames.
 
 - The feature-demo surface (`FeatureDemo`, `FeatureMeta`, `FeatureResult`, `GifMode`,
   `GifStatus`) is reached through `testty::feature::*`.
@@ -90,8 +91,8 @@ items (`testty::recipe`, `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`,
 - `feature::compute_frame_hash` now takes the caller's redaction rules as a second
   argument: `compute_frame_hash(&report, &[])` reproduces the old behavior. Pass the
   same rules the `FeatureDemo` was built with so its frame-hash component matches. To
-  reproduce a committed sidecar, pass those rules and the demo's rendering settings to
-  `compute_gif_hash`.
+  reproduce a committed sidecar, pass the scenario, those rules, and the demo's
+  rendering settings to `compute_recording_hash`.
 
   ```rust
   // Before
@@ -102,7 +103,8 @@ items (`testty::recipe`, `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`,
   let hash = feature::compute_frame_hash(&report, &redactions);
 
   let settings = VhsTapeSettings::feature_demo();
-  let sidecar_hash = feature::compute_gif_hash(&report, &redactions, &settings);
+  let sidecar_hash =
+      feature::compute_recording_hash(&scenario, &report, &redactions, &settings);
 
   let demo = FeatureDemo::new("session_creation").redact(Redaction::hex_after("wt/", 8, "<hash>"));
   ```

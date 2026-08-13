@@ -20,6 +20,7 @@ use testty::region::Region;
 use testty::scenario::Scenario;
 use testty::session::PtySessionBuilder;
 use testty::step::Step;
+use testty::vhs::VhsError;
 
 /// CLI executable names stubbed into every [`BuilderEnv`] `PATH`.
 ///
@@ -220,6 +221,10 @@ impl BuilderEnv {
             ),
             (NO_COLOR_ENV_VAR.to_string(), NO_COLOR_ENV_VALUE.to_string()),
             ("PATH".to_string(), path_env),
+            (
+                "PWD".to_string(),
+                self.workdir.to_string_lossy().into_owned(),
+            ),
         ]
     }
 
@@ -609,39 +614,16 @@ fn parse_gif_mode(raw: &str) -> Option<GifMode> {
 /// committed page, GIF, or hash sidecar. Other [`FeatureTest`] uses are
 /// regression tests that should still run under `TESTTY_GIF_MODE=check`, but
 /// they do not have committed GIF artifacts to validate.
-fn feature_gif_mode_for_run(
-    gif_mode: Option<GifMode>,
-    name: &str,
-    has_zola_page: bool,
-) -> Option<GifMode> {
-    feature_gif_mode_for_artifacts(gif_mode, has_zola_page, feature_artifact_exists(name))
+fn feature_gif_mode_for_run(gif_mode: Option<GifMode>, has_zola_page: bool) -> Option<GifMode> {
+    gif_mode.filter(|_| has_zola_page)
 }
 
-/// Pure policy for deciding whether a run should enable GIF work.
-fn feature_gif_mode_for_artifacts(
-    gif_mode: Option<GifMode>,
-    has_zola_page: bool,
-    has_committed_artifact: bool,
-) -> Option<GifMode> {
-    match gif_mode {
-        Some(GifMode::CheckOnly) if has_zola_page && has_committed_artifact => {
-            Some(GifMode::CheckOnly)
-        }
-        Some(GifMode::GenerateIfStale | GifMode::AlwaysGenerate) if has_zola_page => gif_mode,
-        _ => None,
-    }
-}
-
-/// Return whether this feature has committed docs artifacts to validate.
-///
-/// A Zola page is the publication marker. GIF and sidecar checks cover the
-/// historical transition period and orphaned artifacts.
-fn feature_artifact_exists(name: &str) -> bool {
-    feature_content_dir_path()
-        .join(format!("{name}.md"))
-        .exists()
-        || feature_output_dir().join(format!("{name}.gif")).exists()
-        || feature_output_dir().join(format!(".{name}.hash")).exists()
+/// Return whether this mode can mutate published artifacts.
+fn gif_mode_records_artifacts(gif_mode: Option<GifMode>) -> bool {
+    matches!(
+        gif_mode,
+        Some(GifMode::GenerateIfStale | GifMode::AlwaysGenerate)
+    )
 }
 
 /// Return the redaction that hides a session's generated worktree hash.
@@ -693,12 +675,12 @@ fn feature_content_dir_path() -> PathBuf {
 }
 
 /// Return the Zola feature content directory, creating it if needed.
-fn feature_content_dir() -> PathBuf {
+fn feature_content_dir() -> std::io::Result<PathBuf> {
     let content_dir = feature_content_dir_path();
 
-    let _ = std::fs::create_dir_all(&content_dir);
+    std::fs::create_dir_all(&content_dir)?;
 
-    content_dir
+    Ok(content_dir)
 }
 
 /// Return whether the run left a GIF on disk for this feature.
@@ -725,28 +707,138 @@ pub(crate) struct ZolaFeaturePage {
 }
 
 impl ZolaFeaturePage {
-    /// Write the Zola frontmatter page if it does not already exist.
-    ///
-    /// The generated page uses TOML frontmatter with `title`, `description`,
-    /// `weight`, and `[extra] gif` fields matching the Zola feature page
-    /// conventions.
-    fn ensure(&self, name: &str) {
-        let content_dir = feature_content_dir();
+    /// Validate an existing page without creating content or directories.
+    fn validate_existing(&self, name: &str) -> std::io::Result<()> {
+        self.validate_existing_in(&feature_content_dir_path(), name)
+    }
+
+    /// Validate an existing page inside an explicit content directory.
+    fn validate_existing_in(&self, content_dir: &Path, name: &str) -> std::io::Result<()> {
         let page_path = content_dir.join(format!("{name}.md"));
+        let committed_content = std::fs::read_to_string(page_path)?;
+
+        self.validate_content(name, &committed_content)
+    }
+
+    /// Publish or validate the page before feature artifacts can change.
+    ///
+    /// A newly published page is represented by a rollback guard so a later
+    /// recording failure cannot leave it orphaned.
+    fn begin_publication(&self, name: &str) -> std::io::Result<ZolaPagePublication> {
+        let content_dir = feature_content_dir()?;
+
+        self.begin_publication_in(&content_dir, name)
+    }
+
+    /// Publish or validate the page inside an explicit content directory.
+    fn begin_publication_in(
+        &self,
+        content_dir: &Path,
+        name: &str,
+    ) -> std::io::Result<ZolaPagePublication> {
+        let page_path = content_dir.join(format!("{name}.md"));
+        let content = self.content(name);
 
         if page_path.exists() {
-            return;
+            let committed_content = std::fs::read_to_string(&page_path)?;
+            self.validate_content(name, &committed_content)?;
+
+            return Ok(ZolaPagePublication {
+                committed: false,
+                created: false,
+                page_path,
+            });
         }
 
-        let content = format!(
+        let staging_path = content_dir.join(format!(".{name}.recording.md"));
+        std::fs::write(&staging_path, content)?;
+        if let Err(error) = std::fs::rename(&staging_path, &page_path) {
+            let _ = std::fs::remove_file(staging_path);
+
+            return Err(error);
+        }
+
+        Ok(ZolaPagePublication {
+            committed: false,
+            created: true,
+            page_path,
+        })
+    }
+
+    /// Render the canonical page content for this feature.
+    fn content(&self, name: &str) -> String {
+        format!(
             "+++\ntitle = \"{title}\"\ndescription = \"{description}\"\nweight = \
              {weight}\n\n[extra]\ngif = \"{name}.gif\"\n+++\n",
             title = self.title,
             description = self.description,
             weight = self.weight,
-        );
+        )
+    }
 
-        let _ = std::fs::write(&page_path, content);
+    /// Validate committed metadata against the owning feature test.
+    fn validate_content(&self, name: &str, content: &str) -> std::io::Result<()> {
+        let expected_fields = [
+            ("title", format!("\"{}\"", self.title)),
+            ("description", format!("\"{}\"", self.description)),
+            ("weight", self.weight.to_string()),
+            ("gif", format!("\"{name}.gif\"")),
+        ];
+
+        for (field, expected_value) in expected_fields {
+            let committed_value = content.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                (key.trim() == field).then(|| value.trim())
+            });
+            if committed_value != Some(expected_value.as_str()) {
+                return Err(std::io::Error::other(format!(
+                    "feature page metadata mismatch for {name}: `{field}` is {committed_value:?}, \
+                     expected `{expected_value}`"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Rollback guard for a Zola page published before feature artifacts.
+struct ZolaPagePublication {
+    committed: bool,
+    created: bool,
+    page_path: PathBuf,
+}
+
+impl ZolaPagePublication {
+    /// Keep the published page after the artifact transaction succeeds.
+    fn commit(mut self) {
+        self.committed = true;
+    }
+
+    /// Remove a page created by this run while preserving existing pages.
+    fn rollback(mut self) -> std::io::Result<()> {
+        if !self.created {
+            return Ok(());
+        }
+
+        let result = match std::fs::remove_file(&self.page_path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        };
+        if result.is_ok() {
+            self.committed = true;
+        }
+
+        result
+    }
+}
+
+impl Drop for ZolaPagePublication {
+    fn drop(&mut self) {
+        if self.created && !self.committed {
+            let _ = std::fs::remove_file(&self.page_path);
+        }
     }
 }
 
@@ -805,6 +897,76 @@ pub(crate) struct FeatureTest {
 
 /// Boxed setup hook used by [`FeatureTest`] before launching the PTY session.
 type FeatureSetupHook = Box<dyn Fn(&BuilderEnv) -> Result<(), Box<dyn std::error::Error>>>;
+
+/// Isolated fixture whose temporary root stays alive for a feature run.
+struct PreparedFeatureEnvironment {
+    env: BuilderEnv,
+    temp: tempfile::TempDir,
+}
+
+impl PreparedFeatureEnvironment {
+    /// Preserve the initialized fixture so the asserted proof can be reset
+    /// before VHS replays the same scenario at the same paths.
+    fn snapshot(&self) -> std::io::Result<FeatureEnvironmentSnapshot> {
+        let temp = tempfile::TempDir::new()?;
+        Self::copy_directory_contents(self.temp.path(), temp.path())?;
+
+        Ok(FeatureEnvironmentSnapshot { temp })
+    }
+
+    /// Restore the initialized fixture after its semantic proof mutates it.
+    fn restore(&self, snapshot: &FeatureEnvironmentSnapshot) -> std::io::Result<()> {
+        Self::remove_directory_contents(self.temp.path())?;
+        Self::copy_directory_contents(snapshot.temp.path(), self.temp.path())
+    }
+
+    /// Copy every fixture entry while preserving directories and symlinks.
+    fn copy_directory_contents(source: &Path, destination: &Path) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            let source_path = entry.path();
+            let destination_path = destination.join(entry.file_name());
+            let file_type = entry.file_type()?;
+
+            if file_type.is_dir() {
+                std::fs::create_dir(&destination_path)?;
+                Self::copy_directory_contents(&source_path, &destination_path)?;
+                std::fs::set_permissions(&destination_path, entry.metadata()?.permissions())?;
+            } else if file_type.is_symlink() {
+                symlink(std::fs::read_link(&source_path)?, &destination_path)?;
+            } else if file_type.is_file() {
+                std::fs::copy(&source_path, &destination_path)?;
+            } else {
+                return Err(std::io::Error::other(format!(
+                    "unsupported fixture entry: {}",
+                    source_path.display()
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Remove every mutable fixture entry without deleting its stable root.
+    fn remove_directory_contents(directory: &Path) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                std::fs::remove_dir_all(path)?;
+            } else {
+                std::fs::remove_file(path)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Immutable copy of one initialized feature fixture.
+struct FeatureEnvironmentSnapshot {
+    temp: tempfile::TempDir,
+}
 
 impl FeatureTest {
     /// Create a new feature test builder with the given name.
@@ -897,102 +1059,198 @@ impl FeatureTest {
     /// The `build_scenario` closure receives a fresh [`Scenario`] with the
     /// feature name and should return it after composing journeys and steps.
     /// The `assert` closure receives the final frame and proof report for
-    /// semantic assertions.
+    /// semantic assertions. Generate modes invoke it again for the isolated
+    /// recording proof before any GIF processing, so assertions must be
+    /// deterministic and reusable.
     pub(crate) fn run(
         self,
         build_scenario: impl FnOnce(Scenario) -> Scenario,
-        assert: impl FnOnce(&TerminalFrame, &ProofReport),
+        assert: impl Fn(&TerminalFrame, &ProofReport),
     ) -> Result<(), Box<dyn std::error::Error>> {
         let _test_guard = acquire_e2e_test_lock();
+        let scenario = build_scenario(Scenario::new(&self.name));
+        let gif_mode = feature_gif_mode_for_run(resolve_gif_mode(), self.zola_page.is_some());
+        let proof_environment = self.prepare_environment()?;
+        let (proof_builder, proof_owned_pairs) = self.runtime_configuration(&proof_environment.env);
+        let proof_env_pairs: Vec<(&str, &str)> = proof_owned_pairs
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+
+        // Generate modes execute assertions with GIF output disabled. A failed
+        // assertion therefore cannot publish or invalidate documentation.
+        let proof_gif_mode = (!gif_mode_records_artifacts(gif_mode))
+            .then_some(gif_mode)
+            .flatten();
+        let result = self
+            .feature_demo(proof_gif_mode)
+            .run(
+                &scenario,
+                proof_builder,
+                &cargo_bin("agentty"),
+                &proof_env_pairs,
+            )
+            .map_err(|error| std::io::Error::other(format!("feature demo failed: {error}")))?;
+
+        self.validate_gif_status(&result.gif_status)?;
+        assert(&result.frame, &result.report);
+
+        if matches!(gif_mode, Some(GifMode::CheckOnly))
+            && let Some(zola_page) = &self.zola_page
+        {
+            zola_page.validate_existing(&self.name)?;
+        }
+
+        if let Some(gif_mode) = gif_mode
+            .filter(|mode| matches!(mode, GifMode::GenerateIfStale | GifMode::AlwaysGenerate))
+        {
+            self.record_feature(&scenario, gif_mode, &assert)?;
+        }
+
+        Ok(())
+    }
+
+    /// Record one feature from an asserted proof after publishing its
+    /// rollback-protected page.
+    fn record_feature(
+        &self,
+        scenario: &Scenario,
+        gif_mode: GifMode,
+        assert: &impl Fn(&TerminalFrame, &ProofReport),
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let recording_environment = self.prepare_environment()?;
+        let recording_snapshot = recording_environment.snapshot()?;
+        let (recording_proof_builder, recording_owned_pairs) =
+            self.runtime_configuration(&recording_environment.env);
+        let recording_env_pairs: Vec<(&str, &str)> = recording_owned_pairs
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        let page_publication = self
+            .zola_page
+            .as_ref()
+            .map(|page| page.begin_publication(&self.name))
+            .transpose()?;
+        let recording_result = self
+            .feature_demo(Some(gif_mode))
+            .run_with_assertion_and_recording_setup(
+                scenario,
+                recording_proof_builder,
+                &cargo_bin("agentty"),
+                &recording_env_pairs,
+                assert,
+                || {
+                    recording_environment
+                        .restore(&recording_snapshot)
+                        .map_err(|error| {
+                            VhsError::IoError(format!(
+                                "failed to restore recording fixture: {error}"
+                            ))
+                        })
+                },
+            );
+        let recording_result = match recording_result {
+            Ok(recording_result) => recording_result,
+            Err(error) => {
+                let error: Box<dyn std::error::Error> =
+                    std::io::Error::other(format!("feature recording failed: {error}")).into();
+
+                return Err(Self::rollback_page_after_error(page_publication, error));
+            }
+        };
+
+        if let Err(error) = self.validate_gif_status(&recording_result.gif_status) {
+            return Err(Self::rollback_page_after_error(page_publication, error));
+        }
+
+        if let Some(page_publication) = page_publication {
+            if gif_exists_on_disk(&recording_result.gif_status) {
+                page_publication.commit();
+            } else {
+                page_publication.rollback()?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Roll back a newly published page and retain the original failure.
+    fn rollback_page_after_error(
+        page_publication: Option<ZolaPagePublication>,
+        error: Box<dyn std::error::Error>,
+    ) -> Box<dyn std::error::Error> {
+        let Some(page_publication) = page_publication else {
+            return error;
+        };
+        if let Err(rollback_error) = page_publication.rollback() {
+            return std::io::Error::other(format!(
+                "{error}; feature page rollback also failed: {rollback_error}"
+            ))
+            .into();
+        }
+
+        error
+    }
+
+    /// Prepare one pristine copy of the test fixture.
+    fn prepare_environment(
+        &self,
+    ) -> Result<PreparedFeatureEnvironment, Box<dyn std::error::Error>> {
         let temp = tempfile::TempDir::new()?;
         let env = BuilderEnv::new(temp.path())?;
 
         if self.with_git {
             env.init_git()?;
         }
-
         if let Some(setup) = &self.setup {
             setup(&env)?;
         }
 
-        let scenario = build_scenario(Scenario::new(&self.name));
-        let terminal_cols = self.terminal_cols;
-        let terminal_rows = self.terminal_rows;
-        let uses_default_terminal_size =
-            terminal_cols == DEFAULT_TERMINAL_COLS && terminal_rows == DEFAULT_TERMINAL_ROWS;
-        let (mut builder, mut owned_pairs) =
-            if self.inherit_system_path && uses_default_terminal_size {
-                (env.builder(), env.as_vhs_env_pairs())
-            } else if self.inherit_system_path {
-                (
-                    env.builder_with_path_and_size(
-                        env.path_with_stub_bin(),
-                        terminal_cols,
-                        terminal_rows,
-                    ),
-                    env.as_vhs_env_pairs(),
-                )
-            } else {
-                let path_env = env.stub_only_path();
+        Ok(PreparedFeatureEnvironment { env, temp })
+    }
 
-                (
-                    env.builder_with_path_and_size(path_env.clone(), terminal_cols, terminal_rows),
-                    env.as_vhs_env_pairs_with_path(path_env),
-                )
-            };
+    /// Build matching PTY and VHS runtime configuration for one fixture.
+    fn runtime_configuration(
+        &self,
+        env: &BuilderEnv,
+    ) -> (PtySessionBuilder, Vec<(String, String)>) {
+        let path_env = if self.inherit_system_path {
+            env.path_with_stub_bin()
+        } else {
+            env.stub_only_path()
+        };
+        let mut builder = env.builder_with_path_and_size(
+            path_env.clone(),
+            self.terminal_cols,
+            self.terminal_rows,
+        );
+        let mut env_pairs = env.as_vhs_env_pairs_with_path(path_env);
+
         for (key, value) in &self.child_env {
             builder = builder.env(key.clone(), value.clone());
-            owned_pairs.push((key.clone(), value.clone()));
+            env_pairs.push((key.clone(), value.clone()));
         }
-        let env_pairs: Vec<(&str, &str)> = owned_pairs
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
-            .collect();
 
-        // Without an output directory testty reports `NoOutputDir` and skips
-        // VHS altogether, so an opt-out run costs nothing and cannot dirty
-        // the docs tree.
-        //
-        // Any frame showing a live session carries that session's generated
-        // worktree hash, which is fresh on every run. Redacting it keeps the
-        // freshness hash tied to the UI instead of the UUID, so a committed GIF
-        // stays valid until the UI itself moves.
+        (builder, env_pairs)
+    }
+
+    /// Build a demo with the shared deterministic redactions and GIF policy.
+    fn feature_demo(&self, gif_mode: Option<GifMode>) -> FeatureDemo {
         let mut demo = FeatureDemo::new(&self.name)
             .redact(session_worktree_redaction())
             .redact(agentty_version_redaction());
-        if let Some(gif_mode) =
-            feature_gif_mode_for_run(resolve_gif_mode(), &self.name, self.zola_page.is_some())
-        {
+        if let Some(gif_mode) = gif_mode {
             demo = demo.gif_output_dir(feature_output_dir()).gif_mode(gif_mode);
         }
 
-        let result = demo
-            .run(&scenario, builder, &cargo_bin("agentty"), &env_pairs)
-            .map_err(|error| std::io::Error::other(format!("feature demo failed: {error}")))?;
-
-        self.validate_gif_status(&result.gif_status)?;
-
-        assert(&result.frame, &result.report);
-
-        // A published feature page must always have its GIF committed
-        // alongside it, so the page is only written once a GIF exists on
-        // disk. Runs without VHS installed skip GIF work entirely and must
-        // not leave a page pointing at a missing asset.
-        if gif_exists_on_disk(&result.gif_status)
-            && let Some(zola_page) = self.zola_page
-        {
-            zola_page.ensure(&self.name);
-        }
-
-        Ok(())
+        demo
     }
 
     /// Validates the GIF generation result for this feature.
     ///
-    /// A stale GIF is an error in check mode when a committed sidecar drifted
-    /// or the GIF itself is missing. Existing GIFs without sidecars are
-    /// tolerated so the check gate can be enabled before every historical GIF
-    /// has been re-recorded with a hash baseline.
+    /// Every stale GIF is an error in check mode, including missing or invalid
+    /// sidecars. A Zola declaration is a publication contract, so there is no
+    /// legacy bypass for partially published artifact sets.
     fn validate_gif_status(
         &self,
         gif_status: &GifStatus,
@@ -1006,12 +1264,6 @@ impl FeatureTest {
             | GifStatus::Fresh { .. }
             | GifStatus::VhsNotInstalled
             | GifStatus::NoOutputDir => Ok(()),
-            GifStatus::Stale {
-                gif_path,
-                committed: None,
-                committed_error: None,
-                ..
-            } if gif_path.is_file() => Ok(()),
             GifStatus::Stale {
                 gif_path,
                 current,
@@ -1055,8 +1307,10 @@ impl BuilderEnv {
     /// Initialize a git repository in the workdir so sessions can create
     /// worktrees.
     ///
-    /// Sets up a `main` branch with an empty initial commit and minimal git
-    /// config for the test environment.
+    /// Sets up a `main` branch with an empty initial commit, a local bare
+    /// `origin`, and an upstream tracking branch. The upstream prevents
+    /// background sync from opening an unrelated failure dialog during a VHS
+    /// replay.
     ///
     /// # Errors
     ///
@@ -1080,7 +1334,15 @@ impl BuilderEnv {
         run(&["init", "-b", "main"])?;
         run(&["config", "user.email", "test@test.com"])?;
         run(&["config", "user.name", "Test"])?;
-        run(&["commit", "--allow-empty", "-m", "init"])
+        run(&["commit", "--allow-empty", "-m", "init"])?;
+
+        let origin_path = self.home_dir.join("origin.git");
+        let origin = origin_path.to_str().ok_or_else(|| {
+            std::io::Error::other(format!("non-UTF-8 origin path: {}", origin_path.display()))
+        })?;
+        run(&["init", "--bare", origin])?;
+        run(&["remote", "add", "origin", origin])?;
+        run(&["push", "--set-upstream", "origin", "main"])
     }
 }
 
@@ -1328,6 +1590,14 @@ pub(crate) fn create_session_with_prompt_and_return_to_list(prompt: &str) -> Jou
 mod tests {
     use super::*;
 
+    fn test_zola_page() -> ZolaFeaturePage {
+        ZolaFeaturePage {
+            title: "Feature title".to_string(),
+            description: "Feature description.".to_string(),
+            weight: 42,
+        }
+    }
+
     #[test]
     fn match_session_view_texts_accepts_footer_and_all_markers() {
         // Arrange
@@ -1415,6 +1685,59 @@ mod tests {
     }
 
     #[test]
+    fn prepared_feature_environment_restores_the_asserted_fixture() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("create fixture root");
+        let env = BuilderEnv::new(temp.path()).expect("create builder environment");
+        let state_path = env.agentty_root.join("state.txt");
+        let link_path = env.home_dir.join("state-link");
+        std::fs::write(&state_path, "initialized").expect("write initialized state");
+        symlink(&state_path, &link_path).expect("create fixture symlink");
+        let prepared = PreparedFeatureEnvironment { env, temp };
+        let snapshot = prepared.snapshot().expect("snapshot initialized fixture");
+        std::fs::write(&state_path, "mutated").expect("mutate fixture state");
+        std::fs::write(prepared.env.home_dir.join("unexpected.txt"), "unexpected")
+            .expect("write unexpected state");
+
+        // Act
+        prepared.restore(&snapshot).expect("restore fixture");
+
+        // Assert
+        assert_eq!(
+            std::fs::read_to_string(&state_path).expect("read restored state"),
+            "initialized"
+        );
+        assert!(!prepared.env.home_dir.join("unexpected.txt").exists());
+        assert!(
+            std::fs::symlink_metadata(link_path)
+                .expect("read restored symlink metadata")
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn prepared_feature_environment_rejects_unsupported_fixture_entries() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("create fixture root");
+        let env = BuilderEnv::new(temp.path()).expect("create builder environment");
+        let socket_path = env.home_dir.join("fixture.sock");
+        let _socket = std::os::unix::net::UnixListener::bind(&socket_path)
+            .expect("create unsupported socket entry");
+        let prepared = PreparedFeatureEnvironment { env, temp };
+
+        // Act
+        let error = prepared
+            .snapshot()
+            .err()
+            .expect("socket fixture should fail snapshot");
+
+        // Assert
+        assert!(error.to_string().contains("unsupported fixture entry"));
+        assert!(error.to_string().contains("fixture.sock"));
+    }
+
+    #[test]
     fn builder_env_exports_no_color_to_vhs_recording() {
         // Arrange
         let temp = tempfile::TempDir::new().expect("failed to create temporary directory");
@@ -1429,6 +1752,12 @@ mod tests {
                 .iter()
                 .any(|(key, value)| { key == NO_COLOR_ENV_VAR && value == NO_COLOR_ENV_VALUE }),
             "feature recording must disable color"
+        );
+        assert!(
+            environment
+                .iter()
+                .any(|(key, value)| key == "PWD" && value == &env.workdir.to_string_lossy()),
+            "feature recording must enter the PTY working directory"
         );
     }
 
@@ -1447,6 +1776,30 @@ mod tests {
                 "missing {executable_name} test stub",
             );
         }
+    }
+
+    #[test]
+    fn builder_env_git_fixture_has_an_upstream() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temporary directory");
+        let env = BuilderEnv::new(temp.path()).expect("failed to create builder environment");
+
+        // Act
+        env.init_git().expect("initialize git fixture");
+        let output = std::process::Command::new("git")
+            .args([
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}",
+            ])
+            .current_dir(&env.workdir)
+            .output()
+            .expect("inspect git upstream");
+
+        // Assert
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "origin/main\n");
     }
 
     #[test]
@@ -1536,7 +1889,7 @@ mod tests {
     fn feature_gif_mode_for_run_keeps_zola_feature_mode() {
         // Arrange / Act / Assert
         assert_eq!(
-            feature_gif_mode_for_artifacts(Some(GifMode::CheckOnly), true, true),
+            feature_gif_mode_for_run(Some(GifMode::CheckOnly), true),
             Some(GifMode::CheckOnly),
         );
     }
@@ -1545,26 +1898,274 @@ mod tests {
     fn feature_gif_mode_for_run_skips_regression_only_tests() {
         // Arrange / Act / Assert
         assert_eq!(
-            feature_gif_mode_for_artifacts(Some(GifMode::CheckOnly), false, true),
+            feature_gif_mode_for_run(Some(GifMode::CheckOnly), false),
             None,
         );
     }
 
     #[test]
-    fn feature_gif_mode_for_run_skips_unpublished_check_only_features() {
+    fn gif_mode_records_artifacts_only_for_generate_modes() {
         // Arrange / Act / Assert
+        assert!(!gif_mode_records_artifacts(None));
+        assert!(!gif_mode_records_artifacts(Some(GifMode::CheckOnly)));
+        assert!(gif_mode_records_artifacts(Some(GifMode::GenerateIfStale)));
+        assert!(gif_mode_records_artifacts(Some(GifMode::AlwaysGenerate)));
+    }
+
+    #[test]
+    fn zola_feature_page_accepts_matching_metadata() {
+        // Arrange
+        let page = test_zola_page();
+        let content = page.content("feature_name");
+
+        // Act
+        let result = page.validate_content("feature_name", &content);
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn zola_feature_page_rejects_metadata_drift() {
+        // Arrange
+        let page = test_zola_page();
+        let content = page
+            .content("feature_name")
+            .replace("weight = 42", "weight = 7");
+
+        // Act
+        let error = page
+            .validate_content("feature_name", &content)
+            .expect_err("drifted metadata should fail");
+
+        // Assert
+        assert!(error.to_string().contains("`weight`"));
+        assert!(error.to_string().contains("expected `42`"));
+    }
+
+    #[test]
+    fn zola_feature_page_validates_existing_page_without_mutation() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let page = test_zola_page();
+        let page_path = temp.path().join("feature_name.md");
+        let content = page.content("feature_name");
+        std::fs::write(&page_path, &content).expect("write page");
+
+        // Act
+        page.validate_existing_in(temp.path(), "feature_name")
+            .expect("validate page");
+
+        // Assert
         assert_eq!(
-            feature_gif_mode_for_artifacts(Some(GifMode::CheckOnly), true, false),
-            None,
+            std::fs::read_to_string(page_path).expect("read page"),
+            content
         );
     }
 
     #[test]
-    fn feature_gif_mode_for_run_keeps_generate_for_unpublished_zola_features() {
-        // Arrange / Act / Assert
+    fn zola_page_publication_rolls_back_new_page() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let page = test_zola_page();
+        let page_path = temp.path().join("feature_name.md");
+        let publication = page
+            .begin_publication_in(temp.path(), "feature_name")
+            .expect("publish page");
+        assert!(page_path.is_file());
+
+        // Act
+        publication.rollback().expect("rollback page");
+
+        // Assert
+        assert!(!page_path.exists());
+    }
+
+    #[test]
+    fn zola_page_publication_commit_keeps_new_page() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let page = test_zola_page();
+        let page_path = temp.path().join("feature_name.md");
+        let publication = page
+            .begin_publication_in(temp.path(), "feature_name")
+            .expect("publish page");
+
+        // Act
+        publication.commit();
+
+        // Assert
+        assert!(page_path.is_file());
+    }
+
+    #[test]
+    fn zola_page_publication_drop_rolls_back_new_page() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let page = test_zola_page();
+        let page_path = temp.path().join("feature_name.md");
+        let publication = page
+            .begin_publication_in(temp.path(), "feature_name")
+            .expect("publish page");
+
+        // Act
+        drop(publication);
+
+        // Assert
+        assert!(!page_path.exists());
+    }
+
+    #[test]
+    fn zola_page_publication_preserves_existing_page_on_rollback() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let page = test_zola_page();
+        let page_path = temp.path().join("feature_name.md");
+        let content = page.content("feature_name");
+        std::fs::write(&page_path, &content).expect("write page");
+        let publication = page
+            .begin_publication_in(temp.path(), "feature_name")
+            .expect("validate page");
+
+        // Act
+        publication.rollback().expect("rollback existing page");
+
+        // Assert
         assert_eq!(
-            feature_gif_mode_for_artifacts(Some(GifMode::GenerateIfStale), true, false),
-            Some(GifMode::GenerateIfStale),
+            std::fs::read_to_string(page_path).expect("read page"),
+            content
+        );
+    }
+
+    #[test]
+    fn zola_page_publication_rejects_drift_before_writing() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let page = test_zola_page();
+        let page_path = temp.path().join("feature_name.md");
+        std::fs::write(&page_path, page.content("feature_name").replace("42", "7"))
+            .expect("write drifted page");
+
+        // Act
+        let error = page
+            .begin_publication_in(temp.path(), "feature_name")
+            .err()
+            .expect("drifted page should fail");
+
+        // Assert
+        assert!(error.to_string().contains("`weight`"));
+        assert!(!temp.path().join(".feature_name.recording.md").exists());
+    }
+
+    #[test]
+    fn zola_page_publication_cleans_staging_file_when_rename_fails() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let page = test_zola_page();
+        let page_path = temp.path().join("feature_name.md");
+        let staging_path = temp.path().join(".feature_name.recording.md");
+        std::fs::create_dir(&page_path).expect("create conflicting page directory");
+
+        // Act
+        let result = page.begin_publication_in(temp.path(), "feature_name");
+
+        // Assert
+        assert!(result.is_err());
+        assert!(!staging_path.exists());
+        assert!(page_path.is_dir());
+    }
+
+    #[test]
+    fn zola_page_publication_ignores_an_already_removed_new_page() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let page = test_zola_page();
+        let page_path = temp.path().join("feature_name.md");
+        let publication = page
+            .begin_publication_in(temp.path(), "feature_name")
+            .expect("publish page");
+        std::fs::remove_file(page_path).expect("remove page");
+
+        // Act
+        let result = publication.rollback();
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn zola_page_publication_reports_rollback_failure() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let page = test_zola_page();
+        let page_path = temp.path().join("feature_name.md");
+        let publication = page
+            .begin_publication_in(temp.path(), "feature_name")
+            .expect("publish page");
+        std::fs::remove_file(&page_path).expect("remove page");
+        std::fs::create_dir(&page_path).expect("replace page with directory");
+
+        // Act
+        let result = publication.rollback();
+
+        // Assert
+        assert!(result.is_err());
+        assert!(page_path.is_dir());
+    }
+
+    #[test]
+    fn rollback_page_after_error_preserves_original_error() {
+        // Arrange
+        let error: Box<dyn std::error::Error> = std::io::Error::other("recording failed").into();
+
+        // Act
+        let returned_error = FeatureTest::rollback_page_after_error(None, error);
+
+        // Assert
+        assert_eq!(returned_error.to_string(), "recording failed");
+    }
+
+    #[test]
+    fn rollback_page_after_error_removes_new_page() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let page = test_zola_page();
+        let page_path = temp.path().join("feature_name.md");
+        let publication = page
+            .begin_publication_in(temp.path(), "feature_name")
+            .expect("publish page");
+        let error: Box<dyn std::error::Error> = std::io::Error::other("recording failed").into();
+
+        // Act
+        let returned_error = FeatureTest::rollback_page_after_error(Some(publication), error);
+
+        // Assert
+        assert_eq!(returned_error.to_string(), "recording failed");
+        assert!(!page_path.exists());
+    }
+
+    #[test]
+    fn rollback_page_after_error_combines_rollback_failure() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let page = test_zola_page();
+        let page_path = temp.path().join("feature_name.md");
+        let publication = page
+            .begin_publication_in(temp.path(), "feature_name")
+            .expect("publish page");
+        std::fs::remove_file(&page_path).expect("remove page");
+        std::fs::create_dir(&page_path).expect("replace page with directory");
+        let error: Box<dyn std::error::Error> = std::io::Error::other("recording failed").into();
+
+        // Act
+        let returned_error = FeatureTest::rollback_page_after_error(Some(publication), error);
+
+        // Assert
+        assert!(returned_error.to_string().contains("recording failed"));
+        assert!(
+            returned_error
+                .to_string()
+                .contains("feature page rollback also failed")
         );
     }
 
@@ -1632,7 +2233,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_gif_status_accepts_existing_gif_without_sidecar() {
+    fn validate_gif_status_rejects_existing_gif_without_sidecar() {
         // Arrange
         let temp = tempfile::TempDir::new().expect("temp dir");
         let gif_path = temp.path().join("legacy_feature.gif");
@@ -1650,7 +2251,8 @@ mod tests {
         let result = feature_test.validate_gif_status(&gif_status);
 
         // Assert
-        assert!(result.is_ok());
+        let error = result.expect_err("missing sidecar should fail validation");
+        assert!(error.to_string().contains("committed hash None"));
     }
 
     #[test]
