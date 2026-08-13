@@ -2119,15 +2119,15 @@ mod tests {
                 ),
             ],
         );
-        session.summary = Some(summary_fixture());
         session.status = Status::Review;
         let review_text = "## Review\n\n### Project Impact\n\n- Documentation-only change.\n\n### \
                            Suggestions\n\n- None.";
-        session.reconcile_transient_messages();
         set_review_transient(
             &mut session,
             TransientMessageBody::Markdown(review_text.to_string()),
         );
+        session.summary = Some(summary_fixture());
+        session.reconcile_transient_messages();
 
         // Act
         let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);

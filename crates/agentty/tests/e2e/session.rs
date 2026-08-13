@@ -1527,6 +1527,13 @@ fn seed_review_ready_session_with_persisted_focused_review(
                         .to_string(),
                 ),
             )
+            .await?;
+        database
+            .sessions()
+            .update_session_summary(
+                "review-shortcut-0001",
+                r#"{"turn":"Persisted the focused review.","session":"Review output survives session reloads."}"#,
+            )
             .await
     })?;
 
@@ -7094,6 +7101,7 @@ fn session_view_compact_mermaid_output() -> E2eResult {
 fn persisted_focused_review_survives_reload() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("persisted_focused_review")
+        .with_terminal_size(100, 40)
         .with_git()
         .setup(seed_review_ready_session_with_persisted_focused_review)
         .run(
@@ -7117,6 +7125,11 @@ fn persisted_focused_review_survives_reload() -> E2eResult {
                     .into_iter()
                     .next()
                     .expect("project impact header should render");
+                let summary_header = frame
+                    .find_text("Change Summary")
+                    .into_iter()
+                    .next()
+                    .expect("change summary header should render");
                 let impact_finding = frame
                     .find_text("Persisted focused review finding.")
                     .into_iter()
@@ -7133,6 +7146,7 @@ fn persisted_focused_review_survives_reload() -> E2eResult {
                     .next()
                     .expect("empty suggestion should render");
 
+                assert!(summary_header.rect.row < impact_header.rect.row);
                 assert_eq!(impact_finding.rect.row, impact_header.rect.row + 1);
                 assert_eq!(empty_suggestion.rect.row, suggestions_header.rect.row + 1);
                 assertion::assert_not_visible(frame, "type \"/apply\" to verify and apply");

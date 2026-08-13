@@ -255,16 +255,17 @@ trigger this automatic review. Press `f` to append the cached review into the se
 output, or to see a loading message while generation is still running. The appended
 review stays visible across diff mode, question mode, session switching, project
 switching, and background session metadata refreshes, and is cleared when you submit the
-next prompt. Focused review includes the saved user and agent chat history for context.
-It uses inspection-only context: it may read files, search, inspect git history, and
-browse when needed, but it recommends verification commands instead of running checks
-itself. The review treats explicit decisions, accepted tradeoffs, and explanations in
-the chat as constraints, and only reopens a resolved suggestion when the current diff
-contradicts the resolution or inspection finds a new significant risk. `Project Impact`
-renders concise bullets directly beneath its heading. `Suggestions` uses the same
-compact spacing and formats its bullets as `[Severity]: Issue details`, using `[High]`
-or `[Medium]` when follow-up work is needed. Empty `Suggestions` output does not offer
-the `/apply` action. A turn stopped with `Ctrl+c` does not start a focused review
+next prompt. When both are visible, `Change Summary` appears before `Review`. Focused
+review includes the saved user and agent chat history for context. It uses inspection-
+only context: it may read files, search, inspect git history, and browse when needed,
+but it recommends verification commands instead of running checks itself. The review
+treats explicit decisions, accepted tradeoffs, and explanations in the chat as
+constraints, and only reopens a resolved suggestion when the current diff contradicts
+the resolution or inspection finds a new significant risk. `Project Impact` renders
+concise bullets directly beneath its heading. `Suggestions` uses the same compact
+spacing and formats its bullets as `[Severity]: Issue details`, using `[High]` or
+`[Medium]` when follow-up work is needed. Empty `Suggestions` output does not offer the
+`/apply` action. A turn stopped with `Ctrl+c` does not start a focused review
 automatically; press `f` for a manual one.
 
 ### Session Output Markdown
