@@ -253,7 +253,7 @@ fn draft_session_cancel_confirmation() -> E2eResult {
                 );
 
                 let final_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Archive", &final_full);
+                assertion::assert_text_in_region(frame, "ARCHIVE —— 1", &final_full);
                 assertion::assert_text_in_region(frame, "Canceled", &final_full);
             },
         )?;
@@ -313,7 +313,7 @@ fn test_draft_orchestrator_cancel() -> E2eResult {
                 );
 
                 let final_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Archive", &final_full);
+                assertion::assert_text_in_region(frame, "ARCHIVE", &final_full);
                 assertion::assert_text_in_region(frame, "Canceled", &final_full);
             },
         )?;
@@ -371,7 +371,7 @@ fn running_session_cancel_confirmation() -> E2eResult {
                 );
 
                 let final_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Archive", &final_full);
+                assertion::assert_text_in_region(frame, "ARCHIVE", &final_full);
                 assertion::assert_text_in_region(frame, "Canceled", &final_full);
             },
         )?;
@@ -433,7 +433,7 @@ fn stacked_child_cancel_confirmation_archives_child() -> E2eResult {
                 );
 
                 let final_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Archive", &final_full);
+                assertion::assert_text_in_region(frame, "ARCHIVE", &final_full);
                 assertion::assert_text_in_region(frame, "Canceled", &final_full);
                 assertion::assert_text_in_region(
                     frame,
