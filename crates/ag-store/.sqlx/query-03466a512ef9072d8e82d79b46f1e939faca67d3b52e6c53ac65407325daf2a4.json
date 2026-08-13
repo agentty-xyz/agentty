@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration_task\nSET research_report = ?,\n    updated_at = ?\nWHERE id = ?\n  AND kind = 'Research'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "03466a512ef9072d8e82d79b46f1e939faca67d3b52e6c53ac65407325daf2a4"
+}

@@ -1,0 +1,30 @@
+[package]
+name = "ag-store"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+include = ["/.sqlx/**", "/migrations/**", "/src/**"]
+
+[dependencies]
+ag-agent.workspace = true
+ag-session.workspace = true
+async-trait.workspace = true
+mockall = { workspace = true, optional = true }
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+mockall.workspace = true
+tempfile.workspace = true
+
+[features]
+test-utils = ["dep:mockall"]
+
+[lints]
+workspace = true

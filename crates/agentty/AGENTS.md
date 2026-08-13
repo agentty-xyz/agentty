@@ -7,9 +7,11 @@ Modular TUI application for managing agent sessions. The main binary is named `a
 - `src/main.rs` is the binary composition root.
 - `src/lib.rs` exposes the crate modules.
 - `src/` contains the layered application code.
-- `migrations/` contains embedded SQLx migrations.
 - `tests/` contains integration tests for live provider behavior and protocol
   compliance.
+
+SQLite repositories and embedded migrations live in `crates/ag-store/`; Agentty owns
+only application-specific database location and clock composition.
 
 ## Architecture References
 

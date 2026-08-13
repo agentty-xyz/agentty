@@ -1558,7 +1558,7 @@ mod tests {
     #[tokio::test]
     async fn refresh_diff_stats_marks_git_failures_unknown_without_erasing_totals() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -1607,7 +1607,7 @@ mod tests {
     #[tokio::test]
     async fn test_append_workflow_notice_updates_live_and_durable_workflow_transcript() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
@@ -1764,7 +1764,7 @@ mod tests {
     #[tokio::test]
     async fn test_append_session_transcript_message_updates_live_and_durable_typed_transcript() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
@@ -1840,7 +1840,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_status_accumulates_repeated_in_progress_intervals() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -1930,7 +1930,7 @@ mod tests {
     #[tokio::test]
     async fn test_status_transition_from_services_updates_handle_and_persistence() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, "gpt-5.6-sol").await;
         let handles = SessionHandles::new(Status::Review);
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
@@ -2613,7 +2613,7 @@ mod tests {
             .returning(|_| {
                 Box::pin(async { Err(GitError::OutputParse("commit failed".to_string())) })
             });
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
@@ -2647,7 +2647,7 @@ mod tests {
     /// through the context's injected one-shot client.
     async fn test_run_commit_assist_for_error_uses_injected_one_shot_client() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let mut one_shot_client = MockOneShotClient::new();
@@ -2726,7 +2726,7 @@ mod tests {
                     })
                 })
             });
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
@@ -2781,7 +2781,7 @@ mod tests {
                     })
                 })
             });
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
@@ -2834,7 +2834,7 @@ mod tests {
             .expect_is_worktree_clean()
             .times(1)
             .returning(|_| Box::pin(async { Ok::<_, GitError>(true) }));
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
@@ -2885,7 +2885,7 @@ mod tests {
     /// project has not persisted a value yet.
     async fn test_load_include_coauthored_by_agentty_setting_defaults_to_false() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
 
         // Act
@@ -2902,7 +2902,7 @@ mod tests {
     /// stored value cannot be parsed as a boolean.
     async fn test_load_include_coauthored_by_agentty_setting_defaults_invalid_value_to_false() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let project_id = database
             .sessions()
@@ -2969,7 +2969,7 @@ mod tests {
             .expect_head_short_hash()
             .times(1)
             .returning(|_| Box::pin(async { Ok::<_, GitError>("abc1234".to_string()) }));
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let summary_payload = "- Session branch updates README formatting.".to_string();
         database
@@ -3037,7 +3037,7 @@ mod tests {
     /// before other fallback settings.
     async fn test_load_auto_commit_agent_setting_prefers_project_fast_selection() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let project_id = database
             .sessions()
@@ -3093,7 +3093,7 @@ mod tests {
     /// fast model and defaults when the session has no project.
     async fn test_load_auto_commit_reasoning_level_uses_project_fast_setting() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let project_id = database
             .sessions()
@@ -3128,7 +3128,7 @@ mod tests {
     /// when the fast-model setting is absent.
     async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let project_id = database
             .sessions()
@@ -3196,7 +3196,7 @@ mod tests {
     /// before persistence and session usage updates.
     async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::ClaudeOpus5.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
@@ -3255,7 +3255,7 @@ mod tests {
     /// original parse and the protocol-repair retry fail.
     async fn test_run_agent_assist_task_rejects_plain_text_output() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::ClaudeOpus5.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
@@ -3310,7 +3310,7 @@ mod tests {
     /// error details.
     async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_review_session(&database, AgentModel::ClaudeOpus5.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");

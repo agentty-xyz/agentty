@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT published_upstream_ref FROM session WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "published_upstream_ref",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "published_upstream_ref"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "043a63db2bdfd4eee521b8095f97fe8ba7a6c9c9ce26e4d4faab2dab9af3bdc8"
+}

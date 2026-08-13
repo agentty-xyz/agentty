@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET merged_commit_hash = ?,\n    updated_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "abfda87183450ab6c7df10e4c9c65f2369208d7f32bc4f860c89ed9d28050c98"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT id\nFROM session\nWHERE parent_session_id = ?\n  AND status NOT IN ('Canceled', 'Draft')\nORDER BY created_at ASC, id ASC\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1c67684c325a3c9c421681d235e36d23240c201a25da35ada7b6dc02151be573"
+}

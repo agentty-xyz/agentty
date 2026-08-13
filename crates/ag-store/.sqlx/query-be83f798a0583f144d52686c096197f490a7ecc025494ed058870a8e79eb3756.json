@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET status = ?,\n    in_progress_total_seconds = CASE\n        WHEN ? = 'InProgress' OR in_progress_started_at IS NULL THEN in_progress_total_seconds\n        ELSE in_progress_total_seconds + MAX(0, ? - in_progress_started_at)\n    END,\n    in_progress_started_at = CASE\n        WHEN ? = 'InProgress' THEN COALESCE(in_progress_started_at, ?)\n        ELSE NULL\n    END,\n    updated_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "be83f798a0583f144d52686c096197f490a7ecc025494ed058870a8e79eb3756"
+}

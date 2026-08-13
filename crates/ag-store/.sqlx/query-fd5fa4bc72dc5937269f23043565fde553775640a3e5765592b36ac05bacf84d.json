@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET questions = ?,\n    status = 'Question',\n    updated_at = ?\nWHERE id = (\n    SELECT controller_session_id\n    FROM session_orchestration\n    WHERE id = ?\n)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "fd5fa4bc72dc5937269f23043565fde553775640a3e5765592b36ac05bacf84d"
+}

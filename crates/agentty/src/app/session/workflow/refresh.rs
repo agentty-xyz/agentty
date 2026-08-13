@@ -409,7 +409,7 @@ mod tests {
 
     /// Persists one session row that matches the in-memory fixture.
     async fn database_with_session(session: &Session) -> AppRepositories {
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -971,7 +971,7 @@ mod tests {
     #[tokio::test]
     async fn refresh_sessions_if_needed_skips_db_call_before_deadline_and_preserves_deadline() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let now = Instant::now();
         let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
         let clock: Arc<dyn Clock> = fake_clock;
@@ -1001,7 +1001,7 @@ mod tests {
     async fn refresh_sessions_if_needed_advances_deadline_and_skips_reload_when_metadata_unchanged()
     {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let now = Instant::now();
         let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
         let clock: Arc<dyn Clock> = fake_clock.clone();

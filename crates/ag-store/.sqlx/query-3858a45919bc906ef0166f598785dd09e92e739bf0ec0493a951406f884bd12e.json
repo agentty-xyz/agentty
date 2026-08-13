@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT parent_session_id\nFROM session\nWHERE id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "parent_session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "parent_session_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "3858a45919bc906ef0166f598785dd09e92e739bf0ec0493a951406f884bd12e"
+}

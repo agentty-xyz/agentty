@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration_task\nSET child_session_id = NULL,\n    status = 'Detached',\n    updated_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6c303b236ae3cf384ad1b157a2c46c6807fc8fedec8e2fe9fd6e0fb9565b0e92"
+}

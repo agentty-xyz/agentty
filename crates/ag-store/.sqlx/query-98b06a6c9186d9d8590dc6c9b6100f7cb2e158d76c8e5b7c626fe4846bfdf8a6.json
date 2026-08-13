@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_operation\nSET status = 'canceled',\n    finished_at = ?,\n    heartbeat_at = ?,\n    last_error = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "98b06a6c9186d9d8590dc6c9b6100f7cb2e158d76c8e5b7c626fe4846bfdf8a6"
+}

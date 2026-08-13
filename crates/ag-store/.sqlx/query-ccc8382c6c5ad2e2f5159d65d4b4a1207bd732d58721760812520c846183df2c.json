@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET parent_session_id = NULL,\n    base_branch = COALESCE((SELECT base_branch FROM session WHERE id = ?), base_branch),\n    updated_at = ?\nWHERE parent_session_id = ?\n  AND status <> 'Canceled'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "ccc8382c6c5ad2e2f5159d65d4b4a1207bd732d58721760812520c846183df2c"
+}

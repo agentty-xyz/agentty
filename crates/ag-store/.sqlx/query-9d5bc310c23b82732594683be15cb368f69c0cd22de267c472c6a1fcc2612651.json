@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT app_server_instruction_provider_conversation_id\nFROM session\nWHERE id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "app_server_instruction_provider_conversation_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "app_server_instruction_provider_conversation_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "9d5bc310c23b82732594683be15cb368f69c0cd22de267c472c6a1fcc2612651"
+}

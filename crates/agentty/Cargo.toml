@@ -22,6 +22,7 @@ ag-forge.workspace = true
 ag-git.workspace = true
 ag-protocol.workspace = true
 ag-session.workspace = true
+ag-store.workspace = true
 ag-tui-text.workspace = true
 async-trait.workspace = true
 askama.workspace = true
@@ -49,6 +50,7 @@ unicode-width.workspace = true
 ag-agent = { workspace = true, features = ["test-utils"] }
 ag-forge = { workspace = true, features = ["test-utils"] }
 ag-git = { workspace = true, features = ["test-utils"] }
+ag-store = { workspace = true, features = ["test-utils"] }
 assert_cmd.workspace = true
 testty.workspace = true
 mockall.workspace = true

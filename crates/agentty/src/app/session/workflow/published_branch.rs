@@ -903,7 +903,7 @@ mod tests {
     #[tokio::test]
     async fn review_comment_resolution_skips_sessions_without_open_linked_review() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_session(&db).await;
         let mut git_client = MockGitClient::new();
         git_client.expect_repo_url().never();
@@ -928,7 +928,9 @@ mod tests {
     #[tokio::test]
     async fn review_comment_resolution_reports_linked_review_load_failure() {
         // Arrange
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         insert_session(&db).await;
         pool.close().await;
         let mut git_client = MockGitClient::new();
@@ -1026,7 +1028,7 @@ mod tests {
 
     /// Inserts one session linked to an open GitHub pull request.
     async fn linked_review_request_db() -> AppRepositories {
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_session(&db).await;
         db.reviews()
             .update_session_review_request(

@@ -857,7 +857,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_preserves_live_handle_output_and_status() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/test", None)
@@ -942,7 +942,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_reports_worktree_availability() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/test", None)
@@ -1006,7 +1006,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_reads_persisted_summary_for_active_session() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/test", None)
@@ -1094,7 +1094,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_defers_persisted_detail_for_inactive_session() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/test", None)
@@ -1171,7 +1171,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_hydrates_empty_handle_for_active_session() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/test", None)
@@ -1241,7 +1241,9 @@ mod tests {
     #[tokio::test]
     async fn test_load_session_transcript_returns_query_errors() {
         // Arrange
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         sqlx::query!("DROP TABLE session_message")
             .execute(&pool)
             .await
@@ -1261,7 +1263,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_terminal_db_status_overrides_handle_status() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/test", None)
@@ -1318,7 +1320,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_switches_active_session_off_retired_model() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/test", None)
@@ -1369,7 +1371,9 @@ mod tests {
     #[tokio::test]
     async fn test_migrate_session_preserves_updated_at() {
         // Arrange
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/test", None)
@@ -1420,7 +1424,7 @@ WHERE id = ?
     #[tokio::test]
     async fn test_migrate_active_sessions_off_retired_models_covers_inactive_projects() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let active_project_id = db
             .projects()
             .upsert_project("/tmp/active", None)
@@ -1496,7 +1500,7 @@ WHERE id = ?
     #[tokio::test]
     async fn test_migrate_session_preserves_retired_model_after_terminal_transition() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/test", None)
@@ -1554,7 +1558,9 @@ WHERE id = ?
     #[tokio::test]
     async fn test_migrate_active_sessions_off_retired_models_ignores_query_failures() {
         // Arrange
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         sqlx::query("DROP TABLE session")
             .execute(&pool)
             .await
@@ -1577,7 +1583,7 @@ WHERE id = ?
     #[tokio::test]
     async fn test_load_sessions_keeps_retired_model_in_db_for_finished_session() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/test", None)
@@ -1627,7 +1633,7 @@ WHERE id = ?
     #[tokio::test]
     async fn test_load_sessions_maps_review_request_metadata() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/test", None)

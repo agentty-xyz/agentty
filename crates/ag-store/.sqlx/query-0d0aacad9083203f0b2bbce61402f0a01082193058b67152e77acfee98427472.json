@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_operation (id, session_id, kind, status, queued_at)\nVALUES (?, ?, ?, 'queued', ?)\nON CONFLICT(id) DO UPDATE SET\n    session_id = excluded.session_id,\n    kind = excluded.kind,\n    status = 'queued',\n    queued_at = excluded.queued_at,\n    started_at = NULL,\n    finished_at = NULL,\n    heartbeat_at = NULL,\n    last_error = NULL,\n    cancel_requested = 0\nWHERE session_operation.status IN ('failed', 'canceled')\nRETURNING id AS \"id!: String\"\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "0d0aacad9083203f0b2bbce61402f0a01082193058b67152e77acfee98427472"
+}

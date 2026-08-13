@@ -109,6 +109,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ag-store"
+version = "0.14.5"
+dependencies = [
+ "ag-agent",
+ "ag-session",
+ "async-trait",
+ "mockall",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ag-tui-text"
 version = "0.14.5"
 dependencies = [
@@ -187,6 +202,7 @@ dependencies = [
  "ag-git",
  "ag-protocol",
  "ag-session",
+ "ag-store",
  "ag-tui-text",
  "askama",
  "assert_cmd",

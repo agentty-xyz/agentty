@@ -2908,7 +2908,7 @@ mod tests {
     }
 
     async fn controller_database() -> (AppRepositories, i64) {
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/orchestration-project", Some("main".to_string()))

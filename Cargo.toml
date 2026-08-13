@@ -22,6 +22,7 @@ ag-forge = { path = "crates/ag-forge", version = "0.14.5" }
 ag-git = { path = "crates/ag-git", version = "0.14.5" }
 ag-protocol = { path = "crates/ag-protocol", version = "0.14.5" }
 ag-session = { path = "crates/ag-session", version = "0.14.5" }
+ag-store = { path = "crates/ag-store", version = "0.14.5" }
 ag-tui-text = { path = "crates/ag-tui-text", version = "0.14.5" }
 testty = { path = "crates/testty", version = "0.14.5" }
 async-trait = "0.1"

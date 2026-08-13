@@ -884,7 +884,9 @@ mod tests {
     #[tokio::test]
     async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() {
         // Arrange
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         pool.close().await;
         let context = PostTurnContext {
             app_event_tx: mpsc::unbounded_channel().0,
@@ -915,7 +917,9 @@ mod tests {
     #[tokio::test]
     async fn finalization_tolerates_managed_child_evidence_persistence_failure() {
         // Arrange
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         pool.close().await;
         let status = Arc::new(Mutex::new(Status::InProgress));
         let context = TurnFinalizerContext {
@@ -944,7 +948,7 @@ mod tests {
     #[tokio::test]
     async fn finalization_archives_research_diff_before_status_transition() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_research_session(&db, "research-session").await;
         let mut fs_client = crate::infra::fs::MockFsClient::new();
         fs_client.expect_is_dir().times(1).return_const(false);
@@ -987,7 +991,7 @@ mod tests {
     #[tokio::test]
     async fn research_diff_archival_returns_when_base_branch_is_missing() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let (context, _status) = research_finalizer_context(
             db.clone(),
             PathBuf::from("/tmp/missing-research"),
@@ -1011,7 +1015,9 @@ mod tests {
     #[tokio::test]
     async fn research_diff_archival_tolerates_base_branch_lookup_failure() {
         // Arrange
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         pool.close().await;
         let (context, _status) = research_finalizer_context(
             db,
@@ -1033,7 +1039,7 @@ mod tests {
     #[tokio::test]
     async fn research_diff_archival_tolerates_git_failure() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_research_session(&db, "research-session").await;
         let mut git_client = MockGitClient::new();
         git_client.expect_diff().times(1).returning(|_, _| {
@@ -1064,7 +1070,9 @@ mod tests {
     #[tokio::test]
     async fn research_diff_archival_tolerates_persistence_failure() {
         // Arrange
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         insert_research_session(&db, "research-session").await;
         let mut git_client = MockGitClient::new();
         git_client.expect_diff().times(1).returning({
@@ -1100,7 +1108,7 @@ mod tests {
     #[tokio::test]
     async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
         // Arrange
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))

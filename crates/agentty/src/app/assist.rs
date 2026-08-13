@@ -181,7 +181,7 @@ mod tests {
         let context = AssistContext {
             app_event_tx,
             child_pid: Arc::new(Mutex::new(None)),
-            db: AppRepositories::in_memory().await,
+            db: AppRepositories::in_memory().await.expect("db should open"),
             folder: temp_directory.path().to_path_buf(),
             git_client: Arc::new(MockGitClient::new()),
             id: "session-id".to_string(),

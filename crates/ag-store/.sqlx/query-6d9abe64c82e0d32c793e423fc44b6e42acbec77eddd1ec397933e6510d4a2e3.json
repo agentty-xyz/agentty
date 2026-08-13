@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET input_tokens = input_tokens + ?,\n    output_tokens = output_tokens + ?,\n    updated_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "6d9abe64c82e0d32c793e423fc44b6e42acbec77eddd1ec397933e6510d4a2e3"
+}

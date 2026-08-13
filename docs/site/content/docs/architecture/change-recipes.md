@@ -19,9 +19,9 @@ through the correct modules without crossing layer boundaries.
 1. Route background-callable operations through the bounded actor in
    `crates/agentty/src/app/session_runtime.rs`; do not share `App` behind an async
    mutex.
-1. Keep persistence in `crates/agentty/src/infra/db/` domain modules and keep
-   `crates/agentty/src/infra/db.rs` router-only. Use `repository.rs` for repository
-   bundle composition and `connection.rs` for pool wiring.
+1. Keep persistence in `crates/ag-store/src/` domain modules. Use `repository.rs` for
+   repository bundle composition and `connection.rs` for pool wiring; keep Agentty's
+   `crates/agentty/src/infra/db.rs` limited to database-location and clock composition.
 1. Keep git operations behind `GitClient` in `crates/ag-git/src/client.rs`.
 1. Preserve the session-branch invariant: one evolving commit per session branch, with
    the first file-changing turn creating it and later file-changing turns updating it by
@@ -69,10 +69,10 @@ through the correct modules without crossing layer boundaries.
 
 ## Add or Change Database Schema
 
-1. Add a new migration file in `crates/agentty/migrations/` (`NNN_description.sql`).
+1. Add a new migration file in `crates/ag-store/migrations/` (`NNN_description.sql`).
 1. Never modify existing migration files.
-1. Keep query changes in the matching `crates/agentty/src/infra/db/*.rs` domain module
-   instead of expanding the router-only `crates/agentty/src/infra/db.rs`.
+1. Keep query changes in the matching `crates/ag-store/src/*.rs` domain module instead
+   of expanding Agentty's composition facade.
 1. Ensure any status/model behavior changes are reflected in docs pages affected by
    user-facing behavior.
 

@@ -790,7 +790,7 @@ mod tests {
     async fn test_services_with_available_agent_kinds(
         available_agent_kinds: Vec<AgentKind>,
     ) -> (AppServices, i64) {
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -1504,7 +1504,7 @@ mod tests {
     #[tokio::test]
     async fn settings_manager_preserves_retired_default_when_provider_is_unavailable() {
         // Arrange
-        let repositories = AppRepositories::in_memory().await;
+        let repositories = AppRepositories::in_memory().await.expect("db should open");
         let project_id = repositories
             .projects()
             .upsert_project("/tmp/test", None)

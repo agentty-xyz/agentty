@@ -51,6 +51,7 @@ When changing architecture-level behavior under `src/`, update:
 - `app.rs` and `app/` own orchestration and workflow state.
 - `domain.rs` and `domain/` own Agentty-specific business entities and compatibility
   re-exports for shared models from `ag-session`.
-- `infra.rs` and `infra/` own external integrations and persistence.
+- `infra.rs` and `infra/` own external integrations plus Agentty's `ag-store`
+  composition facade.
 - `runtime.rs` and `runtime/` own terminal lifecycle and event dispatch.
 - `ui.rs` and `ui/` own rendering, layout, and interaction widgets.

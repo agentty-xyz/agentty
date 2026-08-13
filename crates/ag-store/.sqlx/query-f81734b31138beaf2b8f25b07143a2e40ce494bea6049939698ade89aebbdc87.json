@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET focused_review_status = NULL,\n    focused_review_diff_hash = NULL,\n    focused_review_text = NULL,\n    updated_at = ?\nWHERE id = (\n    SELECT child_session_id\n    FROM session_orchestration_task\n    WHERE id = ?\n)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f81734b31138beaf2b8f25b07143a2e40ce494bea6049939698ade89aebbdc87"
+}
