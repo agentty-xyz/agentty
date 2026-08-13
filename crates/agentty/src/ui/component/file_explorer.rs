@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use ag_tui_text::text_util;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -12,6 +13,7 @@ use crate::ui::{Component, style};
 
 const DIFF_GIT_FILE_HEADER_PREFIX: &str = "diff --git";
 const DIFF_GIT_FALLBACK_PREFIX: &str = "diff --git ";
+const FILE_EXPLORER_HORIZONTAL_BORDER_WIDTH: u16 = 2;
 const FILE_EXPLORER_TITLE: &str = " Files ";
 const NO_FILES_LABEL: &str = "No files";
 const PATH_SEGMENT_SEPARATOR: char = '/';
@@ -26,6 +28,7 @@ const ROOT_TREE_PREFIX: &str = "";
 /// Diff file explorer panel rendering the changed file list.
 pub struct FileExplorer {
     file_list_lines: Arc<[Line<'static>]>,
+    preserved_suffix_span_count: usize,
     selected_index: usize,
 }
 
@@ -90,14 +93,20 @@ impl FileExplorer {
 
         Self {
             file_list_lines: Arc::from(file_list_lines),
+            preserved_suffix_span_count: 0,
             selected_index: 0,
         }
     }
 
-    /// Creates a file explorer component from cached rendered tree lines.
-    pub(crate) fn from_cached_lines(file_list_lines: Arc<[Line<'static>]>) -> Self {
+    /// Creates a file explorer component from cached rendered tree lines while
+    /// preserving the requested number of trailing spans when labels overflow.
+    pub(crate) fn from_cached_lines(
+        file_list_lines: Arc<[Line<'static>]>,
+        preserved_suffix_span_count: usize,
+    ) -> Self {
         Self {
             file_list_lines,
+            preserved_suffix_span_count,
             selected_index: 0,
         }
     }
@@ -305,14 +314,47 @@ impl FileExplorer {
             items.push(FileTreeItem::File(file_path));
         }
     }
+
+    /// Right-aligns a preserved suffix, truncating the file-tree label first
+    /// when both cannot fit in the available width.
+    fn line_for_width(&self, line: &Line<'static>, max_width: usize) -> Line<'static> {
+        let suffix_start = line
+            .spans
+            .len()
+            .saturating_sub(self.preserved_suffix_span_count);
+        if self.preserved_suffix_span_count == 0 || suffix_start == 0 {
+            return line.clone();
+        }
+
+        let suffix_spans = line.spans[suffix_start..].to_vec();
+        let suffix_width = suffix_spans.iter().map(Span::width).sum::<usize>();
+        let available_prefix_width = max_width.saturating_sub(suffix_width);
+        let prefix_spans = line.spans[..suffix_start].to_vec();
+        let prefix_width = prefix_spans.iter().map(Span::width).sum::<usize>();
+        let mut spans = if prefix_width > available_prefix_width {
+            text_util::truncate_spans_with_ellipsis(prefix_spans, available_prefix_width)
+        } else {
+            prefix_spans
+        };
+        let rendered_prefix_width = spans.iter().map(Span::width).sum::<usize>();
+        let padding_width = available_prefix_width.saturating_sub(rendered_prefix_width);
+        spans.push(Span::raw(" ".repeat(padding_width)));
+        spans.extend(suffix_spans);
+
+        Line::from(spans)
+    }
 }
 
 impl Component for FileExplorer {
     fn render(&self, f: &mut Frame, area: Rect) {
+        let content_width = usize::from(
+            area.width
+                .saturating_sub(FILE_EXPLORER_HORIZONTAL_BORDER_WIDTH),
+        );
         let items: Vec<ListItem> = self
             .file_list_lines
             .iter()
-            .cloned()
+            .map(|line| self.line_for_width(line, content_width))
             .map(ListItem::new)
             .collect();
 
@@ -365,6 +407,59 @@ mod tests {
         let border_cell = &buffer.content()[0];
         assert_eq!(border_cell.symbol(), "┌");
         assert_eq!(border_cell.fg, style::palette::border());
+    }
+
+    #[test]
+    fn test_render_right_aligns_preserved_suffix_and_truncates_long_labels() {
+        // Arrange
+        let change_totals = || {
+            [
+                Span::raw(" "),
+                Span::styled("+12", Style::default().fg(style::palette::success())),
+                Span::styled("/", Style::default().fg(style::palette::text_muted())),
+                Span::styled("-3", Style::default().fg(style::palette::danger())),
+            ]
+        };
+        let lines: Arc<[Line<'static>]> = Arc::from([
+            Line::from(
+                [Span::styled(
+                    "└ main.rs",
+                    Style::default().fg(style::palette::accent()),
+                )]
+                .into_iter()
+                .chain(change_totals())
+                .collect::<Vec<_>>(),
+            ),
+            Line::from(
+                [Span::styled(
+                    "└ path/to/longer/main.rs",
+                    Style::default().fg(style::palette::accent()),
+                )]
+                .into_iter()
+                .chain(change_totals())
+                .collect::<Vec<_>>(),
+            ),
+        ]);
+        let backend = ratatui::backend::TestBackend::new(20, 5);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                FileExplorer::from_cached_lines(lines.clone(), 4).render(frame, frame.area());
+            })
+            .expect("failed to draw file explorer");
+
+        // Assert
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(text.contains("└ main.rs   +12/-3"));
+        assert!(text.contains("└ path/t... +12/-3"));
     }
 
     const DIFF_SAME_PATH_HEADER: &str = "diff --git a/src/main.rs b/src/main.rs";

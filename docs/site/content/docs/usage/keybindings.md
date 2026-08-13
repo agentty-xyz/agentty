@@ -259,7 +259,8 @@ diff.
 | `?`           | Help                        |
 
 <a id="usage-diff-totals"></a> The diff panel title includes aggregate `+added` and
-`-removed` line totals plus the selected file or folder's added/removed counts.
+`-removed` line totals. Every file and folder row in the left panel shows its own
+right-aligned `+added/-removed` counts.
 
 On a selected `.md` file, `p` replaces the raw patch with the rendered post-change
 worktree file. Headings, lists, tables, code blocks, and supported Mermaid diagrams use
