@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET questions = '',\n    status = 'Review',\n    updated_at = ?\nWHERE id = (\n    SELECT controller_session_id\n    FROM session_orchestration\n    WHERE id = ?\n      AND relayed_question_task_id IS NOT NULL\n)\n  AND role = 'Orchestrator'\n  AND status = 'Question'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "344a39f4a83483e2254435db8a6efe62fb86eba1321c5257366c5cf797fd07f5"
+}

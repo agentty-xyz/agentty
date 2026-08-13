@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration\nSET relayed_question_task_id = ?,\n    updated_at = ?\nWHERE id = ?\n  AND relayed_question_task_id IS NULL\n  AND EXISTS (\n      SELECT 1\n      FROM session_orchestration_task AS task\n      WHERE task.id = ?\n        AND task.session_orchestration_id = session_orchestration.id\n        AND task.status = 'WaitingForInput'\n        AND task.child_session_id IS NOT NULL\n  )\n  AND EXISTS (\n      SELECT 1\n      FROM session AS controller\n      WHERE controller.id = session_orchestration.controller_session_id\n        AND controller.role = 'Orchestrator'\n        AND controller.status IN ('Review', 'Question')\n        AND COALESCE(controller.questions, '') = ''\n  )\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "633ca0426eb33e8ff28366ec523514e0731d465fb53553aff06d826c408c3264"
+}

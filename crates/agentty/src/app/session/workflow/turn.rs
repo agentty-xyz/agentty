@@ -790,7 +790,7 @@ mod tests {
     #[tokio::test]
     async fn persisted_research_role_selects_read_only_permission_mode() {
         // Arrange
-        let repositories = AppRepositories::in_memory().await;
+        let repositories = AppRepositories::in_memory().await.expect("db should open");
         let project_id = repositories
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -833,7 +833,7 @@ mod tests {
     #[tokio::test]
     async fn title_reasoning_level_defaults_without_project() {
         // Arrange
-        let repositories = AppRepositories::in_memory().await;
+        let repositories = AppRepositories::in_memory().await.expect("db should open");
 
         // Act
         let reasoning_level = load_title_reasoning_level(&repositories, None).await;

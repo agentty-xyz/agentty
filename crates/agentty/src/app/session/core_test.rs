@@ -661,14 +661,14 @@ async fn new_test_app_with_db(
 /// Builds a test app rooted at `path` with no branch-specific git context.
 async fn new_test_app(path: PathBuf) -> App {
     let working_dir = PathBuf::from("/tmp/test");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
 
     new_test_app_with_db(path, working_dir, None, db).await
 }
 
 /// Builds a test app rooted at `path` with mock git branch context.
 async fn new_test_app_with_git(path: &Path) -> App {
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     new_test_app_with_git_and_db(path, db).await
 }
 
@@ -1521,7 +1521,7 @@ async fn test_git_branch_getter_with_branch() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let working_dir = PathBuf::from("/tmp/test");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let app = new_test_app_with_db(
         dir.path().to_path_buf(),
         working_dir,
@@ -1743,7 +1743,9 @@ async fn test_create_session() {
 async fn test_create_session_propagates_project_reasoning_read_failure() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let (database, pool) = AppRepositories::in_memory_with_pool().await;
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
     let mut app = new_test_app_with_git_and_db(dir.path(), database).await;
     sqlx::query!("DROP TABLE project_setting")
         .execute(&pool)
@@ -1938,7 +1940,7 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
 {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let mut app = new_test_app_with_git_and_db(dir.path(), db.clone()).await;
     let active_project_id = app.active_project_id();
     app.services
@@ -2418,7 +2420,9 @@ async fn test_start_staged_session_clears_draft_flag() {
 async fn test_start_staged_session_succeeds_when_clearing_draft_flag_fails() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let (db, pool) = AppRepositories::in_memory_with_pool().await;
+    let (db, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
     let mut app = new_test_app_with_git_and_db(dir.path(), db).await;
     let session_id = app
         .create_draft_session()
@@ -3114,7 +3118,7 @@ async fn test_delete_last_session_update_selection() {
 async fn test_load_existing_sessions() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("/tmp/test", None)
@@ -3168,7 +3172,7 @@ async fn test_load_existing_sessions() {
 async fn test_create_session_uses_default_smart_model_setting_and_most_recent_permission_mode() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project(&dir.path().to_string_lossy(), Some("main".to_string()))
@@ -3234,7 +3238,7 @@ async fn test_create_session_uses_default_smart_model_setting_and_most_recent_pe
 async fn test_load_existing_sessions_ordered_by_updated_at_desc() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("/tmp/test", None)
@@ -3287,7 +3291,7 @@ async fn test_load_existing_sessions_ordered_by_updated_at_desc() {
 async fn test_load_sessions_aggregates_daily_activity() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("/tmp/test", None)
@@ -3377,7 +3381,7 @@ async fn test_load_sessions_aggregates_daily_activity() {
 async fn test_load_sessions_keeps_daily_activity_after_session_deletion() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("/tmp/test", None)
@@ -3435,7 +3439,7 @@ async fn test_load_sessions_keeps_daily_activity_after_session_deletion() {
 async fn test_refresh_sessions_if_needed_reloads_and_preserves_selection() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("/tmp/test", None)
@@ -3499,7 +3503,7 @@ async fn test_refresh_sessions_if_needed_reloads_and_preserves_selection() {
 async fn test_periodic_session_refresh_preserves_focused_review_states() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("/tmp/test", None)
@@ -3597,7 +3601,7 @@ fn review_message_body<'a>(app: &'a App, session_id: &str) -> &'a TransientMessa
 async fn test_refresh_sessions_loads_question_detail_when_another_session_is_selected() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("/tmp/test", None)
@@ -3697,7 +3701,7 @@ async fn test_refresh_sessions_loads_question_detail_when_another_session_is_sel
 async fn test_refresh_sessions_loads_diff_help_detail_when_another_session_is_selected() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("/tmp/test", None)
@@ -3806,7 +3810,7 @@ async fn test_load_sessions_invalid_path() {
 async fn test_load_done_session_without_folder_kept() {
     // Arrange — DB has a terminal row but no matching folder on disk
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("/tmp/test", None)
@@ -3836,7 +3840,7 @@ async fn test_load_done_session_without_folder_kept() {
 async fn test_load_in_progress_session_without_folder_skipped() {
     // Arrange — DB has a non-terminal row but no matching folder on disk
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("/tmp/test", None)
@@ -4071,7 +4075,7 @@ async fn test_load_sessions_uses_persisted_size_for_done_status() {
 async fn test_spawn_integration() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let mut app = new_test_app_with_git_and_db(dir.path(), db).await;
 
     // One channel handles both turns; a counter distinguishes them so the
@@ -4315,7 +4319,7 @@ fn assert_sync_waits_without_canceling_turn(app: &mut App, session_id: &str) {
 async fn test_reply_with_backend_replays_history_once_after_model_switch() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let mut app = new_test_app_with_git_and_db(dir.path(), db).await;
 
     let session_id = app
@@ -4442,7 +4446,7 @@ async fn test_reply_with_backend_replays_history_once_after_model_switch() {
 async fn test_reply_with_backend_replays_history_after_app_restart_for_review_session() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
 
     let mut first_app = new_test_app_with_git_and_db(dir.path(), db.clone()).await;
     let session_id = first_app
@@ -4530,7 +4534,7 @@ async fn test_reply_with_backend_replays_history_after_app_restart_for_review_se
 async fn test_spawn_session_task_auto_commits_changes() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let mut app = new_test_app_with_git_and_db(dir.path(), db).await;
     let repo_root = dir.path().to_path_buf();
     let mut mock_git_client = git::MockGitClient::new();
@@ -4849,7 +4853,7 @@ async fn test_next_tab() {
 async fn test_next_tab_includes_tasks_when_active_project_has_roadmap() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let mut app = new_test_app_with_db(
         dir.path().to_path_buf(),
         dir.path().to_path_buf(),
@@ -4892,7 +4896,7 @@ async fn test_create_session_without_git() {
 async fn test_create_session_with_git_no_actual_repo() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let mut app = new_test_app_with_db(
         dir.path().to_path_buf(),
         PathBuf::from("/tmp/test"),
@@ -4924,7 +4928,7 @@ async fn test_create_session_with_git_no_actual_repo() {
 async fn test_create_session_cleans_up_on_error() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let mut app = new_test_app_with_db(
         dir.path().to_path_buf(),
         PathBuf::from("/tmp/test"),
@@ -5453,7 +5457,9 @@ async fn test_rebase_session_cancels_pending_focused_review() {
 async fn test_rebase_session_cleanup_failure_does_not_start_sync() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let (db, pool) = AppRepositories::in_memory_with_pool().await;
+    let (db, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
     let mut app = new_test_app_with_git_and_db(dir.path(), db.clone()).await;
     let session_id = app
         .create_session()
@@ -6014,7 +6020,7 @@ async fn test_cancel_running_session_stops_turn_and_cancels_session() {
 async fn test_cancel_session_triggers_app_server_shutdown() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let mut mock_app_server = MockAppServerClient::new();
     mock_app_server
@@ -6088,7 +6094,7 @@ async fn test_cancel_session_triggers_app_server_shutdown() {
 async fn test_done_status_triggers_app_server_shutdown() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await;
+    let db = AppRepositories::in_memory().await.expect("db should open");
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let mut mock_app_server = MockAppServerClient::new();
     mock_app_server

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET agent = ?,\n    model = ?\nWHERE id = ?\n  AND status NOT IN ('Merged', 'Done', 'Canceled')\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e8df2177af7c7ca2728531c2c09415ebbf1d9376be6b57281aaf974316a95b86"
+}

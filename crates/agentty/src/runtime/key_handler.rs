@@ -1987,7 +1987,9 @@ mod tests {
         let base_dir = tempfile::tempdir().expect("failed to create base dir");
         let project_dir = tempfile::tempdir().expect("failed to create project dir");
         crate::test_support::setup_test_git_repo(project_dir.path());
-        let repositories = crate::infra::db::AppRepositories::in_memory().await;
+        let repositories = crate::infra::db::AppRepositories::in_memory()
+            .await
+            .expect("db should open");
         let clients = crate::test_support::test_app_clients_with_mock_app_server()
             .with_tmux_client(Arc::new(MockTmuxClient::new()));
         let mut app = App::new_with_clients(

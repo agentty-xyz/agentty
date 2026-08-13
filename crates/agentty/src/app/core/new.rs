@@ -607,7 +607,9 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
-        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let (database, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         sqlx::query("DROP TABLE session_operation")
             .execute(&pool)
             .await
@@ -647,7 +649,9 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
-        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let (database, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         let project_id = database
             .projects()
             .upsert_project(&base_path.to_string_lossy(), None)

@@ -2132,7 +2132,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_persisted_command_marks_failed_when_worker_receiver_is_closed() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         insert_in_progress_test_session(&database).await;
         database
             .operations()
@@ -2353,7 +2353,7 @@ mod tests {
     async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_in_progress_research_session(&db).await;
         db.sessions()
             .update_session_provisional_title("sess1", "test prompt")
@@ -2460,7 +2460,7 @@ mod tests {
         // cancellation. `run_channel_turn` swaps in a fresh token so the
         // stale cancellation is discarded.
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -2563,7 +2563,7 @@ mod tests {
     async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_in_progress_test_session(&db).await;
 
         let mut mock_channel = MockAgentChannel::new();
@@ -2666,7 +2666,7 @@ mod tests {
     async fn test_run_channel_turn_skips_warning_when_main_checkout_is_clean_after_turn() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_in_progress_test_session(&db).await;
 
         let mut mock_channel = MockAgentChannel::new();
@@ -2772,7 +2772,7 @@ mod tests {
     async fn test_run_channel_turn_skips_warning_when_main_checkout_stays_dirty() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_in_progress_test_session(&db).await;
 
         let mut mock_channel = MockAgentChannel::new();
@@ -2864,7 +2864,7 @@ mod tests {
     async fn test_run_channel_turn_skips_main_checkout_snapshot_for_bare_repo() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_in_progress_test_session(&db).await;
 
         let mut mock_channel = MockAgentChannel::new();
@@ -3144,7 +3144,9 @@ mod tests {
 
         // Act
         let missing_session = resolve_turn_personality(&context).await;
-        let (closed_db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (closed_db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         pool.close().await;
         context.db = closed_db;
         let query_failure = resolve_turn_personality(&context)
@@ -3218,7 +3220,7 @@ mod tests {
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::infra::clock::RealClock),
-            db: AppRepositories::in_memory().await,
+            db: AppRepositories::in_memory().await.expect("db should open"),
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
@@ -3294,7 +3296,7 @@ mod tests {
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::infra::clock::RealClock),
-            db: AppRepositories::in_memory().await,
+            db: AppRepositories::in_memory().await.expect("db should open"),
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
@@ -3367,7 +3369,7 @@ mod tests {
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(Some(child_pid))),
             clock: Arc::new(crate::infra::clock::RealClock),
-            db: AppRepositories::in_memory().await,
+            db: AppRepositories::in_memory().await.expect("db should open"),
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
@@ -3413,7 +3415,7 @@ mod tests {
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::infra::clock::RealClock),
-            db: AppRepositories::in_memory().await,
+            db: AppRepositories::in_memory().await.expect("db should open"),
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
@@ -3519,7 +3521,7 @@ mod tests {
     async fn test_apply_turn_result_persists_summary_to_database() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -3630,7 +3632,7 @@ mod tests {
     async fn test_apply_turn_result_syncs_linked_review_request_metadata_after_commit() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_in_progress_session_with_review_request(&db).await;
         let folder = base_dir.path().join("sess1");
         let commit_message =
@@ -3721,7 +3723,7 @@ mod tests {
     async fn test_apply_turn_result_skips_review_request_metadata_sync_when_auto_push_fails() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_in_progress_session_with_review_request(&db).await;
         let commit_message =
             "Refine review metadata sync\n\n- Update the linked review request body.";
@@ -4126,7 +4128,7 @@ mod tests {
     async fn test_apply_turn_result_starts_background_push_for_published_branch() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -4227,7 +4229,7 @@ mod tests {
     async fn test_apply_turn_result_resolves_fixed_review_threads_after_push() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         insert_in_progress_session_with_review_request(&db).await;
         let folder = base_dir.path().join("sess1");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
@@ -4325,7 +4327,7 @@ mod tests {
     async fn test_apply_turn_result_skips_background_push_while_messages_are_queued() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -4423,7 +4425,7 @@ mod tests {
     async fn test_apply_turn_result_skips_background_push_while_sync_is_queued() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -4521,7 +4523,7 @@ mod tests {
     async fn test_apply_turn_result_reports_background_push_failures() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -4632,7 +4634,7 @@ mod tests {
     async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -4738,7 +4740,7 @@ mod tests {
     async fn test_apply_turn_result_keeps_summary_out_of_assistant_messages() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -4835,7 +4837,7 @@ mod tests {
     async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_server_turns() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -5148,7 +5150,7 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         write_rebase_conflict_file(base_dir.path());
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         seed_existing_session_rebase_metadata(&db).await;
         let harness = rebase_assist_worker_harness(base_dir.path().to_path_buf(), db);
 
@@ -5242,7 +5244,9 @@ mod tests {
     async fn test_fail_unfinished_operations_from_previous_run_returns_load_error() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         pool.close().await;
         let mut mock_git_client = MockGitClient::new();
         mock_git_client.expect_is_rebase_in_progress().times(0);
@@ -5267,7 +5271,7 @@ mod tests {
     async fn test_fail_unfinished_operations_from_previous_run_returns_rebase_cleanup_error() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         seed_recovery_test_operation(&db, Status::Rebasing, REBASE_OPERATION_KIND).await;
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
@@ -5304,7 +5308,9 @@ mod tests {
      {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         seed_recovery_test_operation(&db, Status::InProgress, "reply").await;
         sqlx::query(
             "CREATE TRIGGER fail_recovery_session_status BEFORE UPDATE OF status ON session BEGIN \
@@ -5342,7 +5348,9 @@ mod tests {
     async fn test_fail_unfinished_operations_from_previous_run_returns_operation_update_error() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         seed_recovery_test_operation(&db, Status::InProgress, "reply").await;
         sqlx::query(
             "CREATE TRIGGER fail_recovery_operation_update BEFORE UPDATE OF status ON \
@@ -5386,7 +5394,9 @@ mod tests {
     async fn test_fail_unfinished_operations_from_previous_run_retries_after_failure() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let (db, pool) = AppRepositories::in_memory_with_pool().await;
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         seed_recovery_test_operation(&db, Status::InProgress, "reply").await;
         sqlx::query(
             "CREATE TRIGGER fail_recovery_retry BEFORE UPDATE OF status ON session_operation \
@@ -5447,7 +5457,7 @@ mod tests {
     async fn test_fail_unfinished_operations_from_previous_run_restores_session_review_status() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -5509,7 +5519,7 @@ mod tests {
     async fn test_fail_unfinished_operations_from_previous_run_aborts_interrupted_rebase() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -5560,7 +5570,7 @@ mod tests {
     async fn test_should_skip_worker_command_without_cancel_request() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -5630,7 +5640,7 @@ mod tests {
     async fn test_should_skip_worker_command_when_cancel_is_requested() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -5705,7 +5715,7 @@ mod tests {
     async fn test_should_skip_worker_command_allows_new_operation_after_cancel() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -5805,7 +5815,7 @@ mod tests {
     ) {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await;
+        let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -5898,7 +5908,7 @@ mod tests {
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::infra::clock::RealClock),
-            db: AppRepositories::in_memory().await,
+            db: AppRepositories::in_memory().await.expect("db should open"),
             folder: PathBuf::new(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),

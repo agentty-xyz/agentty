@@ -1,45 +1,41 @@
-//! Database layer for persisting session metadata using `SQLite` via `SQLx`.
+//! Agentty persistence facade and database-location policy.
 
-mod activity;
-mod connection;
-mod error;
-mod operation;
-mod orchestration;
-mod project;
-mod repository;
-mod review;
-mod session;
-mod session_message;
-mod session_snapshot;
-mod setting;
-mod status;
-mod usage;
+use std::sync::Arc;
 
-pub use activity::ActivityRepository;
-pub(crate) use activity::SqliteActivityRepository;
-pub use connection::{DB_DIR, DB_FILE, Database};
-pub use error::DbError;
-pub(crate) use error::DbResultExt;
-pub(crate) use operation::SqliteOperationRepository;
-pub use operation::{OperationRepository, SessionOperationRow};
+pub use ag_store::*;
+
+use crate::infra::clock;
+
+/// Subdirectory under the Agentty home where the database file is stored.
+pub const DB_DIR: &str = "db";
+
+/// Default Agentty database filename.
+pub const DB_FILE: &str = "agentty.db";
+
+/// Returns a store timestamp source backed by Agentty's environment-selected
+/// clock.
+///
+/// Feature tests pin that clock so database ordering and activity timestamps
+/// remain deterministic alongside rendered frame time.
+pub fn timestamp_source_from_environment() -> Arc<dyn TimestampSource> {
+    let clock = clock::from_environment();
+
+    Arc::new(move || clock::unix_timestamp_seconds(clock.as_ref()))
+}
+
 #[cfg(test)]
-pub(crate) use orchestration::MockOrchestrationRepository;
-pub(crate) use orchestration::SqliteOrchestrationRepository;
-pub use orchestration::{
-    OrchestrationRepository, PersistedOrchestrationTask, SessionOrchestrationMetadataRow,
-    SessionOrchestrationRow, SessionOrchestrationTaskRow,
-};
-pub(crate) use project::SqliteProjectRepository;
-pub use project::{ProjectListRow, ProjectRepository, ProjectRow};
-pub use repository::AppRepositories;
-pub(crate) use review::SqliteReviewRepository;
-pub use review::{ReviewRepository, SessionReviewRequestRow};
-pub(crate) use session::SqliteSessionRepository;
-pub use session::{
-    ForkSessionSnapshot, PersistedSessionCreation, SessionAgentModelRow, SessionDetailRow,
-    SessionFocusedReviewRow, SessionListRow, SessionMessageRow, SessionRepository, SessionRow,
-    SessionTurnMetadata,
-};
-pub(crate) use setting::{SettingRepository, SqliteSettingRepository};
-pub(crate) use usage::SqliteUsageRepository;
-pub use usage::{SessionUsageRow, UsageRepository};
+mod tests {
+    use super::*;
+
+    #[test]
+    fn environment_timestamp_source_returns_a_unix_timestamp() {
+        // Arrange
+        let timestamp_source = timestamp_source_from_environment();
+
+        // Act
+        let timestamp = timestamp_source.now_timestamp_seconds();
+
+        // Assert
+        assert!(timestamp > 0);
+    }
+}

@@ -942,7 +942,7 @@ mod tests {
     async fn push_session_branch_to_remote_with_mock(
         mock_git_client: git::MockGitClient,
     ) -> Result<String, BranchPublishTaskFailure> {
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -1023,7 +1023,7 @@ mod tests {
     #[tokio::test]
     async fn push_session_branch_to_remote_persists_upstream_reference() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -1228,7 +1228,7 @@ mod tests {
     #[tokio::test]
     async fn push_blocks_when_custom_remote_branch_already_exists() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -1268,7 +1268,7 @@ mod tests {
     #[tokio::test]
     async fn push_skips_existence_check_when_upstream_ref_already_set() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -1309,7 +1309,7 @@ mod tests {
     #[tokio::test]
     async fn push_skips_existence_check_when_no_custom_branch_name() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -1357,7 +1357,7 @@ mod tests {
     #[tokio::test]
     async fn push_blocks_while_session_branch_rebase_is_in_progress() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -1467,7 +1467,7 @@ mod tests {
     #[tokio::test]
     async fn push_blocks_when_worktree_is_not_on_session_branch() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -1543,7 +1543,7 @@ mod tests {
     #[tokio::test]
     async fn push_shows_auth_guidance_when_ls_remote_returns_auth_error() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -1594,7 +1594,7 @@ mod tests {
     #[tokio::test]
     async fn push_shows_auth_guidance_when_push_returns_auth_error() {
         // Arrange
-        let database = AppRepositories::in_memory().await;
+        let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))

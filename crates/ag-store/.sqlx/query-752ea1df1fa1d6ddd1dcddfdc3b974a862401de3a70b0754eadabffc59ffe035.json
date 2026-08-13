@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT session_id, model, created_at, input_tokens, invocation_count, output_tokens\nFROM session_usage\nWHERE session_id = ?\nORDER BY model\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "model",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "input_tokens",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "input_tokens"
+          }
+        }
+      },
+      {
+        "name": "invocation_count",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "invocation_count"
+          }
+        }
+      },
+      {
+        "name": "output_tokens",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "output_tokens"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "752ea1df1fa1d6ddd1dcddfdc3b974a862401de3a70b0754eadabffc59ffe035"
+}

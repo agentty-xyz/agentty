@@ -43,6 +43,10 @@ For file-level detail, read the module docstrings directly.
   and the object-safe `SessionBackend` port exposed through the owned, cloneable
   `SessionService` for creation, lookup, messaging, structured question answers, durable
   coordinator submissions, cancellation, merge, and review-request workflows.
+- `crates/ag-store/`: Reusable persistence library with narrow repository contracts,
+  SQLite adapters, WAL/foreign-key connection setup, offline SQLx query metadata, and
+  embedded migrations. Host applications may inject a `TimestampSource` while the
+  default constructors use the system clock.
 - `crates/ag-tui-text/`: Shared Ratatui text-rendering library crate with Markdown
   parsing/styling, forge HTML normalization, bounded mermaid-to-terminal diagram
   rendering, and terminal-width wrapping/truncation helpers. Host applications inject
@@ -78,14 +82,13 @@ For file-level detail, read the module docstrings directly.
   runtime selection and UI suggestions. Thin compatibility modules re-export `ag-agent`
   provider models, `ag-session` session and session-adjacent models, and shared protocol
   turn prompt payloads. No I/O.
-- `infra/`: External integrations behind traits — Agentty data-root resolution, SQLite
-  persistence (`infra/db/` repositories), git (`GitClient`, backed by `ag-git`),
-  filesystem (`FsClient`), the session-worktree-only personality catalog, tmux,
-  clipboard images, version checks, project discovery, and file indexing. Clipboard
-  image capture delegates host clipboard reads to `ag-clipboard`, then owns temp-file
-  persistence and attachment metadata. Agentty imports the curated `ag-agent` crate-root
-  API; provider registry, router, parser, and transport internals stay private to
-  `crates/ag-agent/`.
+- `infra/`: External integrations behind traits — Agentty data-root resolution and
+  `ag-store` composition, git (`GitClient`, backed by `ag-git`), filesystem
+  (`FsClient`), the session-worktree-only personality catalog, tmux, clipboard images,
+  version checks, project discovery, and file indexing. Clipboard image capture
+  delegates host clipboard reads to `ag-clipboard`, then owns temp-file persistence and
+  attachment metadata. Agentty imports the curated `ag-agent` crate-root API; provider
+  registry, router, parser, and transport internals stay private to `crates/ag-agent/`.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
   for common interactions such as review-request detail navigation, session-output
@@ -135,6 +138,9 @@ For file-level detail, read the module docstrings directly.
   returned navigation and composer effects. `app/` must not inspect or mutate `AppMode`.
 - Frontend-neutral session entities, enums, and policies live in `ag-session`; keep only
   Agentty-specific entities and interaction state in `domain/`.
+- Persistence contracts, SQLite repositories, offline query metadata, and migrations
+  live in `ag-store`; Agentty's `infra/db.rs` owns only application-specific database
+  location and timestamp-source composition.
 - External side effects live in `infra/` behind mockable traits; see
   [Testability Boundaries](@/docs/architecture/testability-boundaries.md).
 - `module.rs` files paired with a `module/` directory stay router-only.

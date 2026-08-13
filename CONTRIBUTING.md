@@ -64,19 +64,20 @@ it is a manual or default hook.
 
 ### SQLx Offline Query Metadata
 
-When changing SQL in `crates/agentty/src/infra/db.rs`, regenerate offline metadata after
-enabling or modifying `query_as!`-style queries.
+When changing SQLx checked queries, regenerate offline metadata in the crate that owns
+the query. Persistence queries normally live in `crates/ag-store/`:
 
 ```sh
 (
-  cd crates/agentty
-  DATABASE_URL=sqlite:///tmp/agentty_db.sqlite cargo sqlx database reset -y
-  DATABASE_URL=sqlite:///tmp/agentty_db.sqlite cargo sqlx prepare -- --all-targets --all-features
+  cd crates/ag-store
+  DATABASE_URL=sqlite:///tmp/ag_store.sqlite cargo sqlx database reset -y
+  DATABASE_URL=sqlite:///tmp/ag_store.sqlite cargo sqlx prepare -- --all-targets --all-features
 )
 ```
 
-This repository expects generated `crates/agentty/.sqlx/` metadata so `SQLx` macro
-queries can compile in offline mode (for example, with `SQLX_OFFLINE=true`).
+This repository expects generated `.sqlx/` metadata in every crate containing SQLx
+checked queries. Both `crates/ag-store/.sqlx/` and `crates/agentty/.sqlx/` are committed
+so their macros compile in offline mode (for example, with `SQLX_OFFLINE=true`).
 
 ## TUI E2E Tests
 

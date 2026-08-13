@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration_task\nSET child_session_id = ?,\n    status = 'Running',\n    attempt_count = attempt_count + 1,\n    updated_at = ?\nWHERE id = ?\n  AND status = 'Creating'\n  AND EXISTS (\n      SELECT 1\n      FROM session_orchestration\n      WHERE session_orchestration.id = session_orchestration_task.session_orchestration_id\n        AND session_orchestration.status = 'Running'\n  )\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "29a6973eae4724d448a24c2b188d96a7323687e00e0302c5fead74319bd49bf2"
+}

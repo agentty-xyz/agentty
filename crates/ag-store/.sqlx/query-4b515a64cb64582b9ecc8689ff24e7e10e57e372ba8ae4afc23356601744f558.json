@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET is_title_provisional = 1,\n    title_generation = title_generation + 1,\n    updated_at = ?\nWHERE id = ?\n  AND is_title_provisional = 1\nRETURNING title_generation\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "title_generation",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "title_generation"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4b515a64cb64582b9ecc8689ff24e7e10e57e372ba8ae4afc23356601744f558"
+}

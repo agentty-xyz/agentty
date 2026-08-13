@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT orchestration.id AS \"id!: i64\",\n       session.project_id AS \"controller_project_id!: i64\",\n       orchestration.controller_session_id,\n       orchestration.goal_statement,\n       orchestration.relayed_question_task_id,\n       orchestration.status,\n       orchestration.max_parallelism,\n       orchestration.verification_generation\nFROM session_orchestration AS orchestration\nINNER JOIN session\nON session.id = orchestration.controller_session_id\nWHERE orchestration.controller_session_id = ?\nORDER BY orchestration.id DESC\nLIMIT 1\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "controller_project_id!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "project_id"
+          }
+        }
+      },
+      {
+        "name": "controller_session_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "controller_session_id"
+          }
+        }
+      },
+      {
+        "name": "goal_statement",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "goal_statement"
+          }
+        }
+      },
+      {
+        "name": "relayed_question_task_id",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "relayed_question_task_id"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "max_parallelism",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "max_parallelism"
+          }
+        }
+      },
+      {
+        "name": "verification_generation",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "verification_generation"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "733d4b8a764174a7270ee72818e367049240b38aa573b0437a72e86214b1d6e9"
+}

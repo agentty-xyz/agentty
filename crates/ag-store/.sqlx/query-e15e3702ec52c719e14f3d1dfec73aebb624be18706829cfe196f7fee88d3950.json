@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_orchestration_task\nSET child_session_id = NULL,\n    infrastructure_retry_count = infrastructure_retry_count + 1,\n    status = CASE\n        WHEN infrastructure_retry_count < ? THEN 'Planned'\n        ELSE 'Failed'\n    END,\n    last_error = ?,\n    updated_at = ?\nWHERE id = ?\nRETURNING status AS \"status!: String\"\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "status!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration_task",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e15e3702ec52c719e14f3d1dfec73aebb624be18706829cfe196f7fee88d3950"
+}

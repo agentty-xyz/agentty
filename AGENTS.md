@@ -30,8 +30,8 @@ validation commands. See Quality Gates for when to run what.
 - Lint: `prek run clippy --files <paths>`
 - Test one crate: `prek run test-agentty-src` (also `test-ag-agent-src`,
   `test-ag-git-src`, `test-testty-src`, `test-ag-forge-src`, `test-ag-harness-src`,
-  `test-ag-protocol-src`, `test-ag-session-src`, `test-ag-clipboard-src`,
-  `test-ag-xtask-src`)
+  `test-ag-protocol-src`, `test-ag-session-src`, `test-ag-store-src`,
+  `test-ag-clipboard-src`, `test-ag-xtask-src`)
 - Focused E2E test:
   `cargo nextest run --locked --profile ci -p agentty --test e2e <test-filter>`
 - Format markdown: `prek run mdformat --files <paths>`
@@ -553,6 +553,8 @@ Always wrap these code elements in backticks when referenced in prose:
 - `crates/` contains all workspace crates.
 - `crates/ag-session/` contains the frontend-neutral session models and programmatic
   lifecycle API.
+- `crates/ag-store/` contains reusable persistence contracts, SQLite repositories, and
+  embedded migrations.
 - `docs/site/content/docs/architecture/` contains the canonical module, runtime, and
   change-path references.
 - `skills/` contains reusable workflow skills and their discovery notes.

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT id\nFROM session\nWHERE project_id = ?\n  AND parent_session_id IS NULL\n  AND stack_base_commit_hash IS NOT NULL\n  AND status IN ('Review', 'AgentReview')\nORDER BY updated_at ASC, id ASC\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3734a0f2471ec1022bc72cd5e0e6195b3d2ea572f44c8defe8ad5e0a470c830f"
+}

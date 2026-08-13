@@ -160,7 +160,7 @@ async fn test_new_with_clients_fails_when_no_backend_cli_is_available() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let clients = crate::test_support::test_app_clients_with_available_agent_kinds(Vec::new())
         .with_app_server_client_override(crate::test_support::mock_app_server())
         .with_tmux_client(Arc::new(MockTmuxClient::new()));
@@ -374,7 +374,7 @@ async fn test_switch_project_reloads_project_scoped_settings() {
     let base_dir = tempdir().expect("failed to create temp dir");
     let second_project_dir = tempdir().expect("failed to create second temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let first_project_id = database
         .projects()
         .upsert_project(&base_path.to_string_lossy(), None)
@@ -467,7 +467,7 @@ async fn test_switch_project_restores_project_scoped_focused_reviews() {
     let base_dir = tempdir().expect("failed to create temp dir");
     let second_project_dir = tempdir().expect("failed to create second temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let first_project_id = database
         .projects()
         .upsert_project(&base_path.to_string_lossy(), None)
@@ -567,7 +567,7 @@ async fn test_switch_project_updates_active_git_upstream_reference() {
     let second_project_dir = tempdir().expect("failed to create second temp dir");
     let base_path = base_dir.path().to_path_buf();
     let second_project_path = second_project_dir.path().to_path_buf();
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let first_project_id = database
         .projects()
         .upsert_project(&base_path.to_string_lossy(), None)
@@ -721,7 +721,7 @@ async fn test_new_prefers_active_session_for_initial_selection() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let project_id = database
         .projects()
         .upsert_project(&base_path.to_string_lossy(), None)
@@ -779,7 +779,9 @@ async fn test_new_returns_error_when_startup_project_upsert_fails() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let (database, pool) = AppRepositories::in_memory_with_pool().await;
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
     sqlx::query!("DROP TABLE project")
         .execute(&pool)
         .await
@@ -810,7 +812,9 @@ async fn test_new_returns_error_when_startup_active_project_persistence_fails() 
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let (database, pool) = AppRepositories::in_memory_with_pool().await;
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
     sqlx::query!("DROP TABLE setting")
         .execute(&pool)
         .await
@@ -847,7 +851,7 @@ async fn test_new_with_clients_falls_back_from_stale_active_project_and_loads_cu
     fs::create_dir_all(current_project_path.join(".git"))
         .expect("failed to create current project git marker");
     let missing_project_path = temp_dir.path().join("missing-project");
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let current_project_id = database
         .projects()
         .upsert_project(
@@ -940,7 +944,7 @@ async fn test_new_with_clients_restores_persisted_active_tab() {
     let project_path = temp_dir.path().join("project");
     fs::create_dir_all(&agentty_home).expect("failed to create agentty home");
     fs::create_dir_all(project_path.join(".git")).expect("failed to create project git marker");
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     database
         .settings()
         .upsert_setting(SettingName::ActiveTab, Tab::Settings.as_str())
@@ -970,7 +974,7 @@ async fn test_new_with_clients_defaults_to_sessions_when_active_project_exists()
     let project_path = temp_dir.path().join("project");
     fs::create_dir_all(&agentty_home).expect("failed to create agentty home");
     fs::create_dir_all(project_path.join(".git")).expect("failed to create project git marker");
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let project_id = database
         .projects()
         .upsert_project(&project_path.to_string_lossy(), Some("main".to_string()))
@@ -1155,7 +1159,9 @@ async fn push_session_branch_auth_failure_shows_git_guidance() {
             })
         });
     let git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
-    let database = crate::infra::db::AppRepositories::in_memory().await;
+    let database = crate::infra::db::AppRepositories::in_memory()
+        .await
+        .expect("db should open");
 
     // Act
     let result = push_session_branch(
@@ -1200,7 +1206,9 @@ async fn push_session_branch_preserves_blocked_when_remote_branch_exists() {
         .once()
         .returning(|_, _| Box::pin(async { Ok(true) }));
     let git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
-    let database = crate::infra::db::AppRepositories::in_memory().await;
+    let database = crate::infra::db::AppRepositories::in_memory()
+        .await
+        .expect("db should open");
 
     // Act
     let result = push_session_branch(
@@ -1247,7 +1255,9 @@ async fn push_session_branch_shows_auth_guidance_when_ls_remote_fails_with_auth_
             })
         });
     let git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
-    let database = crate::infra::db::AppRepositories::in_memory().await;
+    let database = crate::infra::db::AppRepositories::in_memory()
+        .await
+        .expect("db should open");
 
     // Act
     let result = push_session_branch(
@@ -1718,7 +1728,9 @@ async fn push_session_branch_uses_custom_remote_branch_name_when_provided() {
             Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
         });
     let git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
-    let database = crate::infra::db::AppRepositories::in_memory().await;
+    let database = crate::infra::db::AppRepositories::in_memory()
+        .await
+        .expect("db should open");
 
     // Act
     let result = push_session_branch(
@@ -1776,7 +1788,9 @@ async fn push_session_branch_succeeds_without_review_request_link_for_unsupporte
         .once()
         .returning(|_| Box::pin(async { Ok("https://example.com/team/project.git".to_string()) }));
     let git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
-    let database = crate::infra::db::AppRepositories::in_memory().await;
+    let database = crate::infra::db::AppRepositories::in_memory()
+        .await
+        .expect("db should open");
 
     // Act
     let result = push_session_branch(
@@ -3435,7 +3449,7 @@ async fn apply_app_events_refresh_git_status_requests_orchestrator_refresh() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let clients = crate::test_support::test_app_clients()
         .with_app_server_client_override(crate::test_support::mock_app_server())
         .with_tmux_client(Arc::new(MockTmuxClient::new()));
@@ -4430,7 +4444,7 @@ async fn apply_app_events_refresh_keeps_viewed_merging_session_without_worktree(
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let project_id = database
         .projects()
         .upsert_project(&base_path.to_string_lossy(), None)
@@ -4646,7 +4660,7 @@ async fn resolve_startup_active_project_id_falls_back_when_stored_project_path_i
     let current_project_dir = tempdir().expect("failed to create current project dir");
     let current_project_path = current_project_dir.path().to_path_buf();
     let missing_project_path = current_project_path.join("removed-project");
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let current_project_id = database
         .projects()
         .upsert_project(
@@ -4690,7 +4704,7 @@ async fn apply_app_events_refresh_projects_reloads_project_active_session_count(
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
     fs::create_dir_all(base_path.join(".git")).expect("failed to create project git marker");
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let project_id = database
         .projects()
         .upsert_project(&base_path.to_string_lossy(), None)
@@ -4757,7 +4771,7 @@ async fn apply_app_events_refresh_projects_reloads_project_active_session_count(
 /// discover repositories implicitly.
 async fn load_project_items_uses_persisted_rows_without_home_scan() {
     // Arrange
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let home_directory = tempdir().expect("failed to create temp dir");
     let discovered_repo = home_directory.path().join("agentty");
     create_git_repo_marker(discovered_repo.as_path());
@@ -4792,7 +4806,7 @@ async fn load_project_items_uses_persisted_rows_without_home_scan() {
 /// the first project list load.
 async fn refresh_project_catalog_on_startup_discovers_home_directory_repositories() {
     // Arrange
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let home_directory = tempdir().expect("failed to create temp dir");
     let discovered_repo = home_directory.path().join("agentty");
     create_git_repo_marker(discovered_repo.as_path());
@@ -4970,7 +4984,7 @@ async fn test_continue_terminal_session_opens_draft_prompt_for_done_session_with
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let clients = crate::test_support::test_app_clients()
         .with_app_server_client_override(crate::test_support::mock_app_server())
         .with_tmux_client(Arc::new(MockTmuxClient::new()));
@@ -5072,7 +5086,7 @@ async fn test_continue_terminal_session_falls_back_to_persisted_context_without_
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let clients = crate::test_support::test_app_clients()
         .with_app_server_client_override(crate::test_support::mock_app_server())
         .with_tmux_client(Arc::new(MockTmuxClient::new()));
@@ -5177,7 +5191,7 @@ async fn test_continue_terminal_session_uses_persisted_context_for_canceled_sour
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let database = AppRepositories::in_memory().await;
+    let database = AppRepositories::in_memory().await.expect("db should open");
     let clients = crate::test_support::test_app_clients()
         .with_app_server_client_override(crate::test_support::mock_app_server())
         .with_tmux_client(Arc::new(MockTmuxClient::new()));
@@ -5890,7 +5904,9 @@ async fn insert_review_session_with_data_dir(app: &App, session_id: &str) {
 async fn new_test_app_with_database_pool() -> (App, sqlx::SqlitePool, tempfile::TempDir) {
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let (database, pool) = AppRepositories::in_memory_with_pool().await;
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
     let clients = crate::test_support::test_app_clients_with_mock_app_server()
         .with_tmux_client(Arc::new(MockTmuxClient::new()));
     let app = App::new_with_clients(base_path.clone(), base_path, None, database, clients)

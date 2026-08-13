@@ -21,6 +21,8 @@ Contains the workspace member crates.
 - `crates/ag-session/` holds shared session identity, lifecycle, orchestration, project,
   personality, review, setting, clarification, and transcript models plus the complete
   session aggregates and frontend-neutral programmatic lifecycle API.
+- `crates/ag-store/` holds reusable persistence contracts, SQLite repository adapters,
+  connection setup, offline query metadata, and embedded migrations.
 - `crates/ag-tui-text/` holds shared Ratatui text rendering helpers for markdown,
   mermaid diagrams, and terminal-width wrapping/truncation.
 - `crates/ag-xtask/` holds workspace maintenance utilities, including migration checks.

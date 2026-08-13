@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT reasoning_level FROM session WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "reasoning_level",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "reasoning_level"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "84274328e9a4f9c0e97e35c372fb9c98c30ed1321da6006d95a8f8e2dd64c1f1"
+}

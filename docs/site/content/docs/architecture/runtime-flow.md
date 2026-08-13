@@ -33,6 +33,7 @@ these constraints:
 | `crates/ag-agent/`        | Shared agent provider models plus channel and transport boundaries.  |
 | `crates/ag-protocol/`     | Shared structured response protocol and turn prompt payload library. |
 | `crates/ag-session/`      | Shared session models, policies, and frontend-neutral lifecycle API. |
+| `crates/ag-store/`        | Shared persistence contracts, SQLite adapters, and migrations.       |
 | `crates/ag-tui-text/`     | Shared Markdown, HTML, mermaid, wrapping, and truncation helpers.    |
 | `crates/agentty/`         | Main TUI application crate.                                          |
 | `crates/testty/`          | TUI end-to-end testing framework.                                    |
@@ -47,7 +48,7 @@ to one event-loop cycle:
 ```mermaid
 flowchart TD
   main["main.rs"]
-  db["Database::open()<br/>sqlite open + WAL + foreign keys + migrations"]
+  db["ag-store Database::open()<br/>WAL + keys + migrations"]
   app_new["App::new()"]
   model_migration["Migrate active retired models<br/>across saved projects"]
   scan["Startup-only home-directory project scan<br/>then project/session snapshot load"]

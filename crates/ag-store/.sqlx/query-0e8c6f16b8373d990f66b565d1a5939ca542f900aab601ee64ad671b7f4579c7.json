@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_operation\nSET status = 'done',\n    finished_at = ?,\n    heartbeat_at = ?,\n    last_error = NULL\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "0e8c6f16b8373d990f66b565d1a5939ca542f900aab601ee64ad671b7f4579c7"
+}

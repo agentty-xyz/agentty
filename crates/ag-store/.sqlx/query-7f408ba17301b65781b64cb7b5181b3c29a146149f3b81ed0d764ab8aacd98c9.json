@@ -1,0 +1,64 @@
+{
+  "db_name": "SQLite",
+  "query": "\nWITH latest_orchestration_id AS (\n    SELECT controller_session_id,\n           MAX(id) AS orchestration_id\n    FROM session_orchestration\n    GROUP BY controller_session_id\n),\nlatest_orchestration AS (\n    SELECT orchestration.id,\n           orchestration.controller_session_id,\n           orchestration.status\n    FROM session_orchestration AS orchestration\n    INNER JOIN latest_orchestration_id AS latest\n    ON latest.orchestration_id = orchestration.id\n),\ncontroller_metadata AS (\n    SELECT orchestration.controller_session_id AS session_id,\n           orchestration.status AS orchestration_status,\n           COALESCE(SUM(\n               CASE WHEN task.status IN (\n                        'Creating',\n                        'Running',\n                        'Reviewing',\n                        'ReviewApplying',\n                        'ContinuationPending'\n                    )\n                    THEN 1 ELSE 0 END\n           ), 0) AS running_task_count,\n           COALESCE(SUM(\n               CASE WHEN task.status = 'WaitingForInput' THEN 1 ELSE 0 END\n           ), 0) AS waiting_task_count\n    FROM latest_orchestration AS orchestration\n    LEFT JOIN session_orchestration_task AS task\n    ON task.session_orchestration_id = orchestration.id\n    GROUP BY orchestration.id\n),\nchild_metadata AS (\n    SELECT task.child_session_id AS session_id,\n           orchestration.controller_session_id\n    FROM session_orchestration_task AS task\n    INNER JOIN session_orchestration AS orchestration\n    ON orchestration.id = task.session_orchestration_id\n    WHERE task.child_session_id IS NOT NULL\n)\nSELECT session.id AS \"session_id!: String\",\n       child_metadata.controller_session_id,\n       controller_metadata.orchestration_status,\n       COALESCE(controller_metadata.running_task_count, 0) AS \"running_task_count!: i64\",\n       COALESCE(controller_metadata.waiting_task_count, 0) AS \"waiting_task_count!: i64\"\nFROM session\nLEFT JOIN controller_metadata\nON controller_metadata.session_id = session.id\nLEFT JOIN child_metadata\nON child_metadata.session_id = session.id\nWHERE session.project_id = ?\n  AND (\n      controller_metadata.session_id IS NOT NULL\n      OR child_metadata.session_id IS NOT NULL\n  )\nORDER BY session.id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "controller_session_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "controller_session_id"
+          }
+        }
+      },
+      {
+        "name": "orchestration_status",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_orchestration",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "running_task_count!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "waiting_task_count!: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "7f408ba17301b65781b64cb7b5181b3c29a146149f3b81ed0d764ab8aacd98c9"
+}

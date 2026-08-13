@@ -3626,7 +3626,9 @@ mod tests {
 
     /// Persists one session row and returns its pool for failure-path tests.
     async fn database_with_session_and_pool(session: &Session) -> (AppRepositories, SqlitePool) {
-        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let (database, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         let project_id = database
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
@@ -4793,7 +4795,9 @@ mod tests {
     /// starting a provider request.
     async fn test_spawn_session_title_generation_task_handles_claim_failure() {
         // Arrange
-        let (database, pool) = AppRepositories::in_memory_with_pool().await;
+        let (database, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         pool.close().await;
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let one_shot_client: Arc<dyn OneShotClient> = Arc::new(MockOneShotClient::new());

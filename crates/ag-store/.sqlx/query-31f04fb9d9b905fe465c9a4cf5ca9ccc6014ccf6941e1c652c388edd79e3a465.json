@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_activity (session_id, created_at)\nSELECT id, created_at\nFROM session\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "31f04fb9d9b905fe465c9a4cf5ca9ccc6014ccf6941e1c652c388edd79e3a465"
+}

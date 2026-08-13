@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT applied_personality_id,\n       applied_personality_prompt_hash,\n       personality_id\nFROM session\nWHERE id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "applied_personality_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "applied_personality_id"
+          }
+        }
+      },
+      {
+        "name": "applied_personality_prompt_hash",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "applied_personality_prompt_hash"
+          }
+        }
+      },
+      {
+        "name": "personality_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "personality_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "8893c8d421b6afdc7fccf834988bdb3d00fdd410598e1b1793b35c766fd0d1f4"
+}

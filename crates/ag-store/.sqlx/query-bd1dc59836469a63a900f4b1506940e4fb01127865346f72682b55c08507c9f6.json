@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET created_at = CASE id WHEN 'a-older' THEN 100 ELSE 200 END,\n    updated_at = 300\nWHERE id IN ('a-older', 'z-newer')\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "bd1dc59836469a63a900f4b1506940e4fb01127865346f72682b55c08507c9f6"
+}
