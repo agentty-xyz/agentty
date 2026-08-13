@@ -312,6 +312,34 @@ const DARK_HORIZON_PALETTE: ThemePalette = ThemePalette {
     warning_soft: Color::Rgb(252, 215, 188),
 };
 
+/// Muted dark palette sampled from the Agentty interface reference: near-black
+/// navy surfaces, cyan focus, mint success, peach warning, crimson danger,
+/// lavender questions, and cool gray text.
+const AGENTTY_DARK_PALETTE: ThemePalette = ThemePalette {
+    accent: Color::Rgb(123, 222, 226),
+    accent_soft: Color::Rgb(159, 229, 233),
+    border: Color::Rgb(53, 60, 81),
+    danger: Color::Rgb(196, 80, 79),
+    danger_soft: Color::Rgb(177, 88, 89),
+    info: Color::Rgb(115, 158, 211),
+    question: Color::Rgb(176, 126, 215),
+    surface: Color::Rgb(22, 24, 31),
+    surface_clarification: Color::Rgb(33, 36, 48),
+    surface_danger: Color::Rgb(60, 34, 42),
+    surface_elevated: Color::Rgb(33, 36, 48),
+    surface_selection: Color::Rgb(46, 50, 67),
+    surface_success: Color::Rgb(36, 63, 54),
+    surface_overlay: Color::Rgb(11, 12, 15),
+    surface_prompt: Color::Rgb(22, 24, 31),
+    text: Color::Rgb(215, 217, 231),
+    text_muted: Color::Rgb(132, 137, 167),
+    text_subtle: Color::Rgb(97, 101, 127),
+    success: Color::Rgb(97, 206, 155),
+    success_soft: Color::Rgb(122, 192, 161),
+    warning: Color::Rgb(243, 196, 158),
+    warning_soft: Color::Rgb(222, 200, 184),
+};
+
 /// Sets the process-wide active color theme used by semantic palette tokens.
 pub fn set_active_theme(theme: ColorTheme) {
     let _lock_guard = ACTIVE_THEME_SCOPE_LOCK
@@ -421,6 +449,7 @@ pub fn forge_indicator_color(state: Option<ReviewRequestState>) -> Color {
 #[must_use]
 fn active_palette() -> ThemePalette {
     match active_theme() {
+        ColorTheme::AgenttyDark => AGENTTY_DARK_PALETTE,
         ColorTheme::Green => GREEN_PALETTE,
         ColorTheme::DarkHorizon => DARK_HORIZON_PALETTE,
         ColorTheme::Current => CURRENT_PALETTE,
@@ -433,6 +462,7 @@ fn active_theme() -> ColorTheme {
     match ACTIVE_THEME.load(Ordering::Relaxed) {
         1 => ColorTheme::Green,
         2 => ColorTheme::DarkHorizon,
+        3 => ColorTheme::AgenttyDark,
         _ => ColorTheme::Current,
     }
 }
@@ -454,6 +484,7 @@ const fn theme_index(theme: ColorTheme) -> u8 {
         ColorTheme::Current => 0,
         ColorTheme::Green => 1,
         ColorTheme::DarkHorizon => 2,
+        ColorTheme::AgenttyDark => 3,
     }
 }
 
@@ -638,6 +669,41 @@ mod tests {
         assert_eq!(palette.warning, Color::Rgb(250, 194, 154));
         assert_eq!(palette.danger, Color::Rgb(209, 67, 76));
         assert_eq!(palette.question, Color::Rgb(184, 119, 219));
+    }
+
+    #[test]
+    fn active_palette_returns_agentty_dark_reference_tones() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::AgenttyDark);
+
+        // Act
+        let palette = palette::active();
+
+        // Assert
+        assert_eq!(palette.surface, Color::Rgb(22, 24, 31));
+        assert_eq!(palette.surface_elevated, Color::Rgb(33, 36, 48));
+        assert_eq!(palette.surface_selection, Color::Rgb(46, 50, 67));
+        assert_eq!(palette.border, Color::Rgb(53, 60, 81));
+        assert_eq!(palette.text, Color::Rgb(215, 217, 231));
+        assert_eq!(palette.text_muted, Color::Rgb(132, 137, 167));
+        assert_eq!(palette.text_subtle, Color::Rgb(97, 101, 127));
+        assert_eq!(palette.accent, Color::Rgb(123, 222, 226));
+    }
+
+    #[test]
+    fn active_palette_returns_agentty_dark_status_tones() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::AgenttyDark);
+
+        // Act
+        let palette = palette::active();
+
+        // Assert
+        assert_eq!(palette.success, Color::Rgb(97, 206, 155));
+        assert_eq!(palette.warning, Color::Rgb(243, 196, 158));
+        assert_eq!(palette.danger, Color::Rgb(196, 80, 79));
+        assert_eq!(palette.question, Color::Rgb(176, 126, 215));
+        assert_eq!(palette.info, Color::Rgb(115, 158, 211));
     }
 
     #[test]
