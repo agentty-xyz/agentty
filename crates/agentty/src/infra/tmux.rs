@@ -1,8 +1,19 @@
+use std::ffi::OsString;
 use std::future::Future;
-use std::io;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Output;
+use std::{env, io};
+
+/// Returns whether Agentty is running inside a `tmux` session.
+pub(crate) fn is_tmux_session() -> bool {
+    has_tmux_environment(|name| env::var_os(name))
+}
+
+/// Returns whether the `TMUX` pane environment variable is nonempty.
+fn has_tmux_environment(mut get_var: impl FnMut(&str) -> Option<OsString>) -> bool {
+    get_var("TMUX").is_some_and(|value| !value.is_empty())
+}
 
 /// Boxed async result returned by [`TmuxClient`] methods.
 pub type TmuxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -224,6 +235,34 @@ mod tests {
     use mockall::predicate::eq;
 
     use super::*;
+
+    #[test]
+    fn tmux_environment_detects_nonempty_tmux_variable() {
+        // Arrange
+        let variables = [("TMUX", Some("/tmp/tmux-501/default,123,0"))];
+
+        // Act
+        let is_tmux_session = has_tmux_environment(|name| {
+            variables
+                .iter()
+                .find(|(key, _)| *key == name)
+                .and_then(|(_, value)| value.map(OsString::from))
+        });
+
+        // Assert
+        assert!(is_tmux_session);
+    }
+
+    #[test]
+    fn tmux_environment_rejects_missing_or_empty_tmux_variable() {
+        // Arrange, Act
+        let missing_tmux_session = has_tmux_environment(|_| None);
+        let empty_tmux_session = has_tmux_environment(|_| Some(OsString::new()));
+
+        // Assert
+        assert!(!missing_tmux_session);
+        assert!(!empty_tmux_session);
+    }
 
     #[tokio::test]
     async fn open_window_for_folder_with_runner_returns_window_id_on_success() {

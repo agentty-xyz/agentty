@@ -174,6 +174,7 @@ impl App {
             question_progress: std::collections::HashMap::new(),
             question_reconcile_reload_attempted: None,
             event_rx,
+            is_tmux_session: clients.is_tmux_session,
             review_cache,
             latest_available_version: None,
             last_seen_session_update_versions: std::collections::HashMap::new(),

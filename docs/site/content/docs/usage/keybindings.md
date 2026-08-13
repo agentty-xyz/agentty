@@ -127,7 +127,7 @@ The full set in **Review** state, subject to session and forge availability:
 | `q`                 | Back to list                                        |
 | `Enter`             | Compose a reply                                     |
 | `/`                 | Open composer with `/` prefilled                    |
-| `o`                 | Run a launch configuration in the worktree          |
+| `o`                 | Run a launch configuration in the worktree (`tmux`) |
 | `p`                 | Publish branch and create or refresh review request |
 | `c`                 | Show linked review-request comments                 |
 | `d`                 | Show diff                                           |
@@ -166,13 +166,13 @@ State-specific differences:
   through **Auto-approve Research**. Controllers hide branch actions: `d`, `o`, `p`,
   `F`, `m`, and `r`.
 - Managed orchestration workers restrict direct Agentty actions. `d` opens their diff,
-  `D` confirms a one-way detach into a regular user-owned session, and a worker in
-  **Review** exposes `o` to open its materialized worktree. The confirmation warns that
-  the shell has normal write access and edits can invalidate orchestration verification.
-  Reply, slash-command, publish, fork, merge, sync, cancel, linked review-comment, and
-  direct question-answer actions stay hidden; `Ctrl+c` is ignored while the worker
-  remains managed. After a managed merge removes the worktree, `d` reads the immutable
-  diff archived during integration.
+  `D` confirms a one-way detach into a regular user-owned session, and, when Agentty is
+  running inside `tmux`, a worker in **Review** exposes `o` to open its materialized
+  worktree. The confirmation warns that the shell has normal write access and edits can
+  invalidate orchestration verification. Reply, slash-command, publish, fork, merge,
+  sync, cancel, linked review-comment, and direct question-answer actions stay hidden;
+  `Ctrl+c` is ignored while the worker remains managed. After a managed merge removes
+  the worktree, `d` reads the immutable diff archived during integration.
 - Temporary research children expose their transcript and `d` evidence while active, but
   hide `D` and `o`: their worktree is always reclaimed after report capture and cannot
   be transferred into a user-owned session. After cleanup, `d` reads the archived
@@ -192,11 +192,10 @@ State-specific differences:
 - **Queued** and **Merging** sessions are otherwise read-only (`q`, scroll, help).
   Linked review requests remain available from other session states with `c`.
 
-`o` runs the configured `Launch Configurations` entry, or opens a selector popup when
-several are configured. Run Agentty inside `tmux` when you rely on
-`Launch Configurations`, because those commands are dispatched into tmux windows.
-Publish (`p`), sync (`r`), and stacked behavior are described in
-[Workflow](@/docs/usage/workflow.md).
+`o` is available only when Agentty runs inside `tmux`. It runs the configured
+`Launch Configurations` entry, or opens a selector popup when several are configured,
+because those commands are dispatched into tmux windows. Publish (`p`), sync (`r`), and
+stacked behavior are described in [Workflow](@/docs/usage/workflow.md).
 
 ## Review Comments
 

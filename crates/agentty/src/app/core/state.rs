@@ -62,7 +62,7 @@ use crate::infra::db;
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::personality::{PersonalityCatalogClient, RealPersonalityCatalogClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
-use crate::infra::tmux::{RealTmuxClient, TmuxClient};
+use crate::infra::tmux::{self, RealTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode, PromptModeSnapshot};
 use crate::presentation::settings::SettingsPresentationState;
 
@@ -126,6 +126,7 @@ pub(crate) struct AppClients {
     pub(super) app_server_client_override: Option<Arc<dyn AppServerClient>>,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
+    pub(super) is_tmux_session: bool,
     pub(super) personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
     pub(super) review_request_client: Arc<dyn ReviewRequestClient>,
@@ -143,6 +144,7 @@ impl AppClients {
             app_server_client_override: None,
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
+            is_tmux_session: tmux::is_tmux_session(),
             personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             project_discovery_client: Arc::new(RealProjectDiscoveryClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
@@ -215,7 +217,17 @@ impl AppClients {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn with_tmux_client(mut self, tmux_client: Arc<dyn TmuxClient>) -> Self {
+        self.is_tmux_session = true;
         self.tmux_client = tmux_client;
+
+        self
+    }
+
+    /// Overrides whether the test app is treated as running inside `tmux`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_tmux_session(mut self, is_tmux_session: bool) -> Self {
+        self.is_tmux_session = is_tmux_session;
 
         self
     }
@@ -271,6 +283,8 @@ pub struct App {
     pub(crate) sync_handle: sync::SyncHandle,
     /// Receives app events emitted by background tasks and workflows.
     pub(super) event_rx: mpsc::UnboundedReceiver<AppEvent>,
+    /// Whether Agentty was launched from inside a `tmux` session.
+    pub(super) is_tmux_session: bool,
     /// Stores the latest available stable `agentty` version when one is
     /// detected.
     pub(crate) latest_available_version: Option<String>,
@@ -324,6 +338,11 @@ impl App {
     /// Clears the pending redraw request after one frame is rendered.
     pub(crate) fn clear_redraw(&mut self) {
         self.needs_redraw = false;
+    }
+
+    /// Returns whether tmux-only session actions are available.
+    pub(crate) fn is_tmux_session(&self) -> bool {
+        self.is_tmux_session
     }
 
     /// Cycles the active list tab forward.
@@ -1159,7 +1178,8 @@ impl App {
     }
 
     /// Opens the selected session worktree in tmux and optionally runs the
-    /// first configured launch configuration.
+    /// first configured launch configuration. This is a no-op when Agentty
+    /// was launched outside tmux.
     pub async fn open_session_worktree_in_tmux(&self) {
         let selected_launch_configuration =
             self.configured_launch_configurations().into_iter().next();
@@ -1171,11 +1191,16 @@ impl App {
     /// Opens the selected session worktree in tmux and optionally runs one
     /// provided launch configuration.
     ///
-    /// Sessions without a materialized worktree are treated as a no-op.
+    /// Sessions without a materialized worktree and Agentty processes outside
+    /// tmux are treated as a no-op.
     pub(crate) async fn open_session_worktree_in_tmux_with_command(
         &self,
         launch_configuration: Option<&str>,
     ) {
+        if !self.is_tmux_session() {
+            return;
+        }
+
         let Some(session) = self.selected_session() else {
             return;
         };
