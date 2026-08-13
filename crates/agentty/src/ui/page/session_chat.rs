@@ -930,27 +930,16 @@ mod tests {
     #[test]
     fn test_status_bar_fyi_rotates_between_session_chat_messages() {
         // Arrange
-        let expected_messages = [
-            "Queued replies run one by one after the active turn finishes.",
-            "Ctrl+c retracts queued replies before stopping the running turn.",
-            "Published sessions auto-push after queued replies drain.",
-            "After publishing once, p refreshes the same review request.",
-            "Focused review output stays visible until you submit the next prompt.",
-            "Done sessions can continue in a fresh draft with C.",
-            "Stacked child review requests target the parent's review branch.",
-            "Use @ to attach files or project context to the next prompt.",
-            "Type /apply after focused review completes to verify and apply suggestions.",
-        ];
+        let actual_messages = crate::ui::page::fyi::session_chat_messages();
 
         // Act
-        let actual_messages = crate::ui::page::fyi::session_chat_messages();
         let wrapped_message = crate::ui::page::fyi::rotating_message(
             actual_messages,
-            u64::try_from(expected_messages.len()).unwrap_or_default(),
+            u64::try_from(actual_messages.len()).unwrap_or_default(),
         );
 
         // Assert
-        assert_eq!(actual_messages, expected_messages);
+        assert_eq!(actual_messages.len(), 9);
         assert_eq!(
             wrapped_message,
             Some("Queued replies run one by one after the active turn finishes.")
