@@ -181,7 +181,6 @@ impl SessionManager {
             | AppMode::Question { session_id, .. }
             | AppMode::View { session_id, .. }
             | AppMode::Diff { session_id, .. }
-            | AppMode::ReviewComments { session_id, .. }
             | AppMode::Help {
                 context: HelpContext::View { session_id, .. } | HelpContext::Diff { session_id, .. },
                 ..
@@ -868,6 +867,7 @@ mod tests {
                 diff: String::new(),
                 file_explorer_selected_index: 0,
                 preview: DiffPreview::default(),
+                review_comments: None,
                 restore: None,
                 scroll_cache: None,
                 scroll_offset: 0,
@@ -912,18 +912,20 @@ mod tests {
     }
 
     #[test]
-    fn test_ensure_mode_session_exists_closes_missing_review_comments_page() {
+    fn test_ensure_mode_session_exists_closes_missing_diff_comments() {
         // Arrange
         let now = Instant::now();
         let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
         let session_manager = session_manager_fixture(clock);
-        let mut mode = AppMode::ReviewComments {
-            comment_actions: Vec::new(),
-            comment_error: None,
-            comment_snapshot: None,
+        let mut mode = AppMode::Diff {
             diff: String::new(),
-            is_loading_comments: true,
-            selected_comment_index: 0,
+            file_explorer_selected_index: 0,
+            preview: DiffPreview::default(),
+            review_comments: Some(crate::presentation::app_mode::DiffReviewComments::loading(
+                1,
+            )),
+            restore: None,
+            scroll_cache: None,
             session_id: "missing-session".into(),
             scroll_offset: 0,
         };

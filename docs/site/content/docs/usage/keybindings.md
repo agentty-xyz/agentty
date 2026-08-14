@@ -179,9 +179,9 @@ State-specific differences:
   observed diff so unexpected writes remain inspectable.
 - Review-ready stacked parents with a materialized child keep `Enter`, `/`, `m`, and `r`
   while the stack is idle.
-- Sessions with a linked pull request or merge request use `c` to open its comments page
-  and hide `m`; merge the linked request through its forge instead of Agentty's local
-  merge queue.
+- Sessions with a linked pull request or merge request use `c` to open Diff mode focused
+  on its Comments section and hide `m`; merge the linked request through its forge
+  instead of Agentty's local merge queue.
 - **Merged** sessions remain in Active and expose only read-only navigation, linked
   review comments, and `d` for the diff until list-mode `s` successfully syncs their
   local target branch.
@@ -197,25 +197,27 @@ State-specific differences:
 because those commands are dispatched into tmux windows. Publish (`p`), sync (`r`), and
 stacked behavior are described in [Workflow](@/docs/usage/workflow.md).
 
-## Review Comments
+## Review Comments in Diff Mode
 
-The review-comments page uses the same split layout as diff view. The left panel lists
-unresolved, outdated, and resolved threads plus standalone review-request comments in
-separate groups. The Outdated group contains unresolved threads with stale anchors;
-resolved threads stay in the Resolved group even when their anchors are outdated. The
-right panel shows the selected comment's author, resolution state, outdated-anchor
-metadata when applicable, current diff context for its attached line or range, and then
-the conversation. Comment bodies render Markdown and common embedded HTML without
-showing HTML comments. Outdated threads explicitly report that their original context is
-unavailable instead of mapping the stale anchor onto the current diff. File-level
-comments similarly show that they have no attached code line instead of highlighting an
-arbitrary diff row. Current inline snippets use the same gutters and added/removed line
-colors as diff view.
+For linked review requests, Diff mode divides its left sidebar into Files and Comments.
+`d` opens the workspace focused on Files, while `c` opens the same workspace focused on
+Comments. The Comments section groups unresolved, outdated, and resolved threads plus
+standalone review-request comments. The Outdated group contains unresolved threads with
+stale anchors; resolved threads stay in the Resolved group even when their anchors are
+outdated. Selecting a comment replaces the right diff pane with its author, resolution
+state, outdated-anchor metadata when applicable, current diff context for its attached
+line or range, and conversation. Comment bodies render Markdown and common embedded HTML
+without showing HTML comments. Outdated threads explicitly report that their original
+context is unavailable instead of mapping the stale anchor onto the current diff.
+File-level comments similarly show that they have no attached code line instead of
+highlighting an arbitrary diff row. Current inline snippets use the same gutters and
+added/removed line colors as diff view.
 
 | Key           | Action                                                  |
 | ------------- | ------------------------------------------------------- |
 | `q` / `Esc`   | Return to session view                                  |
 | `j` / `k`     | Select previous/next comment                            |
+| `f`           | Focus the Files section                                 |
 | `Up` / `Down` | Scroll selected comment info                            |
 | `a`           | Toggle the selected actionable thread as address        |
 | `d`           | Toggle the selected actionable thread as deny           |
@@ -247,16 +249,18 @@ longer available. Resolved threads and standalone comments are read-only.
 
 ## Diff Mode
 
-Pressing `d` from session view opens diff mode with the right panel showing the git
-diff.
+Pressing `d` from session view opens Diff mode focused on Files with the right panel
+showing the git diff. Linked review requests add a Comments section below Files; `c`
+focuses Comments, and `f` returns to Files.
 
-| Key           | Action                      |
-| ------------- | --------------------------- |
-| `q` / `Esc`   | Back to session             |
-| `j` / `k`     | Select file                 |
-| `p`           | Toggle markdown preview     |
-| `Up` / `Down` | Scroll selected right panel |
-| `?`           | Help                        |
+| Key           | Action                       |
+| ------------- | ---------------------------- |
+| `q` / `Esc`   | Back to session              |
+| `j` / `k`     | Select file                  |
+| `p`           | Toggle markdown preview      |
+| `c`           | Focus linked review comments |
+| `Up` / `Down` | Scroll selected right panel  |
+| `?`           | Help                         |
 
 <a id="usage-diff-totals"></a> The diff panel title includes aggregate `+added` and
 `-removed` line totals. Every file and folder row in the left panel shows its own

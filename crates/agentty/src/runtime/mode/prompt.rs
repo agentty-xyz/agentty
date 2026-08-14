@@ -16,7 +16,9 @@ use crate::domain::composer::PromptAttachment;
 use crate::domain::input::{InputCommand, InputEffect, InputState};
 use crate::domain::session::SessionId;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
-use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRestoreTarget, PromptModeSnapshot};
+use crate::presentation::app_mode::{
+    AppMode, ChatFocus, DiffRestoreTarget, DiffSidebarFocus, PromptModeSnapshot,
+};
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptSlashStage, PromptSuggestionSelection,
     apply_prompt_delete_range as apply_prompt_delete_range_components,
@@ -197,7 +199,7 @@ async fn show_prompt_diff(app: &mut App, session_id: &str) {
 
     let restore = take_prompt_snapshot(app).map(DiffRestoreTarget::Prompt);
 
-    diff::enter_diff_mode(app, session_id, diff, restore);
+    diff::enter_diff_mode(app, session_id, diff, restore, DiffSidebarFocus::Files);
 }
 
 /// Snapshots the current prompt-mode state for later restoration.

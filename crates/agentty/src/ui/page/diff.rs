@@ -14,8 +14,10 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use rustc_hash::FxHasher;
 
 use crate::domain::session::Session;
-use crate::presentation::app_mode::{DiffPreview, DiffPreviewUnavailableReason};
-use crate::presentation::help_action;
+use crate::presentation::app_mode::{
+    DiffPreview, DiffPreviewUnavailableReason, DiffReviewComments, DiffSidebarFocus,
+};
+use crate::presentation::{help_action, review_comment as review_comment_selection};
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 #[cfg(test)]
@@ -23,6 +25,7 @@ use crate::ui::component::vertical_scrollbar::{SCROLLBAR_THUMB_SYMBOL, SCROLLBAR
 use crate::ui::diff_util::{
     DiffLine, DiffLineKind, FileTreeItem, diff_header_new_path, parse_diff_lines,
 };
+use crate::ui::page::review_comment;
 use crate::ui::{Component, Page, diff_util, markdown, style};
 
 const WRAPPED_CHUNK_START_INDEX: usize = 0;
@@ -595,10 +598,14 @@ pub struct DiffPage<'a> {
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Rendered-markdown preview state for the selected file.
     pub preview: &'a DiffPreview,
+    /// Optional linked review-request comments shown below changed files.
+    pub review_comments: Option<&'a DiffReviewComments>,
     /// Vertical scroll offset inside the diff panel.
     pub scroll_offset: u16,
     /// Session whose diff is being rendered.
     pub session: &'a Session,
+    /// Sidebar section currently controlling the right pane.
+    pub sidebar_focus: DiffSidebarFocus,
 }
 
 /// Borrowed inputs required to construct a [`DiffPage`] for one frame.
@@ -614,10 +621,14 @@ pub struct DiffPageInput<'a> {
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Rendered-markdown preview state for the selected file.
     pub preview: &'a DiffPreview,
+    /// Optional linked review-request comments shown below changed files.
+    pub review_comments: Option<&'a DiffReviewComments>,
     /// Vertical scroll offset inside the diff panel.
     pub scroll_offset: u16,
     /// Session whose diff is being rendered.
     pub session: &'a Session,
+    /// Sidebar section currently controlling the right pane.
+    pub sidebar_focus: DiffSidebarFocus,
 }
 
 impl<'a> DiffPage<'a> {
@@ -629,8 +640,10 @@ impl<'a> DiffPage<'a> {
             file_explorer_selected_index,
             markdown_render_cache,
             preview,
+            review_comments,
             scroll_offset,
             session,
+            sidebar_focus,
         } = input;
 
         Self {
@@ -639,8 +652,10 @@ impl<'a> DiffPage<'a> {
             file_explorer_selected_index,
             markdown_render_cache,
             preview,
+            review_comments,
             scroll_offset,
             session,
+            sidebar_focus,
         }
     }
 
@@ -897,15 +912,53 @@ impl Page for DiffPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = diff_util::diff_page_areas(area);
         let content = self.diff_layout_cache.content(self.diff);
+        let sidebar_areas =
+            diff_util::diff_sidebar_areas(areas.file_list_area, self.review_comments.is_some());
 
         FileExplorer::from_cached_lines(
             content.file_list_lines(),
             FILE_LIST_CHANGE_TOTAL_SPAN_COUNT,
         )
         .selected_index(self.file_explorer_selected_index)
-        .render(f, areas.file_list_area);
+        .focused(self.sidebar_focus == DiffSidebarFocus::Files)
+        .render(f, sidebar_areas.file_list_area);
 
-        if let Some(path) =
+        let review_comment_page = self.review_comments.map(|review_comments| {
+            let rows = review_comments
+                .comment_snapshot
+                .as_ref()
+                .map(review_comment_selection::grouped_review_comment_rows)
+                .unwrap_or_default();
+            let page =
+                review_comment::ReviewCommentPage::new(review_comment::ReviewCommentPageInput {
+                    comment_actions: &review_comments.comment_actions,
+                    comment_error: review_comments.comment_error.as_deref(),
+                    comment_snapshot: review_comments.comment_snapshot.as_ref(),
+                    diff: self.diff,
+                    is_loading_comments: review_comments.is_loading_comments,
+                    render_caches: review_comment::ReviewCommentRenderCaches {
+                        diff_layout: self.diff_layout_cache,
+                        markdown: self.markdown_render_cache,
+                    },
+                    scroll_offset: self.scroll_offset,
+                    selected_comment_index: review_comments.selected_comment_index,
+                    session: self.session,
+                });
+            page.render_comment_list(
+                f,
+                sidebar_areas.comment_list_area,
+                &rows,
+                self.sidebar_focus == DiffSidebarFocus::Comments,
+            );
+
+            (page, rows)
+        });
+
+        if let Some((review_comment_page, rows)) = review_comment_page
+            && self.sidebar_focus == DiffSidebarFocus::Comments
+        {
+            review_comment_page.render_comment_detail(f, areas.diff_area, &rows);
+        } else if let Some(path) =
             preview_path_for_selection(self.preview, &content, self.file_explorer_selected_index)
         {
             self.render_preview_content(f, areas.diff_area, path);
@@ -919,8 +972,35 @@ impl Page for DiffPage<'_> {
             );
         }
 
+        let (can_mark_selected, can_submit) = if self.sidebar_focus == DiffSidebarFocus::Comments {
+            self.review_comments
+                .map_or((false, false), |review_comments| {
+                    let rows = review_comments
+                        .comment_snapshot
+                        .as_ref()
+                        .map(review_comment_selection::grouped_review_comment_rows)
+                        .unwrap_or_default();
+                    let can_reply = self.session.allows_review_comment_reply();
+
+                    (
+                        can_reply
+                            && review_comment::review_comment_selected_is_actionable(
+                                &rows,
+                                review_comments.selected_comment_index,
+                            ),
+                        can_reply && !review_comments.comment_actions.is_empty(),
+                    )
+                })
+        } else {
+            (false, false)
+        };
         let help_message = Paragraph::new(crate::ui::help_format::footer_line(
-            &help_action::diff_footer_actions(),
+            &help_action::diff_footer_actions(
+                self.review_comments.is_some(),
+                self.sidebar_focus,
+                can_mark_selected,
+                can_submit,
+            ),
         ));
         f.render_widget(help_message, areas.footer_area);
     }
@@ -1018,8 +1098,10 @@ mod tests {
             file_explorer_selected_index,
             markdown_render_cache: test_markdown_render_cache(),
             preview: test_diff_preview(),
+            review_comments: None,
             scroll_offset,
             session,
+            sidebar_focus: DiffSidebarFocus::Files,
         })
     }
 
@@ -1036,8 +1118,10 @@ mod tests {
             file_explorer_selected_index,
             markdown_render_cache: test_markdown_render_cache(),
             preview,
+            review_comments: None,
             scroll_offset,
             session,
+            sidebar_focus: DiffSidebarFocus::Files,
         })
     }
 
@@ -1623,8 +1707,10 @@ mod tests {
             file_explorer_selected_index: 0,
             markdown_render_cache: &markdown_render_cache,
             preview: &preview,
+            review_comments: None,
             scroll_offset: 12,
             session: &session,
+            sidebar_focus: DiffSidebarFocus::Files,
         });
         let terminal_area = Rect::new(0, 0, 80, 12);
         let backend = ratatui::backend::TestBackend::new(80, 12);

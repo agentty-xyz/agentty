@@ -32,6 +32,8 @@ const AT_MENTION_LOAD_DEBOUNCE: Duration = Duration::from_millis(75);
 const FOCUSED_REVIEW_PERSISTENCE_RETRY_BASE_DELAY: Duration = Duration::from_millis(250);
 /// Monotonic counter used to distinguish stale and current at-mention loads.
 static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+/// Monotonic counter used to distinguish stale review-comment loads.
+static NEXT_REVIEW_COMMENT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Stateless helpers for app-scoped one-shot background tasks and app-server
 /// session execution.
@@ -185,13 +187,14 @@ impl TaskService {
     }
 
     /// Spawns one linked session review-comment load without blocking terminal
-    /// input or redraws.
+    /// input or redraws and returns its stale-completion request generation.
     pub(super) fn spawn_session_review_comment_snapshot_task(
         task: SessionReviewCommentSnapshotTask,
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
         git_client: Arc<dyn GitClient>,
         review_request_client: Arc<dyn ReviewRequestClient>,
-    ) {
+    ) -> u64 {
+        let request_id = NEXT_REVIEW_COMMENT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
         tokio::spawn(async move {
             let result = Self::load_session_review_comment_snapshot(
                 task.working_dir,
@@ -202,10 +205,13 @@ impl TaskService {
             )
             .await;
             let _ = app_event_tx.send(AppEvent::SessionReviewCommentSnapshotLoaded {
+                request_id,
                 result,
                 session_id: task.session_id,
             });
         });
+
+        request_id
     }
 
     /// Loads comments for one linked session review request, falling back to

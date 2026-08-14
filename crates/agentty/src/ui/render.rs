@@ -211,7 +211,6 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
         | AppMode::Prompt { session_id, .. }
         | AppMode::Question { session_id, .. }
         | AppMode::Diff { session_id, .. }
-        | AppMode::ReviewComments { session_id, .. }
         | AppMode::ViewInfoPopup {
             restore_view: ConfirmationViewMode { session_id, .. },
             ..
@@ -334,13 +333,15 @@ mod tests {
                 session_id: session_id.into(),
                 scroll_offset: None,
             },
-            AppMode::ReviewComments {
-                comment_actions: Vec::new(),
-                comment_error: None,
-                comment_snapshot: None,
+            AppMode::Diff {
                 diff: String::new(),
-                is_loading_comments: true,
-                selected_comment_index: 0,
+                file_explorer_selected_index: 0,
+                preview: crate::presentation::app_mode::DiffPreview::default(),
+                review_comments: Some(crate::presentation::app_mode::DiffReviewComments::loading(
+                    1,
+                )),
+                restore: None,
+                scroll_cache: None,
                 session_id: session_id.into(),
                 scroll_offset: 0,
             },

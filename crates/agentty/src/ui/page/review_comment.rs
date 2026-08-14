@@ -12,16 +12,16 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::domain::session::Session;
 use crate::presentation::app_mode::{ReviewCommentAction, ReviewCommentActionSelection};
-use crate::presentation::{help_action, review_comment as review_comment_selection};
+use crate::presentation::review_comment as review_comment_selection;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 use crate::ui::diff_util::DiffLine;
 #[cfg(test)]
 use crate::ui::diff_util::DiffLineKind;
-use crate::ui::{Component, Page, diff_util, help_format, markdown, review_comment_format, style};
+use crate::ui::{Component, diff_util, markdown, review_comment_format, style};
 
 const CODE_CONTEXT_RADIUS: usize = 3;
 
-/// Split page for inspecting and agent-resolving linked review comments.
+/// List and detail renderer embedded in the unified Diff workspace.
 pub struct ReviewCommentPage<'a> {
     comment_actions: &'a [ReviewCommentActionSelection],
     comment_error: Option<&'a str>,
@@ -43,7 +43,7 @@ pub struct ReviewCommentRenderCaches<'a> {
     pub markdown: &'a markdown::MarkdownRenderCache,
 }
 
-/// Borrowed inputs needed to construct one review-comment page renderer.
+/// Borrowed inputs needed to construct one review-comment panel renderer.
 #[derive(Clone, Copy)]
 pub struct ReviewCommentPageInput<'a> {
     /// Actionable threads marked for batched address or deny handling.
@@ -67,7 +67,7 @@ pub struct ReviewCommentPageInput<'a> {
 }
 
 impl<'a> ReviewCommentPage<'a> {
-    /// Creates a review-comment page for one session frame.
+    /// Creates review-comment panels for one session frame.
     pub fn new(input: ReviewCommentPageInput<'a>) -> Self {
         let ReviewCommentPageInput {
             comment_actions,
@@ -96,11 +96,12 @@ impl<'a> ReviewCommentPage<'a> {
 
     /// Renders the left comment selector for loaded, loading, empty, and error
     /// states.
-    fn render_comment_list(
+    pub(crate) fn render_comment_list(
         &self,
         frame: &mut Frame,
         area: Rect,
         rows: &[review_comment_selection::GroupedReviewCommentRow<'_>],
+        is_focused: bool,
     ) {
         let item_count = review_comment_item_count(self.comment_snapshot);
         let title = format!(
@@ -133,7 +134,7 @@ impl<'a> ReviewCommentPage<'a> {
             )
             .highlight_symbol("▶ ");
         let mut state = ListState::default();
-        if item_count > 0 {
+        if is_focused && item_count > 0 {
             let selected_entry_index =
                 normalized_selection(self.selected_comment_index, item_count);
             state.select(selection_rows.get(selected_entry_index).copied());
@@ -144,7 +145,7 @@ impl<'a> ReviewCommentPage<'a> {
 
     /// Renders metadata, conversation text, and attached code context for the
     /// selected comment entry.
-    fn render_comment_detail(
+    pub(crate) fn render_comment_detail(
         &self,
         frame: &mut Frame,
         area: Rect,
@@ -179,28 +180,6 @@ impl<'a> ReviewCommentPage<'a> {
             let scrollbar_area = diff_util::diff_scrollbar_area(area, viewport_height);
             VerticalScrollbar::new(scroll_offset, line_count).render(frame, scrollbar_area);
         }
-    }
-}
-
-impl Page for ReviewCommentPage<'_> {
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let areas = diff_util::diff_page_areas(area);
-        let rows = self
-            .comment_snapshot
-            .map(review_comment_selection::grouped_review_comment_rows)
-            .unwrap_or_default();
-
-        self.render_comment_list(frame, areas.file_list_area, &rows);
-        self.render_comment_detail(frame, areas.diff_area, &rows);
-
-        let can_reply = self.session.allows_review_comment_reply();
-        let can_mark_selected =
-            can_reply && review_comment_selected_is_actionable(&rows, self.selected_comment_index);
-        let can_submit = can_reply && !self.comment_actions.is_empty();
-        let footer = Paragraph::new(help_format::footer_line(
-            &help_action::review_comment_footer_actions(can_mark_selected, can_submit),
-        ));
-        frame.render_widget(footer, areas.footer_area);
     }
 }
 
@@ -717,7 +696,7 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                let mut page = ReviewCommentPage::new(ReviewCommentPageInput {
+                let page = ReviewCommentPage::new(ReviewCommentPageInput {
                     comment_actions,
                     comment_error,
                     comment_snapshot: snapshot,
@@ -731,7 +710,12 @@ mod tests {
                     selected_comment_index,
                     session: &session,
                 });
-                Page::render(&mut page, frame, frame.area());
+                let areas = diff_util::diff_page_areas(frame.area());
+                let rows = snapshot
+                    .map(review_comment_selection::grouped_review_comment_rows)
+                    .unwrap_or_default();
+                page.render_comment_list(frame, areas.file_list_area, &rows, true);
+                page.render_comment_detail(frame, areas.diff_area, &rows);
             })
             .expect("failed to draw review-comment page");
 
@@ -747,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_shows_comment_selector_general_detail_and_footer() {
+    fn test_render_shows_comment_selector_and_general_detail() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
         let snapshot = comment_snapshot();
@@ -766,7 +750,6 @@ mod tests {
         assert!(text.contains("Scope: General discussion"));
         assert!(text.contains("General comment"));
         assert!(text.contains("This comment is not attached to a code line."));
-        assert!(text.contains("q/Esc: back"));
         assert!(
             buffer
                 .content()
@@ -832,9 +815,6 @@ mod tests {
         assert!(text.contains("[A] src/main.rs:2"));
         assert!(text.contains("[D] src/main.rs:3"));
         assert!(text.contains("src/main.rs:4"));
-        assert!(text.contains("a: address"));
-        assert!(text.contains("d: deny"));
-        assert!(text.contains("Enter: submit"));
     }
 
     #[test]

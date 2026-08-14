@@ -358,6 +358,7 @@ mod tests {
     fn app_event_label_names_session_review_comment_snapshot_loads() {
         // Arrange
         let event = AppEvent::SessionReviewCommentSnapshotLoaded {
+            request_id: 1,
             result: Err("forge unavailable".to_string()),
             session_id: "session-id".into(),
         };

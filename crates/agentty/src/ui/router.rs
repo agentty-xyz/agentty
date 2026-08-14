@@ -8,7 +8,9 @@ use crate::app::Tab;
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
-use crate::presentation::app_mode::{AppMode, ConfirmationIntent, DiffPreview, HelpContext};
+use crate::presentation::app_mode::{
+    AppMode, ConfirmationIntent, DiffPreview, DiffReviewComments, DiffSidebarFocus, HelpContext,
+};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::settings::SettingsScreenSnapshot;
 use crate::ui::{
@@ -52,11 +54,12 @@ enum Surface<'a> {
         diff: &'a str,
         file_explorer_selected_index: usize,
         preview: &'a DiffPreview,
+        review_comments: Option<&'a DiffReviewComments>,
         scroll_offset: u16,
         session_id: &'a str,
+        sidebar_focus: DiffSidebarFocus,
     },
     List,
-    ReviewComments(&'a AppMode),
     Session {
         mode: SessionSurfaceMode<'a>,
         scroll_offset: Option<u16>,
@@ -70,7 +73,6 @@ impl Surface<'_> {
         match self {
             Self::Diff { .. } => SurfaceKind::Diff,
             Self::List => SurfaceKind::List,
-            Self::ReviewComments(_) => SurfaceKind::ReviewComments,
             Self::Session { .. } => SurfaceKind::Session,
         }
     }
@@ -81,7 +83,6 @@ impl Surface<'_> {
 pub(crate) enum SurfaceKind {
     Diff,
     List,
-    ReviewComments,
     Session,
 }
 
@@ -280,6 +281,7 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
             diff,
             file_explorer_selected_index,
             preview,
+            review_comments,
             scroll_offset,
             session_id,
             ..
@@ -287,10 +289,15 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
             diff,
             file_explorer_selected_index: *file_explorer_selected_index,
             preview,
+            review_comments: review_comments.as_ref(),
             scroll_offset: *scroll_offset,
             session_id,
+            sidebar_focus: review_comments
+                .as_ref()
+                .map_or(DiffSidebarFocus::Files, |review_comments| {
+                    review_comments.sidebar_focus
+                }),
         },
-        AppMode::ReviewComments { .. } => Surface::ReviewComments(mode),
     }
 }
 
@@ -311,6 +318,7 @@ fn surface_for_help_context(context: &HelpContext) -> Surface<'_> {
             diff,
             file_explorer_selected_index,
             preview,
+            review_comments,
             scroll_offset,
             session_id,
             ..
@@ -318,8 +326,14 @@ fn surface_for_help_context(context: &HelpContext) -> Surface<'_> {
             diff,
             file_explorer_selected_index: *file_explorer_selected_index,
             preview,
+            review_comments: review_comments.as_deref(),
             scroll_offset: *scroll_offset,
             session_id,
+            sidebar_focus: review_comments
+                .as_deref()
+                .map_or(DiffSidebarFocus::Files, |review_comments| {
+                    review_comments.sidebar_focus
+                }),
         },
     }
 }
@@ -351,8 +365,10 @@ fn render_surface(
             diff,
             file_explorer_selected_index,
             preview,
+            review_comments,
             scroll_offset,
             session_id,
+            sidebar_focus,
         } => render_diff_surface(
             f,
             area,
@@ -360,15 +376,14 @@ fn render_surface(
                 diff,
                 file_explorer_selected_index,
                 preview,
+                review_comments,
                 scroll_offset,
                 session_id,
+                sidebar_focus,
             },
             shared.sessions,
             resources,
         ),
-        Surface::ReviewComments(mode) => {
-            render_review_comments_surface(f, area, mode, shared.sessions, resources);
-        }
     }
 }
 
@@ -385,8 +400,7 @@ fn render_mode_overlay(
         | AppMode::View { .. }
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }
-        | AppMode::Diff { .. }
-        | AppMode::ReviewComments { .. } => {}
+        | AppMode::Diff { .. } => {}
         AppMode::SessionCreation {
             selected_option_index,
         } => component::session_creation_overlay::SessionCreationOverlay::new(
@@ -536,8 +550,10 @@ struct DiffSurfaceInput<'a> {
     diff: &'a str,
     file_explorer_selected_index: usize,
     preview: &'a DiffPreview,
+    review_comments: Option<&'a DiffReviewComments>,
     scroll_offset: u16,
     session_id: &'a str,
+    sidebar_focus: DiffSidebarFocus,
 }
 
 /// Renders a diff page for a resolved session.
@@ -561,50 +577,10 @@ fn render_diff_surface(
         file_explorer_selected_index: input.file_explorer_selected_index,
         markdown_render_cache: resources.markdown_render_cache,
         preview: input.preview,
+        review_comments: input.review_comments,
         scroll_offset: input.scroll_offset,
         session,
-    })
-    .render(f, area);
-}
-
-/// Renders the forge review-comment page for a resolved session.
-fn render_review_comments_surface(
-    f: &mut Frame,
-    area: Rect,
-    mode: &AppMode,
-    sessions: &[Session],
-    resources: FrameResources<'_>,
-) {
-    let AppMode::ReviewComments {
-        comment_actions,
-        comment_error,
-        comment_snapshot,
-        diff,
-        is_loading_comments,
-        selected_comment_index,
-        session_id,
-        scroll_offset,
-    } = mode
-    else {
-        return;
-    };
-    let Some(session) = sessions.iter().find(|session| &session.id == session_id) else {
-        return;
-    };
-
-    page::review_comment::ReviewCommentPage::new(page::review_comment::ReviewCommentPageInput {
-        comment_actions,
-        comment_error: comment_error.as_deref(),
-        comment_snapshot: comment_snapshot.as_ref(),
-        diff,
-        is_loading_comments: *is_loading_comments,
-        render_caches: page::review_comment::ReviewCommentRenderCaches {
-            diff_layout: resources.diff_layout_cache,
-            markdown: resources.markdown_render_cache,
-        },
-        scroll_offset: *scroll_offset,
-        selected_comment_index: *selected_comment_index,
-        session,
+        sidebar_focus: input.sidebar_focus,
     })
     .render(f, area);
 }
@@ -948,6 +924,10 @@ mod tests {
             diff: "diff --git a/file b/file".to_string(),
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: Some(Box::new(DiffReviewComments {
+                sidebar_focus: DiffSidebarFocus::Comments,
+                ..DiffReviewComments::loading(1)
+            })),
             restore: None,
             scroll_offset: 2,
             session_id: "session-help".into(),
@@ -961,13 +941,18 @@ mod tests {
         // Assert
         assert!(matches!(list_surface, Surface::List));
         assert!(matches!(view_surface, Surface::Session { .. }));
-        assert!(matches!(diff_surface, Surface::Diff { .. }));
+        assert!(matches!(
+            diff_surface,
+            Surface::Diff {
+                sidebar_focus: DiffSidebarFocus::Comments,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn surface_kind_classifies_each_base_page() {
         // Arrange
-        let mode = AppMode::List;
         let diff = String::new();
         let preview = DiffPreview::default();
         let surfaces = [
@@ -975,11 +960,12 @@ mod tests {
                 diff: &diff,
                 file_explorer_selected_index: 0,
                 preview: &preview,
+                review_comments: None,
                 scroll_offset: 0,
                 session_id: "session-surface-kind",
+                sidebar_focus: DiffSidebarFocus::Files,
             },
             Surface::List,
-            Surface::ReviewComments(&mode),
             Surface::Session {
                 mode: SessionSurfaceMode::View,
                 scroll_offset: None,
@@ -993,12 +979,7 @@ mod tests {
         // Assert
         assert_eq!(
             surface_kinds,
-            [
-                SurfaceKind::Diff,
-                SurfaceKind::List,
-                SurfaceKind::ReviewComments,
-                SurfaceKind::Session,
-            ]
+            [SurfaceKind::Diff, SurfaceKind::List, SurfaceKind::Session]
         );
     }
 
@@ -1075,19 +1056,13 @@ mod tests {
             diff: String::new(),
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: Some(DiffReviewComments {
+                sidebar_focus: DiffSidebarFocus::Comments,
+                ..DiffReviewComments::loading(1)
+            }),
             restore: None,
             scroll_cache: None,
             scroll_offset: 4,
-            session_id: "session-overlay".into(),
-        };
-        let review_comments_mode = AppMode::ReviewComments {
-            comment_actions: vec![],
-            comment_error: None,
-            comment_snapshot: None,
-            diff: String::new(),
-            is_loading_comments: true,
-            scroll_offset: 5,
-            selected_comment_index: 0,
             session_id: "session-overlay".into(),
         };
 
@@ -1098,11 +1073,7 @@ mod tests {
         let question_is_session =
             matches!(surface_for_mode(&question_mode), Surface::Session { .. });
         let diff_is_diff = matches!(surface_for_mode(&diff_mode), Surface::Diff { .. });
-        let comments_are_review = matches!(
-            surface_for_mode(&review_comments_mode),
-            Surface::ReviewComments(_)
-        );
-        let (_, comments_text) = render_list_backed_mode(&review_comments_mode);
+        let (_, comments_text) = render_list_backed_mode(&diff_mode);
 
         // Assert
         assert!(help_is_list);
@@ -1110,7 +1081,6 @@ mod tests {
         assert!(prompt_is_session);
         assert!(question_is_session);
         assert!(diff_is_diff);
-        assert!(comments_are_review);
         assert!(comments_text.contains("Comment — Router Session"));
     }
 
@@ -1154,6 +1124,7 @@ mod tests {
                     path: "README.md".to_string(),
                     request_id: 1,
                 },
+                review_comments: None,
                 restore: None,
                 scroll_offset: 0,
                 session_id: session_id.into(),
@@ -1569,8 +1540,10 @@ mod tests {
                         diff: "",
                         file_explorer_selected_index: 0,
                         preview: &DiffPreview::default(),
+                        review_comments: None,
                         scroll_offset: 0,
                         session_id,
+                        sidebar_focus: DiffSidebarFocus::Files,
                     },
                     &sessions,
                     FrameResources {
@@ -1616,8 +1589,10 @@ mod tests {
                         diff: "",
                         file_explorer_selected_index: 0,
                         preview: &DiffPreview::default(),
+                        review_comments: None,
                         scroll_offset: 0,
                         session_id: "missing-session",
+                        sidebar_focus: DiffSidebarFocus::Files,
                     },
                     &[],
                     FrameResources {
@@ -1642,21 +1617,15 @@ mod tests {
     }
 
     #[test]
-    fn render_review_comments_surface_renders_matching_session() {
+    fn render_diff_surface_renders_linked_comments_for_matching_session() {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let session_id = "session-comments";
         let sessions = vec![session_fixture(session_id)];
-        let mode = AppMode::ReviewComments {
-            comment_actions: Vec::new(),
-            comment_error: None,
-            comment_snapshot: None,
-            diff: String::new(),
-            is_loading_comments: true,
-            selected_comment_index: 0,
-            session_id: session_id.into(),
-            scroll_offset: 0,
+        let review_comments = DiffReviewComments {
+            sidebar_focus: DiffSidebarFocus::Comments,
+            ..DiffReviewComments::loading(1)
         };
         let progress_messages = HashMap::new();
         let cache = markdown::MarkdownRenderCache::default();
@@ -1667,10 +1636,18 @@ mod tests {
         // Act
         terminal
             .draw(|frame| {
-                render_review_comments_surface(
+                render_diff_surface(
                     frame,
                     frame.area(),
-                    &mode,
+                    DiffSurfaceInput {
+                        diff: "",
+                        file_explorer_selected_index: 0,
+                        preview: &DiffPreview::default(),
+                        review_comments: Some(&review_comments),
+                        scroll_offset: 0,
+                        session_id,
+                        sidebar_focus: DiffSidebarFocus::Comments,
+                    },
                     &sessions,
                     FrameResources {
                         active_prompt_outputs: &HashMap::new(),
@@ -1693,61 +1670,6 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Comment — Router Session"));
         assert!(text.contains("Loading review comments..."));
-    }
-
-    #[test]
-    fn render_review_comments_surface_preserves_frame_for_unresolved_input() {
-        // Arrange
-        let backend = ratatui::backend::TestBackend::new(80, 20);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let missing_session_mode = AppMode::ReviewComments {
-            comment_actions: vec![],
-            comment_error: None,
-            comment_snapshot: None,
-            diff: String::new(),
-            is_loading_comments: false,
-            scroll_offset: 0,
-            selected_comment_index: 0,
-            session_id: "missing-session".into(),
-        };
-        let diff_layout_cache = page::diff::DiffLayoutCache::default();
-        let markdown_render_cache = markdown::MarkdownRenderCache::default();
-        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
-        let active_prompt_outputs = HashMap::new();
-        let session_progress_messages = HashMap::new();
-        let session_update_versions = HashMap::new();
-        let session_worktree_availability = HashMap::new();
-        let resources = FrameResources {
-            active_prompt_outputs: &active_prompt_outputs,
-            default_reasoning_level: ReasoningLevel::default(),
-            diff_layout_cache: &diff_layout_cache,
-            is_tmux_session: true,
-            markdown_render_cache: &markdown_render_cache,
-            output_layout_cache: &output_layout_cache,
-            review_snapshot: None,
-            session_progress_messages: &session_progress_messages,
-            session_update_versions: &session_update_versions,
-            session_worktree_availability: &session_worktree_availability,
-            frame_time: FrameTime::new(0, 0, 0),
-        };
-
-        // Act
-        terminal
-            .draw(|frame| {
-                frame.render_widget(Paragraph::new("sentinel"), frame.area());
-                render_review_comments_surface(frame, frame.area(), &AppMode::List, &[], resources);
-                render_review_comments_surface(
-                    frame,
-                    frame.area(),
-                    &missing_session_mode,
-                    &[],
-                    resources,
-                );
-            })
-            .expect("failed to draw");
-
-        // Assert
-        assert!(buffer_text(terminal.backend().buffer()).contains("sentinel"));
     }
 
     #[test]

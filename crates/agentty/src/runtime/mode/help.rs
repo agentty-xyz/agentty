@@ -175,6 +175,7 @@ mod tests {
                 session_id: "s1".into(),
                 diff: "diff content".to_string(),
                 preview: crate::presentation::app_mode::DiffPreview::default(),
+                review_comments: None,
                 restore: None,
                 scroll_offset: 7,
                 file_explorer_selected_index: 0,
@@ -198,7 +199,7 @@ mod tests {
                 scroll_cache: None,
                 scroll_offset: 7,
                 file_explorer_selected_index: 0,
-                preview: _,
+                ..
             } if session_id == "s1" && diff == "diff content"
         ));
     }

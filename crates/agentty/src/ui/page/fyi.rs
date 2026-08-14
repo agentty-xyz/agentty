@@ -158,6 +158,7 @@ mod tests {
             diff: String::new(),
             file_explorer_selected_index: 0,
             preview: crate::presentation::app_mode::DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
             session_id: "session-id".into(),

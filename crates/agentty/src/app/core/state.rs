@@ -63,7 +63,9 @@ use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::personality::{PersonalityCatalogClient, RealPersonalityCatalogClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{self, RealTmuxClient, TmuxClient};
-use crate::presentation::app_mode::{AppMode, ChatFocus, ConfirmationViewMode, PromptModeSnapshot};
+use crate::presentation::app_mode::{
+    AppMode, ChatFocus, ConfirmationViewMode, DiffReviewComments, PromptModeSnapshot,
+};
 use crate::presentation::settings::SettingsPresentationState;
 
 /// Relative directory name used for session git worktrees within the
@@ -365,39 +367,23 @@ impl App {
             .await;
     }
 
-    /// Opens the read-only comment page for a session's linked review request
-    /// and starts a background forge comment load.
-    pub(crate) fn open_session_review_comments(
+    /// Starts loading linked forge review comments for the unified diff
+    /// workspace.
+    pub(crate) fn start_session_review_comment_load(
         &mut self,
         session_id: &SessionId,
-        diff: String,
-    ) -> bool {
-        let Some(session) = self
+    ) -> Option<DiffReviewComments> {
+        let session = self
             .sessions
             .sessions()
             .iter()
-            .find(|session| session.id == *session_id)
-        else {
-            return false;
-        };
-        let Some(review_request) = session.review_request.as_ref() else {
-            return false;
-        };
+            .find(|session| session.id == *session_id)?;
+        let review_request = session.review_request.as_ref()?;
         let display_id = review_request.summary.display_id.clone();
         let fallback_repo_url = SessionManager::review_request_repo_url(review_request);
         let working_dir = session.folder.clone();
 
-        self.mode = AppMode::ReviewComments {
-            comment_actions: Vec::new(),
-            comment_error: None,
-            comment_snapshot: None,
-            diff,
-            is_loading_comments: true,
-            selected_comment_index: 0,
-            session_id: session_id.clone(),
-            scroll_offset: 0,
-        };
-        task::TaskService::spawn_session_review_comment_snapshot_task(
+        let request_id = task::TaskService::spawn_session_review_comment_snapshot_task(
             task::SessionReviewCommentSnapshotTask {
                 display_id,
                 fallback_repo_url,
@@ -409,7 +395,7 @@ impl App {
             self.services.review_request_client(),
         );
 
-        true
+        Some(DiffReviewComments::loading(request_id))
     }
 
     /// Moves selection to the next session in the list.

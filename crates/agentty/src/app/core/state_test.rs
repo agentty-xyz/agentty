@@ -32,8 +32,10 @@ use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
+use crate::presentation::app_mode::{DiffPreview, DiffSidebarFocus};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::settings::SettingsAction;
+use crate::runtime::mode::diff;
 
 /// Builds one reducer-ready turn projection for tests.
 fn test_turn_applied_state(
@@ -212,16 +214,16 @@ async fn merge_session_rejects_linked_review_request_before_queueing() {
 }
 
 #[tokio::test]
-async fn review_comments_page_has_no_tick_driven_ui() {
+async fn diff_comments_have_no_tick_driven_ui() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.mode = AppMode::ReviewComments {
-        comment_actions: Vec::new(),
-        comment_error: None,
-        comment_snapshot: None,
+    app.mode = AppMode::Diff {
         diff: String::new(),
-        is_loading_comments: true,
-        selected_comment_index: 0,
+        file_explorer_selected_index: 0,
+        preview: DiffPreview::default(),
+        review_comments: Some(DiffReviewComments::loading(1)),
+        restore: None,
+        scroll_cache: None,
         session_id: "session-id".into(),
         scroll_offset: 0,
     };
@@ -640,9 +642,9 @@ async fn open_session_review_comments_requires_link_and_applies_background_snaps
         .build();
     app.sessions.push_session(session);
 
-    let missing_session_opened =
-        app.open_session_review_comments(&SessionId::from("missing-session"), String::new());
-    let unlinked_session_opened = app.open_session_review_comments(&session_id, String::new());
+    let missing_session_comments =
+        app.start_session_review_comment_load(&SessionId::from("missing-session"));
+    let unlinked_session_comments = app.start_session_review_comment_load(&session_id);
 
     let session = app
         .sessions
@@ -680,13 +682,21 @@ async fn open_session_review_comments_requires_link_and_applies_background_snaps
     install_mock_review_request_client(&mut app, mock_review_request_client);
 
     // Act
-    let linked_session_opened =
-        app.open_session_review_comments(&session_id, "review diff".to_string());
+    diff::enter_diff_mode(
+        &mut app,
+        &session_id,
+        "review diff".to_string(),
+        None,
+        DiffSidebarFocus::Comments,
+    );
     wait_for_app_condition(&mut app, |app| {
         matches!(
             app.mode,
-            AppMode::ReviewComments {
-                is_loading_comments: false,
+            AppMode::Diff {
+                review_comments: Some(DiffReviewComments {
+                    is_loading_comments: false,
+                    ..
+                }),
                 ..
             }
         )
@@ -694,23 +704,28 @@ async fn open_session_review_comments_requires_link_and_applies_background_snaps
     .await;
 
     // Assert
-    assert!(!missing_session_opened);
-    assert!(!unlinked_session_opened);
-    assert!(linked_session_opened);
+    assert!(missing_session_comments.is_none());
+    assert!(unlinked_session_comments.is_none());
     assert!(matches!(
         app.mode,
-        AppMode::ReviewComments {
-            ref comment_actions,
-            comment_error: None,
-            comment_snapshot: Some(ref snapshot),
+        AppMode::Diff {
             ref diff,
-            is_loading_comments: false,
-            selected_comment_index: 0,
+            review_comments: Some(DiffReviewComments {
+                ref comment_actions,
+                comment_error: None,
+                comment_snapshot: Some(ref snapshot),
+                is_loading_comments: false,
+                request_id,
+                selected_comment_index: 0,
+                sidebar_focus: DiffSidebarFocus::Comments,
+            }),
             ref session_id,
             scroll_offset: 0,
+            ..
         } if comment_actions.is_empty()
             && snapshot == &review_comment_snapshot()
             && diff == "review diff"
+            && request_id > 0
             && session_id == "session-review-comments"
     ));
 }

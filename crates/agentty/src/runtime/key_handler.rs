@@ -13,7 +13,9 @@ use crate::app::{App, diff_content_hash};
 use crate::domain::orchestration::IntegrationApproach;
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
+use crate::presentation::app_mode::{
+    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffSidebarFocus,
+};
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 use crate::runtime::{EventResult, PresentationState, backend_err, mode};
 
@@ -83,7 +85,12 @@ where
                 .await
             }
             AppMode::Question { .. } => handle_question_key(app, presentation, terminal, key).await,
-            AppMode::ReviewComments { .. } => {
+            AppMode::Diff {
+                review_comments: Some(review_comments),
+                ..
+            } if review_comments.sidebar_focus == DiffSidebarFocus::Comments
+                && !matches!(key.code, KeyCode::Char('?' | 'q') | KeyCode::Esc) =>
+            {
                 handle_review_comment_key(app, presentation, terminal, key).await
             }
             AppMode::Diff { .. } => {
@@ -950,7 +957,7 @@ mod tests {
     use crate::domain::orchestration::OrchestrationStatus;
     use crate::domain::session_message::SessionTranscript;
     use crate::infra::tmux::MockTmuxClient;
-    use crate::presentation::app_mode::ConfirmationViewMode;
+    use crate::presentation::app_mode::{ConfirmationViewMode, DiffPreview, DiffReviewComments};
 
     fn session_replay_text(session: &crate::domain::session::Session) -> String {
         session
@@ -1718,13 +1725,16 @@ mod tests {
     async fn test_handle_key_event_routes_review_comment_back_shortcut() {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-        app.mode = AppMode::ReviewComments {
-            comment_actions: Vec::new(),
-            comment_error: None,
-            comment_snapshot: None,
+        app.mode = AppMode::Diff {
             diff: String::new(),
-            is_loading_comments: true,
-            selected_comment_index: 0,
+            file_explorer_selected_index: 0,
+            preview: DiffPreview::default(),
+            review_comments: Some(DiffReviewComments {
+                sidebar_focus: DiffSidebarFocus::Comments,
+                ..DiffReviewComments::loading(1)
+            }),
+            restore: None,
+            scroll_cache: None,
             session_id: "session-id".into(),
             scroll_offset: 0,
         };

@@ -41,10 +41,12 @@ use crate::domain::transient_message::TransientMessageBody;
 use crate::infra::db::DbError;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffPreview, DiffPreviewUnavailableReason,
-    HelpContext,
+    DiffReviewComments, HelpContext,
 };
 #[cfg(test)]
-use crate::presentation::app_mode::{ReviewCommentAction, ReviewCommentActionSelection};
+use crate::presentation::app_mode::{
+    DiffSidebarFocus, ReviewCommentAction, ReviewCommentActionSelection,
+};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::presentation::review_comment as review_comment_selection;
 
@@ -124,6 +126,8 @@ pub(crate) enum AppEvent {
     RefreshGitStatus,
     /// Indicates completion of a linked session review-request comment load.
     SessionReviewCommentSnapshotLoaded {
+        /// Request generation used to reject stale completions.
+        request_id: u64,
         /// Comment snapshot result from the background forge task.
         result: Result<ag_forge::ReviewCommentSnapshot, String>,
         /// Session whose comments were requested.
@@ -254,8 +258,7 @@ pub(super) struct AppEventBatch {
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
     pub(super) session_speed_mode_updates: HashMap<SessionId, crate::domain::agent::SpeedMode>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
-    pub(super) session_review_comment_snapshots:
-        HashMap<SessionId, Result<ag_forge::ReviewCommentSnapshot, String>>,
+    pub(super) session_review_comment_snapshots: Vec<SessionReviewCommentSnapshotUpdate>,
     pub(super) session_diff_stats_updates: HashMap<SessionId, SessionDiffStats>,
     pub(super) stacked_parent_merge_child_rebases: HashSet<SessionId>,
     pub(super) stacked_parent_syncs_completed: HashSet<SessionId>,
@@ -298,6 +301,13 @@ pub(super) struct DiffPreviewUpdate {
     pub(super) path: String,
     pub(super) request_id: u64,
     pub(super) result: Result<ag_git::WorktreeFileContent, String>,
+    pub(super) session_id: SessionId,
+}
+
+/// Completed review-comment load ready for stale-safe reducer application.
+pub(super) struct SessionReviewCommentSnapshotUpdate {
+    pub(super) request_id: u64,
+    pub(super) result: Result<ag_forge::ReviewCommentSnapshot, String>,
     pub(super) session_id: SessionId,
 }
 
@@ -507,9 +517,17 @@ impl AppEventBatch {
                 self.session_progress_updates
                     .insert(session_id, progress_message);
             }
-            AppEvent::SessionReviewCommentSnapshotLoaded { result, session_id } => {
+            AppEvent::SessionReviewCommentSnapshotLoaded {
+                request_id,
+                result,
+                session_id,
+            } => {
                 self.session_review_comment_snapshots
-                    .insert(session_id, result);
+                    .push(SessionReviewCommentSnapshotUpdate {
+                        request_id,
+                        result,
+                        session_id,
+                    });
             }
             AppEvent::SyncMainCompleted { result } => self.collect_sync_main_completed(result),
             AppEvent::SyncMainConflictResolutionStarted { conflicted_files } => {
@@ -1057,48 +1075,71 @@ impl App {
     }
 
     /// Applies completed linked-session comment loads only while the matching
-    /// comments page remains visible.
+    /// diff workspace remains visible.
     fn apply_session_review_comment_snapshot_updates(
         &mut self,
-        updates: HashMap<SessionId, Result<ag_forge::ReviewCommentSnapshot, String>>,
+        updates: Vec<SessionReviewCommentSnapshotUpdate>,
     ) {
-        for (loaded_session_id, result) in updates {
-            let AppMode::ReviewComments {
-                comment_actions,
-                comment_error,
-                comment_snapshot,
-                is_loading_comments,
-                selected_comment_index,
-                session_id,
-                ..
-            } = &mut self.mode
-            else {
+        for SessionReviewCommentSnapshotUpdate {
+            request_id,
+            result,
+            session_id,
+        } in updates
+        {
+            let Some(review_comments) = self.diff_review_comments_for_session(&session_id) else {
                 continue;
             };
-            if *session_id != loaded_session_id {
+            if review_comments.request_id != request_id {
                 continue;
             }
 
-            *is_loading_comments = false;
+            review_comments.is_loading_comments = false;
             match result {
                 Ok(snapshot) => {
                     review_comment_selection::retain_actionable_selections(
-                        comment_actions,
+                        &mut review_comments.comment_actions,
                         &snapshot,
                     );
-                    *selected_comment_index = review_comment_selection::retarget_selected_index(
-                        comment_snapshot.as_ref(),
-                        *selected_comment_index,
-                        &snapshot,
-                    );
-                    *comment_error = None;
-                    *comment_snapshot = Some(snapshot);
+                    review_comments.selected_comment_index =
+                        review_comment_selection::retarget_selected_index(
+                            review_comments.comment_snapshot.as_ref(),
+                            review_comments.selected_comment_index,
+                            &snapshot,
+                        );
+                    review_comments.comment_error = None;
+                    review_comments.comment_snapshot = Some(snapshot);
                 }
                 Err(error) => {
-                    *comment_error = Some(format!("Failed to load review comments: {error}"));
-                    *comment_snapshot = None;
+                    review_comments.comment_error =
+                        Some(format!("Failed to load review comments: {error}"));
+                    review_comments.comment_snapshot = None;
                 }
             }
+        }
+    }
+
+    /// Returns mutable review-comment state for the active diff or its help
+    /// overlay when it belongs to `session_id`.
+    fn diff_review_comments_for_session(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Option<&mut DiffReviewComments> {
+        match &mut self.mode {
+            AppMode::Diff {
+                review_comments: Some(review_comments),
+                session_id: diff_session_id,
+                ..
+            } if diff_session_id == session_id => Some(review_comments),
+            AppMode::Help {
+                context:
+                    HelpContext::Diff {
+                        review_comments: Some(review_comments),
+                        session_id: diff_session_id,
+                        ..
+                    },
+                ..
+            } if diff_session_id == session_id => Some(review_comments),
+            _ => None,
         }
     }
 
@@ -1465,10 +1506,6 @@ impl App {
                 ..
             }
             | AppMode::Diff {
-                session_id: view_id,
-                ..
-            }
-            | AppMode::ReviewComments {
                 session_id: view_id,
                 ..
             }
@@ -2437,19 +2474,11 @@ mod tests {
     async fn test_session_review_comment_result_updates_matching_open_page() {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-        app.mode = AppMode::ReviewComments {
-            comment_actions: Vec::new(),
-            comment_error: None,
-            comment_snapshot: None,
-            diff: String::new(),
-            is_loading_comments: true,
-            selected_comment_index: 0,
-            session_id: "session-id".into(),
-            scroll_offset: 0,
-        };
+        app.mode = review_comment_diff_mode("session-id", DiffReviewComments::loading(1));
 
         // Act
         app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            request_id: 1,
             result: Ok(ag_forge::ReviewCommentSnapshot::default()),
             session_id: "session-id".into(),
         })
@@ -2458,10 +2487,13 @@ mod tests {
         // Assert
         assert!(matches!(
             app.mode,
-            AppMode::ReviewComments {
-                comment_error: None,
-                comment_snapshot: Some(_),
-                is_loading_comments: false,
+            AppMode::Diff {
+                review_comments: Some(DiffReviewComments {
+                    comment_error: None,
+                    comment_snapshot: Some(_),
+                    is_loading_comments: false,
+                    ..
+                }),
                 ..
             }
         ));
@@ -2479,28 +2511,31 @@ mod tests {
             review_comment_thread("selected", true),
             review_comment_thread("other", false),
         ]);
-        app.mode = AppMode::ReviewComments {
-            comment_actions: vec![
-                ReviewCommentActionSelection {
-                    action: ReviewCommentAction::Address,
-                    thread_id: "selected".to_string(),
-                },
-                ReviewCommentActionSelection {
-                    action: ReviewCommentAction::Deny,
-                    thread_id: "other".to_string(),
-                },
-            ],
-            comment_error: None,
-            comment_snapshot: Some(previous_snapshot),
-            diff: String::new(),
-            is_loading_comments: true,
-            selected_comment_index: 0,
-            session_id: "session-id".into(),
-            scroll_offset: 0,
-        };
+        app.mode = review_comment_diff_mode(
+            "session-id",
+            DiffReviewComments {
+                comment_actions: vec![
+                    ReviewCommentActionSelection {
+                        action: ReviewCommentAction::Address,
+                        thread_id: "selected".to_string(),
+                    },
+                    ReviewCommentActionSelection {
+                        action: ReviewCommentAction::Deny,
+                        thread_id: "other".to_string(),
+                    },
+                ],
+                comment_error: None,
+                comment_snapshot: Some(previous_snapshot),
+                is_loading_comments: true,
+                request_id: 1,
+                selected_comment_index: 0,
+                sidebar_focus: DiffSidebarFocus::Comments,
+            },
+        );
 
         // Act
         app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            request_id: 1,
             result: Ok(updated_snapshot),
             session_id: "session-id".into(),
         })
@@ -2509,10 +2544,13 @@ mod tests {
         // Assert
         assert!(matches!(
             app.mode,
-            AppMode::ReviewComments {
-                ref comment_actions,
-                comment_snapshot: Some(ref snapshot),
-                selected_comment_index: 1,
+            AppMode::Diff {
+                review_comments: Some(DiffReviewComments {
+                    ref comment_actions,
+                    comment_snapshot: Some(ref snapshot),
+                    selected_comment_index: 1,
+                    ..
+                }),
                 ..
             } if review_comment_selection::selected_thread_id(snapshot, 1) == Some("selected")
                 && comment_actions == &[ReviewCommentActionSelection {
@@ -2523,32 +2561,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_session_review_comment_result_ignores_stale_request() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = review_comment_diff_mode("session-id", DiffReviewComments::loading(2));
+
+        // Act
+        app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            request_id: 1,
+            result: Err("stale failure".to_string()),
+            session_id: "session-id".into(),
+        })
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                review_comments: Some(DiffReviewComments {
+                    comment_error: None,
+                    comment_snapshot: None,
+                    is_loading_comments: true,
+                    request_id: 2,
+                    ..
+                }),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
     async fn test_session_review_comment_result_ignores_stale_pages_and_surfaces_errors() {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
 
         // Act
         app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            request_id: 1,
             result: Ok(ag_forge::ReviewCommentSnapshot::default()),
             session_id: "closed-session".into(),
         })
         .await;
-        app.mode = AppMode::ReviewComments {
-            comment_actions: Vec::new(),
-            comment_error: None,
-            comment_snapshot: None,
-            diff: String::new(),
-            is_loading_comments: true,
-            selected_comment_index: 0,
-            session_id: "open-session".into(),
-            scroll_offset: 0,
-        };
+        app.mode = review_comment_diff_mode("open-session", DiffReviewComments::loading(1));
         app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            request_id: 1,
             result: Ok(ag_forge::ReviewCommentSnapshot::default()),
             session_id: "stale-session".into(),
         })
         .await;
         app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            request_id: 1,
             result: Err("authentication failed".to_string()),
             session_id: "open-session".into(),
         })
@@ -2559,12 +2621,60 @@ mod tests {
         assert!(!app.is_viewing_session("stale-session"));
         assert!(matches!(
             app.mode,
-            AppMode::ReviewComments {
-                comment_error: Some(ref error),
-                comment_snapshot: None,
-                is_loading_comments: false,
+            AppMode::Diff {
+                review_comments: Some(DiffReviewComments {
+                    comment_error: Some(ref error),
+                    comment_snapshot: None,
+                    is_loading_comments: false,
+                    ..
+                }),
                 ..
             } if error == "Failed to load review comments: authentication failed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_session_review_comment_result_updates_open_diff_help_overlay() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = AppMode::Help {
+            context: HelpContext::Diff {
+                diff: String::new(),
+                file_explorer_selected_index: 0,
+                preview: DiffPreview::default(),
+                review_comments: Some(Box::new(DiffReviewComments::loading(1))),
+                restore: None,
+                scroll_offset: 0,
+                session_id: "session-id".into(),
+            },
+            scroll_offset: 0,
+        };
+
+        // Act
+        app.apply_app_events(AppEvent::SessionReviewCommentSnapshotLoaded {
+            request_id: 1,
+            result: Ok(ReviewCommentSnapshot::default()),
+            session_id: "session-id".into(),
+        })
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Help {
+                context: HelpContext::Diff {
+                    review_comments: Some(ref review_comments),
+                    ..
+                },
+                ..
+            } if matches!(
+                **review_comments,
+                DiffReviewComments {
+                    comment_snapshot: Some(_),
+                    is_loading_comments: false,
+                    ..
+                }
+            )
         ));
     }
 
@@ -2575,6 +2685,25 @@ mod tests {
         ReviewCommentSnapshot {
             pr_level_comments: Vec::new(),
             threads: Vec::from(threads),
+        }
+    }
+
+    /// Builds a diff workspace focused on one linked review-comment state.
+    fn review_comment_diff_mode(
+        session_id: &str,
+        mut review_comments: DiffReviewComments,
+    ) -> AppMode {
+        review_comments.sidebar_focus = DiffSidebarFocus::Comments;
+
+        AppMode::Diff {
+            diff: String::new(),
+            file_explorer_selected_index: 0,
+            preview: DiffPreview::default(),
+            review_comments: Some(review_comments),
+            restore: None,
+            scroll_cache: None,
+            scroll_offset: 0,
+            session_id: session_id.into(),
         }
     }
 
@@ -2834,6 +2963,7 @@ mod tests {
                     path: "README.md".to_string(),
                     request_id,
                 },
+                review_comments: None,
                 restore: None,
                 scroll_cache: Some(crate::presentation::app_mode::DiffScrollCache {
                     content_area: crate::presentation::app_mode::ViewportRect {
@@ -2916,6 +3046,7 @@ mod tests {
             diff: "diff".to_string(),
             file_explorer_selected_index: 0,
             preview,
+            review_comments: None,
             restore: None,
             scroll_cache: None,
             scroll_offset: 0,
@@ -2976,6 +3107,7 @@ mod tests {
                     path: "README.md".to_string(),
                     request_id: 8,
                 },
+                review_comments: None,
                 restore: None,
                 scroll_offset: 0,
                 session_id: "session-id".into(),
