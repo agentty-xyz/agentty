@@ -886,12 +886,12 @@ mod tests {
         // Arrange
         let session_folder = Path::new("/tmp/review-assist-provider");
         let review_selection =
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash);
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
         let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
         let mut one_shot_client = agent::MockOneShotClient::new();
         one_shot_client.expect_submit().returning(|request| {
             assert_eq!(request.agent_kind, AgentKind::Antigravity);
-            assert_eq!(request.model, AgentModel::Gemini36Flash);
+            assert_eq!(request.model, AgentModel::Gemini37Flash);
             assert_eq!(request.reasoning_level, ReasoningLevel::Low);
 
             Ok(agent::OneShotSubmission {

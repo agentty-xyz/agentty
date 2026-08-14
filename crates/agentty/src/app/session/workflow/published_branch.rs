@@ -1063,7 +1063,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "session-id",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "Review",
                 project_id,

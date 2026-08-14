@@ -5394,7 +5394,7 @@ fn gemini_model_picker_lists_current_models() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Enter")
-                    .wait_for_text("gemini-3.6-flash", 3000)
+                    .wait_for_text("gemini-3.7-flash", 3000)
                     .capture_labeled(
                         "gemini_model_picker",
                         "Gemini model picker lists current models",
@@ -5402,7 +5402,7 @@ fn gemini_model_picker_lists_current_models() -> E2eResult {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gemini-3.6-flash", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.7-flash", &full);
                 assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
             },
         )?;
@@ -5565,7 +5565,7 @@ fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Enter")
-                    .wait_for_text("gemini-3.6-flash", 3000)
+                    .wait_for_text("gemini-3.7-flash", 3000)
                     .capture_labeled(
                         "antigravity_model_picker",
                         "Antigravity model picker includes Gemini models",
@@ -5574,7 +5574,7 @@ fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gemini-3.1-pro-preview", &full);
-                assertion::assert_text_in_region(frame, "gemini-3.6-flash", &full);
+                assertion::assert_text_in_region(frame, "gemini-3.7-flash", &full);
                 assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
             },
         )?;

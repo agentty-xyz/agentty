@@ -90,8 +90,8 @@ pub enum AgentModel {
     Gpt56Terra,
     /// Codex Luna model backed by `gpt-5.6-luna`.
     Gpt56Luna,
-    /// Fast Gemini model backed by `gemini-3.6-flash`.
-    Gemini36Flash,
+    /// Fast Gemini model backed by `gemini-3.7-flash`.
+    Gemini37Flash,
     /// Lightweight Gemini model backed by `gemini-3.5-flash-lite`.
     Gemini35FlashLite,
     /// Higher-quality Gemini preview model backed by `gemini-3.1-pro-preview`.
@@ -177,7 +177,7 @@ impl AgentModel {
             Self::Gpt56Sol => "gpt-5.6-sol",
             Self::Gpt56Terra => "gpt-5.6-terra",
             Self::Gpt56Luna => "gpt-5.6-luna",
-            Self::Gemini36Flash => "gemini-3.6-flash",
+            Self::Gemini37Flash => "gemini-3.7-flash",
             Self::Gemini35FlashLite => "gemini-3.5-flash-lite",
             Self::Gemini31Pro => "gemini-3.1-pro-preview",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
@@ -230,7 +230,8 @@ impl AgentModel {
         const RETIRED_MODEL_REPLACEMENTS: &[(&str, AgentModel)] = &[
             ("gemini-3-pro-preview", AgentModel::Gemini31Pro),
             ("gemini-3.1-pro", AgentModel::Gemini31Pro),
-            ("gemini-3-flash-preview", AgentModel::Gemini36Flash),
+            ("gemini-3-flash-preview", AgentModel::Gemini37Flash),
+            ("gemini-3.6-flash", AgentModel::Gemini37Flash),
             ("gemini-3.5-flash", AgentModel::Gemini35FlashLite),
             (
                 "gemini-3.1-flash-lite-preview",
@@ -513,7 +514,7 @@ impl FromStr for AgentModel {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "gemini-3.6-flash" => Ok(Self::Gemini36Flash),
+            "gemini-3.7-flash" => Ok(Self::Gemini37Flash),
             "gemini-3.5-flash-lite" => Ok(Self::Gemini35FlashLite),
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31Pro),
             "gpt-5.6-sol" => Ok(Self::Gpt56Sol),
@@ -537,7 +538,7 @@ impl AgentSelectionMetadata for AgentModel {
     fn description(&self) -> &'static str {
         match self {
             Self::Gemini31Pro => "Higher-quality Gemini model for deeper reasoning.",
-            Self::Gemini36Flash => "Fast Gemini model for agentic and multimodal tasks.",
+            Self::Gemini37Flash => "Fast Gemini model for agentic and multimodal tasks.",
             Self::Gemini35FlashLite => {
                 "Lightweight Gemini model for fast, cost-conscious workloads."
             }
@@ -594,12 +595,12 @@ impl AgentKind {
     pub fn models(self) -> &'static [AgentModel] {
         const ANTIGRAVITY_MODELS: &[AgentModel] = &[
             AgentModel::Gemini31Pro,
-            AgentModel::Gemini36Flash,
+            AgentModel::Gemini37Flash,
             AgentModel::Gemini35FlashLite,
         ];
         const GEMINI_MODELS: &[AgentModel] = &[
             AgentModel::Gemini31Pro,
-            AgentModel::Gemini36Flash,
+            AgentModel::Gemini37Flash,
             AgentModel::Gemini35FlashLite,
         ];
         const CLAUDE_MODELS: &[AgentModel] = &[
@@ -710,7 +711,7 @@ mod tests {
     fn test_parse_model_returns_none_for_models_from_other_providers() {
         // Arrange
         let claude_kind = AgentKind::Claude;
-        let antigravity_model = AgentModel::Gemini36Flash.as_str();
+        let antigravity_model = AgentModel::Gemini37Flash.as_str();
 
         // Act
         let parsed_model = claude_kind.parse_model(antigravity_model);
@@ -747,12 +748,12 @@ mod tests {
 
         // Act
         let parsed_pro = antigravity_kind.parse_model("gemini-3.1-pro-preview");
-        let parsed_flash_36 = antigravity_kind.parse_model("gemini-3.6-flash");
+        let parsed_flash_37 = antigravity_kind.parse_model("gemini-3.7-flash");
         let parsed_flash_35_lite = antigravity_kind.parse_model("gemini-3.5-flash-lite");
 
         // Assert
         assert_eq!(parsed_pro, Some(AgentModel::Gemini31Pro));
-        assert_eq!(parsed_flash_36, Some(AgentModel::Gemini36Flash));
+        assert_eq!(parsed_flash_37, Some(AgentModel::Gemini37Flash));
         assert_eq!(parsed_flash_35_lite, Some(AgentModel::Gemini35FlashLite));
     }
 
@@ -764,10 +765,10 @@ mod tests {
         let gemini_kind = AgentKind::Gemini;
 
         // Act
-        let parsed_model = gemini_kind.parse_model("gemini-3.6-flash");
+        let parsed_model = gemini_kind.parse_model("gemini-3.7-flash");
 
         // Assert
-        assert_eq!(parsed_model, Some(AgentModel::Gemini36Flash));
+        assert_eq!(parsed_model, Some(AgentModel::Gemini37Flash));
     }
 
     #[test]
@@ -790,7 +791,7 @@ mod tests {
         // Arrange
         let models = [
             AgentModel::Gemini31Pro,
-            AgentModel::Gemini36Flash,
+            AgentModel::Gemini37Flash,
             AgentModel::Gemini35FlashLite,
         ];
 
@@ -875,7 +876,8 @@ mod tests {
         let retired_ids = [
             ("gemini-3-pro-preview", AgentModel::Gemini31Pro),
             ("gemini-3.1-pro", AgentModel::Gemini31Pro),
-            ("gemini-3-flash-preview", AgentModel::Gemini36Flash),
+            ("gemini-3-flash-preview", AgentModel::Gemini37Flash),
+            ("gemini-3.6-flash", AgentModel::Gemini37Flash),
             ("gemini-3.5-flash", AgentModel::Gemini35FlashLite),
             (
                 "gemini-3.1-flash-lite-preview",
@@ -898,7 +900,7 @@ mod tests {
         let selectable_parses = retired_ids.map(|(retired_id, _)| retired_id.parse::<AgentModel>());
         let current_replacements = [
             "gemini-3.1-pro-preview",
-            "gemini-3.6-flash",
+            "gemini-3.7-flash",
             "gemini-3.5-flash-lite",
             "claude-opus-5",
         ]
@@ -928,6 +930,7 @@ mod tests {
         let parsed_sonnet_5 = AgentModel::parse_persisted("claude-sonnet-5");
         let parsed_gpt_54_mini = AgentModel::parse_persisted("gpt-5.4-mini");
         let parsed_gpt_54 = AgentModel::parse_persisted("gpt-5.4");
+        let parsed_gemini_37_flash = AgentModel::parse_persisted("gemini-3.7-flash");
         let parsed_gemini_36_flash = AgentModel::parse_persisted("gemini-3.6-flash");
         let parsed_gemini_35_flash = AgentModel::parse_persisted("gemini-3.5-flash");
         let parsed_gemini_3_flash_preview = AgentModel::parse_persisted("gemini-3-flash-preview");
@@ -944,9 +947,10 @@ mod tests {
         assert_eq!(parsed_sonnet_5, Ok(AgentModel::ClaudeSonnet5));
         assert_eq!(parsed_gpt_54_mini, Ok(AgentModel::Gpt56Luna));
         assert_eq!(parsed_gpt_54, Ok(AgentModel::Gpt56Sol));
-        assert_eq!(parsed_gemini_36_flash, Ok(AgentModel::Gemini36Flash));
+        assert_eq!(parsed_gemini_37_flash, Ok(AgentModel::Gemini37Flash));
+        assert_eq!(parsed_gemini_36_flash, Ok(AgentModel::Gemini37Flash));
         assert_eq!(parsed_gemini_35_flash, Ok(AgentModel::Gemini35FlashLite));
-        assert_eq!(parsed_gemini_3_flash_preview, Ok(AgentModel::Gemini36Flash));
+        assert_eq!(parsed_gemini_3_flash_preview, Ok(AgentModel::Gemini37Flash));
         assert_eq!(
             parsed_gemini_35_flash_lite,
             Ok(AgentModel::Gemini35FlashLite)
@@ -966,7 +970,7 @@ mod tests {
         // Arrange
 
         // Act
-        let selection = parse_persisted_session_agent_model(Some("codex"), "gemini-3.6-flash");
+        let selection = parse_persisted_session_agent_model(Some("codex"), "gemini-3.7-flash");
 
         // Assert
         assert_eq!(selection.kind(), AgentKind::Codex);
@@ -981,11 +985,11 @@ mod tests {
 
         // Act
         let selection =
-            parse_persisted_session_agent_model(Some("antigravity"), "gemini-3.6-flash");
+            parse_persisted_session_agent_model(Some("antigravity"), "gemini-3.7-flash");
 
         // Assert
         assert_eq!(selection.kind(), AgentKind::Antigravity);
-        assert_eq!(selection.model(), AgentModel::Gemini36Flash);
+        assert_eq!(selection.model(), AgentModel::Gemini37Flash);
     }
 
     #[test]
@@ -1038,11 +1042,11 @@ mod tests {
         // Arrange
 
         // Act
-        let selection = parse_persisted_session_agent_model(None, "gemini-3.6-flash");
+        let selection = parse_persisted_session_agent_model(None, "gemini-3.7-flash");
 
         // Assert
         assert_eq!(selection.kind(), AgentKind::Antigravity);
-        assert_eq!(selection.model(), AgentModel::Gemini36Flash);
+        assert_eq!(selection.model(), AgentModel::Gemini37Flash);
     }
 
     #[test]
@@ -1144,7 +1148,7 @@ mod tests {
         // Arrange
         let models = [
             AgentModel::Gemini31Pro,
-            AgentModel::Gemini36Flash,
+            AgentModel::Gemini37Flash,
             AgentModel::Gemini35FlashLite,
         ];
 
@@ -1259,7 +1263,7 @@ mod tests {
                 AgentModel::Gpt56Luna,
                 AgentModel::Gpt53CodexSpark,
                 AgentModel::Gemini31Pro,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
                 AgentModel::Gemini35FlashLite,
             ]
         );
@@ -1280,7 +1284,7 @@ mod tests {
             selectable_models,
             vec![
                 AgentModel::Gemini31Pro,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
                 AgentModel::Gemini35FlashLite,
             ]
         );
@@ -1331,7 +1335,7 @@ mod tests {
     /// run the selected model.
     fn test_resolve_agent_selection_for_model_preserves_preferred_shared_provider() {
         // Arrange
-        let model = AgentModel::Gemini36Flash;
+        let model = AgentModel::Gemini37Flash;
         let available_agent_kinds = [AgentKind::Gemini, AgentKind::Antigravity];
 
         // Act
@@ -1353,7 +1357,7 @@ mod tests {
     /// preferred provider cannot run the selected model.
     fn test_resolve_agent_selection_for_model_uses_available_provider_order() {
         // Arrange
-        let model = AgentModel::Gemini36Flash;
+        let model = AgentModel::Gemini37Flash;
         let available_agent_kinds = [AgentKind::Gemini, AgentKind::Antigravity];
 
         // Act

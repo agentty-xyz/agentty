@@ -3127,7 +3127,7 @@ mod tests {
 
     /// Returns the agent selection used by rebase workflow tests.
     fn test_session_agent() -> AgentSelection {
-        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash)
+        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash)
     }
 
     /// Returns an empty forge boundary for tests that do not sync metadata.
@@ -3317,7 +3317,7 @@ mod tests {
                 rebase_plan: RebasePlan::target("main".to_string()),
                 session_agent: AgentSelection::new(
                     AgentKind::Antigravity,
-                    AgentModel::Gemini36Flash,
+                    AgentModel::Gemini37Flash,
                 ),
                 session_update_versions: Arc::default(),
             },
@@ -3354,7 +3354,7 @@ mod tests {
                 session_update_versions: Arc::default(),
                 session_agent: AgentSelection::new(
                     AgentKind::Antigravity,
-                    AgentModel::Gemini36Flash,
+                    AgentModel::Gemini37Flash,
                 ),
                 source_branch: "wt/session-123".to_string(),
                 status: Arc::new(Mutex::new(Status::Merging)),
@@ -3397,7 +3397,7 @@ mod tests {
             folder,
             fs_client: test_fs_client(),
             git_client,
-            session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash),
+            session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash),
             sync_assist_client,
         }
     }
@@ -3989,7 +3989,7 @@ mod tests {
             one_shot_client: test_one_shot_client(),
             transcript: empty_transcript(),
             rebase_plan: RebasePlan::target("origin/main".to_string()),
-            session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash),
+            session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash),
             session_update_versions: Arc::default(),
         };
 
@@ -4732,7 +4732,7 @@ mod tests {
             Some(app_event_tx),
             test_fs_client(),
             Arc::new(mock_git_client),
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash),
             Arc::new(mock_sync_assist_client),
         )
         .await;
@@ -4823,7 +4823,7 @@ mod tests {
             None,
             test_fs_client(),
             Arc::new(mock_git_client),
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash),
             Arc::new(mock_sync_assist_client),
         )
         .await;
@@ -5136,7 +5136,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess-rebase",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "Rebasing",
                 project_id,
@@ -5284,7 +5284,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess-rebase",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "Rebasing",
                 project_id,
@@ -5498,7 +5498,7 @@ mod tests {
             one_shot_client: &metadata_sync_one_shot_client(),
             rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
             review_request_client: &review_request_client,
-            session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash),
+            session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash),
             session_update_versions: &session_update_versions,
             status_transition: &status_transition,
             transcript: &transcript,
@@ -5637,7 +5637,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess-no-push",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "Rebasing",
                 project_id,
