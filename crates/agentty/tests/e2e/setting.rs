@@ -570,16 +570,14 @@ fn test_input_undo_redo() {
 }
 
 /// Verify that the `Theme` settings row dropdown selects `Agentty Default`,
-/// `Agentty Green`, `Dark Horizon`, and `Agentty Dark`, then wraps back to
-/// `Agentty Default`.
+/// `Agentty Green`, and `Dark Horizon`, then wraps back to `Agentty Default`.
 #[test]
 fn settings_theme_switch() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_theme_switch")
         .zola(
             "Settings theme switch",
-            "Select Agentty Default, Agentty Green, Dark Horizon, and Agentty Dark themes from \
-             settings.",
+            "Select Agentty Default, Agentty Green, and Dark Horizon themes from settings.",
             155,
         )
         .run(
@@ -619,14 +617,6 @@ fn settings_theme_switch() {
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)
-                    .capture_labeled("agentty_dark", "Agentty Dark selected")
-                    .press_key("Enter")
-                    .wait_for_stable_frame(200, 3000)
-                    .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
-                    .press_key("Enter")
-                    .wait_for_stable_frame(200, 3000)
-                    .viewing_pause_ms(2500)
                     .capture_labeled("wrapped_default", "Theme wraps to Agentty Default")
             },
             |frame, report| {
@@ -636,9 +626,9 @@ fn settings_theme_switch() {
 
                 assert_eq!(
                     report.captures.len(),
-                    5,
-                    "Expected 5 captures (initial Agentty Default, Agentty Green, Dark Horizon, \
-                     Agentty Dark, wrapped Agentty Default)"
+                    4,
+                    "Expected 4 captures (initial Agentty Default, Agentty Green, Dark Horizon, \
+                     wrapped Agentty Default)"
                 );
 
                 let before_frame = common::frame_from_capture(&report.captures[0]);
@@ -663,16 +653,7 @@ fn settings_theme_switch() {
                     &dark_horizon_full,
                 );
 
-                let agentty_dark_frame = common::frame_from_capture(&report.captures[3]);
-                let agentty_dark_full =
-                    Region::full(agentty_dark_frame.cols(), agentty_dark_frame.rows());
-                assertion::assert_text_in_region(
-                    &agentty_dark_frame,
-                    "Agentty Dark",
-                    &agentty_dark_full,
-                );
-
-                let wrapped_frame = common::frame_from_capture(&report.captures[4]);
+                let wrapped_frame = common::frame_from_capture(&report.captures[3]);
                 let wrapped_full = Region::full(wrapped_frame.cols(), wrapped_frame.rows());
                 assertion::assert_text_in_region(&wrapped_frame, "Agentty Default", &wrapped_full);
             },

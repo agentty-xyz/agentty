@@ -3306,12 +3306,6 @@ fn session_list_selected_row_remains_readable_under_dark_horizon() -> E2eResult 
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
-                    .wait_for_text("Agentty Dark", 5000)
-                    .press_key("Enter")
-                    .wait_for_stable_frame(200, 3000)
-                    .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
-                    .press_key("Enter")
                     .wait_for_text("Agentty Default", 5000)
             },
             |_frame, report| {
