@@ -7,10 +7,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.14.7] - 2026-08-13
+
+### Added
+
+- agentty: unify review comments with Diff mode through Files and Comments sidebar
+  focus, shared navigation, Markdown previews, comment actions, and context-sensitive
+  help.
+
 ### Changed
 
 - agentty: replace Gemini 3.6 Flash with Gemini 3.7 Flash for the Gemini and Antigravity
   providers, migrating persisted selections to the replacement.
+- release: bump workspace crate metadata and lockfile package versions to `0.14.7`.
+
+### Contributors
+
+- @minev-dev
 
 ## [v0.14.6] - 2026-08-13
 
