@@ -71,7 +71,7 @@ mod tests {
                 folder: temp_directory.path(),
                 main_checkout_root: None,
                 replay_transcript: None,
-                model: "gemini-3.6-flash",
+                model: "gemini-3.7-flash",
                 permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Generate title",
@@ -87,7 +87,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(args, vec!["--acp", "--model", "gemini-3.6-flash"]);
+        assert_eq!(args, vec!["--acp", "--model", "gemini-3.7-flash"]);
         assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
     }
 
@@ -107,7 +107,7 @@ mod tests {
                 folder: temp_directory.path(),
                 main_checkout_root: None,
                 replay_transcript: None,
-                model: "gemini-3.6-flash",
+                model: "gemini-3.7-flash",
                 permission_mode: crate::model::permission::PermissionMode::ReadOnly,
                 personality_prompt: None,
                 prompt: "Inspect the architecture",
@@ -128,7 +128,7 @@ mod tests {
             vec![
                 "--acp",
                 "--model",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "--approval-mode",
                 "plan",
                 "--sandbox"

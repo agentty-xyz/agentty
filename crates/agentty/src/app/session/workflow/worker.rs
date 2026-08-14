@@ -1631,7 +1631,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -1655,7 +1655,7 @@ mod tests {
                 base_branch: "main",
                 id: "sess1",
                 is_draft: false,
-                model: "gemini-3.6-flash",
+                model: "gemini-3.7-flash",
                 orchestration_task_id: None,
                 parent_session_id: None,
                 personality_id: None,
@@ -1684,7 +1684,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 &status.to_string(),
                 project_id,
@@ -2401,7 +2401,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2469,7 +2469,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -2514,7 +2514,7 @@ mod tests {
         // Pre-cancel the token to simulate a previous turn's cancellation.
         let stale_token = CancellationToken::new();
         stale_token.cancel();
-        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash);
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
 
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
@@ -2636,7 +2636,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2740,7 +2740,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2831,7 +2831,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2928,7 +2928,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2997,14 +2997,14 @@ mod tests {
     }
 
     /// Builds the default turn metadata used by session worker tests that
-    /// exercise the `Gemini36Flash` path without branch publication.
+    /// exercise the `Gemini37Flash` path without branch publication.
     fn default_turn_metadata() -> TurnMetadata {
         TurnMetadata {
             published_upstream_ref: None,
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
         }
     }
@@ -3181,7 +3181,7 @@ mod tests {
                     applied_personality_id: personality.applied_personality_id,
                     applied_personality_prompt_hash: personality.applied_personality_prompt_hash,
                     instruction_conversation_id: None,
-                    model: AgentModel::Gemini36Flash.as_str().to_string(),
+                    model: AgentModel::Gemini37Flash.as_str().to_string(),
                     provider_conversation_id: None,
                     questions_json: "[]".to_string(),
                     summary: String::new(),
@@ -3233,7 +3233,7 @@ mod tests {
             session_id: "sess-preturn".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -3242,7 +3242,7 @@ mod tests {
             continuation: TurnContinuation::fresh(),
             folder: context.folder.clone(),
             main_checkout_root: None,
-            model: "gemini-3.6-flash".to_string(),
+            model: "gemini-3.7-flash".to_string(),
             permission_mode: ag_agent::PermissionMode::AutoEdit,
             personality: ag_agent::PersonalityPrompt::default(),
             prompt: "test".into(),
@@ -3309,7 +3309,7 @@ mod tests {
             session_id: "sess-timeout".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -3318,7 +3318,7 @@ mod tests {
             continuation: TurnContinuation::fresh(),
             folder: context.folder.clone(),
             main_checkout_root: None,
-            model: "gemini-3.6-flash".to_string(),
+            model: "gemini-3.7-flash".to_string(),
             permission_mode: ag_agent::PermissionMode::AutoEdit,
             personality: ag_agent::PersonalityPrompt::default(),
             prompt: "test".into(),
@@ -3382,7 +3382,7 @@ mod tests {
             session_id: "sess-term".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -3428,7 +3428,7 @@ mod tests {
             session_id: "sess-nopid".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -3533,7 +3533,7 @@ mod tests {
                 base_branch: "main",
                 id: "sess1",
                 is_draft: false,
-                model: "gemini-3.6-flash",
+                model: "gemini-3.7-flash",
                 orchestration_task_id: None,
                 parent_session_id: None,
                 personality_id: None,
@@ -3548,7 +3548,7 @@ mod tests {
 
         let mut mock_git_client = MockGitClient::new();
         mock_git_client.expect_is_worktree_clean().never();
-        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash);
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -3594,7 +3594,7 @@ mod tests {
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
@@ -3661,7 +3661,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -3679,7 +3679,7 @@ mod tests {
                 review_comment_thread_ids: Vec::new(),
                 session_agent: AgentSelection::new(
                     crate::domain::agent::AgentKind::Antigravity,
-                    crate::domain::agent::AgentModel::Gemini36Flash,
+                    crate::domain::agent::AgentModel::Gemini37Flash,
                 ),
             },
             Ok(turn_result),
@@ -3747,7 +3747,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -3760,7 +3760,7 @@ mod tests {
                 review_comment_thread_ids: Vec::new(),
                 session_agent: AgentSelection::new(
                     crate::domain::agent::AgentKind::Antigravity,
-                    crate::domain::agent::AgentModel::Gemini36Flash,
+                    crate::domain::agent::AgentModel::Gemini37Flash,
                 ),
             },
             Ok(successful_turn_result("Implemented the change.")),
@@ -3809,7 +3809,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4137,7 +4137,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4145,7 +4145,7 @@ mod tests {
             .await
             .expect("failed to insert session");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash);
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
             .expect_is_worktree_clean()
@@ -4179,7 +4179,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -4233,7 +4233,7 @@ mod tests {
         insert_in_progress_session_with_review_request(&db).await;
         let folder = base_dir.path().join("sess1");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash);
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
         let mut sequence = Sequence::new();
         let mock_git_client = review_resolution_git_client(&mut sequence);
         let review_request_client = review_resolution_client(folder.clone(), &mut sequence);
@@ -4336,7 +4336,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4344,7 +4344,7 @@ mod tests {
             .await
             .expect("failed to insert session");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash);
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
             .expect_is_worktree_clean()
@@ -4376,7 +4376,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -4434,7 +4434,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4446,7 +4446,7 @@ mod tests {
             .await
             .expect("failed to insert queued sync operation");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash);
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
             .expect_is_worktree_clean()
@@ -4474,7 +4474,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -4532,7 +4532,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4540,7 +4540,7 @@ mod tests {
             .await
             .expect("failed to insert session");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash);
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
             .expect_is_worktree_clean()
@@ -4643,7 +4643,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4675,7 +4675,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -4703,7 +4703,7 @@ mod tests {
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
         };
         let error = apply_worker_turn_result(&context, turn_metadata, turn_result)
@@ -4749,7 +4749,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -4784,7 +4784,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -4812,7 +4812,7 @@ mod tests {
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
         };
         let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
@@ -4873,7 +4873,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -5466,7 +5466,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -5526,7 +5526,7 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.sessions()
-            .insert_session("sess1", "gemini-3.6-flash", "main", "Rebasing", project_id)
+            .insert_session("sess1", "gemini-3.7-flash", "main", "Rebasing", project_id)
             .await
             .expect("failed to insert session");
         db.operations()
@@ -5579,7 +5579,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -5616,7 +5616,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -5649,7 +5649,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -5690,7 +5690,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -5724,7 +5724,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -5778,7 +5778,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -5824,7 +5824,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -5887,7 +5887,7 @@ mod tests {
             session_id: "sess1".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(status)),
         };
@@ -5920,7 +5920,7 @@ mod tests {
             session_id: "sess".into(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini36Flash,
+                AgentModel::Gemini37Flash,
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         }

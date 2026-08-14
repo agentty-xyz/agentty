@@ -661,7 +661,7 @@ mod tests {
             .sessions()
             .insert_session(
                 "sess1",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 &Status::InProgress.to_string(),
                 project_id,

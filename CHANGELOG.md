@@ -7,6 +7,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- agentty: replace Gemini 3.6 Flash with Gemini 3.7 Flash for the Gemini and Antigravity
+  providers, migrating persisted selections to the replacement.
+
 ## [v0.14.6] - 2026-08-13
 
 ### Added

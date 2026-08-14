@@ -1117,7 +1117,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "session-id",
-                "gemini-3.6-flash",
+                "gemini-3.7-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -1157,7 +1157,7 @@ mod tests {
                         review_comment_thread_ids: Vec::new(),
                         session_agent: AgentSelection::new(
                             AgentKind::Antigravity,
-                            AgentModel::Gemini36Flash,
+                            AgentModel::Gemini37Flash,
                         ),
                     },
                     None,

@@ -237,7 +237,7 @@ impl SessionFixtureBuilder {
     pub(crate) fn new() -> Self {
         Self {
             session: Session {
-                agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini36Flash),
+                agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash),
                 base_branch: "main".to_string(),
                 created_at: 0,
                 draft_attachments: Vec::new(),
