@@ -7,10 +7,40 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.14.6] - 2026-08-13
+
+### Added
+
+- ag-harness: add Muse structured-output support, public model identifiers, explicit
+  model overrides, OTLP/HTTP metrics, and live API verification.
+- ag-harness: support validated native `read` tool calls for Qwen and Kimi models.
+
 ### Changed
 
+- agentty: show per-row added and removed totals in the diff explorer.
+- agentty: add counts to populated session group headings and mute archived session
+  details.
+- agentty: show persisted change summaries before focused reviews.
+- agentty: require `tmux` before offering worktree-opening actions.
 - release: publish `ag-harness` to crates.io with the workspace release.
 - agentty: remove the `Agentty Dark` color theme from the settings selector.
+- persistence: extract reusable SQLite repositories and migrations into `ag-store`.
+- session: centralize shared frontend-neutral session models in `ag-session`.
+- ci: route VHS recording through the pinned canonical container and document pinned
+  GitHub Action versions.
+- deps: update the GitHub Actions and Rust dependency groups.
+- release: bump workspace crate metadata and lockfile package versions to `0.14.6`.
+
+### Fixed
+
+- agentty: align continuation guidance with completed and canceled session actions and
+  the current lowercase `c` key.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.14.5] - 2026-08-11
 
