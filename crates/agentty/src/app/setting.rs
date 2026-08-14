@@ -1641,6 +1641,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn settings_manager_new_loads_persisted_agentty_dark_theme() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        services
+            .db()
+            .settings()
+            .upsert_setting(SettingName::Theme, ColorTheme::AgenttyDark.as_str())
+            .await
+            .expect("failed to persist theme setting");
+
+        // Act
+        let manager = settings_manager(&services, project_id).await;
+
+        // Assert
+        assert_eq!(manager.settings().theme, ColorTheme::AgenttyDark);
+    }
+
+    #[tokio::test]
     async fn apply_operation_persists_role_model_and_reasoning_settings() {
         // Arrange
         let (services, project_id) = test_services().await;
@@ -2355,6 +2373,7 @@ mod tests {
         assert_eq!(dropdown.row_index, 0);
         assert_eq!(dropdown.selected_index, 0);
         assert_eq!(dropdown.options[1].label, "Agentty Green");
+        assert_eq!(dropdown.options[3].label, "Agentty Dark");
 
         manager.next_selector_dropdown_option();
         manager.select_selector_dropdown_option().await;
