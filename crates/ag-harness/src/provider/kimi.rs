@@ -268,9 +268,12 @@ mod tests {
             .expect("response should contain a tool call");
         assert_eq!(call.id(), "call_kimi_read");
         assert_eq!(call.name(), "read");
-        assert_eq!(call.arguments().path(), "Cargo.toml");
-        assert_eq!(call.arguments().offset(), Some(1));
-        assert_eq!(call.arguments().limit(), Some(12));
+        let arguments = call
+            .read_arguments()
+            .expect("provider should decode read arguments");
+        assert_eq!(arguments.path(), "Cargo.toml");
+        assert_eq!(arguments.offset(), Some(1));
+        assert_eq!(arguments.limit(), Some(12));
     }
 
     #[tokio::test]

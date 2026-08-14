@@ -7,12 +7,18 @@ use serde_json::{Number, Value, json};
 const READ_DESCRIPTION: &str =
     "Read a repository-relative file, optionally selecting a line range.";
 const READ_NAME: &str = "read";
+const MAX_PATCH_BYTES: usize = 1024 * 1024;
+const MAX_PATH_BYTES: usize = 4 * 1024;
+const WRITE_DESCRIPTION: &str = "Apply one unified diff to one repository-relative text file.";
+const WRITE_NAME: &str = "write";
 
 /// Built-in tool that can be enabled for a harness run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tool {
     /// Repository-relative file reads.
     Read,
+    /// Repository-relative patch writes.
+    Write,
 }
 
 /// Provider-neutral definition of a native model tool.
@@ -35,11 +41,7 @@ impl ToolDefinition {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "pattern": "^(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+)(?:/(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+))*$"
-                    },
+                    "path": repository_path_schema(),
                     "offset": {
                         "type": "integer",
                         "minimum": 1,
@@ -52,6 +54,27 @@ impl ToolDefinition {
                     }
                 },
                 "required": ["path"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    /// Defines the native `write` function tool.
+    pub fn write() -> Self {
+        Self {
+            description: WRITE_DESCRIPTION,
+            name: WRITE_NAME,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": repository_path_schema(),
+                    "patch": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_PATCH_BYTES
+                    }
+                },
+                "required": ["path", "patch"],
                 "additionalProperties": false
             }),
         }
@@ -73,12 +96,20 @@ impl ToolDefinition {
     }
 }
 
+fn repository_path_schema() -> Value {
+    json!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAX_PATH_BYTES,
+        "pattern": "^(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+)(?:/(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+))*$"
+    })
+}
+
 /// Provider-neutral model request for one native tool invocation.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ToolCall {
-    arguments: ReadArguments,
+    arguments: ToolArguments,
     id: String,
-    name: String,
     reasoning_content: Option<String>,
 }
 
@@ -88,7 +119,7 @@ impl fmt::Debug for ToolCall {
             .debug_struct("ToolCall")
             .field("arguments", &self.arguments)
             .field("id", &self.id)
-            .field("name", &self.name)
+            .field("name", &self.name())
             .field(
                 "reasoning_content",
                 &self.reasoning_content.as_ref().map(|_| "[REDACTED]"),
@@ -98,9 +129,28 @@ impl fmt::Debug for ToolCall {
 }
 
 impl ToolCall {
-    /// Returns the typed arguments supplied to the `read` function.
-    pub fn arguments(&self) -> &ReadArguments {
-        &self.arguments
+    /// Returns the typed arguments for this native tool call.
+    pub fn arguments(&self) -> ToolCallArguments<'_> {
+        match &self.arguments {
+            ToolArguments::Read(arguments) => ToolCallArguments::Read(arguments),
+            ToolArguments::Write(arguments) => ToolCallArguments::Write(arguments),
+        }
+    }
+
+    /// Returns typed `read` arguments when this is a `read` call.
+    pub fn read_arguments(&self) -> Option<&ReadArguments> {
+        match &self.arguments {
+            ToolArguments::Read(arguments) => Some(arguments),
+            ToolArguments::Write(_) => None,
+        }
+    }
+
+    /// Returns typed `write` arguments when this is a `write` call.
+    pub fn write_arguments(&self) -> Option<&WriteArguments> {
+        match &self.arguments {
+            ToolArguments::Read(_) => None,
+            ToolArguments::Write(arguments) => Some(arguments),
+        }
     }
 
     /// Returns the provider-assigned call identifier.
@@ -109,8 +159,11 @@ impl ToolCall {
     }
 
     /// Returns the requested native function name.
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn name(&self) -> &'static str {
+        match self.arguments {
+            ToolArguments::Read(_) => READ_NAME,
+            ToolArguments::Write(_) => WRITE_NAME,
+        }
     }
 
     pub(crate) fn read(
@@ -119,20 +172,49 @@ impl ToolCall {
         reasoning_content: Option<String>,
     ) -> Self {
         Self {
-            arguments,
+            arguments: ToolArguments::Read(arguments),
             id,
-            name: READ_NAME.to_string(),
+            reasoning_content,
+        }
+    }
+
+    pub(crate) fn write(
+        id: String,
+        arguments: WriteArguments,
+        reasoning_content: Option<String>,
+    ) -> Self {
+        Self {
+            arguments: ToolArguments::Write(arguments),
+            id,
             reasoning_content,
         }
     }
 
     pub(crate) fn arguments_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(&self.arguments)
+        match &self.arguments {
+            ToolArguments::Read(arguments) => serde_json::to_string(arguments),
+            ToolArguments::Write(arguments) => serde_json::to_string(arguments),
+        }
     }
 
     pub(crate) fn reasoning_content(&self) -> Option<&str> {
         self.reasoning_content.as_deref()
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ToolArguments {
+    Read(ReadArguments),
+    Write(WriteArguments),
+}
+
+/// Borrowed typed arguments for one native tool call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolCallArguments<'a> {
+    /// Arguments for a repository read.
+    Read(&'a ReadArguments),
+    /// Arguments for a repository patch write.
+    Write(&'a WriteArguments),
 }
 
 /// Validated arguments for the native `read` function.
@@ -174,6 +256,46 @@ impl ReadArguments {
     pub fn path(&self) -> &str {
         &self.path
     }
+}
+
+/// Validated arguments for the native `write` function.
+///
+/// `path` names exactly one repository-relative text file and `patch` is a
+/// standard unified diff that creates or updates that same file.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WriteArguments {
+    #[serde(deserialize_with = "deserialize_bounded_patch")]
+    patch: String,
+    #[serde(deserialize_with = "deserialize_repository_path")]
+    path: String,
+}
+
+impl WriteArguments {
+    /// Returns the unified diff supplied by the model.
+    pub fn patch(&self) -> &str {
+        &self.patch
+    }
+
+    /// Returns the repository-relative path to write.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+fn deserialize_bounded_patch<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let patch = String::deserialize(deserializer)?;
+    if patch.is_empty() {
+        return Err(de::Error::custom("patch must not be empty"));
+    }
+    if patch.len() > MAX_PATCH_BYTES {
+        return Err(de::Error::custom("patch exceeds the byte limit"));
+    }
+
+    Ok(patch)
 }
 
 fn deserialize_optional_positive_integer<'de, D>(
@@ -233,6 +355,9 @@ where
     let path = String::deserialize(deserializer)?;
     if path.is_empty() {
         return Err(de::Error::custom("path must not be empty"));
+    }
+    if path.len() > MAX_PATH_BYTES {
+        return Err(de::Error::custom("path exceeds the byte limit"));
     }
     if path.starts_with('/') || path.contains('\\') {
         return Err(de::Error::custom("path must be repository-relative"));
@@ -323,6 +448,92 @@ mod tests {
 
         // Assert
         assert!(results.into_iter().all(|is_valid| !is_valid));
+    }
+
+    #[test]
+    fn write_definition_exposes_native_function_contract() {
+        // Arrange and Act
+        let definition = ToolDefinition::write();
+        let validator =
+            Validator::new(definition.parameters()).expect("write argument schema should compile");
+
+        // Assert
+        assert_eq!(definition.name(), "write");
+        assert_eq!(
+            definition.description(),
+            "Apply one unified diff to one repository-relative text file."
+        );
+        assert!(validator.is_valid(&json!({
+            "path": "src/lib.rs",
+            "patch": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n"
+        })));
+    }
+
+    #[test]
+    fn write_definition_and_arguments_reject_invalid_input() {
+        // Arrange
+        let definition = ToolDefinition::write();
+        let validator =
+            Validator::new(definition.parameters()).expect("write argument schema should compile");
+        let values = [
+            json!({}),
+            json!({ "path": "src/lib.rs" }),
+            json!({ "path": "src/lib.rs", "patch": "" }),
+            json!({ "path": "../lib.rs", "patch": "patch" }),
+            json!({ "path": "src/lib.rs", "patch": "patch", "extra": true }),
+            json!({ "path": "a".repeat(MAX_PATH_BYTES + 1), "patch": "patch" }),
+            json!({ "path": "src/lib.rs", "patch": "x".repeat(MAX_PATCH_BYTES + 1) }),
+        ];
+
+        // Act
+        let schema_results = values.clone().map(|value| validator.is_valid(&value));
+        let decode_results = values.map(serde_json::from_value::<WriteArguments>);
+
+        // Assert
+        assert!(schema_results.into_iter().all(|valid| !valid));
+        assert!(decode_results.into_iter().all(|result| result.is_err()));
+    }
+
+    #[test]
+    fn tool_call_exposes_matching_typed_arguments_and_serialization() {
+        // Arrange
+        let read_arguments = serde_json::from_value(json!({ "path": "Cargo.toml" }))
+            .expect("read arguments should decode");
+        let write_arguments = serde_json::from_value(json!({
+            "path": "src/lib.rs",
+            "patch": "patch"
+        }))
+        .expect("write arguments should decode");
+        let read = ToolCall::read(
+            "read-id".to_string(),
+            read_arguments,
+            Some("secret".to_string()),
+        );
+        let write = ToolCall::write("write-id".to_string(), write_arguments, None);
+
+        // Act
+        let read_json = read.arguments_json().expect("read arguments should encode");
+        let write_json = write
+            .arguments_json()
+            .expect("write arguments should encode");
+
+        // Assert
+        assert!(read.read_arguments().is_some());
+        assert!(read.write_arguments().is_none());
+        assert!(write.read_arguments().is_none());
+        assert_eq!(read.name(), "read");
+        assert_eq!(write.name(), "write");
+        let write_arguments = write
+            .write_arguments()
+            .expect("write arguments should be exposed");
+        assert_eq!(write_arguments.path(), "src/lib.rs");
+        assert_eq!(write_arguments.patch(), "patch");
+        assert_eq!(read_json, r#"{"path":"Cargo.toml"}"#);
+        assert_eq!(write_json, r#"{"patch":"patch","path":"src/lib.rs"}"#);
+        assert_eq!(read.reasoning_content(), Some("secret"));
+        assert!(format!("{read:?}").contains("[REDACTED]"));
+        assert!(matches!(read.arguments(), ToolCallArguments::Read(_)));
+        assert!(matches!(write.arguments(), ToolCallArguments::Write(_)));
     }
 
     #[test]
