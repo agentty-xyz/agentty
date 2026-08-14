@@ -10,6 +10,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 
 - release: publish `ag-harness` to crates.io with the workspace release.
+- agentty: remove the `Agentty Dark` color theme from the settings selector.
 
 ## [v0.14.5] - 2026-08-11
 

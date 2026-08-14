@@ -12,18 +12,11 @@ pub enum ColorTheme {
     Green,
     /// A warm dark palette inspired by the Horizon editor theme.
     DarkHorizon,
-    /// A muted navy palette shown as `Agentty Dark`.
-    AgenttyDark,
 }
 
 impl ColorTheme {
     /// All selectable color themes in settings display order.
-    pub const ALL: [Self; 4] = [
-        Self::Current,
-        Self::Green,
-        Self::DarkHorizon,
-        Self::AgenttyDark,
-    ];
+    pub const ALL: [Self; 3] = [Self::Current, Self::Green, Self::DarkHorizon];
 
     /// Returns the persisted wire value for this theme.
     #[must_use]
@@ -32,7 +25,6 @@ impl ColorTheme {
             Self::Current => "current",
             Self::Green => "green",
             Self::DarkHorizon => "dark_horizon",
-            Self::AgenttyDark => "agentty_dark",
         }
     }
 
@@ -43,7 +35,6 @@ impl ColorTheme {
             Self::Current => "Agentty Default",
             Self::Green => "Agentty Green",
             Self::DarkHorizon => "Dark Horizon",
-            Self::AgenttyDark => "Agentty Dark",
         }
     }
 
@@ -57,7 +48,6 @@ impl ColorTheme {
             "current" => Some(Self::Current),
             "green" => Some(Self::Green),
             "dark_horizon" => Some(Self::DarkHorizon),
-            "agentty_dark" => Some(Self::AgenttyDark),
             _ => None,
         }
     }
@@ -127,18 +117,15 @@ mod tests {
         let current_theme = ColorTheme::Current;
         let green_theme = ColorTheme::Green;
         let dark_horizon_theme = ColorTheme::DarkHorizon;
-        let agentty_dark_theme = ColorTheme::AgenttyDark;
 
         // Act
         let next_theme = current_theme.next();
         let after_green_theme = green_theme.next();
-        let after_dark_horizon_theme = dark_horizon_theme.next();
-        let wrapped_theme = agentty_dark_theme.next();
+        let wrapped_theme = dark_horizon_theme.next();
 
         // Assert
         assert_eq!(next_theme, ColorTheme::Green);
         assert_eq!(after_green_theme, ColorTheme::DarkHorizon);
-        assert_eq!(after_dark_horizon_theme, ColorTheme::AgenttyDark);
         assert_eq!(wrapped_theme, ColorTheme::Current);
     }
 
@@ -152,21 +139,5 @@ mod tests {
 
         // Assert
         assert_eq!(theme, Some(ColorTheme::DarkHorizon));
-    }
-
-    #[test]
-    fn agentty_dark_has_persisted_value_and_label() {
-        // Arrange
-        let stored_value = "agentty_dark";
-
-        // Act
-        let theme = ColorTheme::parse_persisted(stored_value);
-        let persisted_value = ColorTheme::AgenttyDark.as_str();
-        let label = ColorTheme::AgenttyDark.label();
-
-        // Assert
-        assert_eq!(theme, Some(ColorTheme::AgenttyDark));
-        assert_eq!(persisted_value, stored_value);
-        assert_eq!(label, "Agentty Dark");
     }
 }

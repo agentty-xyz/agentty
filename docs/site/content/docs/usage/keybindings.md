@@ -108,14 +108,14 @@ highlighted in the table with a `* ` prefix and accented row text.
 </table>
 
 <a id="usage-settings-options"></a> The page is split into `Global settings` for the
-app-wide `Theme` row (`Agentty Default`, `Agentty Green`, `Dark Horizon`, or
-`Agentty Dark`) and `'<project>' settings` for Smart, Fast, and Review
-`agent/model [reasoning]` defaults, the commit coauthor toggle, and
-`Launch Configurations` rows described in [Workflow](@/docs/usage/workflow.md). Selector
-rows open dropdowns; use `j` / `k` to move through the dropdown. For a role default,
-press `Enter` after choosing the model, then choose and save its reasoning level with
-`Enter`. Other selectors save directly. The `Launch Configurations` row opens a list
-browser where each command is added, edited, deleted, or reordered as its own entry.
+app-wide `Theme` row (`Agentty Default`, `Agentty Green`, or `Dark Horizon`) and
+`'<project>' settings` for Smart, Fast, and Review `agent/model [reasoning]` defaults,
+the commit coauthor toggle, and `Launch Configurations` rows described in
+[Workflow](@/docs/usage/workflow.md). Selector rows open dropdowns; use `j` / `k` to
+move through the dropdown. For a role default, press `Enter` after choosing the model,
+then choose and save its reasoning level with `Enter`. Other selectors save directly.
+The `Launch Configurations` row opens a list browser where each command is added,
+edited, deleted, or reordered as its own entry.
 
 ## Session View
 
