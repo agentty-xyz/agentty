@@ -1,4 +1,5 @@
 use crate::domain::session::{PublishBranchAction, Session, Status};
+use crate::presentation::app_mode::DiffSidebarFocus;
 
 /// Footer shortcut label for prompt image paste.
 ///
@@ -765,57 +766,71 @@ fn prompt_action_help_action(session_state: ViewSessionState) -> HelpAction {
 
 /// Returns help entries for diff-mode actions.
 ///
-/// These entries are used by the help overlay and include all available
-/// actions.
+/// The help overlay is a complete cross-focus reference; the compact footer
+/// below filters actions to those usable in the current sidebar state.
 pub(crate) fn diff_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("back", "q/Esc", "Back to session"),
-        HelpAction::new("select file", "j/k", "Select file"),
-        HelpAction::new("preview", "p", "Toggle markdown preview"),
+        HelpAction::new("select item", "j/k", "Select file or comment"),
+        HelpAction::new("files", "f", "Focus changed files"),
+        HelpAction::new("comments", "c", "Focus review comments"),
+        HelpAction::new("preview", "p", "Toggle selected markdown preview"),
         HelpAction::new("scroll pane", "Up/Down", "Scroll right panel"),
+        HelpAction::new("address", "a", "Mark comment for agent address"),
+        HelpAction::new("deny", "d", "Mark comment for agent denial"),
+        HelpAction::new("submit", "Enter", "Submit marked comments to the agent"),
         HelpAction::new("help", "?", "Help"),
     ]
 }
 
 /// Returns compact diff footer actions for the page-level hint line.
-pub(crate) fn diff_footer_actions() -> Vec<HelpAction> {
-    vec![
-        HelpAction::new("back", "q/Esc", "Back to session"),
-        HelpAction::new("select file", "j/k", "Select file"),
-        HelpAction::new("preview", "p", "Toggle markdown preview"),
-        HelpAction::new("help", "?", "Help"),
-    ]
-}
-
-/// Returns compact review-comment page actions for the current selection.
-pub(crate) fn review_comment_footer_actions(
+pub(crate) fn diff_footer_actions(
+    has_review_comments: bool,
+    sidebar_focus: DiffSidebarFocus,
     can_mark_selected: bool,
     can_submit: bool,
 ) -> Vec<HelpAction> {
-    let mut actions = vec![
-        HelpAction::new("back", "q/Esc", "Back to session"),
-        HelpAction::new("select comment", "j/k", "Select comment"),
-        HelpAction::new("scroll pane", "Up/Down", "Scroll comment details"),
-    ];
-    if can_mark_selected {
+    let mut actions = vec![HelpAction::new("back", "q/Esc", "Back to session")];
+    match sidebar_focus {
+        DiffSidebarFocus::Files => {
+            actions.push(HelpAction::new("select file", "j/k", "Select file"));
+            actions.push(HelpAction::new("preview", "p", "Toggle markdown preview"));
+            if has_review_comments {
+                actions.push(HelpAction::new("comments", "c", "Focus review comments"));
+            }
+        }
+        DiffSidebarFocus::Comments => {
+            actions.push(HelpAction::new("select comment", "j/k", "Select comment"));
+            if can_mark_selected {
+                actions.push(HelpAction::new(
+                    "address",
+                    "a",
+                    "Toggle selected comment for agent address",
+                ));
+                actions.push(HelpAction::new(
+                    "deny",
+                    "d",
+                    "Toggle selected comment for agent denial",
+                ));
+            }
+            if can_submit {
+                actions.push(HelpAction::new(
+                    "submit",
+                    "Enter",
+                    "Submit marked comments to the agent",
+                ));
+            }
+        }
+    }
+    if sidebar_focus == DiffSidebarFocus::Comments {
+        actions.push(HelpAction::new("files", "f", "Focus changed files"));
         actions.push(HelpAction::new(
-            "address",
-            "a",
-            "Toggle selected comment for agent address",
-        ));
-        actions.push(HelpAction::new(
-            "deny",
-            "d",
-            "Toggle selected comment for agent denial",
+            "scroll pane",
+            "Up/Down",
+            "Scroll comment details",
         ));
     }
-    if can_submit {
-        actions.push(HelpAction::new(
-            "submit",
-            "Enter",
-            "Submit marked comments to the agent",
-        ));
-    }
+    actions.push(HelpAction::new("help", "?", "Help"));
 
     actions
 }
@@ -1988,23 +2003,31 @@ mod tests {
             .iter()
             .map(|action| action.key)
             .collect::<Vec<_>>();
-        let comment_keys = review_comment_footer_actions(false, false)
+        let file_footer_keys = diff_footer_actions(true, DiffSidebarFocus::Files, true, true)
             .iter()
             .map(|action| action.key)
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(diff_keys, ["q/Esc", "j/k", "p", "Up/Down", "?"]);
-        assert_eq!(comment_keys, ["q/Esc", "j/k", "Up/Down"]);
+        assert_eq!(
+            diff_keys,
+            [
+                "q/Esc", "j/k", "f", "c", "p", "Up/Down", "a", "d", "Enter", "?"
+            ]
+        );
+        assert_eq!(file_footer_keys, ["q/Esc", "j/k", "p", "c", "?"]);
     }
 
     #[test]
     fn test_review_comment_actions_include_enabled_batch_keys() {
         // Arrange, Act
-        let actions = review_comment_footer_actions(true, true);
+        let actions = diff_footer_actions(true, DiffSidebarFocus::Comments, true, true);
         let comment_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(comment_keys, ["q/Esc", "j/k", "Up/Down", "a", "d", "Enter"]);
+        assert_eq!(
+            comment_keys,
+            ["q/Esc", "j/k", "a", "d", "Enter", "f", "Up/Down", "?"]
+        );
     }
 }

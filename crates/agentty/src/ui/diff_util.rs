@@ -63,6 +63,15 @@ pub struct DiffPageAreas {
     pub footer_area: Rect,
 }
 
+/// Vertical sections inside the unified diff sidebar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffSidebarAreas {
+    /// Linked review-comment selector shown below changed files.
+    pub comment_list_area: Rect,
+    /// Changed-file explorer shown above linked review comments.
+    pub file_list_area: Rect,
+}
+
 /// Shared wrapping and viewport measurements for rendering the diff panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiffRenderLayout {
@@ -301,6 +310,27 @@ pub fn diff_page_areas(terminal_area: Rect) -> DiffPageAreas {
         diff_area: content_layout[1],
         file_list_area: content_layout[0],
         footer_area: page_chunks[1],
+    }
+}
+
+/// Splits the diff sidebar into Files and Comments sections when linked
+/// review-comment state is available.
+pub fn diff_sidebar_areas(sidebar_area: Rect, show_comments: bool) -> DiffSidebarAreas {
+    if !show_comments {
+        return DiffSidebarAreas {
+            comment_list_area: Rect::default(),
+            file_list_area: sidebar_area,
+        };
+    }
+
+    let sidebar_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(sidebar_area);
+
+    DiffSidebarAreas {
+        comment_list_area: sidebar_layout[1],
+        file_list_area: sidebar_layout[0],
     }
 }
 

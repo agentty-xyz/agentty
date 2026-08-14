@@ -2,9 +2,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::{App, AppEvent};
+use crate::domain::session::SessionId;
 use crate::presentation::app_mode::{
-    AppMode, DiffPreview, DiffPreviewUnavailableReason, DiffRestoreTarget, DiffScrollCache,
-    HelpContext, ViewportRect,
+    AppMode, DiffPreview, DiffPreviewUnavailableReason, DiffRestoreTarget, DiffReviewComments,
+    DiffScrollCache, DiffSidebarFocus, HelpContext, ViewportRect,
 };
 use crate::runtime::EventResult;
 use crate::ui::component::file_explorer::FileExplorer;
@@ -79,14 +80,22 @@ pub(crate) fn enter_diff_mode(
     session_id: &str,
     diff: String,
     restore: Option<DiffRestoreTarget>,
+    sidebar_focus: DiffSidebarFocus,
 ) {
+    let session_id = session_id.into();
+    let mut review_comments = app.start_session_review_comment_load(&session_id);
+    if let Some(review_comments) = &mut review_comments {
+        review_comments.sidebar_focus = sidebar_focus;
+    }
+
     app.mode = AppMode::Diff {
         diff,
         file_explorer_selected_index: 0,
         preview: DiffPreview::default(),
+        review_comments,
         restore: restore.map(Box::new),
         scroll_cache: None,
-        session_id: session_id.into(),
+        session_id,
         scroll_offset: 0,
     };
 }
@@ -102,6 +111,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
         diff,
         file_explorer_selected_index,
         preview,
+        review_comments,
         restore,
         session_id,
         scroll_offset,
@@ -113,6 +123,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
                 diff,
                 file_explorer_selected_index,
                 preview,
+                review_comments: review_comments.map(Box::new),
                 restore,
                 session_id,
                 scroll_offset,
@@ -166,6 +177,7 @@ fn handle_navigation_key(
         diff,
         mut file_explorer_selected_index,
         mut preview,
+        mut review_comments,
         restore,
         mut scroll_cache,
         mut scroll_offset,
@@ -181,11 +193,9 @@ fn handle_navigation_key(
     match key.code {
         KeyCode::Char(character @ ('j' | 'k')) if is_plain_char_key(key, character) => {
             let content = render_cache_store.diff_layout_cache().content(&diff);
-            let new_index = selected_index_after_key(
-                character,
-                file_explorer_selected_index,
-                content.item_count(),
-            );
+            let item_count = content.item_count();
+            let new_index =
+                selected_index_after_key(character, file_explorer_selected_index, item_count);
 
             if file_explorer_selected_index != new_index {
                 file_explorer_selected_index = new_index;
@@ -239,16 +249,19 @@ fn handle_navigation_key(
                 scroll_offset = 0;
             }
         }
+        KeyCode::Char('c') if is_plain_char_key(key, 'c') && review_comments.is_some() => {
+            focus_review_comments(&mut review_comments, &mut scroll_cache, &mut scroll_offset);
+        }
         _ => {}
     }
 
     if selection_changed && preview.is_enabled() {
-        preview = start_selected_preview_load(
+        refresh_selected_preview(
             app,
-            render_cache_store.diff_layout_cache(),
+            render_cache_store,
             &diff,
             file_explorer_selected_index,
-            &preview,
+            &mut preview,
             &session_id,
         );
     }
@@ -257,11 +270,42 @@ fn handle_navigation_key(
         diff,
         file_explorer_selected_index,
         preview,
+        review_comments,
         restore,
         scroll_cache,
         scroll_offset,
         session_id,
     };
+}
+
+fn focus_review_comments(
+    review_comments: &mut Option<DiffReviewComments>,
+    scroll_cache: &mut Option<DiffScrollCache>,
+    scroll_offset: &mut u16,
+) {
+    if let Some(review_comments) = review_comments {
+        review_comments.sidebar_focus = DiffSidebarFocus::Comments;
+    }
+    *scroll_cache = None;
+    *scroll_offset = 0;
+}
+
+fn refresh_selected_preview(
+    app: &mut App,
+    render_cache_store: &RenderCacheStore,
+    diff: &str,
+    file_explorer_selected_index: usize,
+    preview: &mut DiffPreview,
+    session_id: &SessionId,
+) {
+    *preview = start_selected_preview_load(
+        app,
+        render_cache_store.diff_layout_cache(),
+        diff,
+        file_explorer_selected_index,
+        preview,
+        session_id,
+    );
 }
 
 /// Returns the wrapped explorer selection for a plain `j` or `k` key.
@@ -432,6 +476,7 @@ mod tests {
     use ratatui::layout::Rect;
 
     use super::*;
+    use crate::presentation::app_mode::DiffReviewComments;
 
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 12);
 
@@ -579,6 +624,7 @@ mod tests {
             scroll_offset: 7,
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -619,6 +665,7 @@ mod tests {
             scroll_offset: 7,
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -652,6 +699,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -684,6 +732,7 @@ mod tests {
             scroll_offset: 3,
             file_explorer_selected_index: 2,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -717,6 +766,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -749,6 +799,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 2,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -800,6 +851,7 @@ mod tests {
             scroll_offset: 10,
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -831,6 +883,7 @@ mod tests {
             scroll_offset: 10,
             file_explorer_selected_index: 1,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -863,6 +916,7 @@ mod tests {
             scroll_offset: 10,
             file_explorer_selected_index: 1,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -895,6 +949,7 @@ mod tests {
             scroll_offset: 10,
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -931,6 +986,7 @@ mod tests {
                 path: "README.md".to_string(),
                 request_id: 6,
             },
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -983,6 +1039,7 @@ mod tests {
             scroll_offset: max_scroll_offset,
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -1028,6 +1085,7 @@ mod tests {
             scroll_offset: u16::MAX,
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -1064,6 +1122,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: Some(Box::new(DiffRestoreTarget::Question(
                 QuestionModeSnapshot {
                     at_mention_state: None,
@@ -1117,6 +1176,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: Some(Box::new(DiffRestoreTarget::Prompt(PromptModeSnapshot {
                 at_mention_state: None,
                 attachment_state: PromptAttachmentState::default(),
@@ -1160,6 +1220,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: Some(Box::new(DiffRestoreTarget::Prompt(
                 non_default_prompt_snapshot(),
             ))),
@@ -1187,6 +1248,7 @@ mod tests {
             scroll_offset: 3,
             file_explorer_selected_index: 1,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: Some(Box::new(DiffRestoreTarget::Prompt(
                 non_default_prompt_snapshot(),
             ))),
@@ -1272,6 +1334,7 @@ mod tests {
             scroll_offset: 3,
             file_explorer_selected_index: 1,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: Some(Box::new(DiffRestoreTarget::Question(snapshot))),
             scroll_cache: None,
         };
@@ -1375,6 +1438,7 @@ mod tests {
             scroll_offset: 4,
             file_explorer_selected_index: 2,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
         };
@@ -1393,6 +1457,47 @@ mod tests {
             AppMode::Diff {
                 scroll_offset: 4,
                 file_explorer_selected_index: 2,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_c_focuses_linked_review_comments() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::Diff {
+            diff: "diff output".to_string(),
+            file_explorer_selected_index: 0,
+            preview: DiffPreview::default(),
+            review_comments: Some(DiffReviewComments::loading(1)),
+            restore: None,
+            scroll_cache: Some(DiffScrollCache {
+                content_area: viewport_rect(TEST_TERMINAL_SIZE),
+                file_explorer_selected_index: 0,
+                max_scroll_offset: 3,
+            }),
+            scroll_offset: 2,
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                review_comments: Some(DiffReviewComments {
+                    sidebar_focus: DiffSidebarFocus::Comments,
+                    ..
+                }),
+                scroll_cache: None,
+                scroll_offset: 0,
                 ..
             }
         ));
@@ -1418,6 +1523,7 @@ mod tests {
             diff: "diff --git a/README.md b/README.md\n+preview".to_string(),
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
             scroll_offset: 7,
@@ -1470,6 +1576,7 @@ mod tests {
             diff: "diff --git a/docs/README.md b/docs/README.md\n+preview".to_string(),
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
             scroll_offset: 3,
@@ -1506,6 +1613,7 @@ mod tests {
                 path: "docs/README.md".to_string(),
                 request_id: 4,
             },
+            review_comments: None,
             restore: None,
             scroll_cache: None,
             scroll_offset: 6,
@@ -1555,6 +1663,7 @@ mod tests {
                 path: "README.md".to_string(),
                 request_id: 2,
             },
+            review_comments: None,
             restore: None,
             scroll_cache: None,
             scroll_offset: 4,
@@ -1596,6 +1705,7 @@ mod tests {
             diff: "diff --git a/README.md b/README.md\n+preview".to_string(),
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             scroll_cache: None,
             scroll_offset: 0,

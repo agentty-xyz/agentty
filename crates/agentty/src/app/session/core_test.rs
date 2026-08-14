@@ -3756,6 +3756,7 @@ async fn test_refresh_sessions_loads_diff_help_detail_when_another_session_is_se
             diff: String::new(),
             file_explorer_selected_index: 0,
             preview: DiffPreview::default(),
+            review_comments: None,
             restore: None,
             session_id: help_session_id.clone(),
             scroll_offset: 0,

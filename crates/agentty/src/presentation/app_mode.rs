@@ -38,6 +38,50 @@ pub struct ReviewCommentActionSelection {
     pub(crate) thread_id: String,
 }
 
+/// Review-comment data attached to the unified diff workspace.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiffReviewComments {
+    /// Actionable threads marked for batched address or deny handling.
+    pub comment_actions: Vec<ReviewCommentActionSelection>,
+    /// User-facing failure returned while loading review comments.
+    pub comment_error: Option<String>,
+    /// Loaded review-request comment snapshot.
+    pub comment_snapshot: Option<ReviewCommentSnapshot>,
+    /// Whether the linked review request's comments are loading.
+    pub is_loading_comments: bool,
+    /// Request generation used to reject stale background completions.
+    pub request_id: u64,
+    /// Selected general comment or inline review thread.
+    pub selected_comment_index: usize,
+    /// Sidebar section currently controlling the unified diff workspace.
+    pub sidebar_focus: DiffSidebarFocus,
+}
+
+impl DiffReviewComments {
+    /// Creates the initial loading state for one linked review request.
+    pub fn loading(request_id: u64) -> Self {
+        Self {
+            comment_actions: Vec::new(),
+            comment_error: None,
+            comment_snapshot: None,
+            is_loading_comments: true,
+            request_id,
+            selected_comment_index: 0,
+            sidebar_focus: DiffSidebarFocus::Files,
+        }
+    }
+}
+
+/// Sidebar section currently controlling the unified diff workspace.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DiffSidebarFocus {
+    /// Changed-file explorer navigation and diff or preview content.
+    #[default]
+    Files,
+    /// Linked forge review-comment navigation and detail content.
+    Comments,
+}
+
 /// Semantic intent for a `Confirmation` overlay interaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConfirmationIntent {
@@ -465,6 +509,8 @@ pub enum AppMode {
         file_explorer_selected_index: usize,
         /// Sticky rendered-markdown preview state for the selected file.
         preview: DiffPreview,
+        /// Optional linked review-request comments rendered below the files.
+        review_comments: Option<DiffReviewComments>,
         /// Captured composer or question state restored when leaving diff, if
         /// the diff was opened from an editing page. `None` restores to `View`
         /// mode. Boxed to keep the `Diff` variant small.
@@ -475,26 +521,6 @@ pub enum AppMode {
         scroll_offset: u16,
         /// Session whose diff is currently visible.
         session_id: SessionId,
-    },
-    /// Displays forge review comments for one linked session review request,
-    /// with agent-resolution actions and current diff context.
-    ReviewComments {
-        /// Actionable threads marked for batched address or deny handling.
-        comment_actions: Vec<ReviewCommentActionSelection>,
-        /// User-facing failure returned while loading review comments.
-        comment_error: Option<String>,
-        /// Loaded review-request comment snapshot.
-        comment_snapshot: Option<ReviewCommentSnapshot>,
-        /// Raw session diff used to derive code context for inline threads.
-        diff: String,
-        /// Whether the linked review request's comments are loading.
-        is_loading_comments: bool,
-        /// Selected general comment or inline review thread.
-        selected_comment_index: usize,
-        /// Session whose linked review-request comments are visible.
-        session_id: SessionId,
-        /// Vertical offset inside the selected comment detail panel.
-        scroll_offset: u16,
     },
 
     /// Interactive clarification flow that asks agent questions one-by-one.
@@ -572,6 +598,8 @@ pub enum HelpContext {
         file_explorer_selected_index: usize,
         /// Rendered-markdown preview state to restore.
         preview: DiffPreview,
+        /// Optional linked review-request comments to restore.
+        review_comments: Option<Box<DiffReviewComments>>,
         /// Preserved diff restore target so the help→diff→exit path can still
         /// return to the originating page when the diff was opened from there.
         /// Boxed to keep the `Diff` variant small.
@@ -643,6 +671,7 @@ impl HelpContext {
                 diff,
                 file_explorer_selected_index,
                 preview,
+                review_comments,
                 restore,
                 session_id,
                 scroll_offset,
@@ -650,6 +679,7 @@ impl HelpContext {
                 diff,
                 file_explorer_selected_index,
                 preview,
+                review_comments: review_comments.map(|review_comments| *review_comments),
                 restore,
                 scroll_cache: None,
                 session_id,

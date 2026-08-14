@@ -576,10 +576,11 @@ can retry without reporting a false terminal cancellation.
   final check can still race with Agentty's update. Failed background pushes or metadata
   evaluation keep the manual `p` flow available for retry and surface the existing
   review-request sync warning.
-- On the review-comments page, mark actionable inline threads with `a` to address or `d`
-  to deny, then press `Enter` to submit all marked threads in one agent turn. Address
-  actions request the relevant worktree change; deny actions request a concise technical
-  rebuttal.
+- In Diff mode's Comments section, mark actionable inline threads with `a` to address or
+  `d` to deny, then press `Enter` to submit all marked threads in one agent turn.
+  Address actions request the relevant worktree change; deny actions request a concise
+  technical rebuttal. Press `f` to return to the Files section without leaving Diff
+  mode.
 - Agent-driven review-comment turns report one structured outcome for each submitted
   inline thread. After Agentty commits the work and successfully pushes an already
   published branch, it posts the agent's concise reply for every valid allowlisted

@@ -28,6 +28,7 @@ const ROOT_TREE_PREFIX: &str = "";
 /// Diff file explorer panel rendering the changed file list.
 pub struct FileExplorer {
     file_list_lines: Arc<[Line<'static>]>,
+    is_focused: bool,
     preserved_suffix_span_count: usize,
     selected_index: usize,
 }
@@ -93,6 +94,7 @@ impl FileExplorer {
 
         Self {
             file_list_lines: Arc::from(file_list_lines),
+            is_focused: true,
             preserved_suffix_span_count: 0,
             selected_index: 0,
         }
@@ -106,6 +108,7 @@ impl FileExplorer {
     ) -> Self {
         Self {
             file_list_lines,
+            is_focused: true,
             preserved_suffix_span_count,
             selected_index: 0,
         }
@@ -115,6 +118,14 @@ impl FileExplorer {
     #[must_use]
     pub fn selected_index(mut self, index: usize) -> Self {
         self.selected_index = index;
+        self
+    }
+
+    /// Controls whether the selected file row receives focus highlighting.
+    #[must_use]
+    pub fn focused(mut self, is_focused: bool) -> Self {
+        self.is_focused = is_focused;
+
         self
     }
 
@@ -371,7 +382,9 @@ impl Component for FileExplorer {
             .highlight_style(Style::default().bg(style::palette::surface_selection()));
 
         let mut state = ListState::default();
-        state.select(Some(self.selected_index));
+        if self.is_focused {
+            state.select(Some(self.selected_index));
+        }
 
         f.render_stateful_widget(list, area, &mut state);
     }

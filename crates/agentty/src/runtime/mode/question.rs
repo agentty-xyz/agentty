@@ -8,7 +8,9 @@ use crate::app::{self, App, AppEvent};
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
 use crate::domain::session::{SessionId, Status};
-use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRestoreTarget, QuestionModeSnapshot};
+use crate::presentation::app_mode::{
+    AppMode, ChatFocus, DiffRestoreTarget, DiffSidebarFocus, QuestionModeSnapshot,
+};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
@@ -242,7 +244,7 @@ async fn show_question_diff(app: &mut App, session_id: &str) {
 
     let restore = take_question_snapshot(app).map(DiffRestoreTarget::Question);
 
-    diff::enter_diff_mode(app, session_id, diff, restore);
+    diff::enter_diff_mode(app, session_id, diff, restore, DiffSidebarFocus::Files);
 }
 
 /// Snapshots the current question-mode state for later restoration.

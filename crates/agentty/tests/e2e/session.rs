@@ -6661,19 +6661,27 @@ fn test_markdown_diff_preview() -> E2eResult {
     Ok(())
 }
 
-/// Verify that a linked review request opens a split comment page with the
-/// selected thread's current diff context.
+/// Verify linked review comments share one workspace with changed files and
+/// the selected thread's current diff context.
 #[test]
 fn test_session_review_comments() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_review_comments")
         .with_git()
-        .setup(seed_review_ready_session_with_review_request)
+        .with_terminal_size(160, 60)
+        .zola(
+            "Unified diff review comments",
+            "Browse changed files and linked review comments in one diff workspace.",
+            44,
+        )
+        .setup(|env| {
+            seed_review_ready_session_with_review_request(env)?;
+            seed_sessions_startup_tab(env)
+        })
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .wait_for_text("c: comments", 5000)
                     .press_key("c")
@@ -6705,6 +6713,9 @@ fn test_session_review_comments() -> E2eResult {
                         "outdated_review_comment",
                         "Outdated comment without misleading current diff context",
                     )
+                    .press_key("f")
+                    .wait_for_text("c: comments", 5000)
+                    .wait_for_stable_frame(300, 5000)
             },
             |frame, report| {
                 let inline_frame = common::frame_from_capture(&report.captures[0]);
@@ -6725,7 +6736,14 @@ fn test_session_review_comments() -> E2eResult {
                 );
                 assertion::assert_not_visible(&file_frame, "println!(\"review\")");
 
-                assert_outdated_review_comment(frame);
+                let outdated_frame = common::frame_from_capture(&report.captures[2]);
+                assert_outdated_review_comment(&outdated_frame);
+
+                let files_focus_region = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Files", &files_focus_region);
+                assertion::assert_not_visible(frame, "a: address");
+                assertion::assert_not_visible(frame, "d: deny");
+                assertion::assert_not_visible(frame, "Enter: submit");
             },
         )?;
 
@@ -6738,6 +6756,7 @@ fn assert_inline_review_comment(frame: &TerminalFrame) {
     let page_text = frame.text_in_region(&full);
 
     assertion::assert_text_in_region(frame, "Comments (6)", &full);
+    assertion::assert_text_in_region(frame, "Files", &full);
     assertion::assert_text_in_region(frame, "Unresolved", &full);
     assertion::assert_text_in_region(frame, "Outdated", &full);
     assertion::assert_text_in_region(frame, "Resolved", &full);

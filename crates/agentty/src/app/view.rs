@@ -121,7 +121,6 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::Prompt { session_id, .. }
         | AppMode::Question { session_id, .. }
         | AppMode::Diff { session_id, .. }
-        | AppMode::ReviewComments { session_id, .. }
         | AppMode::Help {
             context: HelpContext::View { session_id, .. } | HelpContext::Diff { session_id, .. },
             ..
@@ -148,15 +147,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn visible_review_session_id_includes_review_comments() {
+    fn visible_review_session_id_includes_diff_comments() {
         // Arrange
-        let mode = AppMode::ReviewComments {
-            comment_actions: Vec::new(),
-            comment_error: None,
-            comment_snapshot: None,
+        let mode = AppMode::Diff {
             diff: String::new(),
-            is_loading_comments: true,
-            selected_comment_index: 0,
+            file_explorer_selected_index: 0,
+            preview: crate::presentation::app_mode::DiffPreview::default(),
+            review_comments: Some(crate::presentation::app_mode::DiffReviewComments::loading(
+                1,
+            )),
+            restore: None,
+            scroll_cache: None,
             session_id: "session-id".into(),
             scroll_offset: 0,
         };

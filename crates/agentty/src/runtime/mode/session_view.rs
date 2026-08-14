@@ -14,7 +14,7 @@ use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{
-    AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, HelpContext,
+    AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, DiffSidebarFocus, HelpContext,
 };
 use crate::presentation::help_action::{self, ViewSessionState};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
@@ -364,8 +364,7 @@ async fn handle_primary_view_key(
             if key.modifiers == event::KeyModifiers::NONE
                 && view_session_snapshot.can_open_review_comments() =>
         {
-            let diff = load_view_session_diff(app, view_context).await;
-            app.open_session_review_comments(&view_context.session_id, diff);
+            open_review_comments_in_diff(app, view_context).await;
 
             return Some(false);
         }
@@ -414,6 +413,17 @@ async fn handle_primary_view_key(
     }
 
     Some(true)
+}
+
+async fn open_review_comments_in_diff(app: &mut App, view_context: &ViewContext) {
+    let session_diff = load_view_session_diff(app, view_context).await;
+    diff::enter_diff_mode(
+        app,
+        &view_context.session_id,
+        session_diff,
+        None,
+        DiffSidebarFocus::Comments,
+    );
 }
 
 /// Opens a regular worktree immediately or warns for a managed worker.
@@ -1198,7 +1208,13 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) -
         return false;
     }
 
-    diff::enter_diff_mode(app, &view_context.session_id, diff_text, None);
+    diff::enter_diff_mode(
+        app,
+        &view_context.session_id,
+        diff_text,
+        None,
+        DiffSidebarFocus::Files,
+    );
 
     true
 }
@@ -3107,6 +3123,41 @@ mod tests {
                 confirmation_intent: ConfirmationIntent::ContinueSession,
                 ..
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn review_comment_key_opens_diff_from_view() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            session_id: session_id.clone().into(),
+            scroll_offset: Some(0),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let pending_update = ViewPendingUpdate::from_context(&view_context);
+        let mut view_session_snapshot = reply_enabled_review_snapshot();
+        view_session_snapshot.review_comments = ViewActionState::Enabled;
+
+        // Act
+        let result = handle_primary_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+            &view_context,
+            &view_session_snapshot,
+            &pending_update,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, Some(false));
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                ref session_id,
+                review_comments: None,
+                ..
+            } if session_id == &view_context.session_id
         ));
     }
 

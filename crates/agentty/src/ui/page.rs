@@ -7,7 +7,7 @@ pub mod fyi;
 pub mod orchestration;
 /// Project selection and activity list page.
 pub mod project_list;
-/// Session-linked forge-review comment page.
+/// Session-linked forge-review panels embedded in Diff mode.
 pub mod review_comment;
 /// Session transcript and prompt page.
 pub mod session_chat;
