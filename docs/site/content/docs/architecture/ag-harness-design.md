@@ -34,6 +34,25 @@ flowchart LR
     J --> O["Chat Completions"]
 ```
 
+## `ag-harness` as a code review agent
+
+```mermaid
+flowchart LR
+    E["PR event"] --> F["Forge host"]
+    F --> H["ag-harness v0"]
+    H --> M["Model"]
+    M --> T["Read tool call"]
+    T --> H
+    H --> O["Structured review"]
+    O --> F
+    F --> P["PR comments"]
+    H --> B["Bounded tool loop"]
+    H --> R["Read-only repo access"]
+```
+
+V0 needs a bounded model-tool loop, read-only repository access, and structured review
+output.
+
 ## Core features
 
 - **Three built-in tools** - `read`, `write`, `bash`.
