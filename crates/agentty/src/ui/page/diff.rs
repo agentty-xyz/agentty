@@ -28,12 +28,14 @@ use crate::ui::{Component, Page, diff_util, markdown, style};
 const WRAPPED_CHUNK_START_INDEX: usize = 0;
 const DIFF_CONTENT_CACHE_ENTRY_LIMIT: usize = 8;
 const DIFF_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
+const FILE_LIST_CHANGE_TOTAL_SPAN_COUNT: usize = 4;
 
 /// Compact identity for one raw diff string.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DiffContentCacheKey {
     content_hash: u64,
     content_len: usize,
+    style_version: u64,
 }
 
 /// Cache key for one fully assembled diff-panel layout.
@@ -82,21 +84,11 @@ impl OwnedDiffLine {
 /// Parsed diff data reused by file-tree rendering and diff layout assembly.
 #[derive(Clone)]
 pub(crate) struct DiffContentSnapshot {
-    all_files_summary: DiffSelectionChangeSummary,
     file_line_ranges: Arc<HashMap<String, Vec<Range<usize>>>>,
     file_list_lines: Arc<[Line<'static>]>,
     key: DiffContentCacheKey,
     parsed_lines: Arc<[OwnedDiffLine]>,
-    selection_summaries: Arc<[DiffSelectionChangeSummary]>,
     tree_items: Arc<[FileTreeItem]>,
-}
-
-/// Change totals for the currently selected diff tree item.
-#[derive(Clone)]
-struct DiffSelectionChangeSummary {
-    added_lines: usize,
-    label: String,
-    removed_lines: usize,
 }
 
 /// Added/removed line totals accumulated while building cached summaries.
@@ -173,16 +165,6 @@ impl DiffContentSnapshot {
         Some(path)
     }
 
-    /// Returns the label and added/removed line totals for the active
-    /// file-tree selection, or the whole diff when the selection is stale.
-    fn selected_change_summary(&self, selected_index: usize) -> &DiffSelectionChangeSummary {
-        if let Some(summary) = self.selection_summaries.get(selected_index) {
-            return summary;
-        }
-
-        &self.all_files_summary
-    }
-
     /// Returns parsed lines for the active file-tree selection.
     fn selected_lines(&self, selected_index: usize) -> Vec<DiffLine<'_>> {
         let parsed_lines = self.borrowed_lines();
@@ -201,13 +183,12 @@ impl DiffContentSnapshot {
             .collect()
     }
 
-    /// Builds cached added/removed summaries for the full diff and each
-    /// selectable tree item in one pass over parsed lines.
-    fn change_summaries(
+    /// Builds cached added/removed totals for each selectable tree item in one
+    /// pass over parsed lines.
+    fn change_totals_by_tree_item(
         parsed_lines: &[DiffLine<'_>],
         tree_items: &[FileTreeItem],
-    ) -> (DiffSelectionChangeSummary, Vec<DiffSelectionChangeSummary>) {
-        let mut all_files_totals = DiffChangeTotals::default();
+    ) -> Vec<DiffChangeTotals> {
         let mut current_path = None;
         let mut file_totals: HashMap<String, DiffChangeTotals> = HashMap::new();
 
@@ -226,7 +207,6 @@ impl DiffContentSnapshot {
             let Some(line_totals) = DiffChangeTotals::from_line_kind(diff_line.kind) else {
                 continue;
             };
-            all_files_totals.add(line_totals);
 
             if let Some(totals) = current_path
                 .as_ref()
@@ -237,25 +217,33 @@ impl DiffContentSnapshot {
         }
 
         let folder_totals = Self::folder_totals(&file_totals);
-        let all_files_summary = DiffSelectionChangeSummary {
-            added_lines: all_files_totals.added_lines,
-            label: "all files".to_string(),
-            removed_lines: all_files_totals.removed_lines,
-        };
-        let selection_summaries = tree_items
+        tree_items
             .iter()
-            .map(|item| {
-                let totals = Self::tree_item_change_totals(item, &file_totals, &folder_totals);
+            .map(|item| Self::tree_item_change_totals(item, &file_totals, &folder_totals))
+            .collect()
+    }
 
-                DiffSelectionChangeSummary {
-                    added_lines: totals.added_lines,
-                    label: tree_item_label(item),
-                    removed_lines: totals.removed_lines,
-                }
-            })
-            .collect();
-
-        (all_files_summary, selection_summaries)
+    /// Appends color-coded added/removed totals to every selectable file-tree
+    /// line.
+    fn append_file_list_change_totals(
+        file_list_lines: &mut [Line<'static>],
+        change_totals: &[DiffChangeTotals],
+    ) {
+        for (line, totals) in file_list_lines.iter_mut().zip(change_totals) {
+            line.spans.push(Span::raw(" "));
+            line.spans.push(Span::styled(
+                format!("+{}", totals.added_lines),
+                Style::default().fg(style::palette::success()),
+            ));
+            line.spans.push(Span::styled(
+                "/",
+                Style::default().fg(style::palette::text_muted()),
+            ));
+            line.spans.push(Span::styled(
+                format!("-{}", totals.removed_lines),
+                Style::default().fg(style::palette::danger()),
+            ));
+        }
     }
 
     /// Indexes each old and new file path to its parsed-line ranges.
@@ -395,9 +383,10 @@ struct DiffLayoutCacheEntry {
 /// Bounded cache for parsed diff content and fully assembled diff layouts.
 ///
 /// The parsed-content layer avoids re-parsing the same raw diff and rebuilding
-/// file-tree metadata or per-path line ranges on every frame. Its key is the
-/// raw diff's hash and byte length, so replacing the diff invalidates the
-/// snapshot. The rendered-layout layer sits above styled diff assembly so
+/// file-tree metadata or per-path line ranges on every frame. Its key includes
+/// the raw diff's hash and byte length plus the active style version, so
+/// replacing the diff or theme invalidates the styled snapshot. The
+/// rendered-layout layer sits above styled diff assembly so
 /// scroll metrics and frame painting
 /// reuse the same rows until diff content, selection, panel width/height,
 /// scrollbar gutter state, or the active style version changes. Both LRU
@@ -425,12 +414,12 @@ impl DiffLayoutCache {
         }
 
         let parsed_lines = parse_diff_lines(diff);
-        let (file_list_lines, tree_items) = FileExplorer::file_tree(&parsed_lines);
-        let (all_files_summary, selection_summaries) =
-            DiffContentSnapshot::change_summaries(&parsed_lines, &tree_items);
+        let (mut file_list_lines, tree_items) = FileExplorer::file_tree(&parsed_lines);
+        let change_totals =
+            DiffContentSnapshot::change_totals_by_tree_item(&parsed_lines, &tree_items);
+        DiffContentSnapshot::append_file_list_change_totals(&mut file_list_lines, &change_totals);
         let file_line_ranges = DiffContentSnapshot::file_line_ranges(&parsed_lines);
         let snapshot = DiffContentSnapshot {
-            all_files_summary,
             file_line_ranges: Arc::new(file_line_ranges),
             file_list_lines: Arc::from(file_list_lines),
             key,
@@ -440,7 +429,6 @@ impl DiffLayoutCache {
                     .map(OwnedDiffLine::from_diff_line)
                     .collect::<Vec<_>>(),
             ),
-            selection_summaries: Arc::from(selection_summaries),
             tree_items: Arc::from(tree_items),
         };
         self.store_content(DiffContentCacheEntry {
@@ -582,7 +570,7 @@ impl DiffLayoutCache {
         }
     }
 
-    /// Returns a compact key for the raw diff string.
+    /// Returns a compact key for the raw diff string and active UI theme.
     fn content_cache_key(diff: &str) -> DiffContentCacheKey {
         let mut hasher = FxHasher::default();
         hasher.write(diff.as_bytes());
@@ -590,6 +578,7 @@ impl DiffLayoutCache {
         DiffContentCacheKey {
             content_hash: hasher.finish(),
             content_len: diff.len(),
+            style_version: style::active_theme_cache_version(),
         }
     }
 }
@@ -656,7 +645,7 @@ impl<'a> DiffPage<'a> {
     }
 
     /// Renders the right-side diff panel with line-number gutters and
-    /// change totals prefixed in the title.
+    /// aggregate change totals prefixed in the title.
     fn render_diff_content(
         &self,
         f: &mut Frame,
@@ -665,7 +654,6 @@ impl<'a> DiffPage<'a> {
         total_added_lines: u64,
         total_removed_lines: u64,
     ) {
-        let selection_summary = content.selected_change_summary(self.file_explorer_selected_index);
         let title = Line::from(vec![
             Span::styled(" (", Style::default().fg(style::palette::warning())),
             Span::styled(
@@ -681,21 +669,6 @@ impl<'a> DiffPage<'a> {
                 format!(") Diff — {} ", inline_text(self.session.display_title())),
                 Style::default().fg(style::palette::warning()),
             ),
-            Span::styled("· ", Style::default().fg(style::palette::warning())),
-            Span::styled(
-                format!("{} ", inline_text(&selection_summary.label)),
-                Style::default().fg(style::palette::text_muted()),
-            ),
-            Span::styled(
-                format!("+{}", selection_summary.added_lines),
-                Style::default().fg(style::palette::success()),
-            ),
-            Span::styled(" ", Style::default().fg(style::palette::warning())),
-            Span::styled(
-                format!("-{}", selection_summary.removed_lines),
-                Style::default().fg(style::palette::danger()),
-            ),
-            Span::styled(" ", Style::default().fg(style::palette::warning())),
         ]);
 
         let layout = self.diff_layout_cache.resolved_layout(
@@ -925,9 +898,12 @@ impl Page for DiffPage<'_> {
         let areas = diff_util::diff_page_areas(area);
         let content = self.diff_layout_cache.content(self.diff);
 
-        FileExplorer::from_cached_lines(content.file_list_lines())
-            .selected_index(self.file_explorer_selected_index)
-            .render(f, areas.file_list_area);
+        FileExplorer::from_cached_lines(
+            content.file_list_lines(),
+            FILE_LIST_CHANGE_TOTAL_SPAN_COUNT,
+        )
+        .selected_index(self.file_explorer_selected_index)
+        .render(f, areas.file_list_area);
 
         if let Some(path) =
             preview_path_for_selection(self.preview, &content, self.file_explorer_selected_index)
@@ -1007,13 +983,6 @@ fn preview_unavailable_message(reason: &DiffPreviewUnavailableReason) -> &str {
         DiffPreviewUnavailableReason::Binary => " Binary file — no preview. ",
         DiffPreviewUnavailableReason::TooLarge => " File too large to preview. ",
         DiffPreviewUnavailableReason::LoadFailed(error) => error,
-    }
-}
-
-/// Returns a compact display label for one file-tree selection.
-fn tree_item_label(item: &FileTreeItem) -> String {
-    match item {
-        FileTreeItem::Folder(path) | FileTreeItem::File(path) => path.clone(),
     }
 }
 
@@ -1133,10 +1102,36 @@ mod tests {
             &first_content.file_list_lines,
             &second_content.file_list_lines
         ));
-        assert!(Arc::ptr_eq(
-            &first_content.selection_summaries,
-            &second_content.selection_summaries
-        ));
+    }
+
+    #[test]
+    fn test_diff_content_snapshot_rebuilds_styled_file_list_after_theme_change() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let (current_lines, current_success_color, expected_current_success) = {
+            let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+            let content = cache.content(SAMPLE_DIFF);
+            let lines = content.file_list_lines();
+            let success_color = lines[0].spans[2].style.fg;
+
+            (lines, success_color, Some(style::palette::success()))
+        };
+
+        // Act
+        let (green_lines, green_success_color, expected_green_success) = {
+            let _theme_scope = style::scoped_active_theme(ColorTheme::Green);
+            let content = cache.content(SAMPLE_DIFF);
+            let lines = content.file_list_lines();
+            let success_color = lines[0].spans[2].style.fg;
+
+            (lines, success_color, Some(style::palette::success()))
+        };
+
+        // Assert
+        assert!(!Arc::ptr_eq(&current_lines, &green_lines));
+        assert_ne!(current_success_color, green_success_color);
+        assert_eq!(current_success_color, expected_current_success);
+        assert_eq!(green_success_color, expected_green_success);
     }
 
     #[test]
@@ -1180,7 +1175,7 @@ mod tests {
     }
 
     #[test]
-    fn test_diff_content_snapshot_caches_selection_change_summaries() {
+    fn test_diff_content_snapshot_appends_change_totals_to_each_file_tree_line() {
         // Arrange
         let cache = DiffLayoutCache::default();
         let content = cache.content(concat!(
@@ -1198,24 +1193,34 @@ mod tests {
         ));
 
         // Act
-        let folder_summary = content.selected_change_summary(0);
-        let nested_folder_summary = content.selected_change_summary(1);
-        let file_summary = content.selected_change_summary(3);
-        let stale_summary = content.selected_change_summary(usize::MAX);
+        let lines = content.file_list_lines();
+        let line_text = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(folder_summary.label, "src/");
-        assert_eq!(folder_summary.added_lines, 2);
-        assert_eq!(folder_summary.removed_lines, 1);
-        assert_eq!(nested_folder_summary.label, "src/ui/");
-        assert_eq!(nested_folder_summary.added_lines, 1);
-        assert_eq!(nested_folder_summary.removed_lines, 0);
-        assert_eq!(file_summary.label, "src/main.rs");
-        assert_eq!(file_summary.added_lines, 1);
-        assert_eq!(file_summary.removed_lines, 1);
-        assert_eq!(stale_summary.label, "all files");
-        assert_eq!(stale_summary.added_lines, 3);
-        assert_eq!(stale_summary.removed_lines, 1);
+        assert_eq!(
+            line_text,
+            [
+                "├ src/ +2/-1",
+                "│ ├ ui/ +1/-0",
+                "│ │ └ diff.rs +1/-0",
+                "│ └ main.rs +1/-1",
+                "└ README.md +1/-0",
+            ]
+        );
+        assert_eq!(lines[0].spans[2].style.fg, Some(style::palette::success()));
+        assert_eq!(
+            lines[0].spans[3].style.fg,
+            Some(style::palette::text_muted())
+        );
+        assert_eq!(lines[0].spans[4].style.fg, Some(style::palette::danger()));
     }
 
     #[test]
@@ -1331,7 +1336,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let text = buffer_text(buffer);
         assert!(text.contains("(+1 -0) Diff — Diff Session"));
-        assert!(text.contains("src/ +1 -0"));
+        assert_eq!(text.matches("+1/-0").count(), 2);
         assert!(text.contains("j/k: select file"));
         assert!(text.contains("?: help"));
         assert!(foreground_symbol_cell_count(buffer, "┌") >= 2);
@@ -1359,7 +1364,7 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("(+9 -4) Diff — Diff Session"));
-        assert!(text.contains("src/ +1 -0"));
+        assert_eq!(text.matches("+1/-0").count(), 2);
         assert!(!text.contains("(+1 -0) Diff — Diff Session"));
     }
 

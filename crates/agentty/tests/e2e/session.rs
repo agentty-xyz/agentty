@@ -6579,7 +6579,7 @@ fn diff_preview_opens_from_session() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
-                    .wait_for_text("src/ +1 -0", 5000)
+                    .wait_for_text("src/   +1/-0", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("diff_preview", "Diff preview after pressing d")
@@ -6587,7 +6587,13 @@ fn diff_preview_opens_from_session() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
 
-                assertion::assert_text_in_region(frame, "src/ +1 -0", &full);
+                assertion::assert_text_in_region(frame, "src/   +1/-0", &full);
+                let text = frame.text_in_region(&full);
+                assert_eq!(
+                    text.matches("+1/-0").count(),
+                    2,
+                    "expected change totals on both file-tree rows:\n{text}"
+                );
                 assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
                 assertion::assert_text_in_region(frame, "j/k: select file", &full);
             },
@@ -6820,7 +6826,7 @@ fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
                         "Chat transcript focused in the reply composer",
                     )
                     .press_key("d")
-                    .wait_for_text("src/ +1 -0", 5000)
+                    .wait_for_text("src/   +1/-0", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
@@ -6838,7 +6844,7 @@ fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
 
                 let diff_frame = common::frame_from_capture(&report.captures[1]);
                 let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
-                assertion::assert_text_in_region(&diff_frame, "src/ +1 -0", &diff_full);
+                assertion::assert_text_in_region(&diff_frame, "src/   +1/-0", &diff_full);
                 assertion::assert_text_in_region(&diff_frame, "println!(\"review\")", &diff_full);
                 assertion::assert_text_in_region(&diff_frame, "j/k: select file", &diff_full);
 
