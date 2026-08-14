@@ -207,7 +207,9 @@ conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` 
 losing the typed draft. While that chat transcript is focused, the `d` diff-preview hint
 appears unless the latest successful refresh found an empty diff against the session's
 base branch; `d` opens text, binary, metadata-only, or diagnostic diff output. Leaving
-the preview returns to the composer with the draft intact.
+the preview returns to the composer with the draft intact. Full diffs load in the
+background; press `q` or `Esc` on **Loading diff...** to return immediately while a
+large repository is still being inspected.
 
 Inside diff view, select a changed markdown file and press `p` to render its complete
 post-change worktree content, including supported Mermaid diagrams. Preview remains

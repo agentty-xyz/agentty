@@ -61,6 +61,10 @@ enum Surface<'a> {
         session_id: &'a str,
         sidebar_focus: DiffSidebarFocus,
     },
+    DiffLoading {
+        session_id: &'a str,
+        sidebar_focus: DiffSidebarFocus,
+    },
     List,
     Session {
         mode: SessionSurfaceMode<'a>,
@@ -73,7 +77,7 @@ impl Surface<'_> {
     /// Returns the stable base-page identity used across mode overlays.
     fn kind(self) -> SurfaceKind {
         match self {
-            Self::Diff { .. } => SurfaceKind::Diff,
+            Self::Diff { .. } | Self::DiffLoading { .. } => SurfaceKind::Diff,
             Self::List => SurfaceKind::List,
             Self::Session { .. } => SurfaceKind::Session,
         }
@@ -285,6 +289,14 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
             scroll_offset: *scroll_offset,
             session_id,
         },
+        AppMode::DiffLoading {
+            session_id,
+            sidebar_focus,
+            ..
+        } => Surface::DiffLoading {
+            session_id,
+            sidebar_focus: *sidebar_focus,
+        },
         AppMode::Diff {
             diff,
             file_explorer_selected_index,
@@ -369,6 +381,27 @@ fn render_surface(
             shared.sessions,
             resources,
         ),
+        Surface::DiffLoading {
+            session_id,
+            sidebar_focus,
+        } => {
+            let preview = DiffPreview::default();
+            render_diff_surface(
+                f,
+                area,
+                DiffSurfaceInput {
+                    diff: "Loading diff...",
+                    file_explorer_selected_index: 0,
+                    preview: &preview,
+                    review_comments: None,
+                    scroll_offset: 0,
+                    session_id,
+                    sidebar_focus,
+                },
+                shared.sessions,
+                resources,
+            );
+        }
         Surface::Diff {
             diff,
             file_explorer_selected_index,
@@ -408,6 +441,7 @@ fn render_mode_overlay(
         | AppMode::View { .. }
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }
+        | AppMode::DiffLoading { .. }
         | AppMode::Diff { .. } => {}
         AppMode::SessionCreation {
             selected_option_index,
@@ -984,6 +1018,10 @@ mod tests {
                 session_id: "session-surface-kind",
                 sidebar_focus: DiffSidebarFocus::Files,
             },
+            Surface::DiffLoading {
+                session_id: "session-surface-kind",
+                sidebar_focus: DiffSidebarFocus::Comments,
+            },
             Surface::List,
             Surface::Session {
                 mode: SessionSurfaceMode::View,
@@ -998,7 +1036,12 @@ mod tests {
         // Assert
         assert_eq!(
             surface_kinds,
-            [SurfaceKind::Diff, SurfaceKind::List, SurfaceKind::Session]
+            [
+                SurfaceKind::Diff,
+                SurfaceKind::Diff,
+                SurfaceKind::List,
+                SurfaceKind::Session,
+            ]
         );
     }
 
@@ -1084,6 +1127,13 @@ mod tests {
             scroll_offset: 4,
             session_id: "session-overlay".into(),
         };
+        let diff_loading_mode = AppMode::DiffLoading {
+            fallback_view_scroll_offset: Some(4),
+            request_id: 1,
+            restore: None,
+            session_id: "session-overlay".into(),
+            sidebar_focus: DiffSidebarFocus::Comments,
+        };
 
         // Act
         let help_is_list = matches!(surface_for_mode(&help_mode), Surface::List);
@@ -1093,6 +1143,14 @@ mod tests {
             matches!(surface_for_mode(&question_mode), Surface::Session { .. });
         let diff_is_diff = matches!(surface_for_mode(&diff_mode), Surface::Diff { .. });
         let (_, comments_text) = render_list_backed_mode(&diff_mode);
+        let diff_loading_is_diff = matches!(
+            surface_for_mode(&diff_loading_mode),
+            Surface::DiffLoading {
+                sidebar_focus: DiffSidebarFocus::Comments,
+                ..
+            }
+        );
+        let (_, loading_text) = render_list_backed_mode(&diff_loading_mode);
 
         // Assert
         assert!(help_is_list);
@@ -1100,7 +1158,9 @@ mod tests {
         assert!(prompt_is_session);
         assert!(question_is_session);
         assert!(diff_is_diff);
+        assert!(diff_loading_is_diff);
         assert!(comments_text.contains("Comment — Router Session"));
+        assert!(loading_text.contains("Loading diff..."));
     }
 
     #[test]

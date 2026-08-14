@@ -40,6 +40,7 @@ use super::events::AppEvent;
 #[cfg(test)]
 use super::events::{AppEventBatch, ReviewRequestStatusUpdate};
 use crate::app;
+use crate::app::session_diff::PendingSessionDiffRequest;
 use crate::app::{AppError, session};
 #[cfg(test)]
 use crate::domain::agent::AgentCliInfo;
@@ -270,6 +271,9 @@ pub struct App {
     /// switches, is hydrated after restart, and is ready when the user presses
     /// `f`.
     pub(crate) review_cache: HashMap<SessionId, ReviewCacheEntry>,
+    /// Tracks background session-diff loads by request generation so stale
+    /// completions cannot change the active mode or review generation.
+    pub(crate) pending_session_diff_requests: HashMap<u64, PendingSessionDiffRequest>,
     /// Owns project selection state, project metadata, and git status
     /// snapshots.
     pub(crate) projects: ProjectManager,
@@ -886,8 +890,10 @@ impl App {
         );
     }
 
-    /// Clears cached focused-review state and retracts its display slot.
+    /// Clears cached focused-review state, invalidates pending `/apply`
+    /// continuations, and retracts its display slot.
     pub(crate) fn clear_review_output(&mut self, session_id: &str) {
+        self.discard_pending_apply_review_diff_loads(&SessionId::from(session_id));
         self.review_cache.remove(session_id);
         if let Some(session) = self.sessions.state_mut().session_mut_for_id(session_id) {
             session

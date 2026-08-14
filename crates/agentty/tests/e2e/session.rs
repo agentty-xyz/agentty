@@ -2285,6 +2285,26 @@ fn seed_review_worktree_with_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+/// Seeds a review diff whose external driver stays busy long enough to prove
+/// that the TUI renders and accepts cancellation before Git completes.
+fn seed_slow_review_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+    seed_review_worktree_with_diff(env)?;
+
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    let slow_diff_driver = session_worktree.join("slow-diff.sh");
+    std::fs::write(&slow_diff_driver, "#!/bin/sh\nsleep 3\nexit 0\n")?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&slow_diff_driver, std::fs::Permissions::from_mode(0o755))?;
+    let slow_diff_driver = slow_diff_driver
+        .to_str()
+        .ok_or("slow diff driver path must be valid UTF-8")?;
+    run_git(
+        &session_worktree,
+        &["config", "diff.external", slow_diff_driver],
+    )
+}
+
 /// Seeds a review-ready worktree whose only change is previewable markdown.
 fn seed_markdown_diff_preview(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
@@ -6698,6 +6718,46 @@ fn diff_preview_opens_from_session() -> E2eResult {
                 );
                 assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
                 assertion::assert_text_in_region(frame, "j/k: select file", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that a slow full diff leaves redraw and input handling responsive.
+#[test]
+fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("slow_diff_loading_remains_cancelable")
+        .with_git()
+        .setup(seed_slow_review_diff)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("Loading diff...", 2000)
+                    .capture_labeled(
+                        "diff_loading",
+                        "Slow Git diff shows a responsive loading page",
+                    )
+                    .press_key("q")
+                    .wait_for_text("Review-ready session shortcuts", 2000)
+                    .capture_labeled(
+                        "diff_loading_canceled",
+                        "Cancel returns before the slow Git diff completes",
+                    )
+            },
+            |frame, report| {
+                let loading_frame = common::frame_from_capture(&report.captures[0]);
+                let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());
+                assertion::assert_text_in_region(&loading_frame, "Loading diff...", &loading_full);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Review-ready session shortcuts", &full);
+                assertion::assert_not_visible(frame, "Loading diff...");
             },
         )?;
 

@@ -7,9 +7,9 @@ use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use tracing::warn;
 
+use crate::app::App;
 #[cfg(test)]
 use crate::app::ReviewCacheEntry;
-use crate::app::{App, diff_content_hash};
 use crate::domain::orchestration::IntegrationApproach;
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -85,6 +85,7 @@ where
                 .await
             }
             AppMode::Question { .. } => handle_question_key(app, presentation, terminal, key).await,
+            AppMode::DiffLoading { .. } => Ok(mode::diff::handle_loading(app, key)),
             AppMode::Diff {
                 review_comments: Some(review_comments),
                 ..
@@ -678,9 +679,11 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
         ConfirmationIntent::MergeSession => {
             handle_merge_confirmation(app, confirmation_session_id, restore_view).await
         }
-        ConfirmationIntent::RegenerateReview => {
-            handle_regenerate_review_confirmation(app, confirmation_session_id, restore_view).await
-        }
+        ConfirmationIntent::RegenerateReview => Ok(handle_regenerate_review_confirmation(
+            app,
+            confirmation_session_id,
+            restore_view,
+        )),
         ConfirmationIntent::DetachManagedSession => {
             handle_detach_managed_session_confirmation(app, confirmation_session_id, restore_view)
                 .await
@@ -874,68 +877,33 @@ async fn handle_merge_confirmation(
     Ok(EventResult::Continue)
 }
 
-/// Clears focused review cache state and persisted review text, restarts
-/// generation for the confirmed session, then restores session view with the
-/// refreshed review state.
-async fn handle_regenerate_review_confirmation(
+/// Clears focused review cache state, requests the diff in the background,
+/// then restores session view with responsive loading state.
+fn handle_regenerate_review_confirmation(
     app: &mut App,
     confirmation_session_id: Option<SessionId>,
     restore_view: Option<ConfirmationViewMode>,
-) -> io::Result<EventResult> {
+) -> EventResult {
     let Some(session_id) = confirmation_session_id else {
         app.mode = AppMode::List;
 
-        return Ok(EventResult::Continue);
+        return EventResult::Continue;
     };
 
     app.clear_review_output(session_id.as_str());
 
-    let session = app
+    if !app
         .sessions
         .sessions()
         .iter()
-        .find(|session| session.id == session_id);
-    let Some(session) = session else {
+        .any(|session| session.id == session_id)
+    {
         app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
 
-        return Ok(EventResult::Continue);
-    };
-
-    let session_folder = session.folder.clone();
-    let base_branch = session.base_branch.clone();
-
-    let diff = app
-        .services
-        .git_client()
-        .diff(session_folder.clone(), base_branch)
-        .await
-        .unwrap_or_else(|error| format!("Failed to run git diff: {error}"));
-
-    if diff.trim().is_empty() || diff.starts_with("Failed to run git diff:") {
-        let view_mode = restore_view.unwrap_or(ConfirmationViewMode {
-            scroll_offset: None,
-            session_id: session_id.clone(),
-        });
-        let diff_hash = diff_content_hash(&diff);
-        let review_text = if diff.trim().is_empty() {
-            "No diff changes found for review.".to_string()
-        } else {
-            diff
-        };
-        app.set_review_ready_output(&session_id, diff_hash, review_text);
-        app.mode = view_mode.into_view_mode();
-
-        return Ok(EventResult::Continue);
+        return EventResult::Continue;
     }
 
-    let diff_hash = diff_content_hash(&diff);
-    let _ = app
-        .services
-        .db()
-        .sessions()
-        .update_session_focused_review(session_id.as_str(), None, None, None)
-        .await;
-    app.start_review_assist(session_id.as_str(), &session_folder, diff_hash, &diff);
+    app.start_manual_review_diff_load(&session_id);
 
     let view_mode = restore_view.unwrap_or(ConfirmationViewMode {
         scroll_offset: None,
@@ -943,7 +911,7 @@ async fn handle_regenerate_review_confirmation(
     });
     app.mode = view_mode.into_view_mode();
 
-    Ok(EventResult::Continue)
+    EventResult::Continue
 }
 
 #[cfg(test)]
@@ -1575,12 +1543,29 @@ mod tests {
         let cancel_result = handle_cancel_session_confirmation(&mut app, None).await;
         let merge_result = handle_merge_confirmation(&mut app, None, None).await;
         let open_result = handle_open_managed_worktree_confirmation(&mut app, None, None).await;
+        let regenerate_result = handle_regenerate_review_confirmation(&mut app, None, None);
+        let missing_regenerate_result = handle_regenerate_review_confirmation(
+            &mut app,
+            Some("missing-session".into()),
+            Some(ConfirmationViewMode {
+                scroll_offset: Some(5),
+                session_id: "restore-session".into(),
+            }),
+        );
 
         // Assert
         assert!(matches!(cancel_result, Ok(EventResult::Continue)));
         assert!(matches!(merge_result, Ok(EventResult::Continue)));
         assert!(matches!(open_result, Ok(EventResult::Continue)));
-        assert!(matches!(app.mode, AppMode::List));
+        assert!(matches!(regenerate_result, EventResult::Continue));
+        assert!(matches!(missing_regenerate_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                scroll_offset: Some(5),
+            } if session_id == "restore-session"
+        ));
     }
 
     #[tokio::test]
@@ -1718,6 +1703,40 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Question { ref input, .. } if input.text() == "x"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_key_event_routes_loading_diff_cancel() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = AppMode::DiffLoading {
+            fallback_view_scroll_offset: Some(3),
+            request_id: 1,
+            restore: None,
+            session_id: "session-id".into(),
+            sidebar_focus: DiffSidebarFocus::Files,
+        };
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        let event_result = handle_key_event(
+            &mut app,
+            &PresentationState::default(),
+            &mut terminal,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                scroll_offset: Some(3),
+            } if session_id == "session-id"
         ));
     }
 

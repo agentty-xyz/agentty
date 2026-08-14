@@ -168,6 +168,7 @@ impl App {
                 crate::presentation::settings::SettingsPresentationState::default(),
             tabs: crate::app::tab::TabManager::new(initial_tab),
             prompt_progress: std::collections::HashMap::new(),
+            pending_session_diff_requests: std::collections::HashMap::new(),
             projects,
             services,
             sessions: sessions.into(),
@@ -185,8 +186,7 @@ impl App {
             sync_main_runner,
             tmux_client: clients.tmux_client,
         };
-        app.recover_startup_focused_reviews(recoverable_focused_review_session_ids)
-            .await;
+        app.recover_startup_focused_reviews(recoverable_focused_review_session_ids);
 
         Ok(app)
     }
@@ -217,13 +217,13 @@ impl App {
 
     /// Restarts focused review for durable managed tasks whose persistence was
     /// interrupted before a terminal review result was stored.
-    pub(super) async fn recover_startup_focused_reviews(&mut self, session_ids: Vec<String>) {
+    pub(super) fn recover_startup_focused_reviews(&mut self, session_ids: Vec<String>) {
         let session_ids = session_ids
             .into_iter()
             .map(crate::domain::session::SessionId::from)
             .collect();
 
-        self.auto_start_reviews(&session_ids).await;
+        self.auto_start_reviews(&session_ids);
     }
 
     /// Loads active-project settings from the feature-scoped dependencies.

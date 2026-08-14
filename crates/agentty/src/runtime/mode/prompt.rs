@@ -28,7 +28,7 @@ use crate::presentation::prompt::{
 };
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
-use crate::runtime::mode::{at_mention, diff, input_key};
+use crate::runtime::mode::{at_mention, input_key};
 use crate::ui::RenderCacheStore;
 use crate::ui::input_layout::{move_input_cursor_down, move_input_cursor_up};
 
@@ -102,7 +102,7 @@ where
         return Ok(EventResult::Continue);
     }
 
-    if handle_chat_focus_key(app, render_cache_store, terminal, &prompt_context, key).await? {
+    if handle_chat_focus_key(app, render_cache_store, terminal, &prompt_context, key)? {
         return Ok(EventResult::Continue);
     }
 
@@ -139,7 +139,7 @@ fn exit_to_list_saving_progress(app: &mut App) {
 /// lays out the transcript.
 ///
 /// Returns `true` when the key was consumed by the focused transcript.
-async fn handle_chat_focus_key<B: Backend>(
+fn handle_chat_focus_key<B: Backend>(
     app: &mut App,
     render_cache_store: &RenderCacheStore,
     terminal: &Terminal<B>,
@@ -163,7 +163,7 @@ where
             Ok(true)
         }
         Some(chat_scroll::ChatFocusAction::OpenDiff) => {
-            show_prompt_diff(app, &prompt_context.session_id).await;
+            show_prompt_diff(app, &prompt_context.session_id);
 
             Ok(true)
         }
@@ -192,14 +192,14 @@ where
 /// Snapshots the current composer state so that exiting the diff view restores
 /// the prompt with its draft, attachments, and history intact instead of
 /// falling back to session view.
-async fn show_prompt_diff(app: &mut App, session_id: &str) {
-    let Some(diff) = diff::session_diff(app, session_id).await else {
-        return;
-    };
-
+fn show_prompt_diff(app: &mut App, session_id: &str) {
     let restore = take_prompt_snapshot(app).map(DiffRestoreTarget::Prompt);
-
-    diff::enter_diff_mode(app, session_id, diff, restore, DiffSidebarFocus::Files);
+    app.start_diff_view_load(
+        &SessionId::from(session_id),
+        restore,
+        DiffSidebarFocus::Files,
+        false,
+    );
 }
 
 /// Snapshots the current prompt-mode state for later restoration.
@@ -1252,6 +1252,22 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// Applies queued app events through the first completed full-diff load.
+    async fn apply_next_session_diff(app: &mut App) {
+        loop {
+            let event =
+                tokio::time::timeout(std::time::Duration::from_secs(1), app.next_app_event())
+                    .await
+                    .expect("session diff event should arrive")
+                    .expect("app event channel should remain open");
+            let is_session_diff = matches!(event, crate::app::AppEvent::SessionDiffLoaded { .. });
+            app.apply_app_events(event).await;
+            if is_session_diff {
+                return;
+            }
+        }
+    }
+
     /// Replaces the app-level git client with a caller-provided mock by
     /// rebuilding `AppServices` through its public constructor, preserving
     /// the remaining shared dependencies.
@@ -1551,7 +1567,6 @@ mod tests {
             &prompt_context,
             KeyEvent::new(KeyCode::Tab, event::KeyModifiers::NONE),
         )
-        .await
         .expect("chat focus handling should not fail");
 
         // Assert
@@ -1574,7 +1589,6 @@ mod tests {
             &prompt_context,
             KeyEvent::new(KeyCode::Char('q'), event::KeyModifiers::NONE),
         )
-        .await
         .expect("chat focus handling should not fail");
 
         // Assert
@@ -1646,12 +1660,12 @@ mod tests {
         // Act
         press_prompt_key(&mut app, KeyCode::Char('d')).await;
 
-        // Assert — transitioned to diff mode carrying a prompt snapshot that
+        // Assert — transitioned to diff loading carrying a prompt snapshot that
         // captured the composer draft.
         assert!(
             matches!(
                 &app.mode,
-                AppMode::Diff {
+                AppMode::DiffLoading {
                     restore: Some(restore_target),
                     ..
                 } if matches!(
@@ -1659,7 +1673,7 @@ mod tests {
                     DiffRestoreTarget::Prompt(snapshot) if snapshot.input.text() == "draft text"
                 )
             ),
-            "expected diff mode carrying a prompt restore snapshot of the draft"
+            "expected diff loading carrying a prompt restore snapshot of the draft"
         );
     }
 
@@ -1675,6 +1689,21 @@ mod tests {
         // Assert — nothing to capture, and the active mode is restored.
         assert!(snapshot.is_none());
         assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_show_prompt_diff_restores_composer_when_session_is_missing() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+
+        // Act
+        show_prompt_diff(&mut app, "missing-session");
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, .. } if input.text() == "draft text"
+        ));
     }
 
     #[tokio::test]
@@ -1720,19 +1749,16 @@ mod tests {
             scroll_offset: Some(4),
         };
 
-        // Act — focus the transcript, open the diff, then leave it. Leaving diff
-        // routes through the diff-mode handler, so this exercises the real
-        // capture-and-restore workflow end to end.
+        // Act — focus the transcript, request the diff, then cancel loading.
+        // This exercises the real capture-and-restore workflow end to end.
         press_prompt_key(&mut app, KeyCode::Tab).await;
         press_prompt_key(&mut app, KeyCode::Char('d')).await;
         assert!(
-            matches!(app.mode, AppMode::Diff { .. }),
-            "pressing d in chat focus must open diff mode"
+            matches!(app.mode, AppMode::DiffLoading { .. }),
+            "pressing d in chat focus must open diff loading"
         );
-        crate::runtime::mode::diff::handle_with_cache(
+        crate::runtime::mode::diff::handle_loading(
             &mut app,
-            &RenderCacheStore::default(),
-            Rect::new(0, 0, 120, 30),
             KeyEvent::new(KeyCode::Esc, event::KeyModifiers::NONE),
         );
 
@@ -1755,10 +1781,11 @@ mod tests {
 
         // Act
         press_prompt_key(&mut app, KeyCode::Char('d')).await;
+        apply_next_session_diff(&mut app).await;
 
-        // Assert — no diff to show, so the composer stays chat-focused with its
-        // draft intact.
-        assert_eq!(prompt_focus(&app), ChatFocus::Chat);
+        // Assert — no diff to show, so loading restores the composer with its
+        // draft intact and returns focus to the editable input.
+        assert_eq!(prompt_focus(&app), ChatFocus::Input);
         let snapshot = take_prompt_snapshot(&mut app).expect("expected AppMode::Prompt");
         assert_eq!(snapshot.input.text(), "draft text");
     }
@@ -4098,10 +4125,11 @@ mod tests {
 
         // Act
         handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        apply_next_session_diff(&mut app).await;
 
         // Assert
         assert!(!app.review_cache.contains_key(session_id.as_str()));
-        assert!(matches!(app.mode, AppMode::Prompt { .. }));
+        assert!(matches!(app.mode, AppMode::View { .. }));
     }
 
     #[tokio::test]
@@ -4160,6 +4188,7 @@ mod tests {
 
         // Act
         handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        apply_next_session_diff(&mut app).await;
 
         // Assert
         assert!(!app.review_cache.contains_key(session_id.as_str()));
@@ -4194,9 +4223,10 @@ mod tests {
 
         // Act
         handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        apply_next_session_diff(&mut app).await;
 
         // Assert
-        assert!(matches!(app.mode, AppMode::Prompt { .. }));
+        assert!(matches!(app.mode, AppMode::View { .. }));
         assert!(
             matches!(
                 app.review_cache.get(session_id.as_str()),

@@ -18,7 +18,6 @@ use app::branch_publish::{
 use app::reducer::AppEventReducer;
 use app::review::{
     FocusedReviewPersistence, FocusedReviewPersistenceRetry, ReviewUpdate, apply_review_updates,
-    auto_start_reviews,
 };
 use tracing::warn;
 
@@ -78,6 +77,15 @@ pub(crate) enum AppEvent {
         /// Bounded worktree-file result.
         result: Result<ag_git::WorktreeFileContent, String>,
         /// Session whose diff preview requested the file.
+        session_id: SessionId,
+    },
+    /// Indicates completion of one background full session-diff load.
+    SessionDiffLoaded {
+        /// Request generation used to reject stale completions.
+        request_id: u64,
+        /// Full diff text or a user-facing load failure.
+        result: Result<String, String>,
+        /// Session whose worktree or archive was loaded.
         session_id: SessionId,
     },
     /// Indicates the latest project-branch and session-branch ahead/behind
@@ -260,6 +268,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_review_comment_snapshots: Vec<SessionReviewCommentSnapshotUpdate>,
     pub(super) session_diff_stats_updates: HashMap<SessionId, SessionDiffStats>,
+    pub(super) session_diff_updates: Vec<crate::app::SessionDiffUpdate>,
     pub(super) stacked_parent_merge_child_rebases: HashSet<SessionId>,
     pub(super) stacked_parent_syncs_completed: HashSet<SessionId>,
     pub(super) stacked_parent_turns_completed: HashSet<SessionId>,
@@ -386,6 +395,7 @@ impl AppEventBatch {
             || !self.session_reasoning_level_updates.is_empty()
             || !self.session_speed_mode_updates.is_empty()
             || !self.session_diff_stats_updates.is_empty()
+            || !self.session_diff_updates.is_empty()
             || !self.session_title_generation_finished.is_empty()
             || !self.session_workflow_notice_updates.is_empty()
             || !self.stacked_parent_merge_child_rebases.is_empty()
@@ -457,6 +467,7 @@ impl AppEventBatch {
             AppEvent::RefreshGitStatus => self.should_refresh_git_status = true,
             event @ (AppEvent::AtMentionEntriesLoaded { .. }
             | AppEvent::DiffPreviewLoaded { .. }
+            | AppEvent::SessionDiffLoaded { .. }
             | AppEvent::SessionModelUpdated { .. }
             | AppEvent::SessionReviewCommentSnapshotLoaded { .. }
             | AppEvent::SessionProgressUpdated { .. }
@@ -510,6 +521,11 @@ impl AppEventBatch {
                 result,
                 session_id,
             }),
+            AppEvent::SessionDiffLoaded {
+                request_id,
+                result,
+                session_id,
+            } => self.collect_session_diff_loaded(request_id, result, session_id),
             AppEvent::SessionProgressUpdated {
                 progress_message,
                 session_id,
@@ -576,6 +592,21 @@ impl AppEventBatch {
                 unreachable!("top-level app event should be collected before runtime events")
             }
         }
+    }
+
+    /// Collects one background full-diff completion for foreground reduction.
+    fn collect_session_diff_loaded(
+        &mut self,
+        request_id: u64,
+        result: Result<String, String>,
+        session_id: SessionId,
+    ) {
+        self.session_diff_updates
+            .push(crate::app::SessionDiffUpdate {
+                request_id,
+                result,
+                session_id,
+            });
     }
 
     /// Collects workflow completion and follow-up events into the batch.
@@ -651,6 +682,7 @@ impl AppEventBatch {
             } => self.collect_review_request_status_updated(generation, result, session_id),
             AppEvent::AtMentionEntriesLoaded { .. }
             | AppEvent::DiffPreviewLoaded { .. }
+            | AppEvent::SessionDiffLoaded { .. }
             | AppEvent::GitStatusUpdated { .. }
             | AppEvent::VersionAvailabilityUpdated { .. }
             | AppEvent::AgentCliVersionsUpdated { .. }
@@ -937,6 +969,11 @@ impl App {
         self.apply_session_review_comment_snapshot_updates(std::mem::take(
             &mut event_batch.session_review_comment_snapshots,
         ));
+        let completed_turn_session_ids = event_batch.applied_turns.keys().cloned().collect();
+        self.supersede_review_diff_loads(&completed_turn_session_ids);
+        for session_diff_update in std::mem::take(&mut event_batch.session_diff_updates) {
+            self.apply_session_diff_update(session_diff_update).await;
+        }
 
         for (session_id, turn_applied_state) in event_batch.applied_turns {
             self.apply_agent_response_received(&session_id, &turn_applied_state);
@@ -975,18 +1012,10 @@ impl App {
         ));
         self.start_stacked_child_rebases_after_parent_turns(turned_parent_session_ids)
             .await;
-        let focused_review_persistence = auto_start_reviews(
-            &mut self.review_cache,
-            &event_batch.session_ids,
-            self.sessions.state_mut(),
-            self.services.git_client(),
-            self.services.event_sender(),
-            self.settings.default_review_reasoning_level,
-            self.settings.default_review_selection,
-        )
-        .await;
-        self.persist_focused_review_updates(focused_review_persistence)
-            .await;
+        let mut auto_review_session_ids =
+            self.sessions_entering_review(&event_batch.session_ids, &previous_session_states);
+        auto_review_session_ids.extend(completed_turn_session_ids);
+        self.start_auto_review_diff_loads(&auto_review_session_ids);
         app::review::hydrate_review_transients(
             &self.review_cache,
             self.sessions.state_mut(),
@@ -1341,6 +1370,28 @@ impl App {
             .collect()
     }
 
+    /// Returns touched sessions whose synchronized status newly entered the
+    /// review-ready lifecycle.
+    fn sessions_entering_review(
+        &self,
+        session_ids: &HashSet<SessionId>,
+        previous_session_states: &HashMap<SessionId, Status>,
+    ) -> HashSet<SessionId> {
+        session_ids
+            .iter()
+            .filter(|session_id| {
+                previous_session_states
+                    .get(*session_id)
+                    .is_some_and(|status| !status.allows_review_actions())
+                    && self
+                        .sessions
+                        .session_for_id(session_id)
+                        .is_some_and(|session| session.status == Status::Review)
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Updates the loading sync popup with the current conflict-resolution
     /// status when the user is still viewing that in-progress sync.
     fn apply_sync_main_conflict_resolution_started(&mut self, conflicted_files: &[String]) {
@@ -1506,6 +1557,10 @@ impl App {
                 ..
             }
             | AppMode::Diff {
+                session_id: view_id,
+                ..
+            }
+            | AppMode::DiffLoading {
                 session_id: view_id,
                 ..
             }
@@ -1684,7 +1739,7 @@ impl App {
 
     /// Persists current focused-review generations and requeues transient
     /// failures through the foreground reducer.
-    async fn persist_focused_review_updates(
+    pub(crate) async fn persist_focused_review_updates(
         &self,
         focused_review_persistence: Vec<FocusedReviewPersistence>,
     ) {
@@ -1766,19 +1821,8 @@ impl App {
     }
 
     /// Starts focused review generation for sessions that just entered review.
-    pub(super) async fn auto_start_reviews(&mut self, session_ids: &HashSet<SessionId>) {
-        let focused_review_persistence = auto_start_reviews(
-            &mut self.review_cache,
-            session_ids,
-            self.sessions.state_mut(),
-            self.services.git_client(),
-            self.services.event_sender(),
-            self.settings.default_review_reasoning_level,
-            self.settings.default_review_selection,
-        )
-        .await;
-        self.persist_focused_review_updates(focused_review_persistence)
-            .await;
+    pub(super) fn auto_start_reviews(&mut self, session_ids: &HashSet<SessionId>) {
+        self.start_auto_review_diff_loads(session_ids);
     }
 
     /// Applies one completed branch-publish action to the session chat.
@@ -2631,6 +2675,27 @@ mod tests {
                 ..
             } if error == "Failed to load review comments: authentication failed"
         ));
+    }
+
+    #[tokio::test]
+    async fn diff_loading_mode_is_viewing_its_session() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        app.mode = AppMode::DiffLoading {
+            fallback_view_scroll_offset: None,
+            request_id: 1,
+            restore: None,
+            session_id: "loading-session".into(),
+            sidebar_focus: DiffSidebarFocus::Files,
+        };
+
+        // Act
+        let is_loading_session_visible = app.is_viewing_session("loading-session");
+        let is_other_session_visible = app.is_viewing_session("other-session");
+
+        // Assert
+        assert!(is_loading_session_visible);
+        assert!(!is_other_session_visible);
     }
 
     #[tokio::test]

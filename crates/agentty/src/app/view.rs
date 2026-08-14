@@ -120,6 +120,7 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         AppMode::View { session_id, .. }
         | AppMode::Prompt { session_id, .. }
         | AppMode::Question { session_id, .. }
+        | AppMode::DiffLoading { session_id, .. }
         | AppMode::Diff { session_id, .. }
         | AppMode::Help {
             context: HelpContext::View { session_id, .. } | HelpContext::Diff { session_id, .. },
@@ -167,6 +168,24 @@ mod tests {
 
         // Assert
         assert_eq!(session_id, Some("session-id"));
+    }
+
+    #[test]
+    fn visible_review_session_id_includes_loading_diff() {
+        // Arrange
+        let mode = AppMode::DiffLoading {
+            fallback_view_scroll_offset: None,
+            request_id: 1,
+            restore: None,
+            session_id: "loading-session".into(),
+            sidebar_focus: crate::presentation::app_mode::DiffSidebarFocus::Files,
+        };
+
+        // Act
+        let session_id = visible_review_session_id(&mode);
+
+        // Assert
+        assert_eq!(session_id, Some("loading-session"));
     }
 
     #[tokio::test]

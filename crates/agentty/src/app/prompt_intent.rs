@@ -5,7 +5,9 @@ use ag_agent as agent;
 use ag_forge::{ReviewCommentSnapshot, ReviewCommentThread};
 use tracing::warn;
 
-use crate::app::{App, ReviewCacheEntry, diff_content_hash};
+#[cfg(test)]
+use crate::app::diff_content_hash;
+use crate::app::{App, ReviewCacheEntry};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::personality::PersonalitySummary;
@@ -446,14 +448,7 @@ impl App {
         session_id: &SessionId,
         session_index: usize,
     ) -> PromptApplyOutcome {
-        let Some((session_status, session_folder, base_branch)) =
-            self.session_at(session_index).map(|session| {
-                (
-                    session.status,
-                    session.folder.clone(),
-                    session.base_branch.clone(),
-                )
-            })
+        let Some(session_status) = self.session_at(session_index).map(|session| session.status)
         else {
             return PromptApplyOutcome::KeepComposer;
         };
@@ -485,42 +480,6 @@ impl App {
             return PromptApplyOutcome::ClearComposer;
         };
 
-        let current_diff = match self
-            .services
-            .git_client()
-            .diff(session_folder, base_branch)
-            .await
-        {
-            Ok(diff) => diff,
-            Err(error) => {
-                self.append_prompt_status_line(
-                    session_id,
-                    TranscriptNotice::Apply,
-                    &format!(
-                        "Failed to read worktree diff: {error}. Review cache preserved; try \
-                         /apply again."
-                    ),
-                )
-                .await;
-
-                return PromptApplyOutcome::ClearComposer;
-            }
-        };
-        let current_hash = diff_content_hash(&current_diff);
-
-        if current_hash != cached_hash {
-            self.clear_review_output(session_id.as_str());
-            self.append_prompt_status_line(
-                session_id,
-                TranscriptNotice::Apply,
-                "Review is stale; the worktree changed since it was generated. Run focused review \
-                 again (f key).",
-            )
-            .await;
-
-            return PromptApplyOutcome::ClearComposer;
-        }
-
         let Some(suggestions) = review::review_suggestions(&cached_text) else {
             self.append_prompt_status_line(
                 session_id,
@@ -532,8 +491,17 @@ impl App {
             return PromptApplyOutcome::KeepComposer;
         };
 
-        self.reply(session_id, build_apply_review_prompt(&suggestions))
+        if !self.start_apply_review_diff_load(session_id, cached_hash, suggestions) {
+            self.append_prompt_status_line(
+                session_id,
+                TranscriptNotice::Apply,
+                "An /apply worktree diff check is already running or unavailable; try again \
+                 shortly.",
+            )
             .await;
+
+            return PromptApplyOutcome::ClearComposer;
+        }
 
         PromptApplyOutcome::ShowSession {
             session_id: session_id.clone(),
@@ -583,7 +551,7 @@ impl App {
 
     /// Appends one prompt-workflow status line to the target session
     /// transcript.
-    async fn append_prompt_status_line(
+    pub(crate) async fn append_prompt_status_line(
         &self,
         session_id: &str,
         notice: TranscriptNotice,
@@ -1371,11 +1339,27 @@ mod tests {
             },
         );
         let empty_review = app.apply_focused_review(&session_id, 0).await;
+        app.review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Ready {
+                diff_hash: diff_content_hash(&current_diff),
+                text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
+            },
+        );
+        let started_apply = app.apply_focused_review(&session_id, 0).await;
+        let duplicate_apply = app.apply_focused_review(&session_id, 0).await;
 
         // Assert
         assert_eq!(missing_session, PromptApplyOutcome::KeepComposer);
         assert_eq!(missing_review, PromptApplyOutcome::ClearComposer);
         assert_eq!(empty_review, PromptApplyOutcome::KeepComposer);
+        assert_eq!(
+            started_apply,
+            PromptApplyOutcome::ShowSession {
+                session_id: session_id.clone(),
+            }
+        );
+        assert_eq!(duplicate_apply, PromptApplyOutcome::ClearComposer);
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ag_protocol::AgentResponseSummary;
@@ -3094,10 +3095,14 @@ async fn apply_app_events_session_workflow_notice_updates_session_state() {
     let mut session =
         crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/session-review"));
     session.id = "session-1".into();
+    session.status = Status::Review;
     session.transcript = Some(crate::test_support::assistant_transcript(
         "assistant output",
     ));
     app.sessions.push_session(session);
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client.expect_diff().times(0);
+    install_mock_git_client(&mut app, mock_git_client);
     app.services
         .event_sender()
         .send(AppEvent::SessionWorkflowNoticeUpdated {
@@ -3130,6 +3135,7 @@ async fn apply_app_events_session_workflow_notice_updates_session_state() {
             "[Commit] No changes to commit.\n\n[Merge] Successfully merged wt/session-1 into main"
         )
     );
+    assert!(app.pending_session_diff_requests.is_empty());
     assert_eq!(
         session
             .transcript
@@ -4096,6 +4102,86 @@ async fn apply_app_events_agent_response_updates_questions_and_token_usage() {
 }
 
 #[tokio::test]
+/// Verifies an unchanged review-ready snapshot does not trigger another full
+/// diff when an unrelated handle field emits `SessionUpdated`.
+async fn apply_app_events_session_updated_skips_auto_review_without_status_transition() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let session_id = "session-1";
+    let mut session = crate::test_support::session_fixture_with_folder(PathBuf::from(
+        "/tmp/session-review-update",
+    ));
+    session.status = Status::Review;
+    app.sessions.push_session(session);
+    app.sessions
+        .session_handles_mut()
+        .insert(session_id.into(), SessionHandles::new(Status::Review));
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client.expect_diff().times(0);
+    install_mock_git_client(&mut app, mock_git_client);
+
+    // Act
+    app.apply_app_events(AppEvent::SessionUpdated {
+        session_id: session_id.into(),
+        version: 1,
+    })
+    .await;
+
+    // Assert
+    assert!(app.pending_session_diff_requests.is_empty());
+    assert!(!app.review_cache.contains_key(session_id));
+    assert_eq!(app.sessions.sessions()[0].status, Status::Review);
+}
+
+#[tokio::test]
+/// Verifies `SessionUpdated` still triggers automatic review when the synced
+/// handle actually transitions into `Review`.
+async fn apply_app_events_session_updated_starts_auto_review_on_status_transition() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let session_id = "session-1";
+    let mut session = crate::test_support::session_fixture_with_folder(PathBuf::from(
+        "/tmp/session-review-transition",
+    ));
+    session.status = Status::InProgress;
+    app.sessions.push_session(session);
+    app.sessions
+        .session_handles_mut()
+        .insert(session_id.into(), SessionHandles::new(Status::Review));
+    let diff_call_count = Arc::new(AtomicUsize::new(0));
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client.expect_diff().once().returning({
+        let diff_call_count = Arc::clone(&diff_call_count);
+
+        move |_, _| {
+            diff_call_count.fetch_add(1, Ordering::Relaxed);
+
+            Box::pin(std::future::pending())
+        }
+    });
+    install_mock_git_client(&mut app, mock_git_client);
+
+    // Act
+    app.apply_app_events(AppEvent::SessionUpdated {
+        session_id: session_id.into(),
+        version: 1,
+    })
+    .await;
+    tokio::task::yield_now().await;
+
+    // Assert
+    assert_eq!(diff_call_count.load(Ordering::Relaxed), 1);
+    assert_eq!(app.pending_session_diff_requests.len(), 1);
+    assert_eq!(app.sessions.sessions()[0].status, Status::Review);
+}
+
+#[tokio::test]
 /// Verifies agent-response events still trigger auto review when the
 /// handle has already advanced to `Review` but the paired
 /// `SessionUpdated` event has not been reduced yet.
@@ -4143,6 +4229,7 @@ async fn apply_app_events_agent_response_starts_auto_review_from_synced_handle_s
         ),
     })
     .await;
+    apply_next_session_diff(&mut app).await;
 
     // Assert
     assert!(matches!(
@@ -4163,12 +4250,9 @@ async fn apply_app_events_agent_response_starts_auto_review_from_synced_handle_s
 }
 
 #[tokio::test]
-/// Verifies auto review still triggers when the render-loop
-/// `sync_from_handles()` has already synced the session snapshot to
-/// `Review` before the reducer processes the `AgentResponseReceived`
-/// event. This is the primary race condition that caused unreliable
-/// auto-review triggering.
-async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_already_review() {
+/// Verifies a completed turn supersedes an older pending review diff before
+/// starting review preparation for the latest generation.
+async fn apply_app_events_agent_response_supersedes_pending_auto_review_diff() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
         Arc::new(MockTmuxClient::new()),
@@ -4194,11 +4278,32 @@ async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_alread
         scroll_offset: None,
     };
 
+    let diff_call_count = Arc::new(AtomicUsize::new(0));
     let mut mock_git_client = ag_git::MockGitClient::new();
-    mock_git_client
-        .expect_diff()
-        .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+    mock_git_client.expect_diff().times(2).returning({
+        let diff_call_count = Arc::clone(&diff_call_count);
+
+        move |_, _| {
+            let is_obsolete_request = diff_call_count.fetch_add(1, Ordering::Relaxed) == 0;
+            Box::pin(async move {
+                if is_obsolete_request {
+                    std::future::pending::<()>().await;
+                }
+
+                Ok(diff_text.to_string())
+            })
+        }
+    });
     install_mock_git_client(&mut app, mock_git_client);
+    let session_ids = HashSet::from([SessionId::from(session_id)]);
+    app.auto_start_reviews(&session_ids);
+    tokio::task::yield_now().await;
+    assert_eq!(diff_call_count.load(Ordering::Relaxed), 1);
+    let obsolete_request_id = *app
+        .pending_session_diff_requests
+        .keys()
+        .next()
+        .expect("obsolete review diff should be pending");
 
     // Act
     app.apply_app_events(AppEvent::AgentResponseReceived {
@@ -4211,8 +4316,19 @@ async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_alread
         ),
     })
     .await;
+    let replacement_request_id = *app
+        .pending_session_diff_requests
+        .keys()
+        .next()
+        .expect("replacement review diff should be pending");
+    apply_next_session_diff(&mut app).await;
 
     // Assert
+    assert_ne!(replacement_request_id, obsolete_request_id);
+    assert!(
+        !app.pending_session_diff_requests
+            .contains_key(&obsolete_request_id)
+    );
     assert!(matches!(
         app.review_cache.get(session_id),
         Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
@@ -5501,11 +5617,26 @@ async fn auto_start_reviews_clears_cache_on_in_progress_transition() {
     let session_ids = HashSet::from([session_id.into()]);
 
     // Act
-    app.auto_start_reviews(&session_ids).await;
+    app.auto_start_reviews(&session_ids);
 
     // Assert
     assert!(!app.review_cache.contains_key(session_id));
     assert_eq!(app.sessions.sessions()[0].transient_messages.messages(), []);
+}
+
+/// Applies queued app events through the first completed full-diff load.
+async fn apply_next_session_diff(app: &mut App) {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(1), app.next_app_event())
+            .await
+            .expect("session diff event should arrive")
+            .expect("app event channel should remain open");
+        let is_session_diff = matches!(event, AppEvent::SessionDiffLoaded { .. });
+        app.apply_app_events(event).await;
+        if is_session_diff {
+            return;
+        }
+    }
 }
 
 #[tokio::test]
@@ -5540,7 +5671,8 @@ async fn auto_start_reviews_skips_when_diff_hash_unchanged() {
     install_mock_git_client(&mut app, mock_git_client);
 
     // Act
-    app.auto_start_reviews(&session_ids).await;
+    app.auto_start_reviews(&session_ids);
+    apply_next_session_diff(&mut app).await;
 
     // Assert
     assert!(matches!(
@@ -5574,13 +5706,11 @@ async fn auto_start_reviews_skips_when_already_loading_with_same_hash() {
     let session_ids = HashSet::from([session_id.into()]);
 
     let mut mock_git_client = ag_git::MockGitClient::new();
-    mock_git_client
-        .expect_diff()
-        .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+    mock_git_client.expect_diff().times(0);
     install_mock_git_client(&mut app, mock_git_client);
 
     // Act
-    app.auto_start_reviews(&session_ids).await;
+    app.auto_start_reviews(&session_ids);
 
     // Assert — still Loading, not re-triggered
     assert!(matches!(
@@ -5614,7 +5744,7 @@ async fn auto_start_reviews_skips_when_auto_review_is_suppressed() {
     install_mock_git_client(&mut app, mock_git_client);
 
     // Act
-    app.auto_start_reviews(&session_ids).await;
+    app.auto_start_reviews(&session_ids);
 
     // Assert
     assert!(matches!(
@@ -5645,7 +5775,7 @@ async fn auto_start_reviews_keeps_orchestrator_controller_in_review() {
     install_mock_git_client(&mut app, mock_git_client);
 
     // Act
-    app.auto_start_reviews(&session_ids).await;
+    app.auto_start_reviews(&session_ids);
 
     // Assert
     assert!(!app.review_cache.contains_key(session_id));
@@ -5677,7 +5807,8 @@ async fn auto_start_reviews_starts_loading_for_review_session() {
     install_mock_git_client(&mut app, mock_git_client);
 
     // Act
-    app.auto_start_reviews(&session_ids).await;
+    app.auto_start_reviews(&session_ids);
+    apply_next_session_diff(&mut app).await;
 
     // Assert
     assert!(matches!(
@@ -5709,8 +5840,8 @@ async fn startup_recovery_restarts_incomplete_managed_focused_review() {
     install_mock_git_client(&mut app, mock_git_client);
 
     // Act
-    app.recover_startup_focused_reviews(vec![session_id.to_string()])
-        .await;
+    app.recover_startup_focused_reviews(vec![session_id.to_string()]);
+    apply_next_session_diff(&mut app).await;
 
     // Assert
     assert!(matches!(
