@@ -83,7 +83,10 @@ impl PreparedSessionCells {
             Span::raw(" ["),
             Span::styled(
                 reasoning_level.as_str(),
-                Style::default().fg(reasoning_level_color(reasoning_level)),
+                Style::default().fg(session_detail_color(
+                    session,
+                    reasoning_level_color(reasoning_level),
+                )),
             ),
             Span::raw("]"),
         ]);
@@ -101,15 +104,18 @@ impl PreparedSessionCells {
             .count()
             .saturating_add(forge_indicator_width);
         let status_cell = if forge_indicator.is_empty() {
-            Cell::from(status_label).style(Style::default().fg(style::status_color(status)))
+            Cell::from(status_label).style(
+                Style::default().fg(session_detail_color(session, style::status_color(status))),
+            )
         } else {
             let review_state = session.review_request.as_ref().map(|rr| rr.summary.state);
-            let indicator_color = style::forge_indicator_color(review_state);
+            let indicator_color =
+                session_detail_color(session, style::forge_indicator_color(review_state));
 
             Cell::from(Line::from(vec![
                 Span::styled(
                     format!("{status_label} "),
-                    Style::default().fg(style::status_color(status)),
+                    Style::default().fg(session_detail_color(session, style::status_color(status))),
                 ),
                 Span::styled(forge_indicator, Style::default().fg(indicator_color)),
             ]))
@@ -135,8 +141,12 @@ impl PreparedSessionCells {
 
 /// Grouped table row carrying the session cells prepared for this frame.
 enum PreparedSessionRow<'a> {
-    GroupLabel(SessionGroup),
+    GroupLabel {
+        group: SessionGroup,
+        session_count: usize,
+    },
     Session {
+        adds_group_spacing: bool,
         cells: PreparedSessionCells,
         session: &'a Session,
         tree_position: SessionTreePosition,
@@ -147,16 +157,33 @@ impl<'a> PreparedSessionRow<'a> {
     /// Converts one grouped domain row into its render-ready representation.
     fn new(
         row: &GroupedSessionRow<'a>,
+        following_rows: &[GroupedSessionRow<'a>],
         default_reasoning_level: ReasoningLevel,
         wall_clock_unix_seconds: i64,
     ) -> Self {
         match row {
-            GroupedSessionRow::GroupLabel(group) => Self::GroupLabel(*group),
+            GroupedSessionRow::GroupLabel(group) => {
+                let session_count = following_rows
+                    .iter()
+                    .take_while(|following_row| {
+                        matches!(following_row, GroupedSessionRow::Session { .. })
+                    })
+                    .count();
+
+                Self::GroupLabel {
+                    group: *group,
+                    session_count,
+                }
+            }
             GroupedSessionRow::Session {
                 session,
                 tree_position,
                 ..
             } => Self::Session {
+                adds_group_spacing: matches!(
+                    following_rows.first(),
+                    Some(GroupedSessionRow::GroupLabel(_))
+                ),
                 cells: PreparedSessionCells::new(
                     session,
                     default_reasoning_level,
@@ -259,9 +286,9 @@ fn prepare_grouped_table_state(table_state: &mut TableState, selected_row: Optio
 /// Returns the display label for a session group.
 fn session_group_label(group: SessionGroup) -> &'static str {
     match group {
-        SessionGroup::MergeQueue => "Merge queue",
-        SessionGroup::Active => "Active sessions",
-        SessionGroup::Archive => "Archive",
+        SessionGroup::MergeQueue => "MERGE QUEUE",
+        SessionGroup::Active => "ACTIVE",
+        SessionGroup::Archive => "ARCHIVE",
     }
 }
 
@@ -294,7 +321,7 @@ fn selected_render_row(
     let selected_session_id = selected_session_id?;
 
     rows.iter().position(|row| match row {
-        PreparedSessionRow::GroupLabel(_) => false,
+        PreparedSessionRow::GroupLabel { .. } => false,
         PreparedSessionRow::Session { session, .. } => session.id == selected_session_id,
     })
 }
@@ -305,28 +332,54 @@ fn prepared_session_rows(
     default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
 ) -> Vec<PreparedSessionRow<'_>> {
-    session_order::grouped_session_rows(sessions)
-        .into_iter()
-        .map(|row| PreparedSessionRow::new(&row, default_reasoning_level, wall_clock_unix_seconds))
+    let grouped_rows = session_order::grouped_session_rows(sessions);
+
+    grouped_rows
+        .iter()
+        .enumerate()
+        .map(|(row_index, row)| {
+            let following_rows = &grouped_rows[row_index + 1..];
+
+            PreparedSessionRow::new(
+                row,
+                following_rows,
+                default_reasoning_level,
+                wall_clock_unix_seconds,
+            )
+        })
         .collect()
 }
 
 /// Converts one grouped row descriptor into a `ratatui` table row.
 fn render_table_row(row: PreparedSessionRow<'_>, title_column_width: usize) -> Row<'static> {
     match row {
-        PreparedSessionRow::GroupLabel(group) => render_group_label_row(group),
+        PreparedSessionRow::GroupLabel {
+            group,
+            session_count,
+        } => render_group_label_row(group, session_count),
         PreparedSessionRow::Session {
+            adds_group_spacing,
             cells,
             session,
             tree_position,
-        } => render_session_row(session, tree_position, cells, title_column_width),
+        } => render_session_row(
+            session,
+            tree_position,
+            cells,
+            title_column_width,
+            adds_group_spacing,
+        ),
     }
 }
 
 /// Renders a non-selectable group label row.
-fn render_group_label_row(group: SessionGroup) -> Row<'static> {
+fn render_group_label_row(group: SessionGroup, session_count: usize) -> Row<'static> {
     let cells = vec![
-        Cell::from(session_group_label(group)).style(Style::default().fg(style::palette::accent())),
+        Cell::from(format!(
+            " {} —— {session_count}",
+            session_group_label(group)
+        ))
+        .style(Style::default().fg(style::palette::text_muted())),
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
@@ -353,6 +406,7 @@ fn render_session_row(
     tree_position: SessionTreePosition,
     cells: PreparedSessionCells,
     title_column_width: usize,
+    adds_group_spacing: bool,
 ) -> Row<'static> {
     let title_spans = render_session_title(
         session,
@@ -372,8 +426,34 @@ fn render_session_row(
     ];
 
     Row::new(cells)
-        .style(Style::default().fg(style::palette::text()))
+        .style(session_row_style(session))
         .height(1)
+        .bottom_margin(u16::from(adds_group_spacing))
+}
+
+/// Returns the base text style for active or archived session rows.
+fn session_row_style(session: &Session) -> Style {
+    let text_color = if is_archived_session(session) {
+        style::palette::text_muted()
+    } else {
+        style::palette::text()
+    };
+
+    Style::default().fg(text_color)
+}
+
+/// Returns whether a session belongs to the visually subdued archive group.
+fn is_archived_session(session: &Session) -> bool {
+    matches!(session.status, Status::Done | Status::Canceled)
+}
+
+/// Subdues semantic detail colors when their session is archived.
+fn session_detail_color(session: &Session, active_color: Color) -> Color {
+    if is_archived_session(session) {
+        style::palette::text_muted()
+    } else {
+        active_color
+    }
 }
 
 /// Returns the one-line status shown in the Sessions table.
@@ -401,7 +481,7 @@ fn model_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
     column_width(
         "Model",
         rows.iter().filter_map(|row| match row {
-            PreparedSessionRow::GroupLabel(_) => None,
+            PreparedSessionRow::GroupLabel { .. } => None,
             PreparedSessionRow::Session { cells, .. } => Some(cells.model_width),
         }),
     )
@@ -423,7 +503,7 @@ fn status_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
         .iter()
         .map(|status| status.to_string().chars().count());
     let session_widths = rows.iter().filter_map(|row| match row {
-        PreparedSessionRow::GroupLabel(_) => None,
+        PreparedSessionRow::GroupLabel { .. } => None,
         PreparedSessionRow::Session { cells, .. } => Some(cells.status_width),
     });
 
@@ -435,7 +515,7 @@ fn timer_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
     column_width(
         "Timer",
         rows.iter().filter_map(|row| match row {
-            PreparedSessionRow::GroupLabel(_) => None,
+            PreparedSessionRow::GroupLabel { .. } => None,
             PreparedSessionRow::Session { cells, .. } => Some(cells.timer_width),
         }),
     )
@@ -448,13 +528,13 @@ fn timer_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
 fn render_session_title(session: &Session, title_column_width: usize) -> Vec<Span<'static>> {
     let mut title_spans = markdown::parse_inline_spans(
         &inline_text(session.display_title()),
-        Style::default().fg(style::palette::text()),
+        session_row_style(session),
     );
     title_spans.insert(
         0,
         Span::styled(
             format!("[{}] ", session.size),
-            Style::default().fg(size_color(session.size)),
+            Style::default().fg(session_detail_color(session, size_color(session.size))),
         ),
     );
 
@@ -498,6 +578,17 @@ mod tests {
             .content()
             .iter()
             .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
+    /// Splits a rendered test buffer into terminal rows.
+    fn buffer_lines(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+        let width = usize::from(buffer.area.width.max(1));
+
+        buffer
+            .content()
+            .chunks(width)
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect())
             .collect()
     }
 
@@ -669,9 +760,116 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains(EMPTY_SESSIONS_HINT));
-        assert!(!text.contains("Merge queue"));
-        assert!(!text.contains("Active sessions"));
-        assert!(!text.contains("Archive"));
+        assert!(!text.contains("MERGE QUEUE"));
+        assert!(!text.contains("ACTIVE"));
+        assert!(!text.contains("ARCHIVE"));
+    }
+
+    #[test]
+    fn test_render_group_labels_show_counts_with_spacing_between_sections() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(100, 18);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(1));
+        let sessions = vec![
+            crate::test_support::titled_session_fixture("active-1", Status::Review),
+            crate::test_support::titled_session_fixture("queued-1", Status::Queued),
+            crate::test_support::titled_session_fixture("archive-1", Status::Done),
+        ];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let lines = buffer_lines(terminal.backend().buffer());
+        let merge_queue_row = lines
+            .iter()
+            .position(|line| line.contains(" MERGE QUEUE —— 1"))
+            .expect("merge queue label should be visible");
+        let active_row = lines
+            .iter()
+            .position(|line| line.contains(" ACTIVE —— 1"))
+            .expect("active label should be visible");
+        let archive_row = lines
+            .iter()
+            .position(|line| line.contains(" ARCHIVE —— 1"))
+            .expect("archive label should be visible");
+        let is_blank_table_row = |line: &str| {
+            line.trim_matches(|character| matches!(character, ' ' | '│'))
+                .is_empty()
+        };
+
+        assert!(!is_blank_table_row(&lines[merge_queue_row - 1]));
+        assert!(is_blank_table_row(&lines[active_row - 1]));
+        assert!(is_blank_table_row(&lines[archive_row - 1]));
+    }
+
+    #[test]
+    fn test_render_archive_rows_use_muted_text_across_columns() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::DarkHorizon);
+        let backend = ratatui::backend::TestBackend::new(120, 16);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let mut active_session =
+            crate::test_support::titled_session_fixture("active-1", Status::Review);
+        active_session.title = Some("Active session title".to_string());
+        active_session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt56Sol,
+        );
+        active_session.reasoning_level_override = Some(ReasoningLevel::Low);
+        let mut archived_session =
+            crate::test_support::titled_session_fixture("archive-1", Status::Done);
+        archived_session.title = Some("Archived session title".to_string());
+        archived_session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Claude,
+            AgentModel::ClaudeSonnet5,
+        );
+        archived_session.reasoning_level_override = Some(ReasoningLevel::High);
+        archived_session.size = SessionSize::Xxl;
+        let sessions = vec![active_session, archived_session];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let active_title_cell = find_text_start_cell(buffer, "Active session title")
+            .expect("active title should be visible");
+        let archived_title_cell = find_text_start_cell(buffer, "Archived session title")
+            .expect("archived title should be visible");
+        let archived_size_cell =
+            find_text_start_cell(buffer, "[XXL]").expect("archived size should be visible");
+        let archived_model_cell = find_text_start_cell(buffer, "claude-sonnet-5")
+            .expect("archived model should be visible");
+        let archived_reasoning_cell =
+            find_text_start_cell(buffer, "high").expect("archived reasoning should be visible");
+        let archived_status_cell =
+            find_text_start_cell(buffer, "Done").expect("archived status should be visible");
+
+        assert_eq!(active_title_cell.fg, style::palette::text());
+        for archived_cell in [
+            archived_title_cell,
+            archived_size_cell,
+            archived_model_cell,
+            archived_reasoning_cell,
+            archived_status_cell,
+        ] {
+            assert_eq!(archived_cell.fg, style::palette::text_muted());
+        }
     }
 
     #[test]

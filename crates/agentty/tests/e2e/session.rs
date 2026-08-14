@@ -2826,14 +2826,14 @@ fn session_list_empty_state() -> E2eResult {
                     "No sessions. Press 'a' to start one.",
                     &empty_full,
                 );
-                assertion::assert_not_visible(&empty_frame, "Merge queue");
-                assertion::assert_not_visible(&empty_frame, "Active sessions");
-                assertion::assert_not_visible(&empty_frame, "Archive");
+                assertion::assert_not_visible(&empty_frame, "MERGE QUEUE");
+                assertion::assert_not_visible(&empty_frame, "ACTIVE");
+                assertion::assert_not_visible(&empty_frame, "ARCHIVE");
 
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Active sessions", &full);
-                assertion::assert_not_visible(frame, "Merge queue");
-                assertion::assert_not_visible(frame, "Archive");
+                assertion::assert_text_in_region(frame, "ACTIVE —— 1", &full);
+                assertion::assert_not_visible(frame, "MERGE QUEUE");
+                assertion::assert_not_visible(frame, "ARCHIVE");
                 assertion::assert_not_visible(frame, "No sessions");
             },
         )?;
@@ -5107,7 +5107,7 @@ fn assert_running_orchestration_session_list(frame: &TerminalFrame) {
     let full = Region::full(frame.cols(), frame.rows());
 
     assertion::assert_text_in_region(frame, "Phase: Running", &full);
-    assertion::assert_text_in_region(frame, "Active sessions", &full);
+    assertion::assert_text_in_region(frame, "ACTIVE", &full);
     assertion::assert_match_count(frame, "[XS]", 3);
 }
 
@@ -6431,7 +6431,7 @@ fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
                 assert_eq!(report.captures.len(), 3);
                 let merged_frame = common::frame_from_capture(&report.captures[0]);
                 let merged_full = Region::full(merged_frame.cols(), merged_frame.rows());
-                assertion::assert_text_in_region(&merged_frame, "Active", &merged_full);
+                assertion::assert_text_in_region(&merged_frame, "ACTIVE —— 1", &merged_full);
                 assertion::assert_text_in_region(&merged_frame, "Merged", &merged_full);
 
                 let read_only_frame = common::frame_from_capture(&report.captures[1]);
