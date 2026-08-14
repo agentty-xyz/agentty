@@ -74,6 +74,7 @@ impl SessionChatLayoutPlan {
             input.area.width.saturating_sub(2),
             input.default_reasoning_level,
             input.wall_clock_unix_seconds,
+            input.has_merge_conflict,
         );
         let prompt_panel =
             prepare_prompt_panel(input.area, input.mode, input.review_text, input.session);
@@ -112,6 +113,8 @@ pub struct SessionChatPage<'a> {
     pub can_open_worktree: bool,
     /// Active project-scoped default reasoning level.
     pub default_reasoning_level: ReasoningLevel,
+    /// Whether the session branch currently conflicts with its base branch.
+    pub has_merge_conflict: bool,
     /// One coherent render-time clock snapshot.
     pub(crate) frame_time: FrameTime,
     /// Shared markdown cache reused across transcript renders in this page.
@@ -143,6 +146,8 @@ pub struct SessionChatPageInput<'a> {
     pub active_progress: Option<&'a str>,
     /// Active project-scoped default reasoning level.
     pub default_reasoning_level: ReasoningLevel,
+    /// Whether the session branch currently conflicts with its base branch.
+    pub has_merge_conflict: bool,
     /// One coherent render-time clock snapshot.
     pub(crate) frame_time: FrameTime,
     /// Shared render cache for session transcript markdown.
@@ -171,6 +176,7 @@ impl<'a> SessionChatPage<'a> {
             active_progress,
             default_reasoning_level,
             frame_time,
+            has_merge_conflict,
             markdown_render_cache,
             mode,
             output_layout_cache,
@@ -187,6 +193,7 @@ impl<'a> SessionChatPage<'a> {
             can_open_worktree: false,
             default_reasoning_level,
             frame_time,
+            has_merge_conflict,
             markdown_render_cache,
             mode,
             output_layout_cache,
@@ -237,6 +244,7 @@ impl<'a> SessionChatPage<'a> {
         let layout_plan = SessionChatLayoutPlan::new(SessionChatLayoutInput {
             area,
             default_reasoning_level: self.default_reasoning_level,
+            has_merge_conflict: self.has_merge_conflict,
             mode: self.mode,
             review_text: self.review_text,
             session,
@@ -385,6 +393,8 @@ pub(crate) struct SessionChatLayoutInput<'a> {
     pub(crate) area: Rect,
     /// Active project-scoped default reasoning level shown in the header.
     pub(crate) default_reasoning_level: ReasoningLevel,
+    /// Whether the session branch currently conflicts with its base branch.
+    pub(crate) has_merge_conflict: bool,
     /// Current UI mode, which determines the reserved bottom-panel height.
     pub(crate) mode: &'a AppMode,
     /// Focused-review output for the rendered session.
@@ -731,6 +741,7 @@ mod tests {
             active_progress: None,
             default_reasoning_level: ReasoningLevel::default(),
             frame_time: FrameTime::new(0, 0, 0),
+            has_merge_conflict: false,
             markdown_render_cache: test_markdown_render_cache(),
             mode,
             output_layout_cache: test_output_layout_cache(),
@@ -765,6 +776,7 @@ mod tests {
         SessionChatLayoutInput {
             area,
             default_reasoning_level: ReasoningLevel::default(),
+            has_merge_conflict: false,
             mode,
             review_text: None,
             session,

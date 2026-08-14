@@ -30,6 +30,7 @@ pub fn session_header_lines(
     header_width: u16,
     default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
+    has_merge_conflict: bool,
 ) -> Vec<Line<'static>> {
     let title_width = usize::from(header_width);
     let title_text = text_util::inline_text(session.display_title());
@@ -47,6 +48,15 @@ pub fn session_header_lines(
 
     let mut lines = Vec::with_capacity(1 + metadata_lines.len());
     lines.push(Line::from(title_spans));
+
+    if has_merge_conflict {
+        lines.push(Line::from(Span::styled(
+            format!("Merge conflict with {}", session.base_branch),
+            Style::default()
+                .fg(style::palette::danger())
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
 
     if session.is_managed() {
         let controller = session
@@ -484,7 +494,7 @@ mod tests {
 
         // Act
         let header_lines =
-            session_header_lines(&session, header_width, ReasoningLevel::default(), 0);
+            session_header_lines(&session, header_width, ReasoningLevel::default(), 0, false);
         let metadata_line = header_lines[1].to_string();
 
         // Assert
@@ -500,7 +510,7 @@ mod tests {
         let session = session_with_review_request("https://example.test/pull/42");
 
         // Act
-        let header_lines = session_header_lines(&session, 60, ReasoningLevel::default(), 0);
+        let header_lines = session_header_lines(&session, 60, ReasoningLevel::default(), 0, false);
         let metadata_line = header_lines[1].to_string();
         let review_url_line = header_lines[2].to_string();
 
@@ -509,6 +519,29 @@ mod tests {
         assert!(metadata_line.contains("Size: XS"));
         assert!(review_url_line.starts_with("https://"));
         assert!(review_url_line.ends_with("https://example.test/pull/42"));
+    }
+
+    #[test]
+    fn test_session_header_lines_show_red_merge_conflict_alert() {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.base_branch = "develop".to_string();
+
+        // Act
+        let header_lines = session_header_lines(&session, 100, ReasoningLevel::default(), 0, true);
+
+        // Assert
+        assert_eq!(header_lines[1].to_string(), "Merge conflict with develop");
+        assert_eq!(
+            header_lines[1].spans[0].style.fg,
+            Some(style::palette::danger())
+        );
+        assert!(
+            header_lines[1].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
     }
 
     #[test]
@@ -533,7 +566,7 @@ mod tests {
         session.controller_session_id = Some(SessionId::from("campaign-controller"));
 
         // Act
-        let header_lines = session_header_lines(&session, 100, ReasoningLevel::default(), 0);
+        let header_lines = session_header_lines(&session, 100, ReasoningLevel::default(), 0, false);
 
         // Assert
         assert!(

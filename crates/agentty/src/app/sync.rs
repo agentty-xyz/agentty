@@ -193,7 +193,7 @@ impl SyncHandle {
 pub(crate) struct SyncContext {
     /// Monotonic snapshot version used for stale-completion rejection.
     pub(crate) generation: u64,
-    /// Git boundary used for fetch and ahead/behind queries.
+    /// Git boundary used for fetch, ahead/behind, and merge-conflict queries.
     pub(crate) git_client: Arc<dyn GitClient>,
     /// Active project branch, or `None` when the project has no git branch
     /// and polling should be skipped.
@@ -664,8 +664,8 @@ fn review_sync_backoff_passes(consecutive_failures: u32) -> u64 {
     ((1_u64 << exponent) - 1).min(REVIEW_SYNC_MAX_BACKOFF_PASSES)
 }
 
-/// Resolves ahead/behind snapshots for all tracked session branches by
-/// combining each branch's base-branch comparison with any tracked-remote
+/// Resolves ahead/behind and merge-conflict snapshots for all tracked session
+/// branches, combining each branch's base comparison with any tracked-remote
 /// snapshot already available from the repo-wide status query.
 async fn session_git_statuses(
     branch_tracking_statuses: &HashMap<String, Option<(u32, u32)>>,
@@ -684,6 +684,18 @@ async fn session_git_statuses(
             )
             .await
             .ok();
+        let has_merge_conflict = match base_status {
+            Some((ahead, behind)) if ahead > 0 && behind > 0 => git_client
+                .has_merge_conflicts(
+                    repo_root.to_path_buf(),
+                    session_git_status_target.branch_name.clone(),
+                    session_git_status_target.base_branch.clone(),
+                )
+                .await
+                .ok(),
+            Some(_) => Some(false),
+            None => None,
+        };
         let remote_status = branch_tracking_statuses
             .get(&session_git_status_target.branch_name)
             .copied()
@@ -692,6 +704,7 @@ async fn session_git_statuses(
             session_git_status_target.session_id.clone(),
             SessionGitStatus {
                 base_status,
+                has_merge_conflict,
                 remote_status,
             },
         );
@@ -1127,6 +1140,15 @@ mod tests {
                     }
                 })
             });
+        mock_git_client
+            .expect_has_merge_conflicts()
+            .once()
+            .withf(|repo_path, source_branch, target_branch| {
+                repo_path == Path::new("/tmp/sync-session-statuses")
+                    && source_branch == "wt/session-a"
+                    && target_branch == "main"
+            })
+            .returning(|_, _, _| Box::pin(async { Ok(true) }));
 
         // Act
         let statuses = session_git_statuses(
@@ -1142,6 +1164,7 @@ mod tests {
             statuses.get("session-a"),
             Some(&SessionGitStatus {
                 base_status: Some((2, 1)),
+                has_merge_conflict: Some(true),
                 remote_status: Some((7, 0)),
             })
         );
@@ -1149,6 +1172,7 @@ mod tests {
             statuses.get("session-b"),
             Some(&SessionGitStatus {
                 base_status: Some((0, 0)),
+                has_merge_conflict: Some(false),
                 remote_status: Some((0, 4)),
             })
         );
@@ -1192,6 +1216,54 @@ mod tests {
             statuses.get("session-a"),
             Some(&SessionGitStatus {
                 base_status: None,
+                has_merge_conflict: None,
+                remote_status: None,
+            })
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies a failed conflict probe stays unknown without dropping valid
+    /// ahead/behind information.
+    async fn session_git_statuses_keeps_failed_conflict_probe_unknown() {
+        // Arrange
+        let repo_root = Path::new("/tmp/sync-session-conflict-error");
+        let session_git_status_targets = vec![SessionGitStatusTarget {
+            base_branch: "main".to_string(),
+            branch_name: "wt/session-a".to_string(),
+            session_id: "session-a".into(),
+        }];
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_get_ref_ahead_behind()
+            .once()
+            .returning(|_, _, _| Box::pin(async { Ok((1, 2)) }));
+        mock_git_client
+            .expect_has_merge_conflicts()
+            .once()
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Err(GitError::OutputParse(
+                        "failed to compute merge tree".to_string(),
+                    ))
+                })
+            });
+
+        // Act
+        let statuses = session_git_statuses(
+            &HashMap::new(),
+            repo_root,
+            &session_git_status_targets,
+            &mock_git_client,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            statuses.get("session-a"),
+            Some(&SessionGitStatus {
+                base_status: Some((1, 2)),
+                has_merge_conflict: None,
                 remote_status: None,
             })
         );

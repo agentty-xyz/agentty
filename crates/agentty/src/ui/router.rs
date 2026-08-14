@@ -5,6 +5,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
 use crate::app::Tab;
+use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
@@ -29,6 +30,7 @@ struct RouteSharedContext<'a> {
     mru_project_order: &'a [usize],
     project_table_state: &'a mut TableState,
     projects: &'a [ProjectListItem],
+    session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     sessions: &'a [Session],
     settings_screen: Option<&'a SettingsScreenSnapshot>,
     stats_activity: &'a [DailyActivity],
@@ -104,6 +106,7 @@ struct SessionChatRenderContext<'a> {
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     session_id: &'a str,
+    session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
@@ -125,6 +128,7 @@ struct FrameResources<'a> {
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
+    session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
@@ -153,6 +157,7 @@ impl<'a> FrameResources<'a> {
             output_layout_cache: self.output_layout_cache,
             review_snapshot: self.review_snapshot,
             session_id,
+            session_git_statuses: self.session_git_statuses,
             session_progress_messages: self.session_progress_messages,
             session_update_versions: self.session_update_versions,
             session_worktree_availability: self.session_worktree_availability,
@@ -177,6 +182,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         project_table_state,
         projects,
         session_review_snapshot,
+        session_git_statuses,
         session_progress_messages,
         session_update_versions,
         session_worktree_availability,
@@ -197,6 +203,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         mru_project_order,
         project_table_state,
         projects,
+        session_git_statuses,
         sessions,
         settings_screen,
         stats_activity,
@@ -211,6 +218,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         markdown_render_cache: render_cache_store.markdown_render_cache(),
         output_layout_cache: render_cache_store.session_output_layout_cache(),
         review_snapshot: session_review_snapshot,
+        session_git_statuses,
         session_progress_messages,
         session_update_versions,
         session_worktree_availability,
@@ -597,6 +605,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         review_snapshot,
         session_id,
         session_progress_messages,
+        session_git_statuses,
         session_update_versions,
         session_worktree_availability,
         sessions,
@@ -618,11 +627,16 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         .get(session_id)
         .copied()
         .unwrap_or_default();
+    let has_merge_conflict = session_git_statuses
+        .get(session_id)
+        .and_then(|status| status.has_merge_conflict)
+        .unwrap_or(false);
 
     let page_input = page::session_chat::SessionChatPageInput {
         active_prompt_output,
         active_progress,
         default_reasoning_level,
+        has_merge_conflict,
         markdown_render_cache,
         mode,
         output_layout_cache,
@@ -690,6 +704,7 @@ fn render_list_background(
                 shared.default_reasoning_level,
                 frame_time.unix_seconds(),
             )
+            .session_git_statuses(shared.session_git_statuses)
             .render(f, chunks[1]);
         }
         Tab::Settings => {
@@ -805,6 +820,7 @@ mod tests {
             mru_project_order: &[],
             project_table_state: &mut project_table_state,
             projects: &projects,
+            session_git_statuses: &HashMap::new(),
             sessions: &sessions,
             settings_screen,
             stats_activity: &stats_activity,
@@ -839,6 +855,7 @@ mod tests {
             mru_project_order: &[],
             project_table_state: &mut project_table_state,
             projects: &[],
+            session_git_statuses: &HashMap::new(),
             sessions: &sessions,
             settings_screen: None,
             stats_activity: &[],
@@ -868,6 +885,7 @@ mod tests {
                         markdown_render_cache: &markdown_render_cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
+                        session_git_statuses: &HashMap::new(),
                         session_progress_messages: &session_progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &session_worktree_availability,
@@ -887,6 +905,7 @@ mod tests {
                         markdown_render_cache: &markdown_render_cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
+                        session_git_statuses: &HashMap::new(),
                         session_progress_messages: &session_progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &session_worktree_availability,
@@ -1141,6 +1160,7 @@ mod tests {
             mru_project_order: &[],
             project_table_state: &mut project_table_state,
             projects: &[],
+            session_git_statuses: &HashMap::new(),
             sessions: &sessions,
             settings_screen: None,
             stats_activity: &[],
@@ -1167,6 +1187,7 @@ mod tests {
                         markdown_render_cache: &markdown_render_cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
+                        session_git_statuses: &HashMap::new(),
                         session_progress_messages: &HashMap::new(),
                         session_update_versions: &HashMap::new(),
                         session_worktree_availability: &HashMap::new(),
@@ -1186,6 +1207,7 @@ mod tests {
                         markdown_render_cache: &markdown_render_cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
+                        session_git_statuses: &HashMap::new(),
                         session_progress_messages: &HashMap::new(),
                         session_update_versions: &HashMap::new(),
                         session_worktree_availability: &HashMap::new(),
@@ -1372,6 +1394,14 @@ mod tests {
         let cache = markdown::MarkdownRenderCache::default();
         let diff_layout_cache = page::diff::DiffLayoutCache::default();
         let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+        let session_git_statuses = HashMap::from([(
+            session_id.into(),
+            SessionGitStatus {
+                base_status: Some((1, 1)),
+                has_merge_conflict: Some(true),
+                remote_status: None,
+            },
+        )]);
         let session_update_versions = HashMap::new();
 
         // Act
@@ -1392,6 +1422,7 @@ mod tests {
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
+                        session_git_statuses: &session_git_statuses,
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::from([(
@@ -1408,6 +1439,7 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Router Session"));
         assert!(text.contains("Captured output"));
+        assert!(text.contains("Merge conflict with main"));
         assert!(!text.contains("o: open"));
     }
 
@@ -1447,6 +1479,7 @@ mod tests {
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
+                        session_git_statuses: &HashMap::new(),
                         session_progress_messages: &HashMap::new(),
                         session_update_versions: &HashMap::new(),
                         session_worktree_availability: &HashMap::from([(
@@ -1501,6 +1534,7 @@ mod tests {
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
+                        session_git_statuses: &HashMap::new(),
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
@@ -1554,6 +1588,7 @@ mod tests {
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
+                        session_git_statuses: &HashMap::new(),
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
@@ -1603,6 +1638,7 @@ mod tests {
                         markdown_render_cache: &markdown_render_cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
+                        session_git_statuses: &HashMap::new(),
                         session_progress_messages: &HashMap::new(),
                         session_update_versions: &HashMap::new(),
                         session_worktree_availability: &HashMap::new(),
@@ -1657,6 +1693,7 @@ mod tests {
                         markdown_render_cache: &cache,
                         output_layout_cache: &output_layout_cache,
                         review_snapshot: None,
+                        session_git_statuses: &HashMap::new(),
                         session_progress_messages: &progress_messages,
                         session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),

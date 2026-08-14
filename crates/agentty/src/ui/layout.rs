@@ -518,7 +518,8 @@ mod tests {
         session.in_progress_started_at = Some(0);
 
         // Act
-        let header_lines = session_header_lines(&session, 50, ReasoningLevel::default(), 3_660);
+        let header_lines =
+            session_header_lines(&session, 50, ReasoningLevel::default(), 3_660, false);
 
         // Assert
         assert_eq!(header_lines.len(), 2);
@@ -535,7 +536,7 @@ mod tests {
         session.title = Some("Canceled session".to_string());
 
         // Act
-        let header_lines = session_header_lines(&session, 80, ReasoningLevel::default(), 0);
+        let header_lines = session_header_lines(&session, 80, ReasoningLevel::default(), 0, false);
 
         // Assert
         assert_eq!(

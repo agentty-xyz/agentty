@@ -811,8 +811,10 @@ fn test_managed_worker_restricted_view() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("j")
-                    .press_key("Enter")
-                    .wait_for_text("Working...", 5000)
+                    .compose(&common::open_selected_session_view_with_texts(&[
+                        "Managed by controller-0001",
+                        "Working...",
+                    ]))
                     .press_key("ctrl+c")
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled(

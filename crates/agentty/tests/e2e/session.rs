@@ -34,6 +34,8 @@ use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 const LOADER_SESSION_ID: &str = "loader-session-0001";
+/// Stable id for the session whose branch conflicts with `main`.
+const MERGE_CONFLICT_SESSION_ID: &str = "merge-conflict-0001";
 
 /// Stable id for the Antigravity session whose replay exceeds the safe
 /// command-argument limit.
@@ -698,6 +700,55 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
 
     run_git(&env.workdir, &["branch", "wt/review-s"])?;
     std::fs::create_dir_all(env.agentty_root.join("wt").join("review-s"))?;
+
+    Ok(())
+}
+
+/// Seeds a review-ready worktree whose committed change conflicts with a
+/// newer commit on the stored base branch.
+fn seed_merge_conflict_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular(MERGE_CONFLICT_SESSION_ID, "gpt-5.6-sol", "main", "Review")
+            .with_title("Update shared configuration"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        test_support::persist_active_tab_for_test(&database, agentty::app::Tab::Sessions).await
+    })?;
+
+    std::fs::write(env.workdir.join("shared.txt"), "initial\n")?;
+    run_git(&env.workdir, &["add", "shared.txt"])?;
+    run_git(&env.workdir, &["commit", "-m", "Add shared configuration"])?;
+
+    let session_worktree =
+        test_support::session_folder(&env.agentty_root.join("wt"), MERGE_CONFLICT_SESSION_ID);
+    let session_worktree_text = session_worktree
+        .to_str()
+        .ok_or_else(|| std::io::Error::other("session worktree path is not UTF-8"))?;
+    run_git(
+        &env.workdir,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt/merge-co",
+            session_worktree_text,
+            "main",
+        ],
+    )?;
+    std::fs::write(session_worktree.join("shared.txt"), "session change\n")?;
+    run_git(&session_worktree, &["add", "shared.txt"])?;
+    run_git(
+        &session_worktree,
+        &["commit", "-m", "Change session configuration"],
+    )?;
+
+    std::fs::write(env.workdir.join("shared.txt"), "main change\n")?;
+    run_git(&env.workdir, &["add", "shared.txt"])?;
+    run_git(&env.workdir, &["commit", "-m", "Change main configuration"])?;
 
     Ok(())
 }
@@ -2883,6 +2934,51 @@ fn test_session_title_refines_after_non_actionable_prompt() -> E2eResult {
                     &full,
                 );
                 assertion::assert_not_visible(frame, "Record background context");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that a session branch conflicting with its stored base is marked in
+/// both the Sessions list and the open session header.
+#[test]
+fn test_session_merge_conflict_alert() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_merge_conflict_alert")
+        .with_git()
+        .setup(seed_merge_conflict_session)
+        .zola(
+            "See merge conflicts before syncing",
+            "Agentty marks sessions whose branch conflicts with its base branch in the list and \
+             session view.",
+            45,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("[merge conflict]", 10000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "session_list_alert",
+                        "The conflicting session is marked beside its title",
+                    )
+                    .press_key("Enter")
+                    .wait_for_text("Merge conflict with main", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "session_view_alert",
+                        "The session header names the conflicting base branch",
+                    )
+            },
+            |frame, report| {
+                let list_frame = common::frame_from_capture(&report.captures[0]);
+                let list_region = Region::full(list_frame.cols(), list_frame.rows());
+                assertion::assert_text_in_region(&list_frame, "[merge conflict]", &list_region);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Merge conflict with main", &full);
             },
         )?;
 

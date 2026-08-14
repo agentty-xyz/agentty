@@ -68,6 +68,12 @@ switches to the session directory and shows the session branch's ahead/behind co
 relative to its base branch, plus a second segment for the published remote branch when
 one exists.
 
+The background status refresh also checks divergent session branches for merge conflicts
+against their stored base branch. A conflict adds a red `[merge conflict]` label beside
+the session title in the **Sessions** list and a red `Merge conflict with <base>` alert
+in the open session. The check compares committed branch tips without changing the index
+or worktree; a failed check remains unknown and does not show a warning.
+
 New session worktrees start from the local active base branch. If local `main` is behind
 `origin/main`, the session branch still starts from local `main`; run list-mode sync
 (`s`) first when you want a new session to include remote-only commits.

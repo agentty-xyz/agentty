@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use ag_tui_text::text_util::{format_duration_compact, inline_text, truncate_spans_with_ellipsis};
 use ratatui::Frame;
@@ -7,8 +8,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
+use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::ReasoningLevel;
-use crate::domain::session::{Session, SessionSize, Status};
+use crate::domain::session::{Session, SessionId, SessionSize, Status};
 use crate::domain::session_order::{self, GroupedSessionRow, SessionGroup, SessionTreePosition};
 use crate::presentation::help_action;
 use crate::ui::input_layout::first_table_column_width;
@@ -20,6 +22,8 @@ const ROW_HIGHLIGHT_SYMBOL: &str = "";
 const TABLE_COLUMN_SPACING: u16 = 2;
 /// Guidance rendered when the project has no sessions.
 const EMPTY_SESSIONS_HINT: &str = "No sessions. Press 'a' to start one.";
+/// Warning suffix appended to titles whose branches conflict with their base.
+const MERGE_CONFLICT_LABEL: &str = " [merge conflict]";
 /// Tree branch prefix for child rows that have siblings after them.
 const TREE_BRANCH_MIDDLE: &str = "├ ";
 /// Tree branch prefix for the final child row in a stack.
@@ -31,6 +35,8 @@ pub struct SessionListPage<'a> {
     pub default_reasoning_level: ReasoningLevel,
     /// Session rows available for rendering.
     pub sessions: &'a [Session],
+    /// Latest session branch comparisons keyed by stable session id.
+    session_git_statuses: Option<&'a HashMap<SessionId, SessionGitStatus>>,
     /// Table selection state tied to the raw session ordering.
     pub table_state: &'a mut TableState,
     /// Current wall-clock time expressed as Unix seconds for live timer labels.
@@ -48,9 +54,21 @@ impl<'a> SessionListPage<'a> {
         Self {
             default_reasoning_level,
             sessions,
+            session_git_statuses: None,
             table_state,
             wall_clock_unix_seconds,
         }
+    }
+
+    /// Sets the latest session branch comparisons used for conflict labels.
+    #[must_use]
+    pub fn session_git_statuses(
+        mut self,
+        session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
+    ) -> Self {
+        self.session_git_statuses = Some(session_git_statuses);
+
+        self
     }
 }
 
@@ -148,6 +166,7 @@ enum PreparedSessionRow<'a> {
     Session {
         adds_group_spacing: bool,
         cells: PreparedSessionCells,
+        has_merge_conflict: bool,
         session: &'a Session,
         tree_position: SessionTreePosition,
     },
@@ -159,6 +178,7 @@ impl<'a> PreparedSessionRow<'a> {
         row: &GroupedSessionRow<'a>,
         following_rows: &[GroupedSessionRow<'a>],
         default_reasoning_level: ReasoningLevel,
+        has_merge_conflict: bool,
         wall_clock_unix_seconds: i64,
     ) -> Self {
         match row {
@@ -189,6 +209,7 @@ impl<'a> PreparedSessionRow<'a> {
                     default_reasoning_level,
                     wall_clock_unix_seconds,
                 ),
+                has_merge_conflict,
                 session,
                 tree_position: *tree_position,
             },
@@ -218,6 +239,7 @@ impl Page for SessionListPage<'_> {
         let table_rows = prepared_session_rows(
             self.sessions,
             self.default_reasoning_level,
+            self.session_git_statuses,
             self.wall_clock_unix_seconds,
         );
         let column_constraints = [
@@ -327,11 +349,12 @@ fn selected_render_row(
 }
 
 /// Prepares every grouped row once so layout sizing and painting share values.
-fn prepared_session_rows(
-    sessions: &[Session],
+fn prepared_session_rows<'a>(
+    sessions: &'a [Session],
     default_reasoning_level: ReasoningLevel,
+    session_git_statuses: Option<&HashMap<SessionId, SessionGitStatus>>,
     wall_clock_unix_seconds: i64,
-) -> Vec<PreparedSessionRow<'_>> {
+) -> Vec<PreparedSessionRow<'a>> {
     let grouped_rows = session_order::grouped_session_rows(sessions);
 
     grouped_rows
@@ -339,11 +362,19 @@ fn prepared_session_rows(
         .enumerate()
         .map(|(row_index, row)| {
             let following_rows = &grouped_rows[row_index + 1..];
+            let has_merge_conflict = match row {
+                GroupedSessionRow::GroupLabel(_) => false,
+                GroupedSessionRow::Session { session, .. } => session_git_statuses
+                    .and_then(|statuses| statuses.get(&session.id))
+                    .and_then(|status| status.has_merge_conflict)
+                    .unwrap_or(false),
+            };
 
             PreparedSessionRow::new(
                 row,
                 following_rows,
                 default_reasoning_level,
+                has_merge_conflict,
                 wall_clock_unix_seconds,
             )
         })
@@ -360,6 +391,7 @@ fn render_table_row(row: PreparedSessionRow<'_>, title_column_width: usize) -> R
         PreparedSessionRow::Session {
             adds_group_spacing,
             cells,
+            has_merge_conflict,
             session,
             tree_position,
         } => render_session_row(
@@ -368,6 +400,7 @@ fn render_table_row(row: PreparedSessionRow<'_>, title_column_width: usize) -> R
             cells,
             title_column_width,
             adds_group_spacing,
+            has_merge_conflict,
         ),
     }
 }
@@ -407,10 +440,12 @@ fn render_session_row(
     cells: PreparedSessionCells,
     title_column_width: usize,
     adds_group_spacing: bool,
+    has_merge_conflict: bool,
 ) -> Row<'static> {
     let title_spans = render_session_title(
         session,
         title_column_width.saturating_sub(tree_position_width(tree_position)),
+        has_merge_conflict,
     );
     let mut title_line_spans = Vec::new();
     let tree_label = tree_position_label(tree_position);
@@ -525,7 +560,11 @@ fn timer_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
 ///
 /// The prefix is derived from the row's current session size at render time
 /// and is not written into the persisted session title.
-fn render_session_title(session: &Session, title_column_width: usize) -> Vec<Span<'static>> {
+fn render_session_title(
+    session: &Session,
+    title_column_width: usize,
+    has_merge_conflict: bool,
+) -> Vec<Span<'static>> {
     let mut title_spans = markdown::parse_inline_spans(
         &inline_text(session.display_title()),
         session_row_style(session),
@@ -537,6 +576,18 @@ fn render_session_title(session: &Session, title_column_width: usize) -> Vec<Spa
             Style::default().fg(session_detail_color(session, size_color(session.size))),
         ),
     );
+
+    if !has_merge_conflict {
+        return truncate_spans_with_ellipsis(title_spans, title_column_width);
+    }
+
+    let label_width = MERGE_CONFLICT_LABEL.chars().count();
+    let mut title_spans =
+        truncate_spans_with_ellipsis(title_spans, title_column_width.saturating_sub(label_width));
+    title_spans.push(Span::styled(
+        MERGE_CONFLICT_LABEL,
+        Style::default().fg(style::palette::danger()),
+    ));
 
     truncate_spans_with_ellipsis(title_spans, title_column_width)
 }
@@ -811,6 +862,42 @@ mod tests {
     }
 
     #[test]
+    fn test_render_conflicted_session_appends_red_title_alert() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let backend = ratatui::backend::TestBackend::new(120, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let mut session = crate::test_support::titled_session_fixture("conflict-1", Status::Review);
+        session.title = Some("Update shared config".to_string());
+        let session_id = session.id.clone();
+        let sessions = vec![session];
+        let session_git_statuses = HashMap::from([(
+            session_id,
+            SessionGitStatus {
+                base_status: Some((1, 1)),
+                has_merge_conflict: Some(true),
+                remote_status: None,
+            },
+        )]);
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .session_git_statuses(&session_git_statuses)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let conflict_cell = find_text_start_cell(terminal.backend().buffer(), "[merge conflict]")
+            .expect("merge conflict alert should be visible");
+        assert_eq!(conflict_cell.fg, style::palette::danger());
+    }
+
+    #[test]
     fn test_render_archive_rows_use_muted_text_across_columns() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::DarkHorizon);
@@ -881,7 +968,7 @@ mod tests {
             crate::test_support::titled_session_fixture("merge-1", Status::Merging),
             crate::test_support::titled_session_fixture("active-2", Status::Draft),
         ];
-        let rows = prepared_session_rows(&sessions, ReasoningLevel::default(), 0);
+        let rows = prepared_session_rows(&sessions, ReasoningLevel::default(), None, 0);
         let selected_session_id = selected_session_id(&sessions, Some(3));
 
         // Act
@@ -945,7 +1032,7 @@ mod tests {
         );
         medium_session.reasoning_level_override = Some(ReasoningLevel::Medium);
         let sessions = vec![default_session, medium_session];
-        let rows = prepared_session_rows(&sessions, ReasoningLevel::Low, 0);
+        let rows = prepared_session_rows(&sessions, ReasoningLevel::Low, None, 0);
 
         // Act
         let width = model_column_width(&rows);
@@ -1170,7 +1257,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let rows = prepared_session_rows(&sessions, ReasoningLevel::High, 0);
+        let rows = prepared_session_rows(&sessions, ReasoningLevel::High, None, 0);
 
         // Act
         let width = status_column_width(&rows);
@@ -1200,7 +1287,7 @@ mod tests {
         archived_session.in_progress_total_seconds = 3_661;
         let sessions = vec![active_session, archived_session];
         let expected_width = u16::try_from("1h1m1s".chars().count()).unwrap_or(u16::MAX);
-        let rows = prepared_session_rows(&sessions, ReasoningLevel::default(), 160);
+        let rows = prepared_session_rows(&sessions, ReasoningLevel::default(), None, 160);
 
         // Act
         let width = timer_column_width(&rows);

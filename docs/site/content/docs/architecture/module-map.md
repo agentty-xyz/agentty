@@ -27,8 +27,8 @@ For file-level detail, read the module docstrings directly.
   reply/resolution, and the `gh`/`glab` adapters behind the `ReviewRequestClient` and
   `ForgeCommandRunner` boundaries.
 - `crates/ag-git/`: Shared git library crate with worktree creation, repository
-  metadata, commit/diff/push/pull sync, rebase/conflict handling, and squash-merge
-  workflows behind the `GitClient` boundary.
+  metadata, commit/diff/push/pull sync, merge-conflict preflights, rebase/conflict
+  handling, and squash-merge workflows behind the `GitClient` boundary.
 - `crates/ag-harness/`: Application-facing LLM harness crate with the provider-neutral
   object-safe `Model` boundary, its `ModelClient` implementation, private Qwen, Kimi,
   and Muse policies, a shared Chat Completions backend with JSON Object and JSON Schema

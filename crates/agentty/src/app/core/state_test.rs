@@ -3244,6 +3244,7 @@ async fn apply_app_events_git_status_updated_updates_project_and_session_state()
             SessionId::from("session-1"),
             SessionGitStatus {
                 base_status: Some((4, 2)),
+                has_merge_conflict: Some(true),
                 remote_status: Some((1, 0)),
             },
         )]),
@@ -3260,6 +3261,7 @@ async fn apply_app_events_git_status_updated_updates_project_and_session_state()
             .get("session-1"),
         Some(&SessionGitStatus {
             base_status: Some((4, 2)),
+            has_merge_conflict: Some(true),
             remote_status: Some((1, 0)),
         })
     );

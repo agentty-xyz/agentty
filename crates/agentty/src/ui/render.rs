@@ -589,6 +589,7 @@ mod tests {
             session_id.to_string().into(),
             SessionGitStatus {
                 base_status: Some((3, 2)),
+                has_merge_conflict: Some(true),
                 remote_status: Some((1, 4)),
             },
         )]);
@@ -642,6 +643,7 @@ mod tests {
             session_id.to_string().into(),
             SessionGitStatus {
                 base_status: Some((5, 1)),
+                has_merge_conflict: Some(false),
                 remote_status: None,
             },
         )]);
