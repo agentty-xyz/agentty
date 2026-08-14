@@ -115,6 +115,12 @@ previous GIF, hash sidecar, and poster. The developer reviews the changed GIF an
 sidecar, refreshes the matching PNG poster, and commits the three artifacts with the UI
 change.
 
+Do not run generation modes directly on a macOS host. VHS launches a local Chromium
+process, which can abort during AppKit registration and show a **Chromium quit
+unexpectedly** dialog. Host-side validation should use `check` mode; intentional
+recording should use the canonical container. Do not suppress macOS crash reporting to
+hide the browser failure.
+
 Use the exact platform-explicit, digest-pinned Podman recording command in
 `skills/feature-test/SKILL.md`. It runs the local container as the host UID and GID so
 Linux bind mounts remain writable, while CI keeps the image's fixed non-root user and

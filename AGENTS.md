@@ -364,13 +364,12 @@ the full suite.
   platforms. Publish replacements through the manual **Publish E2E Image** workflow in
   `.github/workflows/publish-e2e-image.yml`; it tests both native variants before
   reporting the digest. CI selects and verifies the `linux/amd64` variant. If recording
-  on the host instead, `TESTTY_GIF_MODE=force` must run from an unsandboxed shell (a
-  normal terminal, or one command explicitly approved to bypass the agent sandbox): VHS
-  records through localhost sockets (`ttyd` plus Chrome DevTools), so a network-denied
-  sandbox crashes `vhs` before Chrome launches — an error easy to misdiagnose as a
-  missing browser binary. Do not run the full E2E feature suite locally;
-  `.github/workflows/presubmit.yml` and `.github/workflows/postsubmit.yml` run
-  `test-agentty-e2e` in that image on GitHub.
+  from an agent session, never invoke host-side `vhs` or set `TESTTY_GIF_MODE=generate`
+  / `TESTTY_GIF_MODE=force`; use the pinned container. On macOS, VHS launches a local
+  Chromium process that can abort during AppKit registration and show a **Chromium quit
+  unexpectedly** dialog. Do not suppress macOS crash reporting to hide this failure. Do
+  not run the full E2E feature suite locally; `.github/workflows/presubmit.yml` and
+  `.github/workflows/postsubmit.yml` run `test-agentty-e2e` in that image on GitHub.
 
 ### Autofix Discipline
 
