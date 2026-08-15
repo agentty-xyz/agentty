@@ -11,6 +11,8 @@ use crate::domain::session::{Session, SessionDiffStats, SessionHandles, SessionI
 pub struct SessionGitStatus {
     /// Ahead/behind counts comparing the session branch to its base branch.
     pub base_status: Option<(u32, u32)>,
+    /// Whether merging the session branch into its base branch would conflict.
+    pub has_merge_conflict: Option<bool>,
     /// Ahead/behind counts comparing the session branch to its tracked remote.
     pub remote_status: Option<(u32, u32)>,
 }
@@ -857,6 +859,7 @@ mod tests {
                 "session-1".into(),
                 SessionGitStatus {
                     base_status: Some((1, 0)),
+                    has_merge_conflict: Some(false),
                     remote_status: Some((0, 1)),
                 },
             ),
@@ -864,6 +867,7 @@ mod tests {
                 "session-2".into(),
                 SessionGitStatus {
                     base_status: Some((0, 2)),
+                    has_merge_conflict: Some(false),
                     remote_status: None,
                 },
             ),
@@ -879,6 +883,7 @@ mod tests {
             state.session_git_statuses.get("session-2"),
             Some(&SessionGitStatus {
                 base_status: Some((0, 2)),
+                has_merge_conflict: Some(false),
                 remote_status: None,
             })
         );

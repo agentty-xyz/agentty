@@ -145,6 +145,7 @@ mod tests {
             active_progress: None,
             default_reasoning_level: ReasoningLevel::default(),
             frame_time: FrameTime::new(0, 0, 0),
+            has_merge_conflict: false,
             markdown_render_cache: &markdown_render_cache,
             mode: &mode,
             output_layout_cache: &output_layout_cache,

@@ -19,7 +19,7 @@ application ports:
 
 | Trait                      | Module                                       | Boundary                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | -------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GitClient`                | `crates/ag-git/src/client.rs`                | Git and worktree operations (hook readiness, merge, rebase, diff, bounded preview-file reads, push, status, ahead/behind).                                                                                                                                                                                                                                                                                                         |
+| `GitClient`                | `crates/ag-git/src/client.rs`                | Git and worktree operations (hook readiness, merge, merge-conflict probes, rebase, diff, bounded preview-file reads, push, status, ahead/behind).                                                                                                                                                                                                                                                                                  |
 | `FsClient`                 | `infra/fs.rs`                                | Async filesystem operations and path probes.                                                                                                                                                                                                                                                                                                                                                                                       |
 | `AgentChannel`             | `crates/ag-agent/src/channel.rs`             | Provider-agnostic turn execution.                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `OneShotClient`            | `crates/ag-agent/src/agent/submission.rs`    | Isolated structured prompts, including transport routing, protocol repair, runtime cleanup, and usage aggregation.                                                                                                                                                                                                                                                                                                                 |
@@ -40,10 +40,11 @@ adjacency per project, and atomically claims roll-up submission before the sessi
 uses its stable operation identifier.
 
 Beyond these, narrower internal command-runner boundaries (for example
-`ForgeCommandRunner`, `GitCommandRunner`, `TmuxCommandRunner`, `UpdateRunner`, and the
-provider transport traits) keep subprocess sequencing and retry behavior deterministic
-in unit tests. The runtime also accepts `Terminal<B: Backend>` via `run_with_backend`,
-enabling in-process TUI tests with `TestBackend`.
+`ForgeCommandRunner`, `GitCommandRunner`, `CompatibilityMergeRunner`,
+`TmuxCommandRunner`, `UpdateRunner`, and the provider transport traits) keep subprocess
+sequencing and retry behavior deterministic in unit tests. The runtime also accepts
+`Terminal<B: Backend>` via `run_with_backend`, enabling in-process TUI tests with
+`TestBackend`.
 
 The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
 private. Application workflows that submit isolated utility prompts inject

@@ -14,9 +14,9 @@ use super::{
     abort_rebase, branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
     commit_all_preserving_single_commit, create_worktree, current_upstream_reference,
     delete_branch, detect_git_info, diff, diff_changed_files, fetch_remote, find_git_repo_root,
-    get_ahead_behind, get_ref_ahead_behind, has_commits_since, has_unmerged_paths,
-    head_commit_message, head_hash, head_short_hash, in_progress_operation, is_rebase_in_progress,
-    is_worktree_clean, list_conflicted_files, list_local_commit_titles,
+    get_ahead_behind, get_ref_ahead_behind, has_commits_since, has_merge_conflicts,
+    has_unmerged_paths, head_commit_message, head_hash, head_short_hash, in_progress_operation,
+    is_rebase_in_progress, is_worktree_clean, list_conflicted_files, list_local_commit_titles,
     list_staged_conflict_marker_files, list_upstream_commit_titles, main_checkout_working_tree,
     main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_remote_branch, rebase,
     rebase_continue, rebase_onto_start, rebase_start, ref_hash, remote_branch_exists,
@@ -383,6 +383,19 @@ pub trait GitClient: Send + Sync {
         right_ref: String,
     ) -> GitFuture<Result<(u32, u32), GitError>>;
 
+    /// Returns whether merging `source_branch` into `target_branch` would
+    /// produce conflicts without changing the index or worktree.
+    ///
+    /// # Errors
+    /// Returns an error when either ref cannot be resolved or the merge
+    /// result cannot be computed.
+    fn has_merge_conflicts(
+        &self,
+        repo_path: PathBuf,
+        source_branch: String,
+        target_branch: String,
+    ) -> GitFuture<Result<bool, GitError>>;
+
     /// Reads ahead/behind snapshots for all local branches that track an
     /// upstream.
     ///
@@ -708,6 +721,15 @@ impl GitClient for RealGitClient {
         Box::pin(async move { get_ref_ahead_behind(repo_path, left_ref, right_ref).await })
     }
 
+    fn has_merge_conflicts(
+        &self,
+        repo_path: PathBuf,
+        source_branch: String,
+        target_branch: String,
+    ) -> GitFuture<Result<bool, GitError>> {
+        Box::pin(async move { has_merge_conflicts(repo_path, source_branch, target_branch).await })
+    }
+
     fn branch_tracking_statuses(
         &self,
         repo_path: PathBuf,
@@ -802,6 +824,37 @@ mod tests {
         fs::write(repo_path.join("README.md"), "test repo").expect("failed to write file");
         run_git_command(repo_path, &["add", "README.md"]);
         run_git_command(repo_path, &["commit", "-m", "Initial commit"]);
+    }
+
+    #[tokio::test]
+    async fn test_real_git_client_detects_merge_conflicts() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        run_git_command(dir.path(), &["checkout", "-b", "session-branch"]);
+        fs::write(dir.path().join("README.md"), "session content")
+            .expect("failed to write session content");
+        run_git_command(dir.path(), &["add", "README.md"]);
+        run_git_command(dir.path(), &["commit", "-m", "Session change"]);
+        run_git_command(dir.path(), &["checkout", "main"]);
+        fs::write(dir.path().join("README.md"), "main content")
+            .expect("failed to write main content");
+        run_git_command(dir.path(), &["add", "README.md"]);
+        run_git_command(dir.path(), &["commit", "-m", "Main change"]);
+        let client = RealGitClient;
+
+        // Act
+        let has_conflicts = client
+            .has_merge_conflicts(
+                dir.path().to_path_buf(),
+                "session-branch".to_string(),
+                "main".to_string(),
+            )
+            .await
+            .expect("merge conflict query should succeed");
+
+        // Assert
+        assert!(has_conflicts);
     }
 
     #[tokio::test]

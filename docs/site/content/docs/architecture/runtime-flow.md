@@ -660,9 +660,13 @@ their triggers:
 
 - **Project sync orchestrator** (startup, project switch, ticks, list-mode `s`): owns
   one command queue per active project that serializes read-only `git fetch`,
-  ahead/behind snapshots, review-request refreshes, and manual pull/rebase/push
-  commands. Forge CLI calls are bounded to 30 seconds and cancel their subprocess on
-  timeout so one unavailable provider cannot retain the queue indefinitely.
+  ahead/behind snapshots, merge-conflict probes for divergent session branches,
+  review-request refreshes, and manual pull/rebase/push commands. Conflict probes use
+  `git merge-tree --write-tree` through `GitClient`, so they do not read or change the
+  index or worktree. Git versions without `--write-tree` perform the same probe in a
+  disposable local shared clone, leaving the managed repository untouched. Forge CLI
+  calls are bounded to 30 seconds and cancel their subprocess on timeout so one
+  unavailable provider cannot retain the queue indefinitely.
 
 - **Version check** (startup): reports npm update availability.
 

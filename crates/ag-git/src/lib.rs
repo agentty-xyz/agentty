@@ -23,7 +23,7 @@ pub use client::{GitClient, GitFuture, RealGitClient};
 /// Re-exported typed error for git infrastructure operations.
 pub use error::GitError;
 pub use merge::SquashMergeOutcome;
-pub(crate) use merge::{squash_merge, squash_merge_diff};
+pub(crate) use merge::{has_merge_conflicts, squash_merge, squash_merge_diff};
 pub use rebase::{InProgressGitOperation, RebaseStepResult};
 pub(crate) use rebase::{
     abort_rebase, has_unmerged_paths, in_progress_operation, is_rebase_in_progress,

@@ -69,12 +69,20 @@ impl ChatScrollMetrics {
         });
         let output_width = chat_area.width.saturating_sub(2);
         let (_, review_text) = app.review_view_state(session_id);
+        let has_merge_conflict = app
+            .sessions
+            .render_parts()
+            .session_git_statuses
+            .get(session_id)
+            .and_then(|status| status.has_merge_conflict)
+            .unwrap_or(false);
         let view_height = session.map_or_else(
             || Self::footer_only_view_height(chat_area),
             |session| {
                 session_chat::transcript_view_height(SessionChatLayoutInput {
                     area: chat_area,
                     default_reasoning_level: app.settings.default_smart_reasoning_level,
+                    has_merge_conflict,
                     mode: &app.mode,
                     review_text,
                     session,
@@ -282,7 +290,10 @@ fn half_page_step(metrics: ChatScrollMetrics) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::app::session_state::SessionGitStatus;
     use crate::domain::session::Status;
     use crate::test_support::SessionFixtureBuilder;
 
@@ -531,6 +542,47 @@ mod tests {
         let empty_metrics = ChatScrollMetrics::empty(terminal_size);
         assert_eq!(metrics.total_lines, 0);
         assert_eq!(metrics.view_height, empty_metrics.view_height);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_reserve_header_row_for_merge_conflict_alert() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let session = SessionFixtureBuilder::new().status(Status::Review).build();
+        let session_id = session.id.clone();
+        app.sessions.push_session(session);
+        app.mode = crate::presentation::app_mode::AppMode::View {
+            scroll_offset: None,
+            session_id: session_id.clone(),
+        };
+        let terminal_size = Rect::new(0, 0, 80, 24);
+        let normal_metrics = ChatScrollMetrics::new(
+            &app,
+            &RenderCacheStore::default(),
+            &session_id,
+            0,
+            terminal_size,
+        );
+        app.sessions.replace_session_git_statuses(HashMap::from([(
+            session_id.clone(),
+            SessionGitStatus {
+                base_status: Some((1, 1)),
+                has_merge_conflict: Some(true),
+                remote_status: None,
+            },
+        )]));
+
+        // Act
+        let conflict_metrics = ChatScrollMetrics::new(
+            &app,
+            &RenderCacheStore::default(),
+            &session_id,
+            0,
+            terminal_size,
+        );
+
+        // Assert
+        assert_eq!(conflict_metrics.view_height + 1, normal_metrics.view_height);
     }
 
     #[tokio::test]
