@@ -206,7 +206,9 @@ transcript. Worktree validation runs while the slot remains queued. After a succ
 notice before sending the same resolution event, so waiting state never disappears
 without an active state or visible result. If turn cancellation marks the queued rebase
 operation canceled before execution, the worker's skip path sends that resolution event
-without starting rebase work.
+without starting rebase work. Session-list refresh treats a failed primary row query as
+non-authoritative: it keeps the current snapshots and worker senders instead of treating
+the failure as an empty project and disconnecting an active queue.
 
 Published-branch auto-push completion sends one terminal reducer event carrying its
 `WorkflowNotice`. After accepting the current operation identifier, the reducer persists

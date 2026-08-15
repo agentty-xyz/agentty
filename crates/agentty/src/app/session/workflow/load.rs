@@ -167,6 +167,22 @@ impl SessionManager {
         input: SessionLoadInput<'_>,
         handles: &mut HashMap<SessionId, SessionHandles>,
     ) -> (Vec<Session>, Vec<DailyActivity>, HashMap<SessionId, bool>) {
+        Self::try_load_sessions_with_fs_client(input, handles)
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Loads session snapshots while preserving a session-list read failure.
+    ///
+    /// Refresh callers use this fallible path so a transient database error
+    /// cannot be mistaken for an empty project and tear down live workers.
+    ///
+    /// # Errors
+    /// Returns an error when the project's session rows cannot be loaded.
+    pub(crate) async fn try_load_sessions_with_fs_client(
+        input: SessionLoadInput<'_>,
+        handles: &mut HashMap<SessionId, SessionHandles>,
+    ) -> Result<(Vec<Session>, Vec<DailyActivity>, HashMap<SessionId, bool>), DbError> {
         let SessionLoadInput {
             active_project_id,
             active_session_id,
@@ -185,8 +201,7 @@ impl SessionManager {
         let db_rows = db
             .sessions()
             .load_sessions_for_project(active_project_id)
-            .await
-            .unwrap_or_default();
+            .await?;
         let activity_timestamps = db
             .activity()
             .load_session_activity_timestamps()
@@ -213,7 +228,7 @@ impl SessionManager {
             Self::push_loaded_session_row(&mut load_context, row).await;
         }
 
-        (sessions, stats_activity, session_worktree_availability)
+        Ok((sessions, stats_activity, session_worktree_availability))
     }
 
     /// Aggregates persisted activity timestamps using the clock-provided

@@ -226,15 +226,17 @@ the queued sync command starts. The existing worker must accept the request; Age
 never creates a second worker from an **InProgress** status just to start sync. If sync
 arrives while Agentty is draining queued chat, the active chat turn finishes before sync
 runs; earlier queued messages stay ahead of sync, while later messages wait behind it.
-Agentty shows a `[Sync]` notice only when sync resolves; while it waits, the
-consolidated queue shows `≡ sync — rebase onto the base branch after this turn`. The
-waiting row disappears when the active `Rebasing...` loader starts. Agentty validates
-the session worktree before that promotion; a validation failure replaces the waiting
-row with a durable `[Sync Error]` notice without showing sync as active. Repeated `r`
-presses keep the single queued rebase instead of adding duplicates. Session sync
-reserves branch-publish ownership before it queues or starts, and retains that ownership
-through its post-rebase push. A completed turn or subsequent sync therefore cannot start
-a competing published-branch auto-push.
+Transient session-list refresh failures preserve the current session snapshot and
+worker, so retrying `r` does not lose the active queue. Agentty shows a `[Sync]` notice
+only when sync resolves; while it waits, the consolidated queue shows
+`≡ sync — rebase onto the base branch after this turn`. The waiting row disappears when
+the active `Rebasing...` loader starts. Agentty validates the session worktree before
+that promotion; a validation failure replaces the waiting row with a durable
+`[Sync Error]` notice without showing sync as active. Repeated `r` presses keep the
+single queued rebase instead of adding duplicates. Session sync reserves branch-publish
+ownership before it queues or starts, and retains that ownership through its post-rebase
+push. A completed turn or subsequent sync therefore cannot start a competing
+published-branch auto-push.
 
 Pressing `p` during a running turn opens the usual branch-name popup and queues
 review-request creation on that same worker. The session remains **InProgress** and
