@@ -14,7 +14,7 @@ use crate::presentation::app_mode::{
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
-use crate::runtime::mode::{at_mention, diff, input_key};
+use crate::runtime::mode::{at_mention, input_key};
 use crate::ui::RenderCacheStore;
 
 /// Default response stored when users skip one model question.
@@ -43,7 +43,7 @@ pub(crate) async fn handle_with_cache(
         return EventResult::Continue;
     }
 
-    if handle_chat_focus_key(app, render_cache_store, terminal_size, key).await {
+    if handle_chat_focus_key(app, render_cache_store, terminal_size, key) {
         return EventResult::Continue;
     }
 
@@ -151,7 +151,7 @@ fn exit_to_list_saving_progress(app: &mut App) {
 /// Returns `true` when the key was consumed as a chat-focus action. Question
 /// mode permits the shared diff-preview action; unsupported actions are
 /// swallowed to keep the answer draft unchanged.
-async fn handle_chat_focus_key(
+fn handle_chat_focus_key(
     app: &mut App,
     render_cache_store: &RenderCacheStore,
     terminal_size: Rect,
@@ -177,7 +177,7 @@ async fn handle_chat_focus_key(
         Some(chat_scroll::ChatFocusAction::OpenDiff) => {
             let session_id = session_id.clone();
 
-            show_question_diff(app, &session_id).await;
+            show_question_diff(app, &session_id);
 
             true
         }
@@ -237,14 +237,14 @@ fn question_scroll_metrics(
 ///
 /// Snapshots the current question state so that exiting the diff view
 /// restores back to question mode instead of session view.
-async fn show_question_diff(app: &mut App, session_id: &str) {
-    let Some(diff) = diff::session_diff(app, session_id).await else {
-        return;
-    };
-
+fn show_question_diff(app: &mut App, session_id: &str) {
     let restore = take_question_snapshot(app).map(DiffRestoreTarget::Question);
-
-    diff::enter_diff_mode(app, session_id, diff, restore, DiffSidebarFocus::Files);
+    app.start_diff_view_load(
+        &SessionId::from(session_id),
+        restore,
+        DiffSidebarFocus::Files,
+        false,
+    );
 }
 
 /// Snapshots the current question-mode state for later restoration.
@@ -2436,8 +2436,7 @@ mod tests {
             &RenderCacheStore::default(),
             TEST_TERMINAL_SIZE,
             KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
-        )
-        .await;
+        );
 
         // Assert
         assert!(!is_consumed);
@@ -3228,10 +3227,10 @@ mod tests {
         )
         .await;
 
-        // Assert — transitioned to Diff mode with a question snapshot.
+        // Assert — transitioned to diff loading with a question snapshot.
         assert!(matches!(
             app.mode,
-            AppMode::Diff {
+            AppMode::DiffLoading {
                 ref session_id,
                 restore: Some(_),
                 ..

@@ -3,9 +3,11 @@ use ratatui::layout::Rect;
 
 use crate::app::{App, AppEvent};
 use crate::domain::session::SessionId;
+#[cfg(test)]
+use crate::presentation::app_mode::DiffRestoreTarget;
 use crate::presentation::app_mode::{
-    AppMode, DiffPreview, DiffPreviewUnavailableReason, DiffRestoreTarget, DiffReviewComments,
-    DiffScrollCache, DiffSidebarFocus, HelpContext, ViewportRect,
+    AppMode, DiffPreview, DiffPreviewUnavailableReason, DiffReviewComments, DiffScrollCache,
+    DiffSidebarFocus, HelpContext, ViewportRect,
 };
 use crate::runtime::EventResult;
 use crate::ui::component::file_explorer::FileExplorer;
@@ -41,40 +43,20 @@ fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventResult {
     handle_with_cache(app, &RenderCacheStore::default(), content_area, key)
 }
 
-/// Runs `git diff` for the session with `session_id`, returning the diff text.
-///
-/// Returns `None` when the session is not loaded or the worktree diff is empty,
-/// so callers can treat the diff shortcut as unavailable for unchanged
-/// sessions. Git failures surface as a `Failed to run git diff:` message rather
-/// than `None`, so the diff view still opens to report the error.
-pub(crate) async fn session_diff(app: &App, session_id: &str) -> Option<String> {
-    let session = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == session_id)?;
-
-    let session_folder = session.folder.clone();
-    let base_branch = session.base_branch.clone();
-
-    let diff = app
-        .services
-        .git_client()
-        .diff(session_folder, base_branch)
-        .await
-        .unwrap_or_else(|error| format!("Failed to run git diff: {error}"));
-
-    if diff.trim().is_empty() {
-        return None;
+/// Handles the only interactive action available while a full diff loads.
+pub(crate) fn handle_loading(app: &mut App, key: KeyEvent) -> EventResult {
+    if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+        app.cancel_diff_view_load();
     }
 
-    Some(diff)
+    EventResult::Continue
 }
 
 /// Enters `AppMode::Diff` for `session_id` with a preloaded `diff`.
 ///
 /// `restore` records the originating page so leaving the diff returns there;
 /// `None` falls back to session view.
+#[cfg(test)]
 pub(crate) fn enter_diff_mode(
     app: &mut App,
     session_id: &str,

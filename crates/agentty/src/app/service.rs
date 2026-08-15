@@ -310,6 +310,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
     match event {
         AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",
         AppEvent::DiffPreviewLoaded { .. } => "DiffPreviewLoaded",
+        AppEvent::SessionDiffLoaded { .. } => "SessionDiffLoaded",
         AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",
         AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",
         AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
@@ -385,6 +386,22 @@ mod tests {
 
         // Assert
         assert_eq!(label, "DiffPreviewLoaded");
+    }
+
+    #[test]
+    fn app_event_label_names_session_diff_loads() {
+        // Arrange
+        let event = AppEvent::SessionDiffLoaded {
+            request_id: 1,
+            result: Ok("diff".to_string()),
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "SessionDiffLoaded");
     }
 
     #[test]

@@ -2,9 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
 
-use ag_git::GitClient;
 use tokio::sync::mpsc;
 
 use super::core::AppEvent;
@@ -12,8 +10,7 @@ use super::task;
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::review::FocusedReviewStatus;
-use crate::domain::session::{Session, SessionId, SessionRole, Status};
-use crate::domain::session_message::SessionTranscript;
+use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
     TransientMessageSlot,
@@ -146,6 +143,9 @@ impl FocusedReviewPersistenceRetry {
 /// Prefix for the focused-review loading status while assist output is being
 /// prepared.
 const REVIEW_LOADING_MESSAGE_PREFIX: &str = "Reviewing changes with";
+
+/// Stable manual-review result shown when the session has no diff changes.
+pub(crate) const REVIEW_NO_DIFF_MESSAGE: &str = "No diff changes found for review.";
 
 /// Computes a deterministic `FNV-1a` hash of diff text for focused-review
 /// cache invalidation.
@@ -374,160 +374,9 @@ pub(crate) fn apply_review_updates(
     persistence_updates
 }
 
-/// Starts focused review generation for sessions that just entered review.
-///
-/// Uses a status-based check instead of transition detection because pending
-/// `SessionUpdated` events may synchronize handle-backed status before the
-/// paired review-related reducer work runs, making transition detection
-/// unreliable.
-///
-/// Sessions returning to `InProgress` clear their cached review immediately so
-/// the next completed diff triggers a fresh assist run. Sessions with a
-/// [`ReviewCacheEntry::Suppressed`] marker skip diff loading entirely; stopped
-/// turns set that marker synchronously so cancellation does not block on `git
-/// diff` just to prevent automatic review startup. Orchestrator controllers
-/// also skip automatic review because they coordinate child work without
-/// owning branch changes.
-pub(crate) async fn auto_start_reviews(
-    review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
-    session_ids: &HashSet<SessionId>,
-    session_state: &mut SessionState,
-    git_client: Arc<dyn GitClient>,
-    app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    reasoning_level: ReasoningLevel,
-    review_selection: AgentSelection,
-) -> Vec<FocusedReviewPersistence> {
-    let mut persistence_updates = Vec::new();
-    for session_id in session_ids {
-        if let Some(persistence_update) = auto_start_review_for_session(
-            review_cache,
-            session_state,
-            git_client.as_ref(),
-            &app_event_tx,
-            reasoning_level,
-            review_selection,
-            session_id,
-        )
-        .await
-        {
-            persistence_updates.push(persistence_update);
-        }
-    }
-
-    persistence_updates
-}
-
-/// Starts focused review generation for one eligible session snapshot.
-async fn auto_start_review_for_session(
-    review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
-    session_state: &mut SessionState,
-    git_client: &dyn GitClient,
-    app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-    reasoning_level: ReasoningLevel,
-    review_selection: AgentSelection,
-    session_id: &SessionId,
-) -> Option<FocusedReviewPersistence> {
-    let session = session_state.session_for_id(session_id)?;
-    let current_status = session.status;
-
-    if current_status == Status::InProgress {
-        review_cache.remove(session_id);
-        if let Some(session) = session_state.session_mut_for_id(session_id) {
-            session
-                .transient_messages
-                .retract(TransientMessageSlot::Review);
-        }
-
-        return None;
-    }
-
-    if session.role == SessionRole::Orchestrator
-        || !matches!(current_status, Status::Review | Status::AgentReview)
-        || matches!(
-            review_cache.get(session_id),
-            Some(ReviewCacheEntry::Suppressed)
-        )
-    {
-        return None;
-    }
-
-    let base_branch = session.base_branch.clone();
-    let session_chat_history = session
-        .transcript
-        .as_ref()
-        .and_then(SessionTranscript::conversation_replay_text);
-    let session_folder = session.folder.clone();
-    let diff = match git_client.diff(session_folder.clone(), base_branch).await {
-        Ok(diff) => diff,
-        Err(error) => {
-            return Some(fail_review_preparation(
-                review_cache,
-                session_state,
-                session_id,
-                format!("Failed to run git diff: {error}"),
-                review_selection.model(),
-            ));
-        }
-    };
-
-    if diff.starts_with("Failed to run git diff:") {
-        return Some(fail_review_preparation(
-            review_cache,
-            session_state,
-            session_id,
-            diff,
-            review_selection.model(),
-        ));
-    }
-    if diff.trim().is_empty() {
-        return None;
-    }
-
-    let new_hash = diff_content_hash(&diff);
-    if review_cache
-        .get(session_id)
-        .is_some_and(|entry| entry.diff_hash() == Some(new_hash))
-    {
-        return None;
-    }
-
-    review_cache.insert(
-        session_id.clone(),
-        ReviewCacheEntry::Loading {
-            diff_hash: new_hash,
-        },
-    );
-    mark_session_agent_review(session_state, session_id);
-    if let Some(session) = session_state.session_mut_for_id(session_id) {
-        session.transient_messages.upsert(TransientMessage {
-            anchor: TransientMessageAnchor::Tail,
-            body: TransientMessageBody::Loading(review_loading_message(review_selection.model())),
-            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
-            slot: TransientMessageSlot::Review,
-            turn_position: session.latest_user_prompt_position(),
-        });
-    }
-    start_review_assist(
-        app_event_tx.clone(),
-        (review_selection, reasoning_level),
-        session_id,
-        &session_folder,
-        new_hash,
-        &diff,
-        session_chat_history.as_deref(),
-    );
-
-    Some(FocusedReviewPersistence {
-        diff_hash: Some(new_hash),
-        session_id: session_id.clone(),
-        status: FocusedReviewStatus::Pending,
-        text: None,
-    })
-}
-
 /// Records a terminal focused-review failure when preparation cannot load a
 /// diff for review generation.
-fn fail_review_preparation(
+pub(crate) fn fail_review_preparation(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
     session_state: &mut SessionState,
     session_id: &SessionId,
@@ -604,7 +453,7 @@ fn apply_review_update(
 
 /// Restores one transient `AgentReview` session back to `Review` after the
 /// focused-review task completes.
-fn restore_session_review_status(session_state: &mut SessionState, session_id: &str) {
+pub(crate) fn restore_session_review_status(session_state: &mut SessionState, session_id: &str) {
     update_transient_review_status(
         session_state,
         session_id,
@@ -626,7 +475,7 @@ fn update_transient_review_status(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
@@ -766,66 +615,6 @@ mod tests {
         let mut stale = update(FocusedReviewStatus::Ready);
         stale.diff_hash = Some(41);
         assert!(!ready.matches_persistence(&stale));
-    }
-
-    #[tokio::test]
-    async fn auto_start_reviews_persists_diff_preparation_failures() {
-        let cases = [
-            (
-                Err(ag_git::GitError::OutputParse(
-                    "diff unavailable".to_string(),
-                )),
-                "Failed to run git diff: diff unavailable",
-            ),
-            (
-                Ok("Failed to run git diff: command failed".to_string()),
-                "Failed to run git diff: command failed",
-            ),
-        ];
-
-        for (diff_result, expected_error) in cases {
-            // Arrange
-            let session_id = SessionId::from("session-id");
-            let mut review_cache = HashMap::new();
-            let mut session_state = session_state_with_stale_review(&session_id);
-            let review_selection = session_state.sessions()[0].agent;
-            let session_ids = HashSet::from([session_id.clone()]);
-            let mut git_client = ag_git::MockGitClient::new();
-            git_client
-                .expect_diff()
-                .return_once(move |_, _| Box::pin(async move { diff_result }));
-            let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-            let expected_diff_hash = diff_content_hash("");
-
-            // Act
-            let persistence_updates = auto_start_reviews(
-                &mut review_cache,
-                &session_ids,
-                &mut session_state,
-                Arc::new(git_client),
-                app_event_tx,
-                ReasoningLevel::High,
-                review_selection,
-            )
-            .await;
-
-            // Assert
-            assert_eq!(
-                persistence_updates,
-                [FocusedReviewPersistence {
-                    diff_hash: Some(expected_diff_hash),
-                    session_id: session_id.clone(),
-                    status: FocusedReviewStatus::Failed,
-                    text: None,
-                }]
-            );
-            assert!(matches!(
-                review_cache.get(&session_id),
-                Some(ReviewCacheEntry::Failed { diff_hash, error })
-                    if *diff_hash == expected_diff_hash && error == expected_error
-            ));
-            assert_eq!(session_state.sessions()[0].status, Status::Review);
-        }
     }
 
     #[test]

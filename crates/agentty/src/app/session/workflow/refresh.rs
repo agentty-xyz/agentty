@@ -192,6 +192,7 @@ impl SessionManager {
             | AppMode::Prompt { session_id, .. }
             | AppMode::Question { session_id, .. }
             | AppMode::View { session_id, .. }
+            | AppMode::DiffLoading { session_id, .. }
             | AppMode::Diff { session_id, .. }
             | AppMode::Help {
                 context: HelpContext::View { session_id, .. } | HelpContext::Diff { session_id, .. },
@@ -386,7 +387,7 @@ mod tests {
     };
     use crate::infra::db::AppRepositories;
     use crate::infra::fs;
-    use crate::presentation::app_mode::DiffPreview;
+    use crate::presentation::app_mode::{DiffPreview, DiffSidebarFocus};
     use crate::presentation::help_action::ViewSessionState;
 
     /// Builds a filesystem mock that delegates directory checks to local disk.
@@ -875,6 +876,13 @@ mod tests {
     fn mode_session_id_uses_diff_and_session_overlay_contexts() {
         // Arrange
         let modes = [
+            AppMode::DiffLoading {
+                fallback_view_scroll_offset: None,
+                request_id: 1,
+                restore: None,
+                session_id: "loading-session".into(),
+                sidebar_focus: DiffSidebarFocus::Files,
+            },
             AppMode::Diff {
                 diff: String::new(),
                 file_explorer_selected_index: 0,
@@ -916,6 +924,7 @@ mod tests {
         assert_eq!(
             session_ids,
             [
+                Some("loading-session"),
                 Some("diff-session"),
                 Some("launch-session"),
                 Some("publish-session"),

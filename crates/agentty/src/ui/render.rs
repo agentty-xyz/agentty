@@ -210,6 +210,7 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
         | AppMode::View { session_id, .. }
         | AppMode::Prompt { session_id, .. }
         | AppMode::Question { session_id, .. }
+        | AppMode::DiffLoading { session_id, .. }
         | AppMode::Diff { session_id, .. }
         | AppMode::ViewInfoPopup {
             restore_view: ConfirmationViewMode { session_id, .. },
@@ -332,6 +333,13 @@ mod tests {
             AppMode::View {
                 session_id: session_id.into(),
                 scroll_offset: None,
+            },
+            AppMode::DiffLoading {
+                fallback_view_scroll_offset: None,
+                request_id: 1,
+                restore: None,
+                session_id: session_id.into(),
+                sidebar_focus: crate::presentation::app_mode::DiffSidebarFocus::Files,
             },
             AppMode::Diff {
                 diff: String::new(),

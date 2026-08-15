@@ -153,6 +153,16 @@ focused-review state application and persistence run afterward. Key behaviors:
 - Diff markdown preview reads carry the selected session, path, and request generation
   in `AppEvent::DiffPreviewLoaded`; the reducer applies them only to the matching
   loading diff or help-overlay snapshot.
+- Full session diffs used by Diff view, focused-review preparation, and `/apply`
+  validation run in background tasks. `AppEvent::SessionDiffLoaded` carries the session
+  and request generation; the reducer discards canceled or superseded completions, so
+  Git work never blocks terminal redraw or input handling. Automatic review checks start
+  only from completed-turn and session-status events, not unrelated per-session updates.
+  A completed turn supersedes pending review and `/apply` diff continuations before
+  queued diff results are reduced, and repeated `/apply` checks are deduplicated per
+  session. Clearing or regenerating focused review also invalidates pending `/apply`
+  continuations, whose completions revalidate the current review-ready cache generation
+  before submitting an agent turn.
 - Externally merged review requests transition sessions to read-only `Merged`; only a
   successful user-triggered sync of the request's local target advances them to `Done`.
   Closed requests transition editable sessions to `Canceled`.
@@ -796,8 +806,9 @@ orchestration paths:
   leaves the merged stack unchanged. Cleanup-critical git subprocesses are cancellable
   and bounded to 30 seconds; confirmed shutdown shares a five-second grace period across
   all tracked cleanup tasks before canceling unfinished work. Session view also loads
-  comments on demand for its linked review request: `AppMode::Diff` renders its Files
-  and Comments sidebar immediately with a loading state, `TaskService` resolves the
+  comments on demand for its linked review request: `AppMode::DiffLoading` renders a
+  cancelable page while the full diff loads, then `AppMode::Diff` renders its Files and
+  Comments sidebar immediately with a comment-loading state. `TaskService` resolves the
   session worktree remote through the injected git/forge boundaries, falls back to the
   persisted review-request URL after terminal-session worktree cleanup, and uses the
   matching `AppEvent` to update only the still-open Diff workspace or its help overlay.

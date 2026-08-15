@@ -7,9 +7,7 @@ use ratatui::layout::Rect;
 use tracing::warn;
 
 use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
-use crate::app::{
-    self, App, AppEvent, OrchestrationApprovalOutcome, ReviewCacheEntry, diff_content_hash,
-};
+use crate::app::{self, App, AppEvent, OrchestrationApprovalOutcome, ReviewCacheEntry};
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -22,7 +20,7 @@ use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key::is_insertable_char_key;
-use crate::runtime::mode::{diff, prompt};
+use crate::runtime::mode::prompt;
 use crate::ui::RenderCacheStore;
 
 #[derive(Clone)]
@@ -205,9 +203,6 @@ impl ViewSessionSnapshot {
     }
 }
 
-/// Fallback copy shown when a review-ready session has no diff to inspect.
-const REVIEW_NO_DIFF_MESSAGE: &str = "No diff changes found for review.";
-
 /// Processes view-mode key presses and keeps shortcut availability aligned with
 /// session status (`o` disabled outside editable/review-ready local
 /// worktrees, and diff/review available for review-ready statuses).
@@ -364,7 +359,7 @@ async fn handle_primary_view_key(
             if key.modifiers == event::KeyModifiers::NONE
                 && view_session_snapshot.can_open_review_comments() =>
         {
-            open_review_comments_in_diff(app, view_context).await;
+            open_review_comments_in_diff(app, view_context);
 
             return Some(false);
         }
@@ -415,14 +410,20 @@ async fn handle_primary_view_key(
     Some(true)
 }
 
-async fn open_review_comments_in_diff(app: &mut App, view_context: &ViewContext) {
-    let session_diff = load_view_session_diff(app, view_context).await;
-    diff::enter_diff_mode(
-        app,
+fn open_review_comments_in_diff(app: &mut App, view_context: &ViewContext) {
+    if app
+        .sessions
+        .session_at(view_context.session_index)
+        .is_none_or(|session| session.id != view_context.session_id)
+    {
+        return;
+    }
+
+    app.start_diff_view_load(
         &view_context.session_id,
-        session_diff,
         None,
         DiffSidebarFocus::Comments,
+        true,
     );
 }
 
@@ -507,7 +508,7 @@ async fn handle_workflow_view_key(
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && view_session_snapshot.inspect_diff.is_enabled() =>
         {
-            show_diff_for_view_session(app, view_context).await;
+            show_diff_for_view_session(app, view_context);
         }
         KeyCode::Char(character)
             if character.eq_ignore_ascii_case(&'p')
@@ -536,7 +537,7 @@ async fn handle_workflow_view_key(
                 && view_session_snapshot.branch_actions.is_enabled()
                 && view_session_snapshot.session_status.allows_review_actions() =>
         {
-            open_or_regenerate_review(app, view_context, pending_update).await;
+            open_or_regenerate_review(app, view_context, pending_update);
         }
         KeyCode::Char('m') if view_session_snapshot.can_merge_session() => {
             open_merge_confirmation(app, view_context);
@@ -665,7 +666,7 @@ fn confirmation_view_mode(view_context: &ViewContext) -> ConfirmationViewMode {
 /// the press is ignored to avoid spawning duplicate background tasks.
 /// Otherwise, loads or starts focused review output and resets scroll to
 /// bottom-aligned mode.
-async fn open_or_regenerate_review(
+fn open_or_regenerate_review(
     app: &mut App,
     view_context: &ViewContext,
     pending_update: &mut ViewPendingUpdate,
@@ -688,7 +689,7 @@ async fn open_or_regenerate_review(
         return;
     }
 
-    open_review_output_mode(app, view_context).await;
+    open_review_output_mode(app, view_context);
 
     pending_update.scroll_offset = None;
 }
@@ -1153,48 +1154,26 @@ fn session_prompt_history_entries(session: &crate::domain::session::Session) -> 
 /// Opens review mode and serves cached review or loading status.
 ///
 /// Reviews are auto-generated when sessions transition to `Review`. When the
-/// user presses `f` and no cached review exists yet, Agentty computes the
-/// current diff, starts background generation, and shows a loading message
-/// immediately. The resulting review is appended into the normal session
-/// output panel instead of replacing it, and successful review text is
+/// user presses `f` and no cached review exists yet, Agentty requests the
+/// current diff in the background, starts generation, and shows a loading
+/// message immediately. The resulting review is appended into the normal
+/// session output panel instead of replacing it, and successful review text is
 /// persisted for restart hydration.
-async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
+fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
     if let Some(cached) = app.review_cache.get(view_context.session_id.as_str())
         && !matches!(cached, ReviewCacheEntry::Suppressed)
     {
         return;
     }
-
-    let Some(session) = app.sessions.session_at(view_context.session_index) else {
-        return;
-    };
-    let session_folder = session.folder.clone();
-    let diff = load_view_session_diff(app, view_context).await;
-    if diff.trim().is_empty() {
-        app.set_review_ready_output(
-            &view_context.session_id,
-            diff_content_hash(&diff),
-            REVIEW_NO_DIFF_MESSAGE.to_string(),
-        );
-
+    if app
+        .sessions
+        .session_at(view_context.session_index)
+        .is_none_or(|session| session.id != view_context.session_id)
+    {
         return;
     }
 
-    if diff.starts_with("Failed to run git diff:") {
-        let diff_hash = diff_content_hash(&diff);
-        app.set_review_ready_output(&view_context.session_id, diff_hash, diff);
-
-        return;
-    }
-
-    let diff_hash = diff_content_hash(&diff);
-    let _ = app
-        .services
-        .db()
-        .sessions()
-        .update_session_focused_review(&view_context.session_id, None, None, None)
-        .await;
-    app.start_review_assist(&view_context.session_id, &session_folder, diff_hash, &diff);
+    app.start_manual_review_diff_load(&view_context.session_id);
 }
 
 /// Opens diff mode only when the viewed session has actual worktree changes.
@@ -1202,75 +1181,21 @@ async fn open_review_output_mode(app: &mut App, view_context: &ViewContext) {
 /// Returns `true` when diff mode was opened and `false` when the session diff
 /// is empty, which keeps the view page in place so the `d` shortcut behaves as
 /// unavailable for unchanged review sessions.
-async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) -> bool {
-    let diff_text = load_view_session_diff(app, view_context).await;
-    if diff_text.trim().is_empty() {
+fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) -> bool {
+    if app
+        .sessions
+        .session_at(view_context.session_index)
+        .is_none_or(|session| session.id != view_context.session_id)
+    {
         return false;
     }
 
-    diff::enter_diff_mode(
-        app,
+    app.start_diff_view_load(
         &view_context.session_id,
-        diff_text,
         None,
         DiffSidebarFocus::Files,
-    );
-
-    true
-}
-
-/// Loads the session worktree diff against its base branch.
-async fn load_view_session_diff(app: &App, view_context: &ViewContext) -> String {
-    let Some(session) = app.sessions.session_at(view_context.session_index) else {
-        return String::new();
-    };
-
-    let uses_archived_diff = session.is_managed()
-        && (session.status == Status::Done
-            || (session.role == crate::domain::session::SessionRole::OrchestrationResearcher
-                && session.status == Status::Canceled));
-    if uses_archived_diff {
-        return match app
-            .services
-            .db()
-            .sessions()
-            .load_session_archived_diff(&view_context.session_id)
-            .await
-        {
-            Ok(Some(diff)) => diff,
-            Ok(None) => String::new(),
-            Err(error) => {
-                warn!(
-                    session_id = %view_context.session_id,
-                    error = %error,
-                    "failed to load archived managed-session diff"
-                );
-
-                format!("Failed to load archived diff: {error}")
-            }
-        };
-    }
-
-    let session_folder = session.folder.clone();
-    let base_branch = session.base_branch.clone();
-
-    match app
-        .services
-        .git_client()
-        .diff(session_folder, base_branch)
-        .await
-    {
-        Ok(diff) => diff,
-        Err(error) => {
-            warn!(
-                session_id = %view_context.session_id,
-                error = %error,
-                "failed to load session diff for view mode"
-            );
-
-            format!("Failed to run git diff: {error}")
-        }
-    }
+        false,
+    )
 }
 
 /// Starts session sync and reports whether the rebase command was accepted.
@@ -1296,7 +1221,7 @@ mod tests {
     use tracing::instrument::WithSubscriber;
 
     use super::*;
-    use crate::app::review_loading_message;
+    use crate::app::{REVIEW_NO_DIFF_MESSAGE, diff_content_hash, review_loading_message};
     use crate::domain::agent::AgentModel;
     use crate::domain::orchestration::OrchestrationStatus;
     use crate::domain::session::{
@@ -1322,6 +1247,22 @@ mod tests {
             .as_ref()
             .and_then(SessionTranscript::replay_text)
             .unwrap_or_default()
+    }
+
+    /// Applies queued app events through the first completed full-diff load.
+    async fn apply_next_session_diff(app: &mut App) {
+        loop {
+            let event =
+                tokio::time::timeout(std::time::Duration::from_secs(1), app.next_app_event())
+                    .await
+                    .expect("session diff event should arrive")
+                    .expect("app event channel should remain open");
+            let is_session_diff = matches!(event, AppEvent::SessionDiffLoaded { .. });
+            app.apply_app_events(event).await;
+            if is_session_diff {
+                return;
+            }
+        }
     }
 
     /// Builds one git-backed test app with one created session and an
@@ -2113,7 +2054,7 @@ mod tests {
         };
 
         // Act
-        open_review_output_mode(&mut app, &view_context).await;
+        open_review_output_mode(&mut app, &view_context);
 
         // Assert
         let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
@@ -2140,7 +2081,7 @@ mod tests {
         };
 
         // Act
-        open_review_output_mode(&mut app, &view_context).await;
+        open_review_output_mode(&mut app, &view_context);
 
         // Assert
         let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
@@ -2160,6 +2101,7 @@ mod tests {
     async fn test_open_review_output_mode_shows_no_diff_message_when_diff_empty() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions_mut()[0].status = Status::Review;
         let view_context = ViewContext {
             scroll_offset: None,
             session_id: session_id.into(),
@@ -2167,7 +2109,8 @@ mod tests {
         };
 
         // Act
-        open_review_output_mode(&mut app, &view_context).await;
+        open_review_output_mode(&mut app, &view_context);
+        apply_next_session_diff(&mut app).await;
 
         // Assert
         let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
@@ -2194,7 +2137,7 @@ mod tests {
         let mut app = app;
 
         // Act
-        open_review_output_mode(&mut app, &view_context).await;
+        open_review_output_mode(&mut app, &view_context);
 
         // Assert
         assert!(!app.review_cache.contains_key(&view_context.session_id));
@@ -2214,10 +2157,13 @@ mod tests {
         };
 
         // Act
-        let opened = show_diff_for_view_session(&mut app, &context).await;
+        let opened = show_diff_for_view_session(&mut app, &context);
+        let loading = matches!(app.mode, AppMode::DiffLoading { .. });
+        apply_next_session_diff(&mut app).await;
 
         // Assert
         assert!(opened);
+        assert!(loading);
         assert!(matches!(
             app.mode,
             AppMode::Diff {
@@ -2243,15 +2189,18 @@ mod tests {
         };
 
         // Act
-        let opened = show_diff_for_view_session(&mut app, &context).await;
+        let opened = show_diff_for_view_session(&mut app, &context);
+        let loading = matches!(app.mode, AppMode::DiffLoading { .. });
+        apply_next_session_diff(&mut app).await;
 
         // Assert
-        assert!(!opened);
+        assert!(opened);
+        assert!(loading);
         assert!(matches!(
             app.mode,
             AppMode::View {
                 ref session_id,
-            scroll_offset: Some(0),
+                scroll_offset: Some(0),
                 ..
             } if session_id == &context.session_id
         ));
@@ -2270,7 +2219,8 @@ mod tests {
         };
 
         // Act
-        let opened = show_diff_for_view_session(&mut app, &context).await;
+        let opened = show_diff_for_view_session(&mut app, &context);
+        apply_next_session_diff(&mut app).await;
 
         // Assert
         assert!(opened);
@@ -2285,12 +2235,11 @@ mod tests {
         ));
     }
 
-    /// Verifies diff loading returns an empty string when the viewed session
-    /// disappears before diff generation starts.
+    /// Verifies a stale view index cannot start a background diff load.
     #[tokio::test]
-    async fn test_load_view_session_diff_returns_empty_string_for_stale_session_index() {
+    async fn test_show_diff_for_view_session_rejects_stale_session_index() {
         // Arrange
-        let (app, _base_dir, session_id) = new_test_app_with_session().await;
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let context = ViewContext {
             scroll_offset: Some(0),
             session_id: session_id.into(),
@@ -2298,10 +2247,11 @@ mod tests {
         };
 
         // Act
-        let diff = load_view_session_diff(&app, &context).await;
+        let opened = show_diff_for_view_session(&mut app, &context);
 
         // Assert
-        assert_eq!(diff, "");
+        assert!(!opened);
+        assert!(!matches!(app.mode, AppMode::DiffLoading { .. }));
     }
 
     #[tokio::test]
@@ -2326,18 +2276,29 @@ mod tests {
         };
 
         // Act
-        let diff = load_view_session_diff(&app, &context).await;
+        let opened = show_diff_for_view_session(&mut app, &context);
+        apply_next_session_diff(&mut app).await;
+
+        // Assert
+        assert!(opened);
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff { ref diff, .. } if diff == archived_diff
+        ));
+
+        // Act
         app.services
             .db()
             .sessions()
             .update_session_archived_diff(&context.session_id, None)
             .await
             .expect("failed to clear archived diff");
-        let missing_diff = load_view_session_diff(&app, &context).await;
+        let missing_opened = show_diff_for_view_session(&mut app, &context);
+        apply_next_session_diff(&mut app).await;
 
         // Assert
-        assert_eq!(diff, archived_diff);
-        assert_eq!(missing_diff, "");
+        assert!(missing_opened);
+        assert!(matches!(app.mode, AppMode::View { .. }));
     }
 
     #[tokio::test]
@@ -2362,10 +2323,12 @@ mod tests {
         };
 
         // Act
-        let diff = load_view_session_diff(&app, &context).await;
+        let opened = show_diff_for_view_session(&mut app, &context);
+        apply_next_session_diff(&mut app).await;
 
         // Assert
-        assert_eq!(diff, archived_diff);
+        assert!(opened);
+        assert!(matches!(app.mode, AppMode::Diff { ref diff, .. } if diff == archived_diff));
     }
 
     #[tokio::test]
@@ -2387,12 +2350,17 @@ mod tests {
         pool.close().await;
 
         // Act
-        let diff = load_view_session_diff(&app, &context)
+        let opened = show_diff_for_view_session(&mut app, &context);
+        apply_next_session_diff(&mut app)
             .with_subscriber(crate::test_support::TestSubscriber)
             .await;
 
         // Assert
-        assert!(diff.starts_with("Failed to load archived diff:"));
+        assert!(opened);
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff { ref diff, .. } if diff.starts_with("Failed to load archived diff:")
+        ));
     }
 
     #[tokio::test]
@@ -2725,7 +2693,7 @@ mod tests {
         };
 
         // Act
-        open_review_output_mode(&mut app, &view_context).await;
+        open_review_output_mode(&mut app, &view_context);
 
         // Assert
         let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
@@ -2752,7 +2720,7 @@ mod tests {
         };
 
         // Act
-        open_review_output_mode(&mut app, &view_context).await;
+        open_review_output_mode(&mut app, &view_context);
 
         // Assert
         let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
@@ -2775,7 +2743,7 @@ mod tests {
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
 
         // Act
-        open_or_regenerate_review(&mut app, &view_context, &mut pending_update).await;
+        open_or_regenerate_review(&mut app, &view_context, &mut pending_update);
 
         // Assert
         assert_eq!(pending_update.scroll_offset, None);
@@ -2800,7 +2768,7 @@ mod tests {
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
 
         // Act
-        open_or_regenerate_review(&mut app, &view_context, &mut pending_update).await;
+        open_or_regenerate_review(&mut app, &view_context, &mut pending_update);
 
         // Assert — confirmation popup is shown instead of direct regeneration
         assert!(matches!(
@@ -2834,7 +2802,7 @@ mod tests {
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
 
         // Act
-        open_or_regenerate_review(&mut app, &view_context, &mut pending_update).await;
+        open_or_regenerate_review(&mut app, &view_context, &mut pending_update);
 
         // Assert — cache and loading state are preserved, no duplicate spawned
         assert!(matches!(
@@ -2848,6 +2816,65 @@ mod tests {
                 ..
             } if session_id == &view_context.session_id
         ));
+    }
+
+    #[tokio::test]
+    async fn workflow_diff_and_review_keys_start_background_loads() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            scroll_offset: Some(2),
+            session_id: session_id.clone().into(),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let view_session_snapshot = reply_enabled_review_snapshot();
+        let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+
+        // Act
+        let diff_result = handle_workflow_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+            &view_context,
+            &view_session_snapshot,
+            &mut pending_update,
+        )
+        .await;
+        let diff_is_loading = matches!(app.mode, AppMode::DiffLoading { .. });
+        app.cancel_diff_view_load();
+        let review_result = handle_workflow_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+            &view_context,
+            &view_session_snapshot,
+            &mut pending_update,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(diff_result, Some(true));
+        assert!(diff_is_loading);
+        assert_eq!(review_result, Some(true));
+        assert!(matches!(
+            app.review_cache.get(&view_context.session_id),
+            Some(ReviewCacheEntry::Loading { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn stale_view_context_cannot_open_review_comments() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let view_context = ViewContext {
+            scroll_offset: None,
+            session_id: session_id.into(),
+            session_index: usize::MAX,
+        };
+
+        // Act
+        open_review_comments_in_diff(&mut app, &view_context);
+
+        // Assert
+        assert!(!matches!(app.mode, AppMode::DiffLoading { .. }));
     }
 
     #[tokio::test]
@@ -3148,9 +3175,12 @@ mod tests {
             &pending_update,
         )
         .await;
+        let loading = matches!(app.mode, AppMode::DiffLoading { .. });
+        apply_next_session_diff(&mut app).await;
 
         // Assert
         assert_eq!(result, Some(false));
+        assert!(loading);
         assert!(matches!(
             app.mode,
             AppMode::Diff {

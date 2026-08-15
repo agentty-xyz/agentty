@@ -85,7 +85,7 @@ impl App {
                 restore_view,
                 ..
             } => *is_loading || self.session_has_tick_driven_ui(&restore_view.session_id),
-            AppMode::Diff { .. } => false,
+            AppMode::DiffLoading { .. } | AppMode::Diff { .. } => false,
             AppMode::Help { context, .. } => self.help_overlay_has_tick_driven_ui(context),
         }
     }

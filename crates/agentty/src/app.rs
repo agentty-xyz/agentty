@@ -18,6 +18,7 @@ mod review_request;
 mod service;
 pub(crate) mod session;
 mod session_api;
+mod session_diff;
 mod session_runtime;
 pub mod session_state;
 pub(crate) mod setting;
@@ -38,15 +39,16 @@ pub(crate) use orchestration::{
     OrchestrationApprovalOutcome, OrchestrationCoordinator, OrchestrationSchedule,
 };
 pub use project::ProjectManager;
+pub(crate) use review::ReviewCacheEntry;
 #[cfg(test)]
-pub(crate) use review::review_loading_message;
-pub(crate) use review::{ReviewCacheEntry, diff_content_hash};
+pub(crate) use review::{REVIEW_NO_DIFF_MESSAGE, diff_content_hash, review_loading_message};
 #[cfg(test)]
 pub(crate) use service::AppServiceDeps;
 pub use service::AppServices;
 pub use session::{SessionError, SessionManager, SessionState};
 #[cfg(test)]
 pub(crate) use session::{SyncMainOutcome, SyncSessionStartError};
+pub(crate) use session_diff::SessionDiffUpdate;
 pub(crate) use session_runtime::{
     SessionRuntimeAccess, SessionRuntimeCommand, SessionRuntimeHandle,
 };

@@ -34,6 +34,8 @@ const FOCUSED_REVIEW_PERSISTENCE_RETRY_BASE_DELAY: Duration = Duration::from_mil
 static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 /// Monotonic counter used to distinguish stale review-comment loads.
 static NEXT_REVIEW_COMMENT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+/// Monotonic counter used to distinguish stale session-diff loads.
+static NEXT_SESSION_DIFF_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Stateless helpers for app-scoped one-shot background tasks and app-server
 /// session execution.
@@ -49,6 +51,27 @@ pub(super) struct SessionReviewCommentSnapshotTask {
     pub(super) session_id: SessionId,
     /// Session worktree used for remote detection and forge CLI context.
     pub(super) working_dir: PathBuf,
+}
+
+/// Source used by one background session-diff load.
+pub(super) enum SessionDiffTaskSource {
+    /// Load a retained diff after a managed session worktree was reclaimed.
+    Archived {
+        repositories: crate::infra::db::AppRepositories,
+    },
+    /// Compute a live worktree diff against the session base branch.
+    Worktree {
+        base_branch: String,
+        git_client: Arc<dyn GitClient>,
+    },
+}
+
+/// Inputs needed to load one session diff without blocking the foreground UI.
+pub(super) struct SessionDiffTaskInput {
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    pub(super) folder: PathBuf,
+    pub(super) session_id: SessionId,
+    pub(super) source: SessionDiffTaskSource,
 }
 
 /// Inputs needed to generate review assist text in the background.
@@ -76,6 +99,36 @@ struct ReviewAssistPromptTemplate<'a> {
 }
 
 impl TaskService {
+    /// Spawns one session-diff load and returns its stale-safe request
+    /// generation without waiting for Git or persistence I/O.
+    pub(super) fn spawn_session_diff_task(input: SessionDiffTaskInput) -> u64 {
+        let request_id = NEXT_SESSION_DIFF_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        tokio::spawn(async move {
+            let result = match input.source {
+                SessionDiffTaskSource::Archived { repositories } => repositories
+                    .sessions()
+                    .load_session_archived_diff(&input.session_id)
+                    .await
+                    .map(Option::unwrap_or_default)
+                    .map_err(|error| format!("Failed to load archived diff: {error}")),
+                SessionDiffTaskSource::Worktree {
+                    base_branch,
+                    git_client,
+                } => git_client
+                    .diff(input.folder, base_branch)
+                    .await
+                    .map_err(|error| format!("Failed to run git diff: {error}")),
+            };
+            let _ = input.app_event_tx.send(AppEvent::SessionDiffLoaded {
+                request_id,
+                result,
+                session_id: input.session_id,
+            });
+        });
+
+        request_id
+    }
+
     /// Publishes cached `@`-mention entries immediately or starts one
     /// debounced filesystem-index task for a cache miss.
     pub(crate) fn spawn_at_mention_entries_task(

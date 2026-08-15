@@ -501,6 +501,21 @@ pub enum AppMode {
         /// Scroll position applied to the transcript.
         scroll_offset: Option<u16>,
     },
+    /// Displays an immediately responsive loading page while the full session
+    /// diff is computed outside the foreground event loop.
+    DiffLoading {
+        /// Scroll position restored when loading ends without opening diff.
+        fallback_view_scroll_offset: Option<u16>,
+        /// Request generation used to ignore a completion after cancellation.
+        request_id: u64,
+        /// Captured composer or question state restored when loading is
+        /// canceled or produces no changes.
+        restore: Option<Box<DiffRestoreTarget>>,
+        /// Session whose diff is loading.
+        session_id: SessionId,
+        /// Sidebar section to focus when the diff finishes loading.
+        sidebar_focus: DiffSidebarFocus,
+    },
     /// Focused diff view with file-tree navigation and independent scrolling.
     Diff {
         /// Raw git diff rendered in the right-hand panel.
