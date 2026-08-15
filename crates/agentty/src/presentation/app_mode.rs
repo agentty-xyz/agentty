@@ -604,6 +604,8 @@ pub enum HelpContext {
         can_open_worktree: bool,
         /// Whether the session branch may be rebased.
         can_rebase_session_branch: bool,
+        /// Whether the session has a diff available to inspect.
+        can_show_diff: bool,
         /// Whether a follow-up agent turn may be submitted.
         can_reply_to_session: bool,
         /// Whether a staged draft session may begin its first turn.
@@ -655,6 +657,7 @@ impl HelpContext {
                 can_open_worktree,
                 can_rebase_session_branch,
                 can_reply_to_session,
+                can_show_diff,
                 can_start_staged_session,
                 can_view_review_comments,
                 publish_pull_request_action,
@@ -673,6 +676,7 @@ impl HelpContext {
                     can_rebase_session_branch: ViewActionAvailability::from_bool(
                         *can_rebase_session_branch,
                     ),
+                    can_show_diff: ViewActionAvailability::from_bool(*can_show_diff),
                     reply_to_session: ViewActionAvailability::from_bool(*can_reply_to_session),
                     can_start_staged_session: ViewActionAvailability::from_bool(
                         *can_start_staged_session,
@@ -766,6 +770,7 @@ mod tests {
             can_mutate_session_branch: true,
             can_open_worktree: true,
             can_rebase_session_branch: true,
+            can_show_diff: true,
             can_reply_to_session: true,
             can_start_staged_session: false,
             can_view_review_comments: false,
@@ -799,6 +804,7 @@ mod tests {
             can_mutate_session_branch: true,
             can_open_worktree: true,
             can_rebase_session_branch: true,
+            can_show_diff: true,
             can_reply_to_session: true,
             can_start_staged_session: false,
             can_view_review_comments: false,
@@ -831,6 +837,7 @@ mod tests {
             can_mutate_session_branch: true,
             can_open_worktree: true,
             can_rebase_session_branch: true,
+            can_show_diff: true,
             can_reply_to_session: true,
             can_start_staged_session: false,
             can_view_review_comments: false,

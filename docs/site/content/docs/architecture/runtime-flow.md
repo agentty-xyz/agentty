@@ -457,7 +457,10 @@ flowchart LR
    (failures return to `Review`). Successful refreshes persist line totals, size, and
    explicit empty/present state so binary and metadata-only diffs remain discoverable.
    Failed refreshes persist unknown availability without erasing the last known totals,
-   allowing the diff view to surface its Git diagnostic.
+   allowing the diff view to surface its Git diagnostic. A writable-worktree open first
+   changes durable and loaded availability to unknown, since external edits can make a
+   previously empty diff stale. A durable invalidation failure prevents the tmux window
+   from opening, so restart cannot restore a stale empty state after external edits.
 
 ### Operation Lifecycle and Recovery
 

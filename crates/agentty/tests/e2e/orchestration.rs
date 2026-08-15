@@ -536,8 +536,9 @@ fn test_orchestrator_auto_review_scope() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::open_selected_session_view())
-                    .wait_for_text("Campaign: Managed feature delivery", 5000)
+                    .compose(&common::open_selected_session_view_with_texts(&[
+                        "Campaign: Managed feature delivery",
+                    ]))
                     .press_key("Enter")
                     .wait_for_text("Tab: focus | Enter: send", 5000)
                     .write_text(CONTROLLER_REVISION_PROMPT)

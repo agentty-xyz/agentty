@@ -718,8 +718,9 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         fork_session: ViewActionState::from_bool(session.allows_fork_action()),
         follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
         inspect_diff: ViewActionState::from_bool(
-            session.is_managed()
-                || (session.owns_branch_changes() && session.status.allows_diff_view()),
+            session.stats.should_show_diff()
+                && (session.is_managed()
+                    || (session.owns_branch_changes() && session.status.allows_diff_view())),
         ),
         is_managed: session.is_managed(),
         is_orchestrator: session.role == crate::domain::session::SessionRole::Orchestrator,
@@ -1019,6 +1020,7 @@ fn open_view_help_overlay(
             can_open_worktree: view_session_snapshot.can_open_worktree(),
             can_rebase_session_branch: view_session_snapshot.can_rebase_session_branch(),
             can_reply_to_session: view_session_snapshot.can_reply_to_session(),
+            can_show_diff: view_session_snapshot.inspect_diff.is_enabled(),
             can_start_staged_session: view_session_snapshot.can_start_staged_session(),
             can_view_review_comments: view_session_snapshot.can_open_review_comments(),
             publish_pull_request_action: view_session_snapshot.publish_pull_request_action,
@@ -1200,7 +1202,7 @@ mod tests {
     use crate::domain::orchestration::OrchestrationStatus;
     use crate::domain::session::{
         ForgeKind, QueuedMessage, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-        SessionRole,
+        SessionDiffState, SessionRole,
     };
     use crate::domain::session_message::{SessionMessage, SessionTranscript};
     use crate::domain::transient_message::{
@@ -1563,6 +1565,26 @@ mod tests {
             managed_worker_snapshot.inspect_diff,
             ViewActionState::Enabled
         );
+    }
+
+    #[tokio::test]
+    async fn diff_snapshot_hides_known_empty_session_diff() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let session = &mut app.sessions.sessions_mut()[0];
+        session.status = Status::Review;
+        session.stats.diff_state = SessionDiffState::Empty;
+        app.mode = AppMode::View {
+            session_id: session_id.into(),
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert_eq!(snapshot.inspect_diff, ViewActionState::Disabled);
     }
 
     #[tokio::test]

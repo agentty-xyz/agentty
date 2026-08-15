@@ -367,6 +367,7 @@ impl<'a> SessionChatPage<'a> {
                 self.can_open_worktree && session.allows_worktree_open_action(),
             ),
             can_rebase_session_branch: ViewActionAvailability::from_bool(can_rebase_session_branch),
+            can_show_diff: ViewActionAvailability::from_bool(session.stats.should_show_diff()),
             reply_to_session: ViewActionAvailability::from_bool(can_reply_to_session),
             can_start_staged_session: ViewActionAvailability::from_bool(can_start_staged_session),
             publish_pull_request_action: session.publish_pull_request_action(),

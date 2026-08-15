@@ -384,6 +384,7 @@ mod tests {
                 can_mutate_session_branch: ViewActionAvailability::Enabled,
                 can_open_worktree: ViewActionAvailability::from_bool(can_open_worktree),
                 can_rebase_session_branch: ViewActionAvailability::Enabled,
+                can_show_diff: ViewActionAvailability::from_bool(session.stats.should_show_diff()),
                 reply_to_session: ViewActionAvailability::Enabled,
                 can_start_staged_session: ViewActionAvailability::from_bool(
                     session.can_start_staged_session(),
@@ -606,6 +607,21 @@ mod tests {
         assert!(!help_text.contains("o: open"));
         assert!(!help_text.contains("d: diff"));
         assert!(!help_text.contains("Enter: reply"));
+    }
+
+    #[test]
+    fn test_session_view_footer_line_hides_known_empty_diff() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        session.stats.diff_state = SessionDiffState::Empty;
+
+        // Act
+        let help_text = view_footer_text(&session, true);
+
+        // Assert
+        assert!(!help_text.contains("d: diff"));
+        assert!(help_text.contains("Enter: reply"));
     }
 
     #[test]

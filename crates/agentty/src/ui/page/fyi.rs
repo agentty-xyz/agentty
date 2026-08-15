@@ -190,6 +190,7 @@ mod tests {
                 can_mutate_session_branch: ViewActionAvailability::Disabled,
                 can_open_worktree: ViewActionAvailability::Disabled,
                 can_rebase_session_branch: ViewActionAvailability::Disabled,
+                can_show_diff: ViewActionAvailability::Enabled,
                 reply_to_session: ViewActionAvailability::Disabled,
                 can_start_staged_session: ViewActionAvailability::Disabled,
                 publish_pull_request_action: None,
