@@ -20,8 +20,8 @@ use app::branch_publish::{BranchPublishTaskFailure, branch_push_failure, push_se
 use app::merge_queue::{MergeQueue, MergeQueueProgress};
 use app::project::ProjectManager;
 use app::review::{
-    ReviewCacheEntry, mark_session_agent_review, review_failure_message, review_loading_message,
-    review_view_text, start_review_assist as spawn_review_assist,
+    FocusedReviewPersistence, ReviewCacheEntry, mark_session_agent_review, review_failure_message,
+    review_loading_message, review_view_text, start_review_assist as spawn_review_assist,
 };
 use app::service::AppServices;
 use app::session::SessionManager;
@@ -271,6 +271,9 @@ pub struct App {
     /// switches, is hydrated after restart, and is ready when the user presses
     /// `f`.
     pub(crate) review_cache: HashMap<SessionId, ReviewCacheEntry>,
+    /// Retains focused-review cache generations until their durable writes
+    /// settle so project-scoped refreshes cannot discard off-project output.
+    pub(crate) pending_focused_review_persistence: HashMap<SessionId, FocusedReviewPersistence>,
     /// Tracks background session-diff loads by request generation so stale
     /// completions cannot change the active mode or review generation.
     pub(crate) pending_session_diff_requests: HashMap<u64, PendingSessionDiffRequest>,
@@ -1481,7 +1484,11 @@ impl App {
             .refresh_sessions_if_needed(&mut self.mode, &self.projects, &self.services)
             .await;
         if refreshed {
-            app::review::prune_review_cache(&mut self.review_cache, self.sessions.state());
+            app::review::prune_review_cache(
+                &mut self.review_cache,
+                &self.pending_focused_review_persistence,
+                self.sessions.state(),
+            );
             app::review::hydrate_review_transients(
                 &self.review_cache,
                 self.sessions.state_mut(),
@@ -1497,7 +1504,11 @@ impl App {
         self.sessions
             .refresh_sessions_now(&mut self.mode, &self.projects, &self.services)
             .await;
-        app::review::prune_review_cache(&mut self.review_cache, self.sessions.state());
+        app::review::prune_review_cache(
+            &mut self.review_cache,
+            &self.pending_focused_review_persistence,
+            self.sessions.state(),
+        );
         app::review::hydrate_review_transients(
             &self.review_cache,
             self.sessions.state_mut(),

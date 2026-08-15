@@ -78,7 +78,6 @@ const PROMPT_FOCUS_DRAFT_TEXT: &str = "Draft kept while reading chat";
 /// Focused-review output emitted when the prompt carries both the saved
 /// decision and the instruction to honor it.
 const RESOLVED_DECISION_REVIEW_TEXT: &str = "Resolved session decision honored.";
-
 /// Review-request notice body used by the timeline-order regression.
 const REVIEW_REQUEST_TIMELINE_NOTICE_TEXT: &str =
     "Created PR https://github.com/agentty-xyz/agentty/pull/42";
@@ -1598,6 +1597,13 @@ fn seed_review_ready_session_with_persisted_focused_review(
     })?;
 
     Ok(())
+}
+
+/// Seeds one persisted focused review plus a second project so the review can
+/// be restored after switching away from its owning project and back.
+fn seed_cross_project_focused_review(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_persisted_focused_review(env)?;
+    common::seed_mru_first_second_project(env)
 }
 
 /// Seeds two review-ready sessions with distinct persisted focused reviews so
@@ -7529,6 +7535,48 @@ fn focused_reviews_survive_session_switching() -> E2eResult {
                     "Persisted focused review finding.",
                     &final_full,
                 );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify a persisted focused review remains available after users switch
+/// away from its owning project and back.
+#[test]
+fn focused_review_survives_project_switching() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("focused_review_survives_project_switching")
+        .with_git()
+        .setup(seed_cross_project_focused_review)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .press_key("p")
+                    .wait_for_text("Switch project", 5000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Project: alpha-project", 5000)
+                    .press_key("p")
+                    .wait_for_text("Switch project", 5000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Project: test-project", 5000)
+                    .wait_for_text("Review-ready session shortcuts", 5000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Persisted focused review finding.", 5000)
+                    .capture_labeled(
+                        "restored_review",
+                        "Focused review restored after project switching",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Persisted focused review finding.", &full);
+                assertion::assert_text_in_region(frame, "Suggestions", &full);
+                assertion::assert_not_visible(frame, "Reviewing changes with");
             },
         )?;
 
