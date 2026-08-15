@@ -4179,7 +4179,10 @@ async fn test_spawn_integration() {
 async fn test_running_turn_finishes_before_queued_sync_and_later_chat() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
-    let mut app = new_test_app_with_git(dir.path()).await;
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    let mut app = new_test_app_with_git_and_db(dir.path(), database).await;
     let release_first_turn = Arc::new(Notify::new());
     let release_first_turn_for_channel = Arc::clone(&release_first_turn);
     let turn_count = Arc::new(Mutex::new(0usize));
@@ -4246,6 +4249,7 @@ async fn test_running_turn_finishes_before_queued_sync_and_later_chat() {
         .await;
     assert_eq!(turn_started_rx.recv().await, Some(0));
     app.sessions.sync_from_handles();
+    refresh_with_session_table_unavailable(&mut app, &pool).await;
 
     // Act
     app.rebase_session(&session_id)
@@ -4283,6 +4287,19 @@ async fn test_running_turn_finishes_before_queued_sync_and_later_chat() {
         .expect("missing later queued prompt");
     assert!(initial_answer_index < sync_completion_index);
     assert!(sync_completion_index < queued_prompt_index);
+}
+
+/// Forces one session refresh to observe a failed primary row query.
+async fn refresh_with_session_table_unavailable(app: &mut App, pool: &sqlx::SqlitePool) {
+    sqlx::query("ALTER TABLE session RENAME TO unavailable_session")
+        .execute(pool)
+        .await
+        .expect("session table should become temporarily unavailable");
+    app.refresh_sessions_now().await;
+    sqlx::query("ALTER TABLE unavailable_session RENAME TO session")
+        .execute(pool)
+        .await
+        .expect("session table should become available again");
 }
 
 fn assert_sync_waits_without_canceling_turn(app: &mut App, session_id: &str) {

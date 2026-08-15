@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use ag_forge as forge;
+use tracing::warn;
 
 use super::SESSION_REFRESH_INTERVAL;
 use super::load::SessionLoadInput;
@@ -127,7 +128,7 @@ impl SessionManager {
         let clock = services.clock();
         let fs_client = services.fs_client();
         let (mut sessions, stats_activity, session_worktree_availability) =
-            Self::load_sessions_with_fs_client(
+            match Self::try_load_sessions_with_fs_client(
                 SessionLoadInput {
                     active_project_id: projects.active_project_id(),
                     active_session_id: detail_session_id.as_deref(),
@@ -139,7 +140,18 @@ impl SessionManager {
                 },
                 self.state.handles_mut(),
             )
-            .await;
+            .await
+            {
+                Ok(loaded_sessions) => loaded_sessions,
+                Err(error) => {
+                    warn!(
+                        error = %error,
+                        "preserving active session state after refresh failure"
+                    );
+
+                    return;
+                }
+            };
         Self::preserve_live_orchestration_progress(&mut sessions, &live_orchestration_progress);
         self.state.replace_sessions(sessions);
         self.state
