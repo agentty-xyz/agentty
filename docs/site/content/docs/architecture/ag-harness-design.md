@@ -84,13 +84,11 @@ completions to train future Meta models; the standard model does not use that da
 training. The Muse example defaults to the standard model and accepts an explicit
 `MODEL_API_MODEL` override so applications must opt in to the contributor terms.
 
-The current wire-only tool foundation lets callers explicitly advertise the native
-`read` function on an individual `ModelRequest`. Qwen, Kimi, and Muse translate the
-shared `ToolDefinition` into their Chat Completions payload and decode exactly one
-validated `ToolCall` with typed `ReadArguments`. A tool call remains distinct from
-terminal `ModelResponse` output, which continues through local `OutputSchema`
-validation. This slice stops at decoding: tool execution, filesystem access, tool-result
-messages, and the continuation loop remain future work.
+The current tool foundation includes:
+
+- A shared native `read` contract across Qwen, Kimi, and Muse.
+- Repository-scoped read round trips with explicit permission.
+- Schema-validated terminal output and typed failures.
 
 ## Session management
 
@@ -242,8 +240,8 @@ best cost and performance:
 
 ## Next iterations
 
-- [ ] **Tool round trip.** Support one model-requested tool through execution to the
-  final response.
+- [x] **Read tool round trip.** Complete a model-requested repository read.
+- [ ] **Write tool round trip.** Complete a model-requested repository write.
 - [ ] **Persisted session round trip.** Run sequential turns in one resumable session,
   persist model and tool history, and stream typed lifecycle events to the host
   application.

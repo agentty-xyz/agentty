@@ -100,9 +100,10 @@ mod tests {
             "MODEL_API_BASE_URL",
             Some(("MODEL_API_MODEL", None)),
         );
+        let responses = vec![process_fixture::terminal_response(r#"{"message":"hello"}"#)];
 
         // Act and Assert
-        process_fixture::assert_exports_metrics(environment).await;
+        process_fixture::assert_exports_metrics(environment, responses).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

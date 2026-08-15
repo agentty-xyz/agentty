@@ -1,11 +1,13 @@
 use std::ops::RangeInclusive;
 use std::process::{ExitStatus, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::Value;
 use tokio::process::{Child, Command};
 use wiremock::matchers::{header, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 use crate::telemetry::DynError;
 
@@ -59,18 +61,43 @@ struct ModelEnvironment {
     variable: &'static str,
 }
 
+#[derive(Clone)]
+struct SequenceResponder {
+    next_response: Arc<AtomicUsize>,
+    responses: Arc<Vec<ResponseTemplate>>,
+}
+
+impl Respond for SequenceResponder {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        let response_index = self.next_response.fetch_add(1, Ordering::SeqCst);
+
+        self.responses[response_index].clone()
+    }
+}
+
+/// Builds a successful terminal Chat Completions response for an example
+/// fixture.
+pub(crate) fn terminal_response(content: &str) -> Value {
+    serde_json::json!({
+        "choices": [{
+            "finish_reason": "stop",
+            "message": {"content": content}
+        }]
+    })
+}
+
 /// Verifies that the example completes and flushes one OTLP metrics request.
-pub(crate) async fn assert_exports_metrics(environment: ProviderEnvironment) {
-    let model_server = model_server(
-        ResponseTemplate::new(200).set_body_json(json!({
-            "choices": [{
-                "finish_reason": "stop",
-                "message": {"content": r#"{"message":"hello"}"#}
-            }]
-        })),
-        1..=1,
-    )
-    .await;
+pub(crate) async fn assert_exports_metrics(
+    environment: ProviderEnvironment,
+    model_responses: Vec<Value>,
+) {
+    let request_count =
+        u64::try_from(model_responses.len()).expect("fixture response count should fit in u64");
+    let responses = model_responses
+        .into_iter()
+        .map(|response| ResponseTemplate::new(200).set_body_json(response))
+        .collect();
+    let model_server = model_server(responses, request_count..=request_count).await;
     let otlp_server = metrics_server().await;
     let otlp_endpoint = format!("{}/otlp", otlp_server.uri());
     let mut child = spawn_fixture(environment, &model_server.uri(), Some(&otlp_endpoint));
@@ -84,7 +111,7 @@ pub(crate) async fn assert_exports_metrics(environment: ProviderEnvironment) {
 /// Verifies that a stalled example process is killed and reaped after timeout.
 pub(crate) async fn assert_timeout_kills_and_reaps(environment: ProviderEnvironment) {
     let model_server = model_server(
-        ResponseTemplate::new(200).set_delay(Duration::from_secs(10)),
+        vec![ResponseTemplate::new(200).set_delay(Duration::from_secs(10))],
         0..=1,
     )
     .await;
@@ -117,13 +144,17 @@ pub(crate) fn run_main_if_requested(run: impl FnOnce() -> Result<(), DynError>) 
 }
 
 async fn model_server(
-    response: ResponseTemplate,
+    responses: Vec<ResponseTemplate>,
     expected_requests: RangeInclusive<u64>,
 ) -> MockServer {
     let server = MockServer::start().await;
+    let responder = SequenceResponder {
+        next_response: Arc::new(AtomicUsize::new(0)),
+        responses: Arc::new(responses),
+    };
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(response)
+        .respond_with(responder)
         .expect(expected_requests)
         .mount(&server)
         .await;
@@ -202,7 +233,7 @@ mod tests {
     #[tokio::test]
     async fn optional_model_server_accepts_no_request() {
         // Arrange
-        let server = model_server(ResponseTemplate::new(200), 0..=1).await;
+        let server = model_server(vec![ResponseTemplate::new(200)], 0..=1).await;
 
         // Act and Assert
         server.verify().await;

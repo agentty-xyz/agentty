@@ -4,7 +4,10 @@ pub(crate) const PROVIDER_NAME: &str = "alibaba_cloud";
 pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
     chat_completion::ChatCompletionProviderPolicy {
         display_name: "Qwen",
-        structured_output: chat_completion::StructuredOutputMode::JsonObject,
+        structured_output: chat_completion::StructuredOutputMode::JsonObject {
+            assistant_reasoning_content: false,
+            tool_result_name: false,
+        },
         telemetry_name: PROVIDER_NAME,
         unsupported_schema_reason: "Qwen JSON Object mode requires an explicit object root schema",
     };
@@ -163,6 +166,15 @@ mod tests {
     }
 
     async fn mount_tool_response(server: &MockServer, prompt: &str, message: serde_json::Value) {
+        mount_read_response(server, prompt, "tool_calls", message).await;
+    }
+
+    async fn mount_read_response(
+        server: &MockServer,
+        prompt: &str,
+        finish_reason: &str,
+        message: serde_json::Value,
+    ) {
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .and(bearer_token("test-key"))
@@ -183,7 +195,7 @@ mod tests {
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "choices": [{
-                    "finish_reason": "tool_calls",
+                    "finish_reason": finish_reason,
                     "message": message
                 }]
             })))
@@ -254,6 +266,116 @@ mod tests {
         assert_eq!(call.arguments().path(), "Cargo.toml");
         assert_eq!(call.arguments().offset(), Some(1));
         assert_eq!(call.arguments().limit(), Some(12));
+    }
+
+    #[tokio::test]
+    async fn sends_tool_result_history_for_continuation() {
+        // Arrange
+        let server = MockServer::start().await;
+        let prompt = "inspect the manifest";
+        let result = r#"{"content":"[workspace]","end_line":1,"next_offset":null,"path":"Cargo.toml","start_line":1,"truncated":false}"#;
+        let arguments = serde_json::from_value(json!({
+            "path": "Cargo.toml",
+            "offset": 1,
+            "limit": 12
+        }))
+        .expect("read arguments should be valid");
+        let call = tool::ToolCall::read("call_qwen_read".to_string(), arguments, None);
+        let mut model_request = read_request(prompt);
+        model_request.record_tool_result(call, result.to_string());
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(bearer_token("test-key"))
+            .and(body_json(json!({
+                "messages": [
+                    {
+                        "content": format!(
+                            "{STRUCTURED_OUTPUT_INSTRUCTION}{}",
+                            person_schema_value()
+                        ),
+                        "role": "system"
+                    },
+                    {"content": prompt, "role": "user"},
+                    {
+                        "content": null,
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "function": {
+                                "arguments": r#"{"limit":12,"offset":1,"path":"Cargo.toml"}"#,
+                                "name": "read"
+                            },
+                            "id": "call_qwen_read",
+                            "type": "function"
+                        }]
+                    },
+                    {
+                        "content": result,
+                        "role": "tool",
+                        "tool_call_id": "call_qwen_read"
+                    }
+                ],
+                "model": "qwen-plus",
+                "response_format": {"type": "json_object"},
+                "tools": [read_tool_wire()]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": r#"{"name":"Cargo"}"#,
+                        "tool_calls": null
+                    }
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let model = qwen(&server);
+
+        // Act
+        let response = model
+            .complete(model_request)
+            .await
+            .expect("continued Qwen request should succeed");
+
+        // Assert
+        assert_eq!(response.output(), Some(&json!({ "name": "Cargo" })));
+    }
+
+    #[tokio::test]
+    async fn rejects_terminal_response_with_tool_calls() {
+        // Arrange
+        let server = MockServer::start().await;
+        mount_read_response(
+            &server,
+            "inspect the manifest",
+            "stop",
+            json!({
+                "content": r#"{"name":"Cargo"}"#,
+                "tool_calls": [{
+                    "id": "call_late",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": r#"{"path":"Cargo.toml"}"#
+                    }
+                }]
+            }),
+        )
+        .await;
+        let model = qwen(&server);
+
+        // Act
+        let error = model
+            .complete(read_request("inspect the manifest"))
+            .await
+            .expect_err("terminal response with tool calls should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            model::ModelError::TerminalResponseWithToolCalls
+        ));
     }
 
     #[tokio::test]
