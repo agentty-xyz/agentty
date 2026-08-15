@@ -604,6 +604,10 @@ optional `summary`):
    Agentty session unless the user explicitly says otherwise. `crates/ag-protocol/src/`
    owns the shared response model, schema, parser diagnostics, protocol prompt
    envelopes, repair prompts, and turn prompt payloads.
+1. Session-title generation bounds the persisted original request, current title,
+   session summary, and latest request independently at UTF-8 boundaries. The rendered
+   utility prompt is capped below 24 KiB, reserving more than 8 KiB for the shared
+   protocol envelope before Antigravity applies its 32 KiB command-argument check.
 1. Channels emit transient loader updates as `TurnEvent::ThoughtDelta` values while the
    turn runs; assistant transcript output is appended once from the final parsed result.
 1. Transports that enforce the schema natively receive it through
@@ -694,17 +698,22 @@ their triggers:
   placeholder. The backend supports macOS pasteboard, X11 reads, and Wayland reads via
   `wl-paste`; missing or unsupported backends report an inline paste error.
 
-- **Session title generation** (provisional start or resume title): runs a one-shot
-  title prompt and persists a concise generated title when the model identifies an
-  actionable session goal. The one-shot uses read-only permissions for every session
-  role, including temporary orchestration researchers. Issued and accepted candidate
-  generations are tracked separately: empty responses leave older usable candidates
-  eligible, newer accepted candidates supersede older ones, and draft edits or
-  commit-derived titles invalidate every outstanding candidate. Session refreshes
-  hydrate transcript-scale detail for the session identified by the active application
-  mode, independently of the session-list table selection. Reply classification also
-  requires `Draft` status before an empty prompt can be treated as the first message, so
-  lightweight list rows cannot replace an existing title.
+- **Session title generation** (provisional start or resume title): claims an ordered
+  candidate, loads the persisted original request, current title, session summary, and
+  latest request, then runs a one-shot title prompt over that stable session context.
+  The original request anchors the overall goal while later requests may establish or
+  clarify it without turning narrow follow-ups into the whole title. The one-shot uses
+  read-only permissions for every session role, including temporary orchestration
+  researchers. Provider submission failures are logged and retried once. Candidates
+  equivalent to persisted request text after case, punctuation, and line normalization
+  are rejected. Issued and accepted candidate generations are tracked separately: empty
+  responses leave older usable candidates eligible, newer accepted candidates supersede
+  older ones, and draft edits or commit-derived titles invalidate every outstanding
+  candidate. Session refreshes hydrate transcript-scale detail for the session
+  identified by the active application mode, independently of the session-list table
+  selection. Reply classification also requires `Draft` status before an empty prompt
+  can be treated as the first message, so lightweight list rows cannot replace an
+  existing title.
 
 - **At-mention file indexing** (`@` in prompt or question input): lists session files
   for the mention picker, falling back to the project root for unstarted drafts.
