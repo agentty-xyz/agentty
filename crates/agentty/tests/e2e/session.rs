@@ -2346,6 +2346,28 @@ fi
     Ok(())
 }
 
+/// Adds a changed file below a single-child folder chain for compact-tree
+/// rendering coverage.
+fn seed_review_session_with_compact_diff_tree(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_review_request(env)?;
+
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    let nested_directory = session_worktree.join("src/app/session");
+    let nested_file = nested_directory.join("handler.rs");
+    std::fs::create_dir_all(&nested_directory)?;
+    std::fs::write(&nested_file, "fn handle() {\n}\n")?;
+    run_git(&session_worktree, &["add", "."])?;
+    run_git(&session_worktree, &["commit", "-m", "add nested handler"])?;
+    std::fs::write(
+        &nested_file,
+        "fn handle() {\n    println!(\"review\");\n}\n",
+    )?;
+
+    Ok(())
+}
+
 /// Seeds a clean review session whose worktree-open action creates an edit.
 fn seed_clean_review_session_with_worktree_edit(env: &BuilderEnv) -> E2eResult {
     seed_clean_review_ready_session(env)?;
@@ -6795,7 +6817,7 @@ fn diff_preview_opens_from_session() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
-                    .wait_for_text("src/   +1/-0", 5000)
+                    .wait_for_text("j/k: select file", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("diff_preview", "Diff preview after pressing d")
@@ -6803,15 +6825,57 @@ fn diff_preview_opens_from_session() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
 
-                assertion::assert_text_in_region(frame, "src/   +1/-0", &full);
-                let text = frame.text_in_region(&full);
-                assert_eq!(
-                    text.matches("+1/-0").count(),
-                    2,
-                    "expected change totals on both file-tree rows:\n{text}"
-                );
+                assert_diff_file_tree_change_totals(frame);
                 assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
                 assertion::assert_text_in_region(frame, "j/k: select file", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that Diff mode collapses uninterrupted folder chains so the Files
+/// sidebar shows more changed paths at once.
+#[test]
+fn test_compact_diff_tree() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("compact_diff_tree")
+        .with_git()
+        .setup(seed_review_session_with_compact_diff_tree)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("app/session/", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "compact_diff_tree",
+                        "Diff tree with a compact single-child folder chain",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                let file_tree = Region::new(0, 0, frame.cols() / 5, frame.rows());
+
+                assertion::assert_text_in_region(frame, "app/session/", &full);
+                assertion::assert_text_in_region(frame, "handler.rs", &full);
+                assertion::assert_text_in_region(frame, "src/a", &file_tree);
+                assertion::assert_text_in_region(frame, "han", &file_tree);
+                let root_match = frame
+                    .find_text_in_region("src/a", &file_tree)
+                    .into_iter()
+                    .next()
+                    .expect("compact tree should render its root path");
+                let nested_match = frame
+                    .find_text_in_region("han", &file_tree)
+                    .into_iter()
+                    .next()
+                    .expect("compact tree should render its nested path");
+                assert_eq!(root_match.rect.col, 2);
+                assert_eq!(nested_match.rect.col, 4);
             },
         )?;
 
@@ -7253,7 +7317,7 @@ fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
                         "Chat transcript focused in the reply composer",
                     )
                     .press_key("d")
-                    .wait_for_text("src/   +1/-0", 5000)
+                    .wait_for_text("j/k: select file", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
@@ -7271,7 +7335,7 @@ fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
 
                 let diff_frame = common::frame_from_capture(&report.captures[1]);
                 let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
-                assertion::assert_text_in_region(&diff_frame, "src/   +1/-0", &diff_full);
+                assert_diff_file_tree_change_totals(&diff_frame);
                 assertion::assert_text_in_region(&diff_frame, "println!(\"review\")", &diff_full);
                 assertion::assert_text_in_region(&diff_frame, "j/k: select file", &diff_full);
 
@@ -7282,6 +7346,28 @@ fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
         )?;
 
     Ok(())
+}
+
+/// Verifies the compact Files panel keeps both per-row totals and the expected
+/// left-aligned hierarchy.
+fn assert_diff_file_tree_change_totals(frame: &TerminalFrame) {
+    let file_tree = Region::new(0, 0, frame.cols() / 5, frame.rows());
+
+    assertion::assert_text_in_region(frame, "src/", &file_tree);
+    assertion::assert_text_in_region(frame, "mai", &file_tree);
+    let root_matches = frame.find_text_in_region("src/", &file_tree);
+    let file_matches = frame.find_text_in_region("mai", &file_tree);
+    let root_match = &root_matches[0];
+    let file_match = &file_matches[0];
+    assert_eq!(root_match.rect.col, 2);
+    assert_eq!(file_match.rect.col, 4);
+
+    let text = frame.text_in_region(&file_tree);
+    assert_eq!(
+        text.matches("+1/-0").count(),
+        2,
+        "expected change totals on both file-tree rows:\n{text}"
+    );
 }
 
 /// Verify binary-only changes retain the chat-focus diff hint and open in the

@@ -289,7 +289,10 @@ Comments, and `f` returns to Files.
 
 <a id="usage-diff-totals"></a> The diff panel title includes aggregate `+added` and
 `-removed` line totals. Every file and folder row in the left panel shows its own
-right-aligned `+added/-removed` counts.
+right-aligned `+added/-removed` counts. Uninterrupted single-child folder chains are
+shown on one compact row, such as `docs/site/content/`, to fit more changed paths in the
+Files panel without flattening branches. Top-level paths omit a redundant tree connector
+so labels begin at the panel's left content edge.
 
 On a selected `.md` file, `p` replaces the raw patch with the rendered post-change
 worktree file. Headings, lists, tables, code blocks, and supported Mermaid diagrams use

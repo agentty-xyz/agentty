@@ -276,13 +276,11 @@ impl FileExplorer {
         for (folder_name, folder_node) in &node.folders {
             child_index += 1;
             let is_last_child = child_index == total_children;
-            let branch_prefix = if is_last_child {
-                TREE_BRANCH_LAST
-            } else {
-                TREE_BRANCH_MIDDLE
-            };
-            let line_text = format!("{prefix}{branch_prefix}{folder_name}{FOLDER_SUFFIX}");
-            let folder_path = format!("{path_prefix}{folder_name}/");
+            let is_root = path_prefix.is_empty();
+            let branch_prefix = Self::tree_branch_prefix(is_root, is_last_child);
+            let (folder_label, folder_path, compacted_node) =
+                Self::compact_folder_chain(folder_name, folder_node, path_prefix);
+            let line_text = format!("{prefix}{branch_prefix}{folder_label}{FOLDER_SUFFIX}");
 
             lines.push(Line::from(Span::styled(
                 line_text,
@@ -290,23 +288,15 @@ impl FileExplorer {
             )));
             items.push(FileTreeItem::Folder(folder_path.clone()));
 
-            let child_prefix = if is_last_child {
-                format!("{prefix}{TREE_PREFIX_SPACER}")
-            } else {
-                format!("{prefix}{TREE_PREFIX_CONTINUATION}")
-            };
+            let child_prefix = Self::child_tree_prefix(prefix, is_root, is_last_child);
 
-            Self::append_tree_lines(folder_node, &child_prefix, &folder_path, lines, items);
+            Self::append_tree_lines(compacted_node, &child_prefix, &folder_path, lines, items);
         }
 
         for file in &node.files {
             child_index += 1;
             let is_last_child = child_index == total_children;
-            let branch_prefix = if is_last_child {
-                TREE_BRANCH_LAST
-            } else {
-                TREE_BRANCH_MIDDLE
-            };
+            let branch_prefix = Self::tree_branch_prefix(path_prefix.is_empty(), is_last_child);
             let file_name = format!("{prefix}{branch_prefix}{}", file.name);
             let file_path = format!("{path_prefix}{}", file.name);
             let mut spans = vec![Span::styled(
@@ -324,6 +314,55 @@ impl FileExplorer {
             lines.push(Line::from(spans));
             items.push(FileTreeItem::File(file_path));
         }
+    }
+
+    /// Returns the connector shown before one folder or file row.
+    fn tree_branch_prefix(is_root: bool, is_last_child: bool) -> &'static str {
+        if is_root {
+            return ROOT_TREE_PREFIX;
+        }
+        if is_last_child {
+            return TREE_BRANCH_LAST;
+        }
+
+        TREE_BRANCH_MIDDLE
+    }
+
+    /// Returns the indentation prefix inherited by one folder's children.
+    fn child_tree_prefix(prefix: &str, is_root: bool, is_last_child: bool) -> String {
+        if is_root {
+            return ROOT_TREE_PREFIX.to_string();
+        }
+        if is_last_child {
+            return format!("{prefix}{TREE_PREFIX_SPACER}");
+        }
+
+        format!("{prefix}{TREE_PREFIX_CONTINUATION}")
+    }
+
+    /// Collapses an uninterrupted folder-only chain into one display label.
+    fn compact_folder_chain<'node>(
+        folder_name: &str,
+        folder_node: &'node FileTreeNode,
+        path_prefix: &str,
+    ) -> (String, String, &'node FileTreeNode) {
+        let folder_label = folder_name.to_string();
+        let folder_path = format!("{path_prefix}{folder_name}/");
+        if !folder_node.files.is_empty() || folder_node.folders.len() != 1 {
+            return (folder_label, folder_path, folder_node);
+        }
+
+        folder_node.folders.iter().fold(
+            (folder_label, folder_path, folder_node),
+            |(mut folder_label, folder_path, _), (child_name, child_node)| {
+                let (child_label, child_path, compacted_node) =
+                    Self::compact_folder_chain(child_name, child_node, &folder_path);
+                folder_label.push(PATH_SEGMENT_SEPARATOR);
+                folder_label.push_str(&child_label);
+
+                (folder_label, child_path, compacted_node)
+            },
+        )
     }
 
     /// Right-aligns a preserved suffix, truncating the file-tree label first
@@ -481,22 +520,23 @@ mod tests {
     const DIFF_README_HEADER: &str = "diff --git a/README.md b/README.md";
     const DIFF_NESTED_HEADER: &str =
         "diff --git a/src/ui/component/file_explorer.rs b/src/ui/component/file_explorer.rs";
+    const DIFF_SIBLING_FOLDER_HEADER: &str =
+        "diff --git a/src/domain/session.rs b/src/domain/session.rs";
     const DIFF_QUOTED_MARKDOWN_HEADER: &str = concat!(
         "diff --git \"a/docs/\\346\\227\\245\\346\\234\\254.md\" ",
         "\"b/docs/\\346\\227\\245\\346\\234\\254.md\"",
     );
-    const EXPECTED_SRC_FOLDER_LINE: &str = "└ src/";
-    const EXPECTED_MAIN_FILE_LINE: &str = "  └ main.rs";
-    const EXPECTED_NEW_FILE_LINE: &str = "  └ new.rs";
+    const EXPECTED_SRC_FOLDER_LINE: &str = "src/";
+    const EXPECTED_MAIN_FILE_LINE: &str = "└ main.rs";
+    const EXPECTED_NEW_FILE_LINE: &str = "└ new.rs";
     const EXPECTED_RENAME_LINE: &str = " <- src/old.rs";
-    const EXPECTED_NONSTANDARD_LINE: &str = "└ old/path new/path";
-    const EXPECTED_NESTED_TREE_LINES: [&str; 6] = [
-        "├ src/",
-        "│ ├ ui/",
-        "│ │ └ component/",
-        "│ │   └ file_explorer.rs",
-        "│ └ main.rs",
-        "└ README.md",
+    const EXPECTED_NONSTANDARD_LINE: &str = "old/path new/path";
+    const EXPECTED_NESTED_TREE_LINES: [&str; 5] = [
+        "src/",
+        "├ ui/component/",
+        "│ └ file_explorer.rs",
+        "└ main.rs",
+        "README.md",
     ];
     const UNCHANGED_DIFF_LINE: &str = " unchanged";
 
@@ -629,6 +669,67 @@ mod tests {
     }
 
     #[test]
+    fn test_file_list_lines_compact_single_child_folder_chain() {
+        // Arrange
+        let parsed_lines = vec![DiffLine {
+            kind: DiffLineKind::FileHeader,
+            old_line: None,
+            new_line: None,
+            content: DIFF_NESTED_HEADER,
+        }];
+
+        // Act
+        let (lines, items) = FileExplorer::build_tree(&parsed_lines);
+
+        // Assert
+        assert_eq!(
+            lines.iter().map(line_text).collect::<Vec<_>>(),
+            ["src/ui/component/", "└ file_explorer.rs"]
+        );
+        assert_eq!(
+            items,
+            [
+                FileTreeItem::Folder("src/ui/component/".to_string()),
+                FileTreeItem::File("src/ui/component/file_explorer.rs".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_file_list_lines_render_last_sibling_folder_branch() {
+        // Arrange
+        let parsed_lines = vec![
+            DiffLine {
+                kind: DiffLineKind::FileHeader,
+                old_line: None,
+                new_line: None,
+                content: DIFF_SIBLING_FOLDER_HEADER,
+            },
+            DiffLine {
+                kind: DiffLineKind::FileHeader,
+                old_line: None,
+                new_line: None,
+                content: DIFF_NESTED_HEADER,
+            },
+        ];
+
+        // Act
+        let lines = FileExplorer::build_tree(&parsed_lines).0;
+
+        // Assert
+        assert_eq!(
+            lines.iter().map(line_text).collect::<Vec<_>>(),
+            [
+                "src/",
+                "├ domain/",
+                "│ └ session.rs",
+                "└ ui/component/",
+                "  └ file_explorer.rs",
+            ]
+        );
+    }
+
+    #[test]
     fn test_file_list_lines_with_no_files() {
         // Arrange
         let parsed_lines = vec![DiffLine {
@@ -697,7 +798,6 @@ mod tests {
             items,
             vec![
                 FileTreeItem::Folder("src/".to_string()),
-                FileTreeItem::Folder("src/ui/".to_string()),
                 FileTreeItem::Folder("src/ui/component/".to_string()),
                 FileTreeItem::File("src/ui/component/file_explorer.rs".to_string()),
                 FileTreeItem::File("src/main.rs".to_string()),
