@@ -291,6 +291,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+    use crate::presentation::app_mode::DiffFocus;
     use crate::test_support::SessionFixtureBuilder;
 
     /// Builds one deterministic session fixture for footer render tests.
@@ -344,6 +345,8 @@ mod tests {
             AppMode::Diff {
                 diff: String::new(),
                 file_explorer_selected_index: 0,
+                focus: DiffFocus::Files,
+                selected_diff_line_index: 0,
                 preview: crate::presentation::app_mode::DiffPreview::default(),
                 review_comments: Some(crate::presentation::app_mode::DiffReviewComments::loading(
                     1,

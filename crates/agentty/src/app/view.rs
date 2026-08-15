@@ -146,6 +146,7 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation::app_mode::DiffFocus;
 
     #[test]
     fn visible_review_session_id_includes_diff_comments() {
@@ -153,6 +154,8 @@ mod tests {
         let mode = AppMode::Diff {
             diff: String::new(),
             file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
+            selected_diff_line_index: 0,
             preview: crate::presentation::app_mode::DiffPreview::default(),
             review_comments: Some(crate::presentation::app_mode::DiffReviewComments::loading(
                 1,

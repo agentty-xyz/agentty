@@ -213,16 +213,19 @@ the preview returns to the composer with the draft intact. Full diffs load in th
 background; press `q` or `Esc` on **Loading diff...** to return immediately while a
 large repository is still being inspected.
 
-Inside diff view, select a changed markdown file and press `p` to render its complete
-post-change worktree content, including supported Mermaid diagrams. Preview remains
-active across file navigation; non-markdown selections keep showing raw diff lines, and
-files that are deleted, binary, too large, or unreadable show a concise notice. Press
-`p` again to restore the patch view. Pressing `q` returns to the sessions list and saves
-the complete composer; reopening the session restores the typed draft with input focus.
-Pressing `Tab` again returns focus to the composer. The same focus toggle, `d` diff
-preview, and `q` preservation flow are available while answering clarification
-questions. Long transcripts show a slim scrollbar on the right side of the output panel
-to indicate the current position.
+Inside diff view, press `Enter` on a file to move focus from the file tree to its patch.
+The first added or removed line becomes the active line; use `j` / `k` or the arrow keys
+to move through changed lines while Agentty keeps the cursor visible. Press `Esc`,
+`Left`, `h`, or `f` to return to the file tree. Select a changed markdown file and press
+`p` to render its complete post-change worktree content, including supported Mermaid
+diagrams. Preview remains active across file navigation; non-markdown selections keep
+showing raw diff lines, and files that are deleted, binary, too large, or unreadable
+show a concise notice. Press `p` again to restore the patch view. Pressing `q` returns
+to the sessions list and saves the complete composer; reopening the session restores the
+typed draft with input focus. Pressing `Tab` again returns focus to the composer. The
+same focus toggle, `d` diff preview, and `q` preservation flow are available while
+answering clarification questions. Long transcripts show a slim scrollbar on the right
+side of the output panel to indicate the current position.
 
 Pressing `r` during a running turn queues session sync on the same session worker. The
 session stays **InProgress** while the active turn runs, then moves to **Rebasing** when

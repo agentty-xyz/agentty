@@ -2446,6 +2446,7 @@ mod tests {
     use crate::domain::session::{
         ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     };
+    use crate::presentation::app_mode::DiffFocus;
 
     #[tokio::test]
     async fn merged_branch_eligibility_rejects_incomplete_session_context() {
@@ -2706,6 +2707,8 @@ mod tests {
             context: HelpContext::Diff {
                 diff: String::new(),
                 file_explorer_selected_index: 0,
+                focus: DiffFocus::Files,
+                selected_diff_line_index: 0,
                 preview: DiffPreview::default(),
                 review_comments: Some(Box::new(DiffReviewComments::loading(1))),
                 restore: None,
@@ -2763,6 +2766,8 @@ mod tests {
         AppMode::Diff {
             diff: String::new(),
             file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
+            selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: Some(review_comments),
             restore: None,
@@ -3024,6 +3029,8 @@ mod tests {
             app.mode = AppMode::Diff {
                 diff: "diff --git a/README.md b/README.md\n+preview".to_string(),
                 file_explorer_selected_index: 0,
+                focus: DiffFocus::Files,
+                selected_diff_line_index: 0,
                 preview: DiffPreview::Loading {
                     path: "README.md".to_string(),
                     request_id,
@@ -3110,11 +3117,13 @@ mod tests {
         let diff_mode = |preview| AppMode::Diff {
             diff: "diff".to_string(),
             file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
             preview,
             review_comments: None,
             restore: None,
             scroll_cache: None,
             scroll_offset: 0,
+            selected_diff_line_index: 0,
             session_id: "session-id".into(),
         };
 
@@ -3168,6 +3177,8 @@ mod tests {
             context: HelpContext::Diff {
                 diff: "diff --git a/README.md b/README.md\n+preview".to_string(),
                 file_explorer_selected_index: 0,
+                focus: DiffFocus::Files,
+                selected_diff_line_index: 0,
                 preview: DiffPreview::Loading {
                     path: "README.md".to_string(),
                     request_id: 8,

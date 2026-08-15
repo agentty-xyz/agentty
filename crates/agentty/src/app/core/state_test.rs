@@ -33,7 +33,7 @@ use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
-use crate::presentation::app_mode::{DiffPreview, DiffSidebarFocus};
+use crate::presentation::app_mode::{DiffFocus, DiffPreview, DiffSidebarFocus};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::settings::SettingsAction;
 use crate::runtime::mode::diff;
@@ -221,6 +221,8 @@ async fn diff_comments_have_no_tick_driven_ui() {
     app.mode = AppMode::Diff {
         diff: String::new(),
         file_explorer_selected_index: 0,
+        focus: DiffFocus::Files,
+        selected_diff_line_index: 0,
         preview: DiffPreview::default(),
         review_comments: Some(DiffReviewComments::loading(1)),
         restore: None,
