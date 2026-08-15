@@ -10,6 +10,7 @@ use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_r
 use crate::app::{self, App, AppEvent, OrchestrationApprovalOutcome, ReviewCacheEntry};
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
+use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, DiffSidebarFocus, HelpContext,
@@ -918,7 +919,9 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
         .iter_mut()
         .find(|session| session.id == session_id)
     {
+        let previous_status = session.status;
         session.status = Status::Review;
+        session.reconcile_status_transition(previous_status);
     }
 
     suppress_auto_review_for_stopped_turn(app, session_id);
@@ -1097,58 +1100,29 @@ where
     ))
 }
 
-/// Extracts user prompt history entries from persisted session output text.
-///
-/// The parser accepts both legacy multiline prompts (raw continuation lines)
-/// and the current continuation-prefixed format where follow-up lines start
-/// with three spaces.
-fn prompt_history_entries(output: &str) -> Vec<String> {
-    let mut entries = Vec::new();
-    let mut output_lines = output.lines().peekable();
-
-    while let Some(line) = output_lines.next() {
-        let Some(first_prompt_line) = line.strip_prefix(" › ") else {
-            continue;
-        };
-
-        let mut prompt = first_prompt_line.to_string();
-
-        while let Some(next_line) = output_lines.peek().copied() {
-            if next_line.is_empty() {
-                break;
-            }
-
-            let prompt_line = next_line.strip_prefix("   ").unwrap_or(next_line);
-            prompt.push('\n');
-            prompt.push_str(prompt_line);
-            // Advance past the consumed continuation line.
-            let _ = output_lines.next();
-        }
-
-        entries.push(prompt);
-    }
-
-    entries
-}
-
 /// Returns prompt-history entries for the session-view prompt composer.
 ///
 /// Draft sessions use the staged prompt stored in `prompt` directly because
 /// they have not yet written user prompts into the persisted transcript.
+/// Started sessions read typed user rows so generated agent prompts remain
+/// available for provider replay without entering user-facing history.
 fn session_prompt_history_entries(session: &crate::domain::session::Session) -> Vec<String> {
     if session.status == Status::Draft && session.is_draft_session() {
         return vec![session.prompt.clone()];
     }
 
-    let Some(transcript_text) = session
+    session
         .transcript
         .as_ref()
-        .and_then(crate::domain::session_message::SessionTranscript::replay_text)
-    else {
-        return Vec::new();
-    };
-
-    prompt_history_entries(&transcript_text)
+        .map(|transcript| {
+            transcript
+                .messages()
+                .iter()
+                .filter(|message| message.kind == SessionMessageKind::UserPrompt)
+                .map(|message| message.content.clone())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Opens review mode and serves cached review or loading status.
@@ -1228,7 +1202,11 @@ mod tests {
         ForgeKind, QueuedMessage, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
         SessionRole,
     };
-    use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+    use crate::domain::session_message::{SessionMessage, SessionTranscript};
+    use crate::domain::transient_message::{
+        TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
+        TransientMessageSlot,
+    };
     use crate::domain::turn_prompt::TurnPrompt;
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::presentation::app_mode::PromptModeSnapshot;
@@ -1896,51 +1874,41 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_history_entries_extracts_user_prompts() {
+    fn test_session_prompt_history_entries_excludes_generated_agent_prompts() {
         // Arrange
-        let output = " › first\n\nassistant\n\n › second\n\n";
+        let mut session = crate::test_support::SessionFixtureBuilder::new()
+            .status(Status::Review)
+            .build();
+        session.transcript = Some(SessionTranscript::new(vec![
+            SessionMessage::conversation(
+                0,
+                SessionMessageKind::UserPrompt,
+                "first line\n\nsecond line",
+            ),
+            SessionMessage::conversation(
+                1,
+                SessionMessageKind::AgentPrompt,
+                "Process the selected review comments",
+            ),
+            SessionMessage::conversation(
+                2,
+                SessionMessageKind::AssistantAnswer,
+                "Resolved the review comments",
+            ),
+            SessionMessage::conversation(3, SessionMessageKind::UserPrompt, "latest prompt"),
+        ]));
 
         // Act
-        let entries = prompt_history_entries(output);
+        let entries = session_prompt_history_entries(&session);
 
         // Assert
-        assert_eq!(entries, vec!["first".to_string(), "second".to_string()]);
-    }
-
-    #[test]
-    fn test_prompt_history_entries_keeps_multiline_prompts() {
-        // Arrange
-        let output = " › first line\n   second line\n\nassistant\n\n";
-
-        // Act
-        let entries = prompt_history_entries(output);
-
-        // Assert
-        assert_eq!(entries, vec!["first line\nsecond line".to_string()]);
-    }
-
-    #[test]
-    fn test_prompt_history_entries_keeps_multiple_blank_lines_in_prompts() {
-        // Arrange
-        let output = " › first line\n   \n   \n   after gap\n\nassistant\n\n";
-
-        // Act
-        let entries = prompt_history_entries(output);
-
-        // Assert
-        assert_eq!(entries, vec!["first line\n\n\nafter gap".to_string()]);
-    }
-
-    #[test]
-    fn test_prompt_history_entries_ignores_non_prompt_lines() {
-        // Arrange
-        let output = "assistant line\n\n";
-
-        // Act
-        let entries = prompt_history_entries(output);
-
-        // Assert
-        assert_eq!(entries, [] as [std::string::String; 0]);
+        assert_eq!(
+            entries,
+            vec![
+                "first line\n\nsecond line".to_string(),
+                "latest prompt".to_string()
+            ]
+        );
     }
 
     #[tokio::test]
@@ -4218,6 +4186,15 @@ mod tests {
         // state after the first press has already drained queued messages.
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions_mut()[0].status = Status::InProgress;
+        app.sessions.sessions_mut()[0]
+            .transient_messages
+            .upsert(TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body: TransientMessageBody::Loading("Resolving 2 review comments...".to_string()),
+                lifecycle: TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::ReviewCommentResolution,
+                turn_position: None,
+            });
         let _ = app
             .services
             .db()
@@ -4252,6 +4229,12 @@ mod tests {
             .lock()
             .expect("lock failed");
         assert_eq!(handle_status, Status::Review);
+        assert!(
+            app.sessions.sessions()[0]
+                .transient_messages
+                .get(TransientMessageSlot::ReviewCommentResolution)
+                .is_none()
+        );
     }
 
     #[tokio::test]

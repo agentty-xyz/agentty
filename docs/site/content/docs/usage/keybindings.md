@@ -228,7 +228,9 @@ Pressing the same action again clears that row; pressing the other action replac
 `a`, `d`, and `Enter` appear only while the session can accept a turn, and `Enter`
 appears only after at least one row is marked. Unresolved outdated threads remain
 actionable through their forge thread ID, although their original code context is no
-longer available. Resolved threads and standalone comments are read-only.
+longer available. Submission returns the session to **InProgress** with a count-aware
+resolution loader; the generated batch prompt remains hidden from chat. Resolved threads
+and standalone comments are read-only.
 
 ## Publish Popup
 

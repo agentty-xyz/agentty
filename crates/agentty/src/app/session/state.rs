@@ -181,15 +181,22 @@ impl SessionState {
     /// Carrying transient output across that refresh keeps active loaders
     /// visible until their owning reducer resolves them.
     pub(crate) fn replace_sessions(&mut self, mut sessions: Vec<Session>) {
-        let transient_messages_by_session_id: HashMap<SessionId, _> = self
+        let transient_state_by_session_id: HashMap<SessionId, _> = self
             .sessions
             .iter()
-            .map(|session| (session.id.clone(), session.transient_messages.clone()))
+            .map(|session| {
+                (
+                    session.id.clone(),
+                    (session.status, session.transient_messages.clone()),
+                )
+            })
             .collect();
         for session in &mut sessions {
-            if let Some(transient_messages) = transient_messages_by_session_id.get(&session.id) {
+            if let Some((previous_status, transient_messages)) =
+                transient_state_by_session_id.get(&session.id)
+            {
                 session.transient_messages.clone_from(transient_messages);
-                session.reconcile_transient_messages();
+                session.reconcile_status_transition(*previous_status);
             }
         }
 
@@ -232,8 +239,9 @@ impl SessionState {
             return;
         };
 
+        let previous_status = session.status;
         Self::sync_session_with_handles(session, session_handles);
-        session.reconcile_transient_messages();
+        session.reconcile_status_transition(previous_status);
     }
 
     /// Copies current values from runtime handles into plain `Session` fields.
@@ -249,8 +257,9 @@ impl SessionState {
                 continue;
             };
 
+            let previous_status = session.status;
             Self::sync_session_with_handles(session, session_handles);
-            session.reconcile_transient_messages();
+            session.reconcile_status_transition(previous_status);
         }
     }
 
@@ -642,6 +651,46 @@ mod tests {
         // Assert
         assert_eq!(session_replay_text(&session), "New\n\n");
         assert_eq!(session.status, Status::InProgress);
+    }
+
+    #[test]
+    /// Verifies a failed turn's status sync clears its review-resolution
+    /// loader.
+    fn sync_from_handles_clears_review_resolution_loader_after_failed_turn() {
+        // Arrange
+        let session_id = SessionId::from("failed-review-resolution");
+        let mut session = SessionFixtureBuilder::new()
+            .id(session_id.as_str())
+            .status(Status::InProgress)
+            .build();
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Resolving 2 review comments...".to_string()),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::ReviewCommentResolution,
+            turn_position: None,
+        });
+        let handles = HashMap::from([(session_id, SessionHandles::new(Status::Review))]);
+        let mut state = SessionState::new(
+            handles,
+            vec![session],
+            SelectionState::default(),
+            Arc::new(FixedClock::new()),
+            0,
+            0,
+        );
+
+        // Act
+        state.sync_from_handles();
+
+        // Assert
+        assert_eq!(state.sessions[0].status, Status::Review);
+        assert!(
+            state.sessions[0]
+                .transient_messages
+                .get(TransientMessageSlot::ReviewCommentResolution)
+                .is_none()
+        );
     }
 
     #[test]

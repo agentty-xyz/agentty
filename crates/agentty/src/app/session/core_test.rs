@@ -1117,7 +1117,7 @@ fn test_apply_session_speed_mode_updated_updates_only_matching_session() {
 }
 
 #[tokio::test]
-async fn test_apply_turn_applied_state_clears_active_prompt_output() {
+async fn test_apply_turn_applied_state_clears_active_prompt_and_resolution_loader() {
     // Arrange
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let mut app = new_test_app(temp_dir.path().to_path_buf()).await;
@@ -1130,6 +1130,15 @@ async fn test_apply_turn_applied_state_clears_active_prompt_output() {
     );
     app.sessions
         .set_active_prompt_output("session-id", " › Prompt\n\n".to_string());
+    app.sessions.sessions_mut()[0]
+        .transient_messages
+        .upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Resolving 1 review comment...".to_string()),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::ReviewCommentResolution,
+            turn_position: None,
+        });
 
     // Act
     app.sessions.apply_turn_applied_state(
@@ -1147,6 +1156,12 @@ async fn test_apply_turn_applied_state_clears_active_prompt_output() {
         !app.sessions
             .active_prompt_outputs()
             .contains_key("session-id")
+    );
+    assert!(
+        app.sessions.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::ReviewCommentResolution)
+            .is_none()
     );
 }
 
@@ -2690,6 +2705,111 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_git(dir.path()).await;
+    let session_id = prepare_review_comment_resolution_session(&mut app).await;
+    let snapshot = review_comment_resolution_snapshot();
+    let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
+    let turn_release = Arc::new(Notify::new());
+    let mut mock_channel = MockAgentChannel::new();
+    let turn_release_for_agent = Arc::clone(&turn_release);
+    mock_channel
+        .expect_run_turn()
+        .once()
+        .returning(move |_, request, _| {
+            assert!(request.prompt.text.contains("Thread ID: thread-42"));
+            let done_tx = done_tx.clone();
+            let turn_release = Arc::clone(&turn_release_for_agent);
+
+            Box::pin(async move {
+                let _ = done_tx.send(());
+                turn_release.notified().await;
+
+                Ok(TurnResult {
+                    assistant_message: AgentResponse::plain("Resolved the review comment."),
+                    context_reset: false,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider_conversation_id: None,
+                })
+            })
+        });
+    mock_channel
+        .expect_shutdown_session()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    app.sessions
+        .worker_service
+        .test_agent_channels
+        .insert(session_id.clone(), Arc::new(mock_channel));
+    let comment_actions = vec![ReviewCommentActionSelection {
+        action: ReviewCommentAction::Address,
+        thread_id: "thread-42".to_string(),
+    }];
+
+    // Act
+    let outcome = app
+        .resolve_session_review_comments(&session_id, &snapshot, &comment_actions)
+        .await;
+    done_rx.recv().await.expect("turn should start");
+    app.sessions.sync_from_handles();
+    let active_session = &app.sessions.sessions()[0];
+    let active_status = active_session.status;
+    let resolution_loader = active_session
+        .transient_messages
+        .get(TransientMessageSlot::ReviewCommentResolution)
+        .map(|message| message.body.text().to_string());
+    let generated_prompt_kind = active_session
+        .transcript
+        .as_ref()
+        .and_then(|transcript| transcript.messages().last())
+        .map(|message| message.kind);
+    turn_release.notify_one();
+    wait_for_status(&mut app, &session_id, Status::Review).await;
+    let focused_reviews = app
+        .services
+        .db()
+        .sessions()
+        .load_session_focused_reviews_for_project(app.active_project_id())
+        .await
+        .expect("failed to load focused reviews");
+    let persisted_messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages(session_id.as_str())
+        .await
+        .expect("session messages should load");
+    let persisted_generated_prompt = persisted_messages
+        .iter()
+        .find(|message| message.content.contains("Thread ID: thread-42"));
+
+    // Assert
+    assert_eq!(
+        outcome,
+        ReviewCommentResolutionOutcome::ShowSession {
+            session_id: session_id.clone(),
+        }
+    );
+    assert!(!app.review_cache.contains_key(&session_id));
+    assert_eq!(active_status, Status::InProgress);
+    assert_eq!(
+        resolution_loader.as_deref(),
+        Some("Resolving 1 review comment...")
+    );
+    assert_eq!(
+        generated_prompt_kind,
+        Some(crate::domain::session_message::SessionMessageKind::AgentPrompt)
+    );
+    assert!(matches!(
+        persisted_generated_prompt,
+        Some(message) if message.kind == "agent_prompt"
+    ));
+    assert_eq!(
+        focused_reviews,
+        [] as [crate::infra::db::SessionFocusedReviewRow; 0]
+    );
+}
+
+/// Prepares one review-ready session with persisted focused-review output.
+async fn prepare_review_comment_resolution_session(app: &mut App) -> SessionId {
     let session_id: SessionId = app
         .create_session()
         .await
@@ -2726,66 +2846,8 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
         )
         .await
         .expect("failed to persist focused review");
-    let snapshot = review_comment_resolution_snapshot();
-    let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut mock_channel = MockAgentChannel::new();
-    mock_channel
-        .expect_run_turn()
-        .once()
-        .returning(move |_, request, _| {
-            assert!(request.prompt.text.contains("Thread ID: thread-42"));
-            let done_tx = done_tx.clone();
 
-            Box::pin(async move {
-                let _ = done_tx.send(());
-
-                Ok(TurnResult {
-                    assistant_message: AgentResponse::plain("Resolved the review comment."),
-                    context_reset: false,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    provider_conversation_id: None,
-                })
-            })
-        });
-    mock_channel
-        .expect_shutdown_session()
-        .returning(|_| Box::pin(async { Ok(()) }));
-    app.sessions
-        .worker_service
-        .test_agent_channels
-        .insert(session_id.clone(), Arc::new(mock_channel));
-    let comment_actions = vec![ReviewCommentActionSelection {
-        action: ReviewCommentAction::Address,
-        thread_id: "thread-42".to_string(),
-    }];
-
-    // Act
-    let outcome = app
-        .resolve_session_review_comments(&session_id, &snapshot, &comment_actions)
-        .await;
-    done_rx.recv().await.expect("turn should start");
-    wait_for_status(&mut app, &session_id, Status::Review).await;
-    let focused_reviews = app
-        .services
-        .db()
-        .sessions()
-        .load_session_focused_reviews_for_project(app.active_project_id())
-        .await
-        .expect("failed to load focused reviews");
-
-    // Assert
-    assert_eq!(
-        outcome,
-        ReviewCommentResolutionOutcome::ShowSession {
-            session_id: session_id.clone(),
-        }
-    );
-    assert!(!app.review_cache.contains_key(&session_id));
-    assert_eq!(
-        focused_reviews,
-        [] as [crate::infra::db::SessionFocusedReviewRow; 0]
-    );
+    session_id
 }
 
 /// Builds one actionable inline review thread for session-resolution tests.

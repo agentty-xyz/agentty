@@ -48,15 +48,17 @@ on the left, while the selected entry's metadata, attached current-diff context,
 conversation appear on the right. In **Review**, **AgentReview**, or **Question**, press
 `a` to send the selected actionable inline thread to the active session agent or `A` to
 send every actionable inline thread. Standalone comments are read-only because they do
-not have forge thread IDs. Conversation bodies render Markdown and common embedded HTML
-through the same shared text-rendering path used by review-request details.
-Forge-authored description and comment input is capped at `1 MiB` before normalization;
-truncated bodies end with `[Forge content truncated at 1 MiB.]`. The timer ticks only
-while the session is actively working. `Done` sessions use `c` to start a continuation
-draft and no longer expose review comments. File-level comments show an explicit
-no-line-context message instead of a synthetic code anchor. Each session stores the
-project's Smart reasoning default when it is created, so later default changes affect
-new sessions without relabeling existing ones.
+not have forge thread IDs. After submission, the session returns to **InProgress** and
+shows a count-aware `Resolving … review comments...` loader without exposing the
+generated agent instructions as a user message. Conversation bodies render Markdown and
+common embedded HTML through the same shared text-rendering path used by review-request
+details. Forge-authored description and comment input is capped at `1 MiB` before
+normalization; truncated bodies end with `[Forge content truncated at 1 MiB.]`. The
+timer ticks only while the session is actively working. `Done` sessions use `c` to start
+a continuation draft and no longer expose review comments. File-level comments show an
+explicit no-line-context message instead of a synthetic code anchor. Each session stores
+the project's Smart reasoning default when it is created, so later default changes
+affect new sessions without relabeling existing ones.
 
 The top status bar shows the current version and update status, and rotates short
 page-scoped `FYI:` messages once per minute in the **Sessions** list and session chat

@@ -84,6 +84,7 @@ pub(crate) fn layout_from_body(
         session.status,
         active_progress,
         review_loading_message(session),
+        review_comment_resolution_loading_message(session),
     );
 
     SessionOutputLines {
@@ -340,6 +341,7 @@ impl SessionOutputAssembly<'_> {
             self.status,
             self.active_progress,
             review_loading_message(self.session),
+            review_comment_resolution_loading_message(self.session),
         );
     }
 }
@@ -390,10 +392,14 @@ fn append_session_tail_lines(
     status: Status,
     active_progress: Option<&str>,
     review_status_message: Option<&str>,
+    review_comment_resolution_message: Option<&str>,
 ) -> Option<usize> {
-    if let Some(status_line) =
-        session_format::session_output_status_line(status, active_progress, review_status_message)
-    {
+    if let Some(status_line) = session_format::session_output_status_line(
+        status,
+        active_progress,
+        review_status_message,
+        review_comment_resolution_message,
+    ) {
         append_block_separator(lines, SessionOutputSeparator::Always);
         let active_loader_line_index =
             session_format::session_output_uses_tachyon_loader(status).then_some(lines.len());
@@ -427,6 +433,18 @@ fn review_loading_message(session: &Session) -> Option<&str> {
         })
 }
 
+fn review_comment_resolution_loading_message(session: &Session) -> Option<&str> {
+    session
+        .transient_messages
+        .get(TransientMessageSlot::ReviewCommentResolution)
+        .and_then(|message| match &message.body {
+            TransientMessageBody::Loading(message) => Some(message.as_str()),
+            TransientMessageBody::Markdown(_)
+            | TransientMessageBody::Plain(_)
+            | TransientMessageBody::Queued(_) => None,
+        })
+}
+
 fn append_transient_message(
     lines: &mut Vec<Line<'static>>,
     message: &TransientMessage,
@@ -440,11 +458,7 @@ fn append_transient_message(
                     session_format::session_output_summary_markdown(markdown)
                 }
                 TransientMessageSlot::Review => session_format::format_review_markdown(markdown),
-                TransientMessageSlot::WorkflowNotice
-                | TransientMessageSlot::Orchestration
-                | TransientMessageSlot::BranchPublish
-                | TransientMessageSlot::SyncQueue
-                | TransientMessageSlot::PublishedBranchSync => markdown.clone(),
+                _ => markdown.clone(),
             };
             append_markdown_lines(lines, &markdown, inner_width, markdown_render_cache);
 
@@ -457,7 +471,10 @@ fn append_transient_message(
             None
         }
         TransientMessageBody::Loading(status_message) => {
-            if message.slot == TransientMessageSlot::Review {
+            if matches!(
+                message.slot,
+                TransientMessageSlot::Review | TransientMessageSlot::ReviewCommentResolution
+            ) {
                 return None;
             }
 
@@ -534,7 +551,7 @@ fn active_prompt_message_index(status: Status, messages: &[SessionMessage]) -> O
 
     messages
         .iter()
-        .rposition(|message| message.kind == SessionMessageKind::UserPrompt)
+        .rposition(|message| message.kind.is_prompt())
 }
 
 fn trailing_workflow_notice_start(messages: &[SessionMessage]) -> Option<usize> {
@@ -642,6 +659,7 @@ fn append_transcript_messages(
             SessionMessageKind::UserPrompt => {
                 append_user_prompt(lines, &message.content, inner_width, markdown_render_cache);
             }
+            SessionMessageKind::AgentPrompt => {}
             SessionMessageKind::AssistantAnswer | SessionMessageKind::WorkflowNotice => {
                 append_markdown_lines(lines, &message.content, inner_width, markdown_render_cache);
             }
@@ -968,6 +986,67 @@ mod tests {
         // Assert
         assert_eq!(loader_line_index, None);
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_generated_review_prompt_is_hidden_behind_resolution_loader() {
+        // Arrange
+        let mut session = crate::test_support::SessionFixtureBuilder::new()
+            .status(Status::InProgress)
+            .build();
+        session.transcript = Some(SessionTranscript::new(vec![
+            SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "initial request"),
+            SessionMessage::conversation(1, SessionMessageKind::AssistantAnswer, "initial answer"),
+            SessionMessage::conversation(
+                2,
+                SessionMessageKind::AgentPrompt,
+                "Process the following selected forge review comments",
+            ),
+        ]));
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading("Resolving 3 review comments...".to_string()),
+            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::ReviewCommentResolution,
+            turn_position: None,
+        });
+
+        // Act
+        let output = output_lines(&session, 80, Some("Inspecting files"), None);
+        let rendered_text = output
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(rendered_text.contains("initial request"));
+        assert!(rendered_text.contains("initial answer"));
+        assert!(rendered_text.contains("Resolving 3 review comments..."));
+        assert!(!rendered_text.contains("Process the following"));
+        assert!(!rendered_text.contains("Inspecting files"));
+        assert!(output.active_loader_line_index.is_some());
+        assert_eq!(output.transient_loader_line_index, None);
+    }
+
+    #[test]
+    fn test_review_comment_resolution_loader_ignores_non_loading_body() {
+        // Arrange
+        let mut session = crate::test_support::SessionFixtureBuilder::new().build();
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Plain("not loading".to_string()),
+            lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::ReviewCommentResolution,
+            turn_position: None,
+        });
+
+        // Act
+        let loading_message = review_comment_resolution_loading_message(&session);
+
+        // Assert
+        assert_eq!(loading_message, None);
     }
 
     #[test]

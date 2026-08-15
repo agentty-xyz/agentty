@@ -873,6 +873,9 @@ impl SessionManager {
         session.questions.clone_from(&turn_applied_state.questions);
         session.summary.clone_from(&turn_applied_state.summary);
         session.hydrate_summary_transient();
+        session
+            .transient_messages
+            .retract(TransientMessageSlot::ReviewCommentResolution);
         session.stats.input_tokens = session
             .stats
             .input_tokens

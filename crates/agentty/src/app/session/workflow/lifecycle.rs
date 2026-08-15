@@ -122,12 +122,37 @@ impl ReplyEligibility {
     }
 }
 
+/// Transcript and output treatment for a submitted reply prompt.
+#[derive(Clone, Copy)]
+enum ReplyPromptPresentation {
+    /// Persist and render a normal user prompt.
+    Visible,
+    /// Persist generated agent context without rendering it in chat.
+    HiddenAgent,
+}
+
+impl ReplyPromptPresentation {
+    /// Returns the durable transcript kind for this presentation mode.
+    fn message_kind(self) -> SessionMessageKind {
+        match self {
+            Self::Visible => SessionMessageKind::UserPrompt,
+            Self::HiddenAgent => SessionMessageKind::AgentPrompt,
+        }
+    }
+
+    /// Returns whether the submitted prompt should render in session output.
+    fn is_visible(self) -> bool {
+        matches!(self, Self::Visible)
+    }
+}
+
 /// Reply-command behavior selected by the caller.
 struct ReplyOptions {
     defer_prompt_until_enqueued: bool,
     eligibility: ReplyEligibility,
     operation_id: Option<String>,
     persist_prompt: bool,
+    prompt_presentation: ReplyPromptPresentation,
     requires_existing_worker: bool,
     review_comment_thread_ids: Vec<String>,
 }
@@ -140,6 +165,7 @@ impl ReplyOptions {
             eligibility: ReplyEligibility::Standard,
             operation_id: None,
             persist_prompt: true,
+            prompt_presentation: ReplyPromptPresentation::Visible,
             requires_existing_worker: false,
             review_comment_thread_ids,
         }
@@ -153,6 +179,7 @@ impl ReplyOptions {
             eligibility: ReplyEligibility::QuestionAnswer,
             operation_id: None,
             persist_prompt: true,
+            prompt_presentation: ReplyPromptPresentation::Visible,
             requires_existing_worker,
             review_comment_thread_ids: Vec::new(),
         }
@@ -165,8 +192,22 @@ impl ReplyOptions {
             eligibility: ReplyEligibility::Standard,
             operation_id: Some(operation_id),
             persist_prompt,
+            prompt_presentation: ReplyPromptPresentation::Visible,
             requires_existing_worker: false,
             review_comment_thread_ids: Vec::new(),
+        }
+    }
+
+    /// Builds hidden generated-prompt behavior for forge review comments.
+    fn review_comments(review_comment_thread_ids: Vec<String>) -> Self {
+        Self {
+            defer_prompt_until_enqueued: false,
+            eligibility: ReplyEligibility::Standard,
+            operation_id: None,
+            persist_prompt: true,
+            prompt_presentation: ReplyPromptPresentation::HiddenAgent,
+            requires_existing_worker: false,
+            review_comment_thread_ids,
         }
     }
 }
@@ -1564,7 +1605,7 @@ impl SessionManager {
             session_id,
             prompt,
             session_agent,
-            ReplyOptions::standard(review_comment_thread_ids),
+            ReplyOptions::review_comments(review_comment_thread_ids),
         )
         .await
     }
@@ -2109,6 +2150,7 @@ impl SessionManager {
             eligibility,
             operation_id,
             persist_prompt,
+            prompt_presentation,
             requires_existing_worker,
             review_comment_thread_ids,
         } = options;
@@ -2139,24 +2181,14 @@ impl SessionManager {
         let status_transition =
             StatusTransition::from_services(services, handles, persisted_session_id.clone());
 
-        let effective_prompt = prompt;
-
-        if let Some(title) = title_to_save {
-            self.persist_first_message_metadata(
-                services,
-                &persisted_session_id,
-                &effective_prompt.text,
-                &title,
-            )
-            .await;
-
-            if !status_transition.apply(Status::InProgress).await {
-                warn!(
-                    session_id = %persisted_session_id,
-                    "skipped reply status update because the in-memory status did not transition to in-progress"
-                );
-            }
-        }
+        self.persist_initial_reply_metadata(
+            services,
+            &status_transition,
+            &persisted_session_id,
+            &prompt.text,
+            title_to_save,
+        )
+        .await;
 
         if persist_prompt && !defer_prompt_until_enqueued {
             self.append_reply_prompt_line(
@@ -2164,7 +2196,8 @@ impl SessionManager {
                 &transcript,
                 &app_event_tx,
                 &persisted_session_id,
-                &effective_prompt,
+                &prompt,
+                prompt_presentation,
             )
             .await;
         }
@@ -2177,7 +2210,7 @@ impl SessionManager {
         let command = Self::build_session_command(BuildSessionCommandInput {
             is_first_message,
             operation_id,
-            prompt: effective_prompt.clone(),
+            prompt: prompt.clone(),
             published_upstream_ref,
             replay_transcript,
             review_comment_thread_ids,
@@ -2188,7 +2221,7 @@ impl SessionManager {
                 services,
                 &transcript,
                 &persisted_session_id,
-                &effective_prompt,
+                &prompt,
                 command,
                 ReplyEnqueueOptions {
                     idempotent,
@@ -2206,12 +2239,37 @@ impl SessionManager {
                 &transcript,
                 &app_event_tx,
                 &persisted_session_id,
-                &effective_prompt,
+                &prompt,
+                prompt_presentation,
             )
             .await;
         }
 
         enqueued != ReplyEnqueueOutcome::Failed
+    }
+
+    /// Persists first-message metadata and starts a reply that targets a
+    /// blank draft session.
+    async fn persist_initial_reply_metadata(
+        &self,
+        services: &AppServices,
+        status_transition: &StatusTransition,
+        session_id: &SessionId,
+        prompt: &str,
+        title: Option<String>,
+    ) {
+        let Some(title) = title else {
+            return;
+        };
+
+        self.persist_first_message_metadata(services, session_id, prompt, &title)
+            .await;
+        if !status_transition.apply(Status::InProgress).await {
+            warn!(
+                session_id = %session_id,
+                "skipped reply status update because the in-memory status did not transition to in-progress"
+            );
+        }
     }
 
     /// Validates reply eligibility and gathers per-session values needed for
@@ -2319,9 +2377,9 @@ impl SessionManager {
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         session_id: &str,
         prompt: &TurnPrompt,
+        presentation: ReplyPromptPresentation,
     ) {
         let prompt_transcript_text = prompt.transcript_text();
-        let reply_line = Self::formatted_prompt_output(prompt, true);
         SessionTaskService::append_session_transcript_message(
             transcript,
             services.db(),
@@ -2329,12 +2387,15 @@ impl SessionManager {
             &services.session_update_versions(),
             session_id,
             SessionTranscriptMessageAppend {
-                kind: SessionMessageKind::UserPrompt,
+                kind: presentation.message_kind(),
                 raw_content: &prompt_transcript_text,
             },
         )
         .await;
-        self.set_active_prompt_output(session_id, reply_line);
+        if presentation.is_visible() {
+            let reply_line = Self::formatted_prompt_output(prompt, true);
+            self.set_active_prompt_output(session_id, reply_line);
+        }
     }
 
     /// Formats one user prompt block for persisted session output.
@@ -4819,6 +4880,53 @@ mod tests {
                 .content
                 .contains("active session worker is unavailable")
         );
+    }
+
+    #[tokio::test]
+    async fn test_persist_initial_reply_metadata_keeps_terminal_status() {
+        // Arrange
+        let session = test_session("", Status::Merged, None, "");
+        let session_id = session.id.clone();
+        let database = database_with_session(&session).await;
+        let session_manager = session_manager_with_one_session(session);
+        let (services, mut event_rx) = test_services_with_event_receiver(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+        let handles = SessionHandles::new(Status::Merged);
+        let status_transition =
+            StatusTransition::from_services(&services, &handles, session_id.clone());
+
+        // Act
+        session_manager
+            .persist_initial_reply_metadata(
+                &services,
+                &status_transition,
+                &session_id,
+                "Initial prompt",
+                Some("Initial title".to_string()),
+            )
+            .await;
+        let session_row = database
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("sessions should load")
+            .into_iter()
+            .find(|row| session_id == row.id)
+            .expect("session row should exist");
+        let live_status = *handles
+            .status
+            .lock()
+            .expect("status lock should be available");
+
+        // Assert
+        assert_eq!(live_status, Status::Merged);
+        assert_eq!(session_row.status, Status::Merged.to_string());
+        assert_eq!(session_row.prompt, "Initial prompt");
+        assert_eq!(session_row.title.as_deref(), Some("Initial title"));
+        assert!(event_rx.try_recv().is_err());
     }
 
     #[test]
