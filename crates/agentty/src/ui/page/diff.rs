@@ -8,14 +8,14 @@ use std::sync::Arc;
 use ag_tui_text::text_util::{self, inline_text};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use rustc_hash::FxHasher;
 
 use crate::domain::session::Session;
 use crate::presentation::app_mode::{
-    DiffPreview, DiffPreviewUnavailableReason, DiffReviewComments, DiffSidebarFocus,
+    DiffFocus, DiffPreview, DiffPreviewUnavailableReason, DiffReviewComments, DiffSidebarFocus,
 };
 use crate::presentation::{help_action, review_comment as review_comment_selection};
 use crate::ui::component::file_explorer::FileExplorer;
@@ -176,6 +176,14 @@ impl DiffContentSnapshot {
         };
 
         diff_util::filter_diff_lines(&parsed_lines, selected_item)
+    }
+
+    /// Returns whether the active file-tree row identifies one file.
+    pub(crate) fn selected_item_is_file(&self, selected_index: usize) -> bool {
+        matches!(
+            self.tree_items.get(selected_index),
+            Some(FileTreeItem::File(_))
+        )
     }
 
     /// Returns the complete cached diff snapshot as borrowed lines.
@@ -341,6 +349,7 @@ impl DiffContentSnapshot {
 /// Cached fully assembled diff lines for one render-affecting key.
 #[derive(Clone)]
 struct DiffCachedLayout {
+    changed_line_ranges: Arc<[Range<usize>]>,
     line_count: usize,
     lines: Arc<[Line<'static>]>,
     render_layout: diff_util::DiffRenderLayout,
@@ -358,10 +367,55 @@ struct DiffLayoutRequest<'a> {
 /// Final diff layout selected for the current panel and scrollbar state.
 #[derive(Clone)]
 pub(crate) struct DiffResolvedLayout {
+    pub(crate) changed_line_ranges: Arc<[Range<usize>]>,
     pub(crate) line_count: usize,
     pub(crate) lines: Arc<[Line<'static>]>,
     pub(crate) render_layout: diff_util::DiffRenderLayout,
     pub(crate) show_scrollbar: bool,
+}
+
+impl DiffResolvedLayout {
+    /// Returns the number of rendered addition and deletion source lines.
+    pub(crate) fn changed_line_count(&self) -> usize {
+        self.changed_line_ranges.len()
+    }
+
+    /// Returns the scroll offset that keeps one changed source line visible.
+    pub(crate) fn changed_line_scroll_offset(
+        &self,
+        selected_diff_line_index: usize,
+        current_scroll_offset: u16,
+    ) -> Option<u16> {
+        let selected_range = self.changed_line_ranges.get(selected_diff_line_index)?;
+        let viewport_height = usize::from(self.render_layout.viewport_height);
+        if viewport_height == 0 {
+            return Some(0);
+        }
+
+        let current_start = usize::from(current_scroll_offset);
+        let current_end = current_start.saturating_add(viewport_height);
+        let next_scroll_offset = if selected_range.start < current_start {
+            selected_range.start
+        } else if selected_range.end > current_end {
+            selected_range.end.saturating_sub(viewport_height)
+        } else {
+            current_start
+        };
+        let next_scroll_offset = u16::try_from(next_scroll_offset).unwrap_or(u16::MAX);
+
+        Some(diff_util::clamp_diff_scroll_offset(
+            next_scroll_offset,
+            self.line_count,
+            self.render_layout.viewport_height,
+        ))
+    }
+}
+
+/// Fully assembled diff rows and the rendered range owned by each changed
+/// source line.
+struct DiffBuiltLines {
+    changed_line_ranges: Vec<Range<usize>>,
+    lines: Vec<Line<'static>>,
 }
 
 /// Final markdown-preview rows selected for the current panel width.
@@ -463,6 +517,7 @@ impl DiffLayoutCache {
         );
         if !show_scrollbar {
             return DiffResolvedLayout {
+                changed_line_ranges: layout_without_scrollbar.changed_line_ranges,
                 line_count: layout_without_scrollbar.line_count,
                 lines: layout_without_scrollbar.lines,
                 render_layout: layout_without_scrollbar.render_layout,
@@ -482,6 +537,7 @@ impl DiffLayoutCache {
         );
 
         DiffResolvedLayout {
+            changed_line_ranges: layout_with_scrollbar.changed_line_ranges,
             line_count: layout_with_scrollbar.line_count,
             lines: layout_with_scrollbar.lines,
             render_layout: layout_with_scrollbar.render_layout,
@@ -536,10 +592,11 @@ impl DiffLayoutCache {
         let selected_lines = content.selected_lines(selected_index);
         let render_layout =
             diff_util::diff_render_layout(&selected_lines, diff_area, reserve_scrollbar_width);
-        let lines = DiffPage::build_diff_lines(&selected_lines, render_layout);
+        let built_lines = DiffPage::build_diff_lines(&selected_lines, render_layout);
         let layout = DiffCachedLayout {
-            line_count: lines.len(),
-            lines: Arc::from(lines),
+            changed_line_ranges: Arc::from(built_lines.changed_line_ranges),
+            line_count: built_lines.lines.len(),
+            lines: Arc::from(built_lines.lines),
             render_layout,
         };
         self.store_layout(DiffLayoutCacheEntry {
@@ -594,6 +651,8 @@ pub struct DiffPage<'a> {
     pub diff_layout_cache: &'a DiffLayoutCache,
     /// Selected file-tree row in the left panel.
     pub file_explorer_selected_index: usize,
+    /// Panel currently receiving changed-file navigation input.
+    pub focus: DiffFocus,
     /// Shared cache for rendered markdown preview rows.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Rendered-markdown preview state for the selected file.
@@ -602,6 +661,8 @@ pub struct DiffPage<'a> {
     pub review_comments: Option<&'a DiffReviewComments>,
     /// Vertical scroll offset inside the diff panel.
     pub scroll_offset: u16,
+    /// Addition or deletion selected in the right-hand diff panel.
+    pub selected_diff_line_index: usize,
     /// Session whose diff is being rendered.
     pub session: &'a Session,
     /// Sidebar section currently controlling the right pane.
@@ -617,6 +678,8 @@ pub struct DiffPageInput<'a> {
     pub diff_layout_cache: &'a DiffLayoutCache,
     /// Selected file-tree row in the left panel.
     pub file_explorer_selected_index: usize,
+    /// Panel currently receiving changed-file navigation input.
+    pub focus: DiffFocus,
     /// Shared cache for rendered markdown preview rows.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Rendered-markdown preview state for the selected file.
@@ -625,6 +688,8 @@ pub struct DiffPageInput<'a> {
     pub review_comments: Option<&'a DiffReviewComments>,
     /// Vertical scroll offset inside the diff panel.
     pub scroll_offset: u16,
+    /// Addition or deletion selected in the right-hand diff panel.
+    pub selected_diff_line_index: usize,
     /// Session whose diff is being rendered.
     pub session: &'a Session,
     /// Sidebar section currently controlling the right pane.
@@ -638,10 +703,12 @@ impl<'a> DiffPage<'a> {
             diff,
             diff_layout_cache,
             file_explorer_selected_index,
+            focus,
             markdown_render_cache,
             preview,
             review_comments,
             scroll_offset,
+            selected_diff_line_index,
             session,
             sidebar_focus,
         } = input;
@@ -650,10 +717,12 @@ impl<'a> DiffPage<'a> {
             diff,
             diff_layout_cache,
             file_explorer_selected_index,
+            focus,
             markdown_render_cache,
             preview,
             review_comments,
             scroll_offset,
+            selected_diff_line_index,
             session,
             sidebar_focus,
         }
@@ -697,17 +766,25 @@ impl<'a> DiffPage<'a> {
             layout.line_count,
             layout.render_layout.viewport_height,
         );
+        let selected_range = (self.focus == DiffFocus::Content)
+            .then(|| {
+                layout
+                    .changed_line_ranges
+                    .get(self.selected_diff_line_index)
+            })
+            .flatten();
         let paint_lines = Self::borrowed_visible_lines(
             &layout.lines,
             scroll_offset,
             layout.render_layout.viewport_height,
+            selected_range,
         );
 
         let paragraph = Paragraph::new(paint_lines).block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(title)
-                .border_style(style::border_style()),
+                .border_style(self.content_border_style()),
         );
 
         f.render_widget(paragraph, area);
@@ -738,12 +815,13 @@ impl<'a> DiffPage<'a> {
                     &layout.lines,
                     scroll_offset,
                     layout.viewport_height,
+                    None,
                 );
                 let paragraph = Paragraph::new(paint_lines).block(
                     Block::default()
                         .borders(Borders::ALL)
                         .title(title)
-                        .border_style(style::border_style()),
+                        .border_style(self.content_border_style()),
                 );
                 frame.render_widget(paragraph, area);
 
@@ -755,10 +833,22 @@ impl<'a> DiffPage<'a> {
                 }
             }
             DiffPreview::Loading { .. } => {
-                render_preview_notice(frame, area, title, " Loading preview… ");
+                render_preview_notice(
+                    frame,
+                    area,
+                    title,
+                    " Loading preview… ",
+                    self.content_border_style(),
+                );
             }
             DiffPreview::Unavailable { reason, .. } => {
-                render_preview_notice(frame, area, title, preview_unavailable_message(reason));
+                render_preview_notice(
+                    frame,
+                    area,
+                    title,
+                    preview_unavailable_message(reason),
+                    self.content_border_style(),
+                );
             }
             DiffPreview::Off { .. } | DiffPreview::Unsupported { .. } => {}
         }
@@ -771,6 +861,7 @@ impl<'a> DiffPage<'a> {
         lines: &'line [Line<'static>],
         scroll_offset: u16,
         viewport_height: u16,
+        selected_range: Option<&Range<usize>>,
     ) -> Vec<Line<'line>> {
         let start_index = usize::from(scroll_offset).min(lines.len());
         let end_index = start_index
@@ -779,8 +870,32 @@ impl<'a> DiffPage<'a> {
 
         lines[start_index..end_index]
             .iter()
-            .map(text_util::borrowed_paint_line)
+            .enumerate()
+            .map(|(visible_index, line)| {
+                let mut paint_line = text_util::borrowed_paint_line(line);
+                let rendered_index = start_index.saturating_add(visible_index);
+                if selected_range.is_some_and(|range| range.contains(&rendered_index)) {
+                    paint_line.style = paint_line.style.add_modifier(Modifier::REVERSED);
+                    for span in &mut paint_line.spans {
+                        span.style = span.style.add_modifier(Modifier::REVERSED);
+                    }
+                }
+
+                paint_line
+            })
             .collect()
+    }
+
+    /// Returns accent chrome while the right-hand changed-line cursor owns
+    /// focus.
+    fn content_border_style(&self) -> Style {
+        if self.focus == DiffFocus::Content {
+            return Style::default()
+                .fg(style::palette::accent())
+                .add_modifier(Modifier::BOLD);
+        }
+
+        style::border_style()
     }
 
     /// Builds wrapped diff lines for the diff panel, optionally reserving one
@@ -788,23 +903,33 @@ impl<'a> DiffPage<'a> {
     fn build_diff_lines(
         parsed: &[DiffLine<'_>],
         layout: diff_util::DiffRenderLayout,
-    ) -> Vec<Line<'static>> {
+    ) -> DiffBuiltLines {
         let gutter_style = diff_util::body_diff_line_gutter_style();
         let mut lines: Vec<Line<'static>> = Vec::with_capacity(parsed.len());
+        let mut changed_line_ranges = Vec::new();
 
         for diff_line in parsed {
+            let rendered_start_index = lines.len();
             if Self::append_special_diff_line(&mut lines, diff_line) {
                 continue;
             }
 
             Self::append_body_diff_line(&mut lines, diff_line, layout, gutter_style);
+            let is_changed_line = diff_line.kind == DiffLineKind::Addition
+                || diff_line.kind == DiffLineKind::Deletion;
+            if is_changed_line {
+                changed_line_ranges.push(rendered_start_index..lines.len());
+            }
         }
 
         if lines.is_empty() {
             lines.push(Line::from(" No changes found. "));
         }
 
-        lines
+        DiffBuiltLines {
+            changed_line_ranges,
+            lines,
+        }
     }
 
     /// Appends file and hunk headers, returning whether the line was consumed.
@@ -908,6 +1033,19 @@ pub(crate) fn diff_view_max_scroll_offset(
     )
 }
 
+/// Returns cached layout metadata for changed-line navigation in one file.
+pub(crate) fn diff_changed_line_layout(
+    diff: &str,
+    selected_file_index: usize,
+    terminal_area: Rect,
+    diff_layout_cache: &DiffLayoutCache,
+) -> DiffResolvedLayout {
+    let diff_area = diff_util::diff_page_areas(terminal_area).diff_area;
+    let content = diff_layout_cache.content(diff);
+
+    diff_layout_cache.resolved_layout(&content, selected_file_index, diff_area)
+}
+
 impl Page for DiffPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = diff_util::diff_page_areas(area);
@@ -920,7 +1058,7 @@ impl Page for DiffPage<'_> {
             FILE_LIST_CHANGE_TOTAL_SPAN_COUNT,
         )
         .selected_index(self.file_explorer_selected_index)
-        .focused(self.sidebar_focus == DiffSidebarFocus::Files)
+        .focused(self.sidebar_focus == DiffSidebarFocus::Files && self.focus == DiffFocus::Files)
         .render(f, sidebar_areas.file_list_area);
 
         let review_comment_page = self.review_comments.map(|review_comments| {
@@ -998,6 +1136,7 @@ impl Page for DiffPage<'_> {
             &help_action::diff_footer_actions(
                 self.review_comments.is_some(),
                 self.sidebar_focus,
+                self.focus,
                 can_mark_selected,
                 can_submit,
             ),
@@ -1046,12 +1185,18 @@ fn diff_preview_layout(
 }
 
 /// Renders one bordered preview loading or availability message.
-fn render_preview_notice(frame: &mut Frame, area: Rect, title: Line<'static>, message: &str) {
+fn render_preview_notice(
+    frame: &mut Frame,
+    area: Rect,
+    title: Line<'static>,
+    message: &str,
+    border_style: Style,
+) {
     let paragraph = Paragraph::new(Line::from(message.to_string())).block(
         Block::default()
             .borders(Borders::ALL)
             .title(title)
-            .border_style(style::border_style()),
+            .border_style(border_style),
     );
     frame.render_widget(paragraph, area);
 }
@@ -1096,10 +1241,12 @@ mod tests {
             diff,
             diff_layout_cache: test_diff_layout_cache(),
             file_explorer_selected_index,
+            focus: DiffFocus::Files,
             markdown_render_cache: test_markdown_render_cache(),
             preview: test_diff_preview(),
             review_comments: None,
             scroll_offset,
+            selected_diff_line_index: 0,
             session,
             sidebar_focus: DiffSidebarFocus::Files,
         })
@@ -1116,10 +1263,12 @@ mod tests {
             diff,
             diff_layout_cache: test_diff_layout_cache(),
             file_explorer_selected_index,
+            focus: DiffFocus::Files,
             markdown_render_cache: test_markdown_render_cache(),
             preview,
             review_comments: None,
             scroll_offset,
+            selected_diff_line_index: 0,
             session,
             sidebar_focus: DiffSidebarFocus::Files,
         })
@@ -1161,6 +1310,14 @@ mod tests {
             .content()
             .iter()
             .filter(|cell| cell.symbol() == symbol && cell.fg == style::palette::border())
+            .count()
+    }
+
+    fn modifier_cell_count(buffer: &ratatui::buffer::Buffer, modifier: Modifier) -> usize {
+        buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.modifier.contains(modifier))
             .count()
     }
 
@@ -1305,6 +1462,105 @@ mod tests {
             Some(style::palette::text_muted())
         );
         assert_eq!(lines[0].spans[4].style.fg, Some(style::palette::danger()));
+    }
+
+    #[test]
+    fn test_diff_content_snapshot_identifies_files() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(SAMPLE_DIFF);
+
+        // Act
+        let folder_is_file = content.selected_item_is_file(0);
+        let file_is_file = content.selected_item_is_file(1);
+
+        // Assert
+        assert!(!folder_is_file);
+        assert!(file_is_file);
+    }
+
+    #[test]
+    fn test_borrowed_visible_lines_reverses_selected_rendered_range() {
+        // Arrange
+        let lines = [
+            Line::from(Span::raw("first")),
+            Line::from(Span::raw("selected")),
+            Line::from(Span::raw("last")),
+        ];
+
+        // Act
+        let paint_lines = DiffPage::borrowed_visible_lines(&lines, 0, 3, Some(&(1..2)));
+
+        // Assert
+        assert!(
+            !paint_lines[0]
+                .style
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert!(
+            paint_lines[1]
+                .style
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert!(
+            paint_lines[1].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+    }
+
+    #[test]
+    fn test_diff_changed_line_layout_counts_changes_and_keeps_cursor_visible() {
+        // Arrange
+        let diff = format!(
+            "diff --git a/src/main.rs b/src/main.rs\n@@ -0,0 +1,40 @@\n{}",
+            (0..40)
+                .map(|index| format!("+line {index}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let cache = DiffLayoutCache::default();
+        let terminal_area = Rect::new(0, 0, 80, 12);
+        let zero_height_area = Rect::new(0, 0, 80, 1);
+
+        // Act
+        let layout = diff_changed_line_layout(&diff, 0, terminal_area, &cache);
+        let scrolled_down = layout
+            .changed_line_scroll_offset(20, 0)
+            .expect("selected changed line should have a rendered range");
+        let scrolled_up = layout
+            .changed_line_scroll_offset(0, scrolled_down)
+            .expect("first changed line should have a rendered range");
+        let zero_height_layout = diff_changed_line_layout(&diff, 0, zero_height_area, &cache);
+        let zero_height_scroll_offset = zero_height_layout
+            .changed_line_scroll_offset(0, scrolled_down)
+            .expect("first changed line should remain selectable without a viewport");
+
+        // Assert
+        assert_eq!(layout.changed_line_count(), 40);
+        assert!(scrolled_down > 0);
+        assert!(scrolled_up < scrolled_down);
+        assert_eq!(zero_height_scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_content_border_style_uses_accent_only_for_diff_focus() {
+        // Arrange
+        let session = session_fixture();
+        let mut page = new_diff_page(&session, SAMPLE_DIFF, 0, 1);
+        let file_border_style = page.content_border_style();
+
+        // Act
+        page.focus = DiffFocus::Content;
+        let content_border_style = page.content_border_style();
+
+        // Assert
+        assert_eq!(file_border_style.fg, Some(style::palette::border()));
+        assert_eq!(content_border_style.fg, Some(style::palette::accent()));
+        assert!(content_border_style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -1520,6 +1776,40 @@ mod tests {
     }
 
     #[test]
+    fn test_render_highlights_selected_changed_line_in_content_focus() {
+        // Arrange
+        let session = session_fixture();
+        let diff = concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -1,2 +1,2 @@\n",
+            "-old content\n",
+            "+new content\n"
+        );
+        let mut diff_page = new_diff_page(&session, diff, 0, 1);
+        diff_page.focus = DiffFocus::Content;
+        diff_page.selected_diff_line_index = 1;
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut diff_page, frame, area);
+            })
+            .expect("failed to draw focused diff page");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        assert!(modifier_cell_count(buffer, Modifier::REVERSED) > 0);
+        assert!(buffer.content().iter().any(|cell| {
+            cell.symbol() == "┌"
+                && cell.fg == style::palette::accent()
+                && cell.modifier.contains(Modifier::BOLD)
+        }));
+    }
+
+    #[test]
     fn test_render_shows_scrollbar_for_overflowing_diff() {
         // Arrange
         let session = session_fixture();
@@ -1705,10 +1995,12 @@ mod tests {
             diff,
             diff_layout_cache: &diff_layout_cache,
             file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
             markdown_render_cache: &markdown_render_cache,
             preview: &preview,
             review_comments: None,
             scroll_offset: 12,
+            selected_diff_line_index: 0,
             session: &session,
             sidebar_focus: DiffSidebarFocus::Files,
         });

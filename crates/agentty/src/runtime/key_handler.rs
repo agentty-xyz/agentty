@@ -90,7 +90,7 @@ where
                 review_comments: Some(review_comments),
                 ..
             } if review_comments.sidebar_focus == DiffSidebarFocus::Comments
-                && !matches!(key.code, KeyCode::Char('?' | 'q') | KeyCode::Esc) =>
+                && !matches!(key.code, KeyCode::Char('?' | 'q')) =>
             {
                 handle_review_comment_key(app, presentation, terminal, key).await
             }
@@ -925,7 +925,9 @@ mod tests {
     use crate::domain::orchestration::OrchestrationStatus;
     use crate::domain::session_message::SessionTranscript;
     use crate::infra::tmux::MockTmuxClient;
-    use crate::presentation::app_mode::{ConfirmationViewMode, DiffPreview, DiffReviewComments};
+    use crate::presentation::app_mode::{
+        ConfirmationViewMode, DiffFocus, DiffPreview, DiffReviewComments,
+    };
 
     fn session_replay_text(session: &crate::domain::session::Session) -> String {
         session
@@ -1741,12 +1743,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_key_event_routes_review_comment_back_shortcut() {
+    async fn test_handle_key_event_routes_review_comment_escape_to_files() {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Diff {
             diff: String::new(),
             file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
+            selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: Some(DiffReviewComments {
                 sidebar_focus: DiffSidebarFocus::Comments,
@@ -1773,9 +1777,13 @@ mod tests {
         assert!(matches!(event_result, Ok(EventResult::Continue)));
         assert!(matches!(
             app.mode,
-            AppMode::View {
+            AppMode::Diff {
+                review_comments: Some(DiffReviewComments {
+                    sidebar_focus: DiffSidebarFocus::Files,
+                    ..
+                }),
                 ref session_id,
-                scroll_offset: None,
+                ..
             } if session_id == "session-id"
         ));
     }

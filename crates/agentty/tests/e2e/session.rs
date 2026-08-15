@@ -2308,6 +2308,25 @@ fn seed_slow_review_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Err
     )
 }
 
+/// Seeds enough changed lines to demonstrate right-pane cursor navigation and
+/// viewport scrolling without a live agent backend.
+fn seed_scrollable_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+    seed_review_worktree_with_diff(env)?;
+
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    let changed_lines = (0..80)
+        .map(|line_index| format!("    println!(\"changed line {line_index:02}\");"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(
+        session_worktree.join("src/main.rs"),
+        format!("fn main() {{\n{changed_lines}\n}}\n"),
+    )?;
+
+    Ok(())
+}
+
 /// Seeds a review-ready worktree whose only change is previewable markdown.
 fn seed_markdown_diff_preview(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
@@ -6775,6 +6794,48 @@ fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
     Ok(())
 }
 
+/// Verify that `Enter` moves focus from a selected file into the right-hand
+/// patch and line navigation scrolls through the file's changed lines.
+#[test]
+fn test_diff_changed_line_navigation() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("diff_changed_line_navigation")
+        .with_git()
+        .setup(seed_scrollable_diff_session)
+        .run(
+            |scenario| {
+                let scenario = scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("main.rs", 5000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Esc/Left: files", 5000);
+                let scenario = (0..70).fold(scenario, |scenario, _| scenario.press_key("Down"));
+
+                scenario
+                    .wait_for_text("changed line 70", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "diff_changed_line_navigation",
+                        "Changed-line cursor scrolled through the selected file",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+
+                assertion::assert_text_in_region(frame, "changed line 70", &full);
+                assertion::assert_text_in_region(frame, "Esc/Left: files", &full);
+                assertion::assert_text_in_region(frame, "j/k: select line", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that `p` toggles a changed markdown file between raw diff and a
 /// rendered markdown/mermaid preview.
 #[test]
@@ -6923,6 +6984,44 @@ fn test_session_review_comments() -> E2eResult {
                 assertion::assert_not_visible(frame, "a: address");
                 assertion::assert_not_visible(frame, "d: deny");
                 assertion::assert_not_visible(frame, "Enter: submit");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that `Esc` returns review-comment focus to Files without leaving
+/// Diff mode.
+#[test]
+fn test_review_comments_escape_focuses_files() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_comments_escape_focuses_files")
+        .with_git()
+        .with_terminal_size(160, 60)
+        .setup(|env| {
+            seed_review_ready_session_with_review_request(env)?;
+            seed_sessions_startup_tab(env)
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("c: comments", 5000)
+                    .press_key("c")
+                    .wait_for_text("a: address", 5000)
+                    .wait_for_text("q: back", 5000)
+                    .wait_for_text("f/Esc: files", 5000)
+                    .press_key("Esc")
+                    .wait_for_text("c: comments", 5000)
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+
+                assertion::assert_text_in_region(frame, "Files", &full);
+                assertion::assert_text_in_region(frame, "c: comments", &full);
+                assertion::assert_not_visible(frame, "a: address");
             },
         )?;
 

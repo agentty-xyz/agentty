@@ -12,7 +12,9 @@ use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
     TransientMessageSlot,
 };
-use crate::presentation::app_mode::{AppMode, DiffPreview, DiffRestoreTarget, DiffSidebarFocus};
+use crate::presentation::app_mode::{
+    AppMode, DiffFocus, DiffPreview, DiffRestoreTarget, DiffSidebarFocus,
+};
 
 /// Completed session-diff task ready for stale-safe reducer application.
 pub(crate) struct SessionDiffUpdate {
@@ -442,11 +444,13 @@ impl App {
         self.mode = AppMode::Diff {
             diff,
             file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
             preview: DiffPreview::default(),
             review_comments,
             restore,
             scroll_cache: None,
             scroll_offset: 0,
+            selected_diff_line_index: 0,
             session_id,
         };
     }

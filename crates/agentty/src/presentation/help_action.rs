@@ -1,5 +1,5 @@
 use crate::domain::session::{PublishBranchAction, Session, Status};
-use crate::presentation::app_mode::DiffSidebarFocus;
+use crate::presentation::app_mode::{DiffFocus, DiffSidebarFocus};
 
 /// Footer shortcut label for prompt image paste.
 ///
@@ -770,12 +770,13 @@ fn prompt_action_help_action(session_state: ViewSessionState) -> HelpAction {
 /// below filters actions to those usable in the current sidebar state.
 pub(crate) fn diff_actions() -> Vec<HelpAction> {
     vec![
-        HelpAction::new("back", "q/Esc", "Back to session"),
+        HelpAction::new("back", "q", "Back to session"),
         HelpAction::new("select item", "j/k", "Select file or comment"),
-        HelpAction::new("files", "f", "Focus changed files"),
+        HelpAction::new("open file", "Enter", "Focus selected file changes"),
+        HelpAction::new("files", "f/Esc/Left", "Focus changed files"),
         HelpAction::new("comments", "c", "Focus review comments"),
         HelpAction::new("preview", "p", "Toggle selected markdown preview"),
-        HelpAction::new("scroll pane", "Up/Down", "Scroll right panel"),
+        HelpAction::new("select line", "Up/Down", "Select changed line"),
         HelpAction::new("address", "a", "Mark comment for agent address"),
         HelpAction::new("deny", "d", "Mark comment for agent denial"),
         HelpAction::new("submit", "Enter", "Submit marked comments to the agent"),
@@ -787,19 +788,31 @@ pub(crate) fn diff_actions() -> Vec<HelpAction> {
 pub(crate) fn diff_footer_actions(
     has_review_comments: bool,
     sidebar_focus: DiffSidebarFocus,
+    focus: DiffFocus,
     can_mark_selected: bool,
     can_submit: bool,
 ) -> Vec<HelpAction> {
     let mut actions = vec![HelpAction::new("back", "q/Esc", "Back to session")];
     match sidebar_focus {
-        DiffSidebarFocus::Files => {
+        DiffSidebarFocus::Files if focus == DiffFocus::Files => {
             actions.push(HelpAction::new("select file", "j/k", "Select file"));
+            actions.push(HelpAction::new(
+                "open file",
+                "Enter",
+                "Focus selected file changes",
+            ));
             actions.push(HelpAction::new("preview", "p", "Toggle markdown preview"));
             if has_review_comments {
                 actions.push(HelpAction::new("comments", "c", "Focus review comments"));
             }
         }
+        DiffSidebarFocus::Files => {
+            actions[0] = HelpAction::new("back", "q", "Back to session");
+            actions.push(HelpAction::new("files", "Esc/Left", "Focus changed files"));
+            actions.push(HelpAction::new("select line", "j/k", "Select changed line"));
+        }
         DiffSidebarFocus::Comments => {
+            actions[0] = HelpAction::new("back", "q", "Back to session");
             actions.push(HelpAction::new("select comment", "j/k", "Select comment"));
             if can_mark_selected {
                 actions.push(HelpAction::new(
@@ -823,7 +836,7 @@ pub(crate) fn diff_footer_actions(
         }
     }
     if sidebar_focus == DiffSidebarFocus::Comments {
-        actions.push(HelpAction::new("files", "f", "Focus changed files"));
+        actions.push(HelpAction::new("files", "f/Esc", "Focus changed files"));
         actions.push(HelpAction::new(
             "scroll pane",
             "Up/Down",
@@ -2003,31 +2016,66 @@ mod tests {
             .iter()
             .map(|action| action.key)
             .collect::<Vec<_>>();
-        let file_footer_keys = diff_footer_actions(true, DiffSidebarFocus::Files, true, true)
-            .iter()
-            .map(|action| action.key)
-            .collect::<Vec<_>>();
+        let file_footer_keys =
+            diff_footer_actions(true, DiffSidebarFocus::Files, DiffFocus::Files, true, true)
+                .iter()
+                .map(|action| action.key)
+                .collect::<Vec<_>>();
 
         // Assert
         assert_eq!(
             diff_keys,
             [
-                "q/Esc", "j/k", "f", "c", "p", "Up/Down", "a", "d", "Enter", "?"
+                "q",
+                "j/k",
+                "Enter",
+                "f/Esc/Left",
+                "c",
+                "p",
+                "Up/Down",
+                "a",
+                "d",
+                "Enter",
+                "?"
             ]
         );
-        assert_eq!(file_footer_keys, ["q/Esc", "j/k", "p", "c", "?"]);
+        assert_eq!(file_footer_keys, ["q/Esc", "j/k", "Enter", "p", "c", "?"]);
+    }
+
+    #[test]
+    fn test_diff_content_footer_exposes_line_navigation_and_file_return() {
+        // Arrange, Act
+        let content_footer_keys = diff_footer_actions(
+            true,
+            DiffSidebarFocus::Files,
+            DiffFocus::Content,
+            false,
+            false,
+        )
+        .iter()
+        .map(|action| action.key)
+        .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(content_footer_keys, ["q", "Esc/Left", "j/k", "?"]);
     }
 
     #[test]
     fn test_review_comment_actions_include_enabled_batch_keys() {
         // Arrange, Act
-        let actions = diff_footer_actions(true, DiffSidebarFocus::Comments, true, true);
+        let actions = diff_footer_actions(
+            true,
+            DiffSidebarFocus::Comments,
+            DiffFocus::Files,
+            true,
+            true,
+        );
         let comment_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert
         assert_eq!(
             comment_keys,
-            ["q/Esc", "j/k", "a", "d", "Enter", "f", "Up/Down", "?"]
+            ["q", "j/k", "a", "d", "Enter", "f/Esc", "Up/Down", "?"]
         );
     }
 }

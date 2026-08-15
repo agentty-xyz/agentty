@@ -24,12 +24,14 @@ pub(crate) async fn handle_with_cache(
     let AppMode::Diff {
         diff,
         file_explorer_selected_index,
+        focus,
         preview,
         review_comments: Some(mut review_comments),
         restore,
         mut scroll_cache,
         session_id,
         mut scroll_offset,
+        selected_diff_line_index,
     } = mode
     else {
         app.mode = mode;
@@ -49,10 +51,12 @@ pub(crate) async fn handle_with_cache(
         app.mode = AppMode::Diff {
             diff,
             file_explorer_selected_index,
+            focus,
             preview,
             review_comments: Some(review_comments),
             restore,
             scroll_cache,
+            selected_diff_line_index,
             session_id: session_id.clone(),
             scroll_offset,
         };
@@ -64,7 +68,54 @@ pub(crate) async fn handle_with_cache(
         return EventResult::Continue;
     }
 
-    if can_reply {
+    handle_review_comment_navigation(
+        &ReviewCommentNavigationInput {
+            can_reply,
+            content_area,
+            diff: &diff,
+            item_count,
+            render_cache_store,
+        },
+        key,
+        &mut review_comments,
+        &mut scroll_cache,
+        &mut scroll_offset,
+    );
+
+    app.mode = AppMode::Diff {
+        diff,
+        file_explorer_selected_index,
+        focus,
+        preview,
+        review_comments: Some(review_comments),
+        restore,
+        scroll_cache,
+        selected_diff_line_index,
+        session_id,
+        scroll_offset,
+    };
+
+    EventResult::Continue
+}
+
+/// Immutable inputs used while navigating review comments.
+struct ReviewCommentNavigationInput<'a> {
+    can_reply: bool,
+    content_area: Rect,
+    diff: &'a str,
+    item_count: usize,
+    render_cache_store: &'a RenderCacheStore,
+}
+
+/// Applies comment selection, marking, focus, and detail-scroll keys.
+fn handle_review_comment_navigation(
+    input: &ReviewCommentNavigationInput<'_>,
+    key: KeyEvent,
+    review_comments: &mut DiffReviewComments,
+    scroll_cache: &mut Option<DiffScrollCache>,
+    scroll_offset: &mut u16,
+) {
+    if input.can_reply {
         toggle_selected_comment_action(
             &key,
             review_comments.comment_snapshot.as_ref(),
@@ -75,53 +126,43 @@ pub(crate) async fn handle_with_cache(
     match key.code {
         KeyCode::Char('j') if key.modifiers == KeyModifiers::NONE => {
             let next_index =
-                next_selected_index(review_comments.selected_comment_index, item_count);
+                next_selected_index(review_comments.selected_comment_index, input.item_count);
             if next_index != review_comments.selected_comment_index {
                 review_comments.selected_comment_index = next_index;
-                scroll_offset = 0;
+                *scroll_offset = 0;
             }
         }
         KeyCode::Char('k') if key.modifiers == KeyModifiers::NONE => {
             let previous_index =
-                previous_selected_index(review_comments.selected_comment_index, item_count);
+                previous_selected_index(review_comments.selected_comment_index, input.item_count);
             if previous_index != review_comments.selected_comment_index {
                 review_comments.selected_comment_index = previous_index;
-                scroll_offset = 0;
+                *scroll_offset = 0;
             }
         }
         KeyCode::Down => {
             let max_scroll_offset = review_comment_max_scroll_offset(
-                render_cache_store,
-                content_area,
-                &diff,
+                input.render_cache_store,
+                input.content_area,
+                input.diff,
                 review_comments.comment_snapshot.as_ref(),
                 review_comments.comment_error.as_deref(),
                 review_comments.is_loading_comments,
                 review_comments.selected_comment_index,
             );
-            scroll_offset = increment_scroll_offset(scroll_offset, max_scroll_offset);
+            *scroll_offset = increment_scroll_offset(*scroll_offset, max_scroll_offset);
         }
         KeyCode::Up => {
-            scroll_offset = scroll_offset.saturating_sub(1);
+            *scroll_offset = scroll_offset.saturating_sub(1);
+        }
+        KeyCode::Esc => {
+            focus_files(review_comments, scroll_cache, scroll_offset);
         }
         KeyCode::Char('f') if key.modifiers == KeyModifiers::NONE => {
-            focus_files(&mut review_comments, &mut scroll_cache, &mut scroll_offset);
+            focus_files(review_comments, scroll_cache, scroll_offset);
         }
         _ => {}
     }
-
-    app.mode = AppMode::Diff {
-        diff,
-        file_explorer_selected_index,
-        preview,
-        review_comments: Some(review_comments),
-        restore,
-        scroll_cache,
-        session_id,
-        scroll_offset,
-    };
-
-    EventResult::Continue
 }
 
 fn focus_files(
@@ -239,7 +280,7 @@ mod tests {
 
     use super::*;
     use crate::domain::session::{SessionId, SessionRole, Status};
-    use crate::presentation::app_mode::{DiffPreview, DiffReviewComments};
+    use crate::presentation::app_mode::{DiffFocus, DiffPreview, DiffReviewComments};
     use crate::test_support::SessionFixtureBuilder;
 
     fn comment_snapshot() -> ReviewCommentSnapshot {
@@ -274,6 +315,8 @@ mod tests {
         AppMode::Diff {
             diff: String::new(),
             file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
+            selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: Some(DiffReviewComments {
                 comment_actions,

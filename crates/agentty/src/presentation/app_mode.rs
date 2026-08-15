@@ -82,6 +82,16 @@ pub enum DiffSidebarFocus {
     Comments,
 }
 
+/// Keyboard focus within the changed-files diff workspace.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DiffFocus {
+    /// The changed-file tree receives navigation input.
+    #[default]
+    Files,
+    /// The right-hand diff panel receives line navigation input.
+    Content,
+}
+
 /// Semantic intent for a `Confirmation` overlay interaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConfirmationIntent {
@@ -522,6 +532,8 @@ pub enum AppMode {
         diff: String,
         /// Selected file or folder in the left explorer tree.
         file_explorer_selected_index: usize,
+        /// Panel currently receiving changed-file navigation input.
+        focus: DiffFocus,
         /// Sticky rendered-markdown preview state for the selected file.
         preview: DiffPreview,
         /// Optional linked review-request comments rendered below the files.
@@ -534,6 +546,8 @@ pub enum AppMode {
         scroll_cache: Option<DiffScrollCache>,
         /// Vertical offset inside the rendered right panel.
         scroll_offset: u16,
+        /// Addition or deletion selected in the right-hand diff panel.
+        selected_diff_line_index: usize,
         /// Session whose diff is currently visible.
         session_id: SessionId,
     },
@@ -611,6 +625,8 @@ pub enum HelpContext {
         diff: String,
         /// Selected file-tree row to restore.
         file_explorer_selected_index: usize,
+        /// Panel that held keyboard focus before help opened.
+        focus: DiffFocus,
         /// Rendered-markdown preview state to restore.
         preview: DiffPreview,
         /// Optional linked review-request comments to restore.
@@ -623,6 +639,8 @@ pub enum HelpContext {
         session_id: SessionId,
         /// Diff-panel scroll position to restore.
         scroll_offset: u16,
+        /// Addition or deletion selected before help opened.
+        selected_diff_line_index: usize,
     },
 }
 
@@ -685,18 +703,22 @@ impl HelpContext {
             HelpContext::Diff {
                 diff,
                 file_explorer_selected_index,
+                focus,
                 preview,
                 review_comments,
                 restore,
+                selected_diff_line_index,
                 session_id,
                 scroll_offset,
             } => AppMode::Diff {
                 diff,
                 file_explorer_selected_index,
+                focus,
                 preview,
                 review_comments: review_comments.map(|review_comments| *review_comments),
                 restore,
                 scroll_cache: None,
+                selected_diff_line_index,
                 session_id,
                 scroll_offset,
             },

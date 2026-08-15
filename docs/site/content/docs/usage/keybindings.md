@@ -252,17 +252,22 @@ and standalone comments are read-only.
 ## Diff Mode
 
 Pressing `d` from session view opens Diff mode focused on Files with the right panel
-showing the git diff. Linked review requests add a Comments section below Files; `c`
-focuses Comments, and `f` returns to Files.
+showing the git diff. Press `Enter` on a file to focus its changed lines, then use `j` /
+`k` or the arrow keys to move the line cursor. `Esc`, `Left`, `h`, or `f` returns focus
+to the file tree. Linked review requests add a Comments section below Files; `c` focuses
+Comments, and `f` returns to Files.
 
-| Key           | Action                       |
-| ------------- | ---------------------------- |
-| `q` / `Esc`   | Back to session              |
-| `j` / `k`     | Select file                  |
-| `p`           | Toggle markdown preview      |
-| `c`           | Focus linked review comments |
-| `Up` / `Down` | Scroll selected right panel  |
-| `?`           | Help                         |
+| Key                | Action                                    |
+| ------------------ | ----------------------------------------- |
+| `q`                | Back to session                           |
+| `Esc`              | Focus Files, or leave from Files          |
+| `j` / `k`          | Select a file or changed line             |
+| `Enter`            | Focus the selected file's changed lines   |
+| `Up` / `Down`      | Select a changed line or scroll a preview |
+| `Left` / `h` / `f` | Return to Files                           |
+| `p`                | Toggle markdown preview                   |
+| `c`                | Focus linked review comments              |
+| `?`                | Help                                      |
 
 <a id="usage-diff-totals"></a> The diff panel title includes aggregate `+added` and
 `-removed` line totals. Every file and folder row in the left panel shows its own

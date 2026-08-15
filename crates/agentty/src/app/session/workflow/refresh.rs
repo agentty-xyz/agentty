@@ -387,7 +387,7 @@ mod tests {
     };
     use crate::infra::db::AppRepositories;
     use crate::infra::fs;
-    use crate::presentation::app_mode::{DiffPreview, DiffSidebarFocus};
+    use crate::presentation::app_mode::{DiffFocus, DiffPreview, DiffSidebarFocus};
     use crate::presentation::help_action::ViewSessionState;
 
     /// Builds a filesystem mock that delegates directory checks to local disk.
@@ -886,6 +886,8 @@ mod tests {
             AppMode::Diff {
                 diff: String::new(),
                 file_explorer_selected_index: 0,
+                focus: DiffFocus::Files,
+                selected_diff_line_index: 0,
                 preview: DiffPreview::default(),
                 review_comments: None,
                 restore: None,
@@ -941,6 +943,8 @@ mod tests {
         let mut mode = AppMode::Diff {
             diff: String::new(),
             file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
+            selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: Some(crate::presentation::app_mode::DiffReviewComments::loading(
                 1,

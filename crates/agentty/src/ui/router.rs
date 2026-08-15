@@ -10,7 +10,8 @@ use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
 use crate::presentation::app_mode::{
-    AppMode, ConfirmationIntent, DiffPreview, DiffReviewComments, DiffSidebarFocus, HelpContext,
+    AppMode, ConfirmationIntent, DiffFocus, DiffPreview, DiffReviewComments, DiffSidebarFocus,
+    HelpContext,
 };
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::settings::SettingsScreenSnapshot;
@@ -55,9 +56,11 @@ enum Surface<'a> {
     Diff {
         diff: &'a str,
         file_explorer_selected_index: usize,
+        focus: DiffFocus,
         preview: &'a DiffPreview,
         review_comments: Option<&'a DiffReviewComments>,
         scroll_offset: u16,
+        selected_diff_line_index: usize,
         session_id: &'a str,
         sidebar_focus: DiffSidebarFocus,
     },
@@ -300,17 +303,21 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
         AppMode::Diff {
             diff,
             file_explorer_selected_index,
+            focus,
             preview,
             review_comments,
             scroll_offset,
+            selected_diff_line_index,
             session_id,
             ..
         } => Surface::Diff {
             diff,
             file_explorer_selected_index: *file_explorer_selected_index,
+            focus: *focus,
             preview,
             review_comments: review_comments.as_ref(),
             scroll_offset: *scroll_offset,
+            selected_diff_line_index: *selected_diff_line_index,
             session_id,
             sidebar_focus: review_comments
                 .as_ref()
@@ -337,17 +344,21 @@ fn surface_for_help_context(context: &HelpContext) -> Surface<'_> {
         HelpContext::Diff {
             diff,
             file_explorer_selected_index,
+            focus,
             preview,
             review_comments,
             scroll_offset,
+            selected_diff_line_index,
             session_id,
             ..
         } => Surface::Diff {
             diff,
             file_explorer_selected_index: *file_explorer_selected_index,
+            focus: *focus,
             preview,
             review_comments: review_comments.as_deref(),
             scroll_offset: *scroll_offset,
+            selected_diff_line_index: *selected_diff_line_index,
             session_id,
             sidebar_focus: review_comments
                 .as_deref()
@@ -392,9 +403,11 @@ fn render_surface(
                 DiffSurfaceInput {
                     diff: "Loading diff...",
                     file_explorer_selected_index: 0,
+                    focus: DiffFocus::Files,
                     preview: &preview,
                     review_comments: None,
                     scroll_offset: 0,
+                    selected_diff_line_index: 0,
                     session_id,
                     sidebar_focus,
                 },
@@ -405,9 +418,11 @@ fn render_surface(
         Surface::Diff {
             diff,
             file_explorer_selected_index,
+            focus,
             preview,
             review_comments,
             scroll_offset,
+            selected_diff_line_index,
             session_id,
             sidebar_focus,
         } => render_diff_surface(
@@ -416,9 +431,11 @@ fn render_surface(
             DiffSurfaceInput {
                 diff,
                 file_explorer_selected_index,
+                focus,
                 preview,
                 review_comments,
                 scroll_offset,
+                selected_diff_line_index,
                 session_id,
                 sidebar_focus,
             },
@@ -591,9 +608,11 @@ fn render_session_surface(
 struct DiffSurfaceInput<'a> {
     diff: &'a str,
     file_explorer_selected_index: usize,
+    focus: DiffFocus,
     preview: &'a DiffPreview,
     review_comments: Option<&'a DiffReviewComments>,
     scroll_offset: u16,
+    selected_diff_line_index: usize,
     session_id: &'a str,
     sidebar_focus: DiffSidebarFocus,
 }
@@ -617,10 +636,12 @@ fn render_diff_surface(
         diff: input.diff,
         diff_layout_cache: resources.diff_layout_cache,
         file_explorer_selected_index: input.file_explorer_selected_index,
+        focus: input.focus,
         markdown_render_cache: resources.markdown_render_cache,
         preview: input.preview,
         review_comments: input.review_comments,
         scroll_offset: input.scroll_offset,
+        selected_diff_line_index: input.selected_diff_line_index,
         session,
         sidebar_focus: input.sidebar_focus,
     })
@@ -976,6 +997,8 @@ mod tests {
         let diff_context = HelpContext::Diff {
             diff: "diff --git a/file b/file".to_string(),
             file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
+            selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: Some(Box::new(DiffReviewComments {
                 sidebar_focus: DiffSidebarFocus::Comments,
@@ -1012,6 +1035,8 @@ mod tests {
             Surface::Diff {
                 diff: &diff,
                 file_explorer_selected_index: 0,
+                focus: DiffFocus::Files,
+                selected_diff_line_index: 0,
                 preview: &preview,
                 review_comments: None,
                 scroll_offset: 0,
@@ -1117,6 +1142,8 @@ mod tests {
         let diff_mode = AppMode::Diff {
             diff: String::new(),
             file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
+            selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: Some(DiffReviewComments {
                 sidebar_focus: DiffSidebarFocus::Comments,
@@ -1198,6 +1225,8 @@ mod tests {
             context: crate::presentation::app_mode::HelpContext::Diff {
                 diff: "diff --git a/README.md b/README.md\n+# Preview".to_string(),
                 file_explorer_selected_index: 0,
+                focus: DiffFocus::Files,
+                selected_diff_line_index: 0,
                 preview: crate::presentation::app_mode::DiffPreview::Ready {
                     content: "# Preview".to_string(),
                     path: "README.md".to_string(),
@@ -1633,6 +1662,8 @@ mod tests {
                     DiffSurfaceInput {
                         diff: "",
                         file_explorer_selected_index: 0,
+                        focus: DiffFocus::Files,
+                        selected_diff_line_index: 0,
                         preview: &DiffPreview::default(),
                         review_comments: None,
                         scroll_offset: 0,
@@ -1683,6 +1714,8 @@ mod tests {
                     DiffSurfaceInput {
                         diff: "",
                         file_explorer_selected_index: 0,
+                        focus: DiffFocus::Files,
+                        selected_diff_line_index: 0,
                         preview: &DiffPreview::default(),
                         review_comments: None,
                         scroll_offset: 0,
@@ -1738,6 +1771,8 @@ mod tests {
                     DiffSurfaceInput {
                         diff: "",
                         file_explorer_selected_index: 0,
+                        focus: DiffFocus::Files,
+                        selected_diff_line_index: 0,
                         preview: &DiffPreview::default(),
                         review_comments: Some(&review_comments),
                         scroll_offset: 0,
