@@ -1449,11 +1449,11 @@ mod tests {
         assert_eq!(
             line_text,
             [
-                "├ src/ +2/-1",
-                "│ ├ ui/ +1/-0",
-                "│ │ └ diff.rs +1/-0",
-                "│ └ main.rs +1/-1",
-                "└ README.md +1/-0",
+                "src/ +2/-1",
+                "├ ui/ +1/-0",
+                "│ └ diff.rs +1/-0",
+                "└ main.rs +1/-1",
+                "README.md +1/-0",
             ]
         );
         assert_eq!(lines[0].spans[2].style.fg, Some(style::palette::success()));
