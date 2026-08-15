@@ -312,9 +312,11 @@ inline paste error. Codex preserves the multimodal ordering at transport level, 
 Antigravity and Claude rewrite the placeholders to local image paths before streaming
 the prompt.
 
-Agentty requests enhanced keyboard reporting from supporting terminals and `tmux` panes
-so remote sessions can distinguish `Shift+Enter` from plain `Enter`. Image paste and `@`
-lookup behavior are described in [Workflow](@/docs/usage/workflow.md).
+Agentty requests Kitty keyboard reporting from supporting terminals so modified keys
+remain distinct without changing shifted punctuation such as `@`. Inside `tmux`, it also
+requests xterm modified-key reporting so panes can translate `Shift+Enter` to CSI-u.
+Image paste and `@` lookup behavior are described in
+[Workflow](@/docs/usage/workflow.md).
 
 ## Question Input — Option Selection
 
