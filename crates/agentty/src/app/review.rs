@@ -213,11 +213,11 @@ pub(crate) fn hydrate_review_transient(
 /// Evicts inactive completed review entries while retaining in-flight work.
 ///
 /// A `Loading` entry must survive project switches so its eventual result can
-/// still be validated and persisted. Once that result arrives,
-/// [`apply_review_updates()`] replaces the entry and this pruning step removes
-/// it unless the session belongs to the currently loaded project.
+/// still be validated and persisted. Completed entries also remain while
+/// their durable write is pending; settled inactive entries are removed.
 pub(crate) fn prune_review_cache(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
+    pending_persistence: &HashMap<SessionId, FocusedReviewPersistence>,
     session_state: &SessionState,
 ) {
     let active_session_ids = session_state
@@ -229,6 +229,7 @@ pub(crate) fn prune_review_cache(
     review_cache.retain(|session_id, cache_entry| {
         active_session_ids.contains(session_id.as_str())
             || matches!(cache_entry, ReviewCacheEntry::Loading { .. })
+            || pending_persistence.contains_key(session_id)
     });
 }
 
@@ -368,8 +369,6 @@ pub(crate) fn apply_review_updates(
             persistence_updates.push(persistence_update);
         }
     }
-
-    prune_review_cache(review_cache, session_state);
 
     persistence_updates
 }
@@ -801,10 +800,11 @@ mod tests {
     }
 
     #[test]
-    fn prune_review_cache_retains_active_and_loading_entries() {
+    fn prune_review_cache_retains_active_loading_and_pending_entries() {
         // Arrange
         let active_session_id = SessionId::from("active-session");
         let loading_session_id = SessionId::from("loading-session");
+        let pending_session_id = SessionId::from("inactive-ready");
         let mut review_cache = HashMap::from([
             (
                 active_session_id.clone(),
@@ -833,14 +833,24 @@ mod tests {
                 ReviewCacheEntry::Loading { diff_hash: 4 },
             ),
         ]);
+        let pending_persistence = HashMap::from([(
+            pending_session_id.clone(),
+            FocusedReviewPersistence {
+                diff_hash: Some(2),
+                session_id: pending_session_id.clone(),
+                status: FocusedReviewStatus::Ready,
+                text: Some("inactive review".to_string()),
+            },
+        )]);
         let session_state = session_state_with_stale_review(&active_session_id);
 
         // Act
-        prune_review_cache(&mut review_cache, &session_state);
+        prune_review_cache(&mut review_cache, &pending_persistence, &session_state);
 
         // Assert
-        assert_eq!(review_cache.len(), 2);
+        assert_eq!(review_cache.len(), 3);
         assert!(review_cache.contains_key(&active_session_id));
+        assert!(review_cache.contains_key(&pending_session_id));
         assert!(matches!(
             review_cache.get(&loading_session_id),
             Some(ReviewCacheEntry::Loading { diff_hash: 4 })
@@ -848,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_review_updates_persists_and_evicts_inactive_success() {
+    fn apply_review_updates_retains_inactive_success_until_persistence() {
         // Arrange
         let session_id = SessionId::from("session-persist-review");
         let diff_hash = 19;
@@ -871,7 +881,10 @@ mod tests {
                 text: Some(review_text.to_string()),
             }]
         );
-        assert!(!review_cache.contains_key(&session_id));
+        assert!(matches!(
+            review_cache.get(&session_id),
+            Some(ReviewCacheEntry::Ready { diff_hash: 19, text }) if text == review_text
+        ));
     }
 
     #[test]

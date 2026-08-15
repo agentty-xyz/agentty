@@ -362,6 +362,88 @@ pub(crate) fn seed_session(
     Ok(())
 }
 
+/// Seed one additional never-opened Git project and start Agentty on the
+/// Sessions tab so project-switching scenarios share deterministic setup.
+///
+/// # Errors
+///
+/// Returns an error if the project repository or persisted metadata cannot
+/// be created.
+pub(crate) fn seed_second_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_additional_project(env, "zeta-project")
+}
+
+/// Seed one project whose label sorts before `test-project`, making it MRU
+/// row zero after both projects receive the same pinned last-opened time.
+///
+/// # Errors
+///
+/// Returns an error if the project repository or persisted metadata cannot
+/// be created.
+pub(crate) fn seed_mru_first_second_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_additional_project(env, "alpha-project")
+}
+
+/// Seed one additional never-opened Git project with the provided directory
+/// and display label.
+fn seed_additional_project(
+    env: &BuilderEnv,
+    project_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let temp_root = env
+        .workdir
+        .parent()
+        .ok_or("missing temp root for second project")?;
+    let second_project_dir = temp_root.join(project_name);
+    std::fs::create_dir_all(&second_project_dir)?;
+    init_git_repository(&second_project_dir)?;
+
+    let second_project_path = second_project_dir.canonicalize()?;
+    let runtime = seed_runtime()?;
+    runtime.block_on(async {
+        let database = open_database(env).await?;
+        database
+            .projects()
+            .upsert_project(
+                &second_project_path.to_string_lossy(),
+                Some("main".to_string()),
+            )
+            .await?;
+        agentty::test_support::persist_active_tab_for_test(&database, agentty::app::Tab::Sessions)
+            .await?;
+
+        Ok::<(), agentty::db::DbError>(())
+    })?;
+
+    Ok(())
+}
+
+/// Initialize one deterministic `main`-branch Git repository for project
+/// switching scenarios.
+fn init_git_repository(directory: &Path) -> std::io::Result<()> {
+    let run = |arguments: &[&str]| -> std::io::Result<()> {
+        let output = std::process::Command::new("git")
+            .args(arguments)
+            .current_dir(directory)
+            .output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other(format!(
+                "git {} failed: {}",
+                arguments.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        Ok(())
+    };
+    run(&["init", "-b", "main"])?;
+    run(&["config", "user.email", "test@test.com"])?;
+    run(&["config", "user.name", "Test"])?;
+    run(&["commit", "--allow-empty", "-m", "init"])
+}
+
 /// Create the current-thread Tokio runtime used by synchronous E2E seeders.
 ///
 /// The E2E tests are synchronous `#[test]` functions, so database setup uses a

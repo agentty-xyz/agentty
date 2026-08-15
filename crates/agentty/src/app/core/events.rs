@@ -1740,31 +1740,43 @@ impl App {
     /// Persists current focused-review generations and requeues transient
     /// failures through the foreground reducer.
     pub(crate) async fn persist_focused_review_updates(
-        &self,
+        &mut self,
         focused_review_persistence: Vec<FocusedReviewPersistence>,
     ) {
-        self.persist_focused_review_retries(
-            focused_review_persistence
-                .into_iter()
-                .map(FocusedReviewPersistenceRetry::initial)
-                .collect(),
-        )
-        .await;
+        let retries = focused_review_persistence
+            .into_iter()
+            .map(|persistence_update| {
+                self.pending_focused_review_persistence.insert(
+                    persistence_update.session_id.clone(),
+                    persistence_update.clone(),
+                );
+
+                FocusedReviewPersistenceRetry::initial(persistence_update)
+            })
+            .collect();
+
+        self.persist_focused_review_retries(retries).await;
     }
 
     /// Applies bounded focused-review persistence attempts while discarding
     /// retries superseded by newer cache state.
     async fn persist_focused_review_retries(
-        &self,
+        &mut self,
         focused_review_retries: Vec<FocusedReviewPersistenceRetry>,
     ) {
         for retry in focused_review_retries {
-            let persistence_update = &retry.persistence_update;
-            if !self
+            let persistence_update = retry.persistence_update.clone();
+            let is_current_persistence = self
+                .pending_focused_review_persistence
+                .get(&persistence_update.session_id)
+                == Some(&persistence_update);
+            let is_current_cache = self
                 .review_cache
                 .get(&persistence_update.session_id)
-                .is_some_and(|cache_entry| cache_entry.matches_persistence(persistence_update))
-            {
+                .is_some_and(|cache_entry| cache_entry.matches_persistence(&persistence_update));
+            if !is_current_persistence || !is_current_cache {
+                self.remove_current_focused_review_persistence(&persistence_update);
+
                 continue;
             }
 
@@ -1783,11 +1795,36 @@ impl App {
                     persistence_update.text.clone(),
                 )
                 .await;
-            Self::handle_focused_review_persistence_result(
+            let retry_scheduled = Self::handle_focused_review_persistence_result(
                 self.services.event_sender(),
                 retry,
                 result,
             );
+            if !retry_scheduled {
+                self.remove_current_focused_review_persistence(&persistence_update);
+            }
+        }
+
+        app::review::prune_review_cache(
+            &mut self.review_cache,
+            &self.pending_focused_review_persistence,
+            self.sessions.state(),
+        );
+    }
+
+    /// Clears one settled or stale pending write without removing a newer
+    /// focused-review generation for the same session.
+    fn remove_current_focused_review_persistence(
+        &mut self,
+        persistence_update: &FocusedReviewPersistence,
+    ) {
+        if self
+            .pending_focused_review_persistence
+            .get(&persistence_update.session_id)
+            == Some(persistence_update)
+        {
+            self.pending_focused_review_persistence
+                .remove(&persistence_update.session_id);
         }
     }
 
@@ -1797,27 +1834,30 @@ impl App {
         app_event_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
         retry: FocusedReviewPersistenceRetry,
         result: Result<(), DbError>,
-    ) {
-        if let Err(error) = result {
-            let session_id = retry.persistence_update.session_id.clone();
-            let Some(retry) = retry.next() else {
-                warn!(
-                    session_id = %session_id,
-                    error = %error,
-                    "focused-review persistence retries exhausted; durable orchestration state \
-                     will recover the review on restart"
-                );
-
-                return;
-            };
+    ) -> bool {
+        let Err(error) = result else {
+            return false;
+        };
+        let session_id = retry.persistence_update.session_id.clone();
+        let Some(retry) = retry.next() else {
             warn!(
                 session_id = %session_id,
-                retry_attempt = retry.attempt,
                 error = %error,
-                "failed to persist focused review; scheduling retry"
+                "focused-review persistence retries exhausted; durable orchestration state \
+                 will recover the review on restart"
             );
-            app::task::TaskService::spawn_focused_review_persistence_retry(app_event_tx, retry);
-        }
+
+            return false;
+        };
+        warn!(
+            session_id = %session_id,
+            retry_attempt = retry.attempt,
+            error = %error,
+            "failed to persist focused review; scheduling retry"
+        );
+        app::task::TaskService::spawn_focused_review_persistence_retry(app_event_tx, retry);
+
+        true
     }
 
     /// Starts focused review generation for sessions that just entered review.
@@ -2929,6 +2969,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completed_focused_review_persists_for_inactive_project() {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_test_app().await;
+        let inactive_project_path = base_dir.path().join("inactive-project");
+        let inactive_project_id = app
+            .services
+            .db()
+            .projects()
+            .upsert_project(&inactive_project_path.to_string_lossy(), None)
+            .await
+            .expect("failed to insert inactive project");
+        let session_id = SessionId::from("inactive-review");
+        let review_text = "## Review\nInactive project finding.";
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                session_id.as_str(),
+                "gpt-5.6-sol",
+                "main",
+                "Review",
+                inactive_project_id,
+            )
+            .await
+            .expect("failed to insert inactive review session");
+        app.review_cache.insert(
+            session_id.clone(),
+            app::review::ReviewCacheEntry::Loading { diff_hash: 42 },
+        );
+
+        // Act
+        app.apply_app_events(AppEvent::ReviewPrepared {
+            diff_hash: 42,
+            review_text: review_text.to_string(),
+            session_id: session_id.clone(),
+        })
+        .await;
+        let persisted_reviews = app
+            .services
+            .db()
+            .sessions()
+            .load_session_focused_reviews_for_project(inactive_project_id)
+            .await
+            .expect("failed to load inactive project review");
+
+        // Assert
+        assert_eq!(persisted_reviews.len(), 1);
+        assert_eq!(persisted_reviews[0].session_id, session_id.as_str());
+        assert_eq!(persisted_reviews[0].diff_hash, "42");
+        assert_eq!(persisted_reviews[0].text, review_text);
+        assert!(!app.review_cache.contains_key(&session_id));
+        assert!(app.pending_focused_review_persistence.is_empty());
+    }
+
+    #[tokio::test]
     async fn failed_focused_review_persistence_retries_without_replaying_stale_state() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
@@ -2952,8 +3047,12 @@ mod tests {
             status: crate::domain::review::FocusedReviewStatus::Ready,
             text: Some("review output".to_string()),
         };
+        app.pending_focused_review_persistence.insert(
+            persistence_update.session_id.clone(),
+            persistence_update.clone(),
+        );
         let (retry_tx, mut retry_rx) = tokio::sync::mpsc::unbounded_channel();
-        App::handle_focused_review_persistence_result(
+        let retry_scheduled = App::handle_focused_review_persistence_result(
             retry_tx,
             FocusedReviewPersistenceRetry::initial(persistence_update.clone()),
             Err(DbError::Query(sqlx::Error::PoolClosed)),
@@ -2985,7 +3084,7 @@ mod tests {
             .await
             .expect("failed to load retried focused review");
         let (exhausted_tx, mut exhausted_rx) = tokio::sync::mpsc::unbounded_channel();
-        App::handle_focused_review_persistence_result(
+        let exhausted_retry_scheduled = App::handle_focused_review_persistence_result(
             exhausted_tx,
             FocusedReviewPersistenceRetry {
                 attempt: app::review::MAX_FOCUSED_REVIEW_PERSISTENCE_RETRIES,
@@ -3000,6 +3099,8 @@ mod tests {
         assert_eq!(persisted[0].session_id, "session-1");
         assert_eq!(persisted[0].diff_hash, "42");
         assert_eq!(persisted[0].text, "review output");
+        assert!(retry_scheduled);
+        assert!(!exhausted_retry_scheduled);
         assert_eq!(exhausted_event, None);
     }
 

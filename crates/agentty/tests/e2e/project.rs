@@ -1,12 +1,10 @@
 //! Projects page E2E tests: project dashboard activity and summary data.
 
-use std::path::Path;
-
 use testty::assertion;
 use testty::region::Region;
 
 use crate::common;
-use crate::common::{BuilderEnv, FeatureTest};
+use crate::common::FeatureTest;
 
 /// Verify that the Projects tab lists the registered git project name and
 /// branch from the temp workdir and shows dashboard activity plus work stats.
@@ -69,7 +67,7 @@ fn test_project_switcher() {
     // Arrange, Act, Assert
     FeatureTest::new("project_switcher")
         .with_git()
-        .setup(seed_second_project)
+        .setup(common::seed_second_project)
         .zola(
             "Project switcher",
             "Switch the active project from the Sessions view with a quick MRU popup.",
@@ -136,58 +134,4 @@ fn test_project_switcher() {
             },
         )
         .expect("feature test failed");
-}
-
-/// Seed one additional never-opened git project so the switcher popup lists
-/// two registered projects, and start the app on the Sessions tab.
-fn seed_second_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    let temp_root = env
-        .workdir
-        .parent()
-        .ok_or("missing temp root for second project")?;
-    let second_project_dir = temp_root.join("zeta-project");
-    std::fs::create_dir_all(&second_project_dir)?;
-    init_git_repository(&second_project_dir)?;
-
-    let second_project_path = second_project_dir.canonicalize()?;
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
-        let database = common::open_database(env).await?;
-        database
-            .projects()
-            .upsert_project(
-                &second_project_path.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-        agentty::test_support::persist_active_tab_for_test(&database, agentty::app::Tab::Sessions)
-            .await?;
-
-        Ok::<(), agentty::db::DbError>(())
-    })?;
-
-    Ok(())
-}
-
-/// Initialize a `main`-branch git repository with one empty commit in `dir`.
-fn init_git_repository(dir: &Path) -> std::io::Result<()> {
-    let run = |args: &[&str]| -> std::io::Result<()> {
-        let output = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()?;
-        if !output.status.success() {
-            return Err(std::io::Error::other(format!(
-                "git {} failed: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-
-        Ok(())
-    };
-    run(&["init", "-b", "main"])?;
-    run(&["config", "user.email", "test@test.com"])?;
-    run(&["config", "user.name", "Test"])?;
-    run(&["commit", "--allow-empty", "-m", "init"])
 }
