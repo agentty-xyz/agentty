@@ -208,10 +208,11 @@ prek run zola-check --all-files --hook-stage manual
 ```
 
 Routine agent validation must use `TESTTY_GIF_MODE=check` so the semantic PTY assertions
-still run while GIF freshness is checked without invoking VHS or launching Chrome. Never
-run host-side `vhs`, `TESTTY_GIF_MODE=generate`, or `TESTTY_GIF_MODE=force` from an
-agent session. Intentional regeneration uses `TESTTY_GIF_MODE=generate` inside the
-canonical container below.
+still run while GIF freshness is checked without invoking VHS or launching Chrome. Do
+not run `vhs` or a generation mode directly in the developer host's operating-system
+environment. Launching the pinned Podman container on that host is supported and is the
+required path for intentional regeneration; the container uses
+`TESTTY_GIF_MODE=generate` below.
 
 ### Record in the canonical container
 
@@ -390,16 +391,19 @@ Do not update the repository when logout, inspection, or either platform pull fa
 logout makes the inspection and pulls exercise the same anonymous access that forked
 pull-request CI requires.
 
-### Host recording prohibition
+### Bare-host recording prohibition
 
-Do not run VHS recording directly on a developer host from an agent session. VHS records
+Do not run VHS recording directly in the developer host's operating-system environment.
+This restriction does not prohibit running the pinned recording container on that host
+with Podman; that is the supported workflow described above. Bare-host VHS records
 through localhost sockets (`ttyd` plus the Chrome DevTools protocol), and sandboxed
 agent shells can deny that network access and crash `vhs` before Chrome launches. On
-macOS, even an unsandboxed host run launches a local Chromium process that can abort
-during AppKit registration and show a **Chromium quit unexpectedly** dialog. This
-prohibition also covers direct `vhs` commands and ignored tests that regenerate demo
-assets. Use the platform-explicit Podman workflow above for every intentional recording;
-do not suppress macOS crash reporting to hide the browser failure.
+macOS, even an unsandboxed bare-host run launches a local Chromium process that can
+abort during AppKit registration and show a **Chromium quit unexpectedly** dialog. The
+bare-host prohibition also covers direct `vhs` commands and ignored tests that
+regenerate demo assets. Use the platform-explicit Podman workflow above for every
+intentional recording; do not suppress macOS crash reporting to hide a bare-host browser
+failure.
 
 In default `generate-if-stale` mode, machines without VHS still run and assert the test
 correctly, then gracefully skip GIF generation. In `force` mode, VHS must be installed
@@ -409,7 +413,8 @@ The `TESTTY_GIF_MODE` env var selects the freshness mode used by `FeatureTest`:
 
 - unset — leave GIF work off while still running the PTY scenario and assertions.
 - `generate` / `generate-if-stale` — regenerate when the on-disk hash sidecar is missing
-  or stale, otherwise reuse the committed GIF. Use only inside the canonical container.
+  or stale, otherwise reuse the committed GIF. Use only inside the canonical container,
+  which may be launched with Podman on a developer host.
 - `check` / `check-only` — compute the would-be hash and compare it to the on-disk
   sidecar without invoking VHS or touching the GIF output directory. The harness fails
   the test when a committed sidecar has drifted, an existing sidecar is invalid, or the
@@ -420,8 +425,9 @@ The `TESTTY_GIF_MODE` env var selects the freshness mode used by `FeatureTest`:
   recording run publishes their artifacts.
 - `force` / `always` / `always-generate` — bypass the hash cache and re-run VHS
   unconditionally. VHS must be installed: a missing VHS binary fails the test instead of
-  being silently skipped, because regeneration was explicitly requested. Do not use this
-  mode on a developer host or from an agent session.
+  being silently skipped, because regeneration was explicitly requested. Use this mode
+  only inside the canonical container, never directly in the bare-host environment; the
+  routine recording workflow above uses `generate` instead.
 
 Run `prek run zola-check --all-files --hook-stage manual` after the test to catch broken
 frontmatter or template integration before the page reaches CI. This requires Zola to be

@@ -373,12 +373,8 @@ impl<'a> SessionChatPage<'a> {
             publish_pull_request_action: session.publish_pull_request_action(),
             session_state: help_action::session_view_state(session),
         };
-        let help_message = Paragraph::new(
-            session_format::session_view_footer_line_with_review_comments(
-                view_help_state,
-                session.has_review_request(),
-            ),
-        );
+        let help_message =
+            Paragraph::new(session_format::session_view_footer_line(view_help_state));
         f.render_widget(help_message, bottom_area);
     }
 }

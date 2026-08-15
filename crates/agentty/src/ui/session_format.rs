@@ -197,16 +197,9 @@ pub(crate) fn session_speed_display(session: &Session) -> Option<&'static str> {
     Some(session.speed_mode.name())
 }
 
-/// Builds the session-view footer and exposes linked forge comments on `c`
-/// when the current session has a review request.
-pub(crate) fn session_view_footer_line_with_review_comments(
-    view_help_state: ViewHelpState,
-    can_view_review_comments: bool,
-) -> Line<'static> {
-    crate::ui::help_format::footer_line(&help_action::view_footer_actions_with_review_comments(
-        view_help_state,
-        can_view_review_comments,
-    ))
+/// Builds the compact session-view footer.
+pub(crate) fn session_view_footer_line(view_help_state: ViewHelpState) -> Line<'static> {
+    crate::ui::help_format::footer_line(&help_action::view_footer_actions(view_help_state))
 }
 
 /// Renders persisted summary payloads into display markdown.

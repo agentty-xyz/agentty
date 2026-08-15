@@ -477,21 +477,6 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     actions
 }
 
-/// Returns compact session-view footer actions with linked review comments
-/// when available outside sessions that support terminal continuation.
-pub(crate) fn view_footer_actions_with_review_comments(
-    state: ViewHelpState,
-    can_view_review_comments: bool,
-) -> Vec<HelpAction> {
-    let mut actions = view_footer_actions(state);
-    append_review_comment_action(
-        &mut actions,
-        can_append_review_comments(state.session_state, can_view_review_comments),
-    );
-
-    actions
-}
-
 /// Returns whether linked review comments should be added to session-view
 /// actions without competing with terminal continuation on `c`.
 fn can_append_review_comments(
@@ -1813,20 +1798,23 @@ mod tests {
 
             // Act
             let full_actions = view_actions_with_review_comments(state, true);
-            let footer_actions = view_footer_actions_with_review_comments(state, true);
 
             // Assert
-            for actions in [&full_actions, &footer_actions] {
-                assert_eq!(actions.iter().filter(|action| action.key == "c").count(), 1);
-                assert!(actions.iter().any(|action| {
-                    action.key == "c" && action.popup_label == "Continue in new session"
-                }));
-                assert!(
-                    !actions
-                        .iter()
-                        .any(|action| action.popup_label == "Show review comments")
-                );
-            }
+            assert_eq!(
+                full_actions
+                    .iter()
+                    .filter(|action| action.key == "c")
+                    .count(),
+                1
+            );
+            assert!(full_actions.iter().any(|action| {
+                action.key == "c" && action.popup_label == "Continue in new session"
+            }));
+            assert!(
+                !full_actions
+                    .iter()
+                    .any(|action| action.popup_label == "Show review comments")
+            );
         }
     }
 
@@ -1848,25 +1836,19 @@ mod tests {
 
         // Act
         let available_actions = view_actions_with_review_comments(state, true);
-        let available_footer_actions = view_footer_actions_with_review_comments(state, true);
         let unavailable_actions = view_actions_with_review_comments(state, false);
-        let unavailable_footer_actions = view_footer_actions_with_review_comments(state, false);
 
         // Assert
-        for actions in [&available_actions, &available_footer_actions] {
-            assert!(
-                actions
-                    .iter()
-                    .any(|action| action.popup_label == "Show review comments")
-            );
-        }
-        for actions in [&unavailable_actions, &unavailable_footer_actions] {
-            assert!(
-                !actions
-                    .iter()
-                    .any(|action| action.popup_label == "Show review comments")
-            );
-        }
+        assert!(
+            available_actions
+                .iter()
+                .any(|action| action.popup_label == "Show review comments")
+        );
+        assert!(
+            !unavailable_actions
+                .iter()
+                .any(|action| action.popup_label == "Show review comments")
+        );
     }
 
     #[test]
