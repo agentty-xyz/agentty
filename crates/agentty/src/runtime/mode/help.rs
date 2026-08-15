@@ -36,7 +36,7 @@ mod tests {
     use crossterm::event::KeyModifiers;
 
     use super::*;
-    use crate::presentation::app_mode::{DiffFocus, HelpContext};
+    use crate::presentation::app_mode::{DiffFocus, DiffLineComments, HelpContext};
     use crate::presentation::help_action::{HelpAction, ViewSessionState};
 
     #[tokio::test]
@@ -173,9 +173,11 @@ mod tests {
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::Diff {
+                can_comment: true,
                 session_id: "s1".into(),
                 diff: "diff content".to_string(),
                 focus: DiffFocus::Content,
+                line_comments: DiffLineComments::default(),
                 preview: crate::presentation::app_mode::DiffPreview::default(),
                 review_comments: None,
                 restore: None,

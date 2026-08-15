@@ -15,7 +15,8 @@ use rustc_hash::FxHasher;
 
 use crate::domain::session::Session;
 use crate::presentation::app_mode::{
-    DiffFocus, DiffPreview, DiffPreviewUnavailableReason, DiffReviewComments, DiffSidebarFocus,
+    DiffFocus, DiffLineComment, DiffLineCommentAnchor, DiffLineComments, DiffLineSide, DiffPreview,
+    DiffPreviewUnavailableReason, DiffReviewComments, DiffSidebarFocus,
 };
 use crate::presentation::{help_action, review_comment as review_comment_selection};
 use crate::ui::component::file_explorer::FileExplorer;
@@ -23,7 +24,7 @@ use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 #[cfg(test)]
 use crate::ui::component::vertical_scrollbar::{SCROLLBAR_THUMB_SYMBOL, SCROLLBAR_TRACK_SYMBOL};
 use crate::ui::diff_util::{
-    DiffLine, DiffLineKind, FileTreeItem, diff_header_new_path, parse_diff_lines,
+    DiffLine, DiffLineKind, FileTreeItem, diff_header_new_path, diff_header_paths, parse_diff_lines,
 };
 use crate::ui::page::review_comment;
 use crate::ui::{Component, Page, diff_util, markdown, style};
@@ -184,6 +185,104 @@ impl DiffContentSnapshot {
             self.tree_items.get(selected_index),
             Some(FileTreeItem::File(_))
         )
+    }
+
+    /// Returns the selected changed line with its old- or new-side file path.
+    pub(crate) fn selected_changed_line(
+        &self,
+        selected_index: usize,
+        changed_line_index: usize,
+    ) -> Option<DiffLineCommentAnchor> {
+        self.find_changed_line(
+            selected_index,
+            |current_changed_line_index, diff_line, side, line_number, path| {
+                (current_changed_line_index == changed_line_index).then(|| DiffLineCommentAnchor {
+                    content: diff_line.content.to_string(),
+                    line: line_number,
+                    path: path.to_string(),
+                    side,
+                })
+            },
+        )
+    }
+
+    /// Returns the changed-line cursor index that owns `anchor`.
+    fn changed_line_index_for_anchor(
+        &self,
+        selected_index: usize,
+        anchor: &DiffLineCommentAnchor,
+    ) -> Option<usize> {
+        self.find_changed_line(
+            selected_index,
+            |current_changed_line_index, diff_line, side, line_number, path| {
+                (side == anchor.side
+                    && line_number == anchor.line
+                    && path == anchor.path.as_str()
+                    && diff_line.content == anchor.content)
+                    .then_some(current_changed_line_index)
+            },
+        )
+    }
+
+    /// Finds one changed line while tracking its hunk counter and side path.
+    fn find_changed_line<T>(
+        &self,
+        selected_index: usize,
+        mut find: impl FnMut(usize, &DiffLine<'_>, DiffLineSide, u32, &str) -> Option<T>,
+    ) -> Option<T> {
+        let FileTreeItem::File(fallback_path) = self.tree_items.get(selected_index)? else {
+            return None;
+        };
+        let mut current_paths = None;
+        let mut current_changed_line_index = 0;
+
+        for diff_line in self.selected_lines(selected_index) {
+            if diff_line.kind == DiffLineKind::FileHeader
+                && diff_line.content.starts_with("diff --git")
+            {
+                current_paths = diff_header_paths(diff_line.content);
+
+                continue;
+            }
+            let Some((side, line_number, path)) =
+                Self::line_comment_location(&diff_line, current_paths.as_ref(), fallback_path)
+            else {
+                continue;
+            };
+            if let Some(found) = find(
+                current_changed_line_index,
+                &diff_line,
+                side,
+                line_number,
+                path,
+            ) {
+                return Some(found);
+            }
+            current_changed_line_index = current_changed_line_index.saturating_add(1);
+        }
+
+        None
+    }
+
+    /// Resolves one changed line's side-specific path and line number.
+    fn line_comment_location<'path>(
+        diff_line: &DiffLine<'_>,
+        current_paths: Option<&'path (String, String)>,
+        fallback_path: &'path str,
+    ) -> Option<(DiffLineSide, u32, &'path str)> {
+        match diff_line.kind {
+            DiffLineKind::Addition => Some((
+                DiffLineSide::New,
+                diff_line.new_line?,
+                current_paths.map_or(fallback_path, |(_, new_path)| new_path),
+            )),
+            DiffLineKind::Deletion => Some((
+                DiffLineSide::Old,
+                diff_line.old_line?,
+                current_paths.map_or(fallback_path, |(old_path, _)| old_path),
+            )),
+            DiffLineKind::Context | DiffLineKind::FileHeader | DiffLineKind::HunkHeader => None,
+        }
     }
 
     /// Returns the complete cached diff snapshot as borrowed lines.
@@ -372,9 +471,64 @@ pub(crate) struct DiffResolvedLayout {
     pub(crate) lines: Arc<[Line<'static>]>,
     pub(crate) render_layout: diff_util::DiffRenderLayout,
     pub(crate) show_scrollbar: bool,
+    comment_insertions: Vec<DiffLineCommentInsertion>,
+}
+
+/// One inline comment row inserted after its changed source line.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DiffLineCommentInsertion {
+    comment: usize,
+    display_row: usize,
+    source_end: usize,
+}
+
+/// Short-lived inputs used to paint one inline-comment diff viewport.
+struct DiffVisibleLineRequest<'a> {
+    comment_insertions: &'a [DiffLineCommentInsertion],
+    content_width: usize,
+    line_comments: &'a DiffLineComments,
+    prefix_width: usize,
+    scroll_offset: u16,
+    selected_range: Option<&'a Range<usize>>,
+    viewport_height: u16,
 }
 
 impl DiffResolvedLayout {
+    /// Adds inline comment rows to one cached source layout.
+    fn with_line_comments(
+        cached_layout: DiffCachedLayout,
+        content: &DiffContentSnapshot,
+        selected_file_index: usize,
+        line_comments: &DiffLineComments,
+    ) -> Self {
+        let comment_insertions = diff_line_comment_insertions(
+            content,
+            selected_file_index,
+            &cached_layout.changed_line_ranges,
+            line_comments,
+        );
+        let changed_line_ranges = changed_line_ranges_with_comments(
+            &cached_layout.changed_line_ranges,
+            &comment_insertions,
+        );
+        let line_count = cached_layout
+            .line_count
+            .saturating_add(comment_insertions.len());
+        let show_scrollbar = diff_util::diff_has_scrollable_overflow(
+            line_count,
+            cached_layout.render_layout.viewport_height,
+        );
+
+        Self {
+            changed_line_ranges,
+            comment_insertions,
+            line_count,
+            lines: cached_layout.lines,
+            render_layout: cached_layout.render_layout,
+            show_scrollbar,
+        }
+    }
+
     /// Returns the number of rendered addition and deletion source lines.
     pub(crate) fn changed_line_count(&self) -> usize {
         self.changed_line_ranges.len()
@@ -409,6 +563,59 @@ impl DiffResolvedLayout {
             self.render_layout.viewport_height,
         ))
     }
+}
+
+/// Resolves inline comment rows and their display positions for one file.
+fn diff_line_comment_insertions(
+    content: &DiffContentSnapshot,
+    selected_file_index: usize,
+    changed_line_ranges: &[Range<usize>],
+    line_comments: &DiffLineComments,
+) -> Vec<DiffLineCommentInsertion> {
+    let mut insertions = line_comments
+        .comments
+        .iter()
+        .enumerate()
+        .filter_map(|(comment_index, line_comment)| {
+            let changed_line_index =
+                content.changed_line_index_for_anchor(selected_file_index, &line_comment.anchor)?;
+            let insertion_index = changed_line_ranges.get(changed_line_index)?.end;
+
+            Some((insertion_index, comment_index))
+        })
+        .collect::<Vec<_>>();
+    insertions.sort_unstable_by_key(|(insertion_index, _)| *insertion_index);
+
+    insertions
+        .into_iter()
+        .enumerate()
+        .map(
+            |(preceding_comment_count, (insertion_index, comment))| DiffLineCommentInsertion {
+                comment,
+                display_row: insertion_index.saturating_add(preceding_comment_count),
+                source_end: insertion_index,
+            },
+        )
+        .collect()
+}
+
+/// Adjusts cached changed-line ranges for comment rows inserted before them.
+fn changed_line_ranges_with_comments(
+    changed_line_ranges: &[Range<usize>],
+    insertions: &[DiffLineCommentInsertion],
+) -> Arc<[Range<usize>]> {
+    changed_line_ranges
+        .iter()
+        .map(|range| {
+            let preceding_comment_count = insertions
+                .iter()
+                .filter(|insertion| insertion.source_end <= range.start)
+                .count();
+
+            range.start.saturating_add(preceding_comment_count)
+                ..range.end.saturating_add(preceding_comment_count)
+        })
+        .collect()
 }
 
 /// Fully assembled diff rows and the rendered range owned by each changed
@@ -502,6 +709,7 @@ impl DiffLayoutCache {
     pub(crate) fn resolved_layout(
         &self,
         content: &DiffContentSnapshot,
+        line_comments: &DiffLineComments,
         selected_index: usize,
         diff_area: Rect,
     ) -> DiffResolvedLayout {
@@ -511,18 +719,14 @@ impl DiffLayoutCache {
             reserve_scrollbar_width: false,
             selected_index,
         });
-        let show_scrollbar = diff_util::diff_has_scrollable_overflow(
-            layout_without_scrollbar.line_count,
-            layout_without_scrollbar.render_layout.viewport_height,
+        let resolved_without_scrollbar = DiffResolvedLayout::with_line_comments(
+            layout_without_scrollbar,
+            content,
+            selected_index,
+            line_comments,
         );
-        if !show_scrollbar {
-            return DiffResolvedLayout {
-                changed_line_ranges: layout_without_scrollbar.changed_line_ranges,
-                line_count: layout_without_scrollbar.line_count,
-                lines: layout_without_scrollbar.lines,
-                render_layout: layout_without_scrollbar.render_layout,
-                show_scrollbar: false,
-            };
+        if !resolved_without_scrollbar.show_scrollbar {
+            return resolved_without_scrollbar;
         }
 
         let layout_with_scrollbar = self.layout(DiffLayoutRequest {
@@ -531,18 +735,12 @@ impl DiffLayoutCache {
             reserve_scrollbar_width: true,
             selected_index,
         });
-        let show_scrollbar = diff_util::diff_has_scrollable_overflow(
-            layout_with_scrollbar.line_count,
-            layout_with_scrollbar.render_layout.viewport_height,
-        );
-
-        DiffResolvedLayout {
-            changed_line_ranges: layout_with_scrollbar.changed_line_ranges,
-            line_count: layout_with_scrollbar.line_count,
-            lines: layout_with_scrollbar.lines,
-            render_layout: layout_with_scrollbar.render_layout,
-            show_scrollbar,
-        }
+        DiffResolvedLayout::with_line_comments(
+            layout_with_scrollbar,
+            content,
+            selected_index,
+            line_comments,
+        )
     }
 
     /// Returns cached parsed content for a matching diff fingerprint and
@@ -645,6 +843,8 @@ impl DiffLayoutCache {
 
 /// Renders the current session's git diff in a scrollable page.
 pub struct DiffPage<'a> {
+    /// Whether this session may collect inline comments for a reply.
+    pub can_comment: bool,
     /// Raw unified diff currently shown by the page.
     pub diff: &'a str,
     /// Shared cache for parsed diff content and rendered layouts.
@@ -653,6 +853,8 @@ pub struct DiffPage<'a> {
     pub file_explorer_selected_index: usize,
     /// Panel currently receiving changed-file navigation input.
     pub focus: DiffFocus,
+    /// Inline changed-line comments accumulated for the next turn.
+    pub line_comments: &'a DiffLineComments,
     /// Shared cache for rendered markdown preview rows.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Rendered-markdown preview state for the selected file.
@@ -672,6 +874,8 @@ pub struct DiffPage<'a> {
 /// Borrowed inputs required to construct a [`DiffPage`] for one frame.
 #[derive(Clone, Copy)]
 pub struct DiffPageInput<'a> {
+    /// Whether this session may collect inline comments for a reply.
+    pub can_comment: bool,
     /// Raw unified diff currently shown by the page.
     pub diff: &'a str,
     /// Shared cache for parsed diff content and rendered diff layouts.
@@ -680,6 +884,8 @@ pub struct DiffPageInput<'a> {
     pub file_explorer_selected_index: usize,
     /// Panel currently receiving changed-file navigation input.
     pub focus: DiffFocus,
+    /// Inline changed-line comments accumulated for the next turn.
+    pub line_comments: &'a DiffLineComments,
     /// Shared cache for rendered markdown preview rows.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Rendered-markdown preview state for the selected file.
@@ -700,10 +906,12 @@ impl<'a> DiffPage<'a> {
     /// Creates a diff page for the given session and scroll position.
     pub fn new(input: DiffPageInput<'a>) -> Self {
         let DiffPageInput {
+            can_comment,
             diff,
             diff_layout_cache,
             file_explorer_selected_index,
             focus,
+            line_comments,
             markdown_render_cache,
             preview,
             review_comments,
@@ -714,10 +922,12 @@ impl<'a> DiffPage<'a> {
         } = input;
 
         Self {
+            can_comment,
             diff,
             diff_layout_cache,
             file_explorer_selected_index,
             focus,
+            line_comments,
             markdown_render_cache,
             preview,
             review_comments,
@@ -757,6 +967,7 @@ impl<'a> DiffPage<'a> {
 
         let layout = self.diff_layout_cache.resolved_layout(
             content,
+            self.line_comments,
             self.file_explorer_selected_index,
             area,
         );
@@ -773,11 +984,17 @@ impl<'a> DiffPage<'a> {
                     .get(self.selected_diff_line_index)
             })
             .flatten();
-        let paint_lines = Self::borrowed_visible_lines(
+        let paint_lines = Self::borrowed_visible_lines_with_comments(
             &layout.lines,
-            scroll_offset,
-            layout.render_layout.viewport_height,
-            selected_range,
+            &DiffVisibleLineRequest {
+                comment_insertions: &layout.comment_insertions,
+                content_width: layout.render_layout.content_width,
+                line_comments: self.line_comments,
+                prefix_width: layout.render_layout.prefix_width,
+                scroll_offset,
+                selected_range,
+                viewport_height: layout.render_layout.viewport_height,
+            },
         );
 
         let paragraph = Paragraph::new(paint_lines).block(
@@ -795,6 +1012,104 @@ impl<'a> DiffPage<'a> {
 
             VerticalScrollbar::new(scroll_offset, layout.line_count).render(f, scrollbar_area);
         }
+    }
+
+    /// Builds visible rows from cached diff lines plus short-lived comments.
+    fn borrowed_visible_lines_with_comments<'line>(
+        lines: &'line [Line<'static>],
+        request: &DiffVisibleLineRequest<'_>,
+    ) -> Vec<Line<'line>> {
+        let line_count = lines.len().saturating_add(request.comment_insertions.len());
+        let start_index = usize::from(request.scroll_offset).min(line_count);
+        let end_index = start_index
+            .saturating_add(usize::from(request.viewport_height))
+            .min(line_count);
+
+        (start_index..end_index)
+            .filter_map(|display_row| {
+                if let Some(insertion) = request
+                    .comment_insertions
+                    .iter()
+                    .find(|insertion| insertion.display_row == display_row)
+                {
+                    let comment = request.line_comments.comments.get(insertion.comment)?;
+
+                    return Some(Self::inline_comment_line(
+                        comment,
+                        request.line_comments.editing_index == Some(insertion.comment),
+                        request.prefix_width,
+                        request.content_width,
+                    ));
+                }
+
+                let preceding_comment_count = request
+                    .comment_insertions
+                    .iter()
+                    .filter(|insertion| insertion.display_row < display_row)
+                    .count();
+                let original_index = display_row.saturating_sub(preceding_comment_count);
+                let mut paint_line = text_util::borrowed_paint_line(lines.get(original_index)?);
+                if request
+                    .selected_range
+                    .is_some_and(|range| range.contains(&display_row))
+                {
+                    paint_line.style = paint_line.style.add_modifier(Modifier::REVERSED);
+                    for span in &mut paint_line.spans {
+                        span.style = span.style.add_modifier(Modifier::REVERSED);
+                    }
+                }
+
+                Some(paint_line)
+            })
+            .collect()
+    }
+
+    /// Builds one full-width highlighted comment row with an editing cursor.
+    fn inline_comment_line(
+        comment: &DiffLineComment,
+        is_editing: bool,
+        prefix_width: usize,
+        content_width: usize,
+    ) -> Line<'static> {
+        let label = "comment: ";
+        let background = if is_editing {
+            style::palette::surface_selection()
+        } else {
+            style::palette::surface_prompt()
+        };
+        let content_style = Style::default().fg(style::palette::text()).bg(background);
+        let text = if is_editing {
+            input_text_with_cursor(&comment.input)
+        } else {
+            comment.input.text().to_string()
+        };
+        let spans = vec![
+            Span::styled(" ".repeat(prefix_width), content_style),
+            Span::styled(
+                label,
+                Style::default()
+                    .fg(style::palette::accent())
+                    .bg(background)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(text, content_style),
+        ];
+        let mut line = Line::from(text_util::truncate_spans_with_ellipsis(
+            spans,
+            content_width,
+        ));
+        for span in &mut line.spans {
+            span.style = span.style.bg(background);
+        }
+        let line_width = line.width();
+        if line_width < content_width {
+            line.spans.push(Span::styled(
+                " ".repeat(content_width - line_width),
+                content_style,
+            ));
+        }
+
+        line
     }
 
     /// Renders ready markdown content or a preview availability notice.
@@ -995,6 +1310,7 @@ impl<'a> DiffPage<'a> {
 /// Returns the max valid scroll offset for the selected diff panel.
 pub(crate) fn diff_view_max_scroll_offset(
     diff: &str,
+    line_comments: &DiffLineComments,
     selected_index: usize,
     terminal_area: Rect,
     diff_layout_cache: &DiffLayoutCache,
@@ -1021,7 +1337,8 @@ pub(crate) fn diff_view_max_scroll_offset(
             _ => 0,
         };
     }
-    let layout = diff_layout_cache.resolved_layout(&content, selected_index, diff_area);
+    let layout =
+        diff_layout_cache.resolved_layout(&content, line_comments, selected_index, diff_area);
     if layout.render_layout.viewport_height == 0 {
         return 0;
     }
@@ -1036,6 +1353,7 @@ pub(crate) fn diff_view_max_scroll_offset(
 /// Returns cached layout metadata for changed-line navigation in one file.
 pub(crate) fn diff_changed_line_layout(
     diff: &str,
+    line_comments: &DiffLineComments,
     selected_file_index: usize,
     terminal_area: Rect,
     diff_layout_cache: &DiffLayoutCache,
@@ -1043,7 +1361,7 @@ pub(crate) fn diff_changed_line_layout(
     let diff_area = diff_util::diff_page_areas(terminal_area).diff_area;
     let content = diff_layout_cache.content(diff);
 
-    diff_layout_cache.resolved_layout(&content, selected_file_index, diff_area)
+    diff_layout_cache.resolved_layout(&content, line_comments, selected_file_index, diff_area)
 }
 
 impl Page for DiffPage<'_> {
@@ -1133,13 +1451,22 @@ impl Page for DiffPage<'_> {
             (false, false)
         };
         let help_message = Paragraph::new(crate::ui::help_format::footer_line(
-            &help_action::diff_footer_actions(
-                self.review_comments.is_some(),
-                self.sidebar_focus,
-                self.focus,
+            &help_action::diff_footer_actions(help_action::DiffFooterContext {
                 can_mark_selected,
                 can_submit,
-            ),
+                focus: self.focus,
+                has_review_comments: self.review_comments.is_some(),
+                line_comment_state: if !self.can_comment {
+                    help_action::DiffLineCommentFooterState::ReadOnly
+                } else if self.line_comments.is_editing() {
+                    help_action::DiffLineCommentFooterState::Editing
+                } else {
+                    help_action::DiffLineCommentFooterState::Ready {
+                        comment_count: self.line_comments.comments.len(),
+                    }
+                },
+                sidebar_focus: self.sidebar_focus,
+            }),
         ));
         f.render_widget(help_message, areas.footer_area);
     }
@@ -1158,6 +1485,24 @@ fn preview_path_for_selection<'a>(
     }
 
     Some(preview_path)
+}
+
+/// Inserts a visible cursor marker into one inline comment's text.
+fn input_text_with_cursor(input: &crate::domain::input::InputState) -> String {
+    let character_count = input.text().chars().count();
+    let cursor = input.cursor.min(character_count);
+    let mut text = String::with_capacity(input.text().len().saturating_add(1));
+    for (character_index, character) in input.text().chars().enumerate() {
+        if character_index == cursor {
+            text.push('|');
+        }
+        text.push(character);
+    }
+    if cursor == character_count {
+        text.push('|');
+    }
+
+    text
 }
 
 /// Resolves cached markdown rows with a scrollbar-width second pass.
@@ -1238,10 +1583,12 @@ mod tests {
         file_explorer_selected_index: usize,
     ) -> DiffPage<'a> {
         DiffPage::new(DiffPageInput {
+            can_comment: true,
             diff,
             diff_layout_cache: test_diff_layout_cache(),
             file_explorer_selected_index,
             focus: DiffFocus::Files,
+            line_comments: test_line_comments(),
             markdown_render_cache: test_markdown_render_cache(),
             preview: test_diff_preview(),
             review_comments: None,
@@ -1260,10 +1607,12 @@ mod tests {
         preview: &'a DiffPreview,
     ) -> DiffPage<'a> {
         DiffPage::new(DiffPageInput {
+            can_comment: true,
             diff,
             diff_layout_cache: test_diff_layout_cache(),
             file_explorer_selected_index,
             focus: DiffFocus::Files,
+            line_comments: test_line_comments(),
             markdown_render_cache: test_markdown_render_cache(),
             preview,
             review_comments: None,
@@ -1280,6 +1629,10 @@ mod tests {
 
     fn test_markdown_render_cache() -> &'static markdown::MarkdownRenderCache {
         Box::leak(Box::new(markdown::MarkdownRenderCache::default()))
+    }
+
+    fn test_line_comments() -> &'static DiffLineComments {
+        Box::leak(Box::new(DiffLineComments::default()))
     }
 
     fn test_diff_preview() -> &'static DiffPreview {
@@ -1343,6 +1696,238 @@ mod tests {
             &first_content.file_list_lines,
             &second_content.file_list_lines
         ));
+    }
+
+    #[test]
+    fn test_diff_content_snapshot_resolves_selected_old_and_new_lines() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -4,2 +4,2 @@\n",
+            "-old line\n",
+            "+new line\n",
+        ));
+
+        // Act
+        let old_line = content.selected_changed_line(1, 0);
+        let new_line = content.selected_changed_line(1, 1);
+        let missing_line = content.selected_changed_line(1, 2);
+        let folder_line = content.selected_changed_line(0, 0);
+        let folder_anchor_index = content.changed_line_index_for_anchor(
+            0,
+            old_line
+                .as_ref()
+                .expect("fixture should contain one deleted line"),
+        );
+        let missing_anchor_index = content.changed_line_index_for_anchor(
+            1,
+            &DiffLineCommentAnchor {
+                content: "missing line".to_string(),
+                line: 4,
+                path: "src/main.rs".to_string(),
+                side: DiffLineSide::Old,
+            },
+        );
+
+        // Assert
+        assert_eq!(
+            old_line,
+            Some(DiffLineCommentAnchor {
+                content: "old line".to_string(),
+                line: 4,
+                path: "src/main.rs".to_string(),
+                side: DiffLineSide::Old,
+            })
+        );
+        assert_eq!(
+            new_line,
+            Some(DiffLineCommentAnchor {
+                content: "new line".to_string(),
+                line: 4,
+                path: "src/main.rs".to_string(),
+                side: DiffLineSide::New,
+            })
+        );
+        assert_eq!(missing_line, None);
+        assert_eq!(folder_line, None);
+        assert_eq!(folder_anchor_index, None);
+        assert_eq!(missing_anchor_index, None);
+    }
+
+    #[test]
+    fn test_diff_content_snapshot_keeps_anchor_after_no_newline_marker() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -1 +1 @@\n",
+            "-old line\n",
+            "\\ No newline at end of file\n",
+            "+new line\n",
+        ));
+
+        // Act
+        let new_line = content.selected_changed_line(1, 1);
+
+        // Assert
+        assert_eq!(
+            new_line,
+            Some(DiffLineCommentAnchor {
+                content: "new line".to_string(),
+                line: 1,
+                path: "src/main.rs".to_string(),
+                side: DiffLineSide::New,
+            })
+        );
+    }
+
+    #[test]
+    fn test_diff_content_snapshot_uses_side_specific_rename_paths() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(concat!(
+            "diff --git a/old.rs b/new.rs\n",
+            "similarity index 50%\n",
+            "rename from old.rs\n",
+            "rename to new.rs\n",
+            "@@ -3 +3 @@\n",
+            "-old line\n",
+            "+new line\n",
+        ));
+
+        // Act
+        let old_line = content
+            .selected_changed_line(0, 0)
+            .expect("renamed deletion should be selectable");
+        let new_line = content
+            .selected_changed_line(0, 1)
+            .expect("renamed addition should be selectable");
+        let old_line_index = content.changed_line_index_for_anchor(0, &old_line);
+        let new_line_index = content.changed_line_index_for_anchor(0, &new_line);
+
+        // Assert
+        assert_eq!(old_line.path, "old.rs");
+        assert_eq!(old_line.side, DiffLineSide::Old);
+        assert_eq!(new_line.path, "new.rs");
+        assert_eq!(new_line.side, DiffLineSide::New);
+        assert_eq!(old_line_index, Some(0));
+        assert_eq!(new_line_index, Some(1));
+    }
+
+    #[test]
+    fn test_diff_page_renders_active_comment_below_its_changed_line() {
+        // Arrange
+        let diff = concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -0,0 +1,2 @@\n",
+            "+fn main() {}\n",
+            "+review();\n",
+        );
+        let mut line_comments = DiffLineComments::default();
+        line_comments.start_editing(DiffLineCommentAnchor {
+            content: "fn main() {}".to_string(),
+            line: 1,
+            path: "src/main.rs".to_string(),
+            side: DiffLineSide::New,
+        });
+        line_comments
+            .editing_input_mut()
+            .expect("inline comment should be editable")
+            .insert_text("Explain this entry point");
+        let session = session_fixture();
+        let diff_layout_cache = DiffLayoutCache::default();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let mut page = DiffPage::new(DiffPageInput {
+            can_comment: true,
+            diff,
+            diff_layout_cache: &diff_layout_cache,
+            file_explorer_selected_index: 1,
+            focus: DiffFocus::Content,
+            line_comments: &line_comments,
+            markdown_render_cache: &markdown_render_cache,
+            preview: test_diff_preview(),
+            review_comments: None,
+            scroll_offset: 0,
+            selected_diff_line_index: 0,
+            session: &session,
+            sidebar_focus: DiffSidebarFocus::Files,
+        });
+        let backend = ratatui::backend::TestBackend::new(100, 14);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| page.render(frame, frame.area()))
+            .expect("failed to render diff page");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("comment: Explain this entry point|"));
+        assert!(text.find("fn main() {}").is_some_and(|source_index| {
+            text.find("comment: Explain this entry point|")
+                .is_some_and(|comment| comment > source_index)
+        }));
+
+        // Act — read-only sessions suppress comment editing affordances.
+        page.can_comment = false;
+        terminal
+            .draw(|frame| page.render(frame, frame.area()))
+            .expect("failed to render read-only diff page");
+
+        // Assert
+        let read_only_text = buffer_text(terminal.backend().buffer());
+        assert!(!read_only_text.contains("save comment"));
+    }
+
+    #[test]
+    fn test_inline_comment_highlighting_distinguishes_active_and_completed_rows() {
+        // Arrange
+        let comment = DiffLineComment {
+            anchor: DiffLineCommentAnchor {
+                content: "review();".to_string(),
+                line: 1,
+                path: "src/main.rs".to_string(),
+                side: DiffLineSide::New,
+            },
+            input: crate::domain::input::InputState::with_text("Explain this".to_string()),
+        };
+
+        // Act
+        let completed_line = DiffPage::inline_comment_line(&comment, false, 4, 40);
+        let active_line = DiffPage::inline_comment_line(&comment, true, 4, 40);
+
+        // Assert
+        assert_eq!(completed_line.width(), 40);
+        assert_eq!(active_line.width(), 40);
+        assert!(
+            completed_line
+                .spans
+                .iter()
+                .all(|span| { span.style.bg == Some(style::palette::surface_prompt()) })
+        );
+        assert!(
+            active_line
+                .spans
+                .iter()
+                .all(|span| { span.style.bg == Some(style::palette::surface_selection()) })
+        );
+    }
+
+    #[test]
+    fn test_input_text_with_cursor_clamps_cursor_to_comment_end() {
+        // Arrange
+        let mut input = crate::domain::input::InputState::with_text("review".to_string());
+        input.cursor = usize::MAX;
+
+        // Act
+        let text_at_end = input_text_with_cursor(&input);
+        input.cursor = 3;
+        let text_in_middle = input_text_with_cursor(&input);
+
+        // Assert
+        assert_eq!(text_at_end, "review|");
+        assert_eq!(text_in_middle, "rev|iew");
     }
 
     #[test]
@@ -1525,16 +2110,18 @@ mod tests {
         let cache = DiffLayoutCache::default();
         let terminal_area = Rect::new(0, 0, 80, 12);
         let zero_height_area = Rect::new(0, 0, 80, 1);
+        let line_comments = DiffLineComments::default();
 
         // Act
-        let layout = diff_changed_line_layout(&diff, 0, terminal_area, &cache);
+        let layout = diff_changed_line_layout(&diff, &line_comments, 0, terminal_area, &cache);
         let scrolled_down = layout
             .changed_line_scroll_offset(20, 0)
             .expect("selected changed line should have a rendered range");
         let scrolled_up = layout
             .changed_line_scroll_offset(0, scrolled_down)
             .expect("first changed line should have a rendered range");
-        let zero_height_layout = diff_changed_line_layout(&diff, 0, zero_height_area, &cache);
+        let zero_height_layout =
+            diff_changed_line_layout(&diff, &line_comments, 0, zero_height_area, &cache);
         let zero_height_scroll_offset = zero_height_layout
             .changed_line_scroll_offset(0, scrolled_down)
             .expect("first changed line should remain selectable without a viewport");
@@ -1544,6 +2131,86 @@ mod tests {
         assert!(scrolled_down > 0);
         assert!(scrolled_up < scrolled_down);
         assert_eq!(zero_height_scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_inline_comment_overflow_reserves_scrollbar_layout_everywhere() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let markdown_cache = markdown::MarkdownRenderCache::default();
+        let empty_comments = DiffLineComments::default();
+        let tall_area = Rect::new(0, 0, 50, 100);
+        let sizing_diff = "diff --git a/main.rs b/main.rs\n@@ -0,0 +1 @@\n+x";
+        let sizing_layout =
+            diff_changed_line_layout(sizing_diff, &empty_comments, 0, tall_area, &cache);
+        let line_width = sizing_layout
+            .render_layout
+            .content_width
+            .saturating_sub(sizing_layout.render_layout.prefix_width);
+        let diff = format!(
+            "diff --git a/main.rs b/main.rs\n@@ -0,0 +1 @@\n+{}",
+            "x".repeat(line_width),
+        );
+        let tall_layout = diff_changed_line_layout(&diff, &empty_comments, 0, tall_area, &cache);
+        let fitting_height = u16::try_from(tall_layout.line_count.saturating_add(5))
+            .expect("short diff height should fit in a terminal");
+        let fitting_area = Rect::new(0, 0, 50, fitting_height);
+        let fitting_layout =
+            diff_changed_line_layout(&diff, &empty_comments, 0, fitting_area, &cache);
+        let content = cache.content(&diff);
+        let anchor = content
+            .selected_changed_line(0, 0)
+            .expect("fixture should contain one changed line");
+        let mut line_comments = DiffLineComments::default();
+        line_comments.start_editing(anchor);
+        line_comments
+            .editing_input_mut()
+            .expect("inline comment should be editable")
+            .insert_text("comment");
+        line_comments.finish_editing();
+
+        // Act
+        let commented_layout =
+            diff_changed_line_layout(&diff, &line_comments, 0, fitting_area, &cache);
+        let max_scroll_offset = diff_view_max_scroll_offset(
+            &diff,
+            &line_comments,
+            0,
+            fitting_area,
+            &cache,
+            &markdown_cache,
+            &DiffPreview::default(),
+        );
+
+        // Assert
+        assert!(!fitting_layout.show_scrollbar);
+        assert!(commented_layout.show_scrollbar);
+        assert_eq!(
+            commented_layout
+                .render_layout
+                .content_width
+                .saturating_add(1),
+            fitting_layout.render_layout.content_width,
+        );
+        assert_eq!(commented_layout.comment_insertions.len(), 1);
+        assert_eq!(
+            commented_layout.changed_line_ranges[0].len(),
+            fitting_layout.changed_line_ranges[0]
+                .len()
+                .saturating_add(1),
+        );
+        assert_eq!(
+            commented_layout.comment_insertions[0].display_row,
+            commented_layout.changed_line_ranges[0].end,
+        );
+        assert_eq!(
+            max_scroll_offset,
+            diff_util::clamp_diff_scroll_offset(
+                u16::MAX,
+                commented_layout.line_count,
+                commented_layout.render_layout.viewport_height,
+            ),
+        );
     }
 
     #[test]
@@ -1644,8 +2311,9 @@ mod tests {
         let area = Rect::new(0, 0, 80, 12);
 
         // Act
-        let first_layout = cache.resolved_layout(&content, 0, area);
-        let second_layout = cache.resolved_layout(&content, 0, area);
+        let line_comments = DiffLineComments::default();
+        let first_layout = cache.resolved_layout(&content, &line_comments, 0, area);
+        let second_layout = cache.resolved_layout(&content, &line_comments, 0, area);
 
         // Assert
         assert!(Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
@@ -1991,11 +2659,14 @@ mod tests {
         };
         let diff_layout_cache = DiffLayoutCache::default();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let line_comments = DiffLineComments::default();
         let mut diff_page = DiffPage::new(DiffPageInput {
+            can_comment: true,
             diff,
             diff_layout_cache: &diff_layout_cache,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: &line_comments,
             markdown_render_cache: &markdown_render_cache,
             preview: &preview,
             review_comments: None,
@@ -2011,6 +2682,7 @@ mod tests {
         // Act
         let max_scroll_offset = diff_view_max_scroll_offset(
             diff,
+            &line_comments,
             0,
             terminal_area,
             &diff_layout_cache,
@@ -2038,10 +2710,12 @@ mod tests {
             path: "README.md".to_string(),
             request_id: 1,
         };
+        let line_comments = DiffLineComments::default();
 
         // Act
         let max_scroll_offset = diff_view_max_scroll_offset(
             diff,
+            &line_comments,
             0,
             Rect::new(0, 0, 80, 12),
             &diff_layout_cache,

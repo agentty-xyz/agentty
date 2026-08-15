@@ -13,7 +13,7 @@ use crate::domain::transient_message::{
     TransientMessageSlot,
 };
 use crate::presentation::app_mode::{
-    AppMode, DiffFocus, DiffPreview, DiffRestoreTarget, DiffSidebarFocus,
+    AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffRestoreTarget, DiffSidebarFocus,
 };
 
 /// Completed session-diff task ready for stale-safe reducer application.
@@ -445,6 +445,7 @@ impl App {
             diff,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             preview: DiffPreview::default(),
             review_comments,
             restore,

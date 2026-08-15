@@ -2486,7 +2486,7 @@ mod tests {
     use crate::domain::session::{
         ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     };
-    use crate::presentation::app_mode::DiffFocus;
+    use crate::presentation::app_mode::{DiffFocus, DiffLineComments};
 
     #[tokio::test]
     async fn merged_branch_eligibility_rejects_incomplete_session_context() {
@@ -2745,9 +2745,11 @@ mod tests {
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.mode = AppMode::Help {
             context: HelpContext::Diff {
+                can_comment: true,
                 diff: String::new(),
                 file_explorer_selected_index: 0,
                 focus: DiffFocus::Files,
+                line_comments: DiffLineComments::default(),
                 selected_diff_line_index: 0,
                 preview: DiffPreview::default(),
                 review_comments: Some(Box::new(DiffReviewComments::loading(1))),
@@ -2807,6 +2809,7 @@ mod tests {
             diff: String::new(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: Some(review_comments),
@@ -3131,6 +3134,7 @@ mod tests {
                 diff: "diff --git a/README.md b/README.md\n+preview".to_string(),
                 file_explorer_selected_index: 0,
                 focus: DiffFocus::Files,
+                line_comments: DiffLineComments::default(),
                 selected_diff_line_index: 0,
                 preview: DiffPreview::Loading {
                     path: "README.md".to_string(),
@@ -3219,6 +3223,7 @@ mod tests {
             diff: "diff".to_string(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             preview,
             review_comments: None,
             restore: None,
@@ -3276,9 +3281,11 @@ mod tests {
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::Diff {
+                can_comment: true,
                 diff: "diff --git a/README.md b/README.md\n+preview".to_string(),
                 file_explorer_selected_index: 0,
                 focus: DiffFocus::Files,
+                line_comments: DiffLineComments::default(),
                 selected_diff_line_index: 0,
                 preview: DiffPreview::Loading {
                     path: "README.md".to_string(),

@@ -270,21 +270,26 @@ and standalone comments are read-only.
 ## Diff Mode
 
 Pressing `d` from session view opens Diff mode focused on Files with the right panel
-showing the git diff. Press `Enter` on a file to focus its changed lines, then use `j` /
-`k` or the arrow keys to move the line cursor. `Esc`, `Left`, `h`, or `f` returns focus
-to the file tree. Linked review requests add a Comments section below Files; `c` focuses
-Comments, and `f` returns to Files.
+showing the git diff. Press `Enter` on a file to focus its changes, then press `Enter`
+again to edit the selected changed line inline. After finishing with `Enter` or `Esc`,
+use `j` / `k` or the arrow keys to move the line cursor and press `Enter` to edit the
+selected line. `Esc`, `Left`, `h`, or `f` returns focus to the file tree. Linked review
+requests add a Comments section below Files; `c` focuses Comments while the file tree is
+focused, and `f` returns to Files. The Comments section keeps its own `Enter` action for
+submitting marked review threads. Press `s` to submit every inline diff comment together
+in the next turn.
 
 | Key                | Action                                    |
 | ------------------ | ----------------------------------------- |
 | `q`                | Back to session                           |
 | `Esc`              | Focus Files, or leave from Files          |
 | `j` / `k`          | Select a file or changed line             |
-| `Enter`            | Focus the selected file's changed lines   |
+| `Enter`            | Focus a file, or edit/finish a comment    |
 | `Up` / `Down`      | Select a changed line or scroll a preview |
 | `Left` / `h` / `f` | Return to Files                           |
 | `p`                | Toggle markdown preview                   |
 | `c`                | Focus linked review comments              |
+| `s`                | Submit all inline comments                |
 | `?`                | Help                                      |
 
 <a id="usage-diff-totals"></a> The diff panel title includes aggregate `+added` and
@@ -300,6 +305,18 @@ the same renderer as session output. Preview stays enabled while navigating: ano
 markdown file loads automatically, while folders and other file types continue showing
 their normal diff. Deleted, binary, oversized, and unreadable markdown files show a
 short availability notice. Press `p` again to return to raw diff lines.
+
+Each line comment stays visible beneath its changed line while Diff mode remains open.
+Press `Enter` again on a commented line to edit it; clearing its text and finishing
+removes it. Completed comments use a distinct inset background, while the active editor
+uses the stronger selection highlight. `s` combines all finished comments with any draft
+text and image attachments that were present before opening the diff, then submits the
+batch as one session turn. The chat renders the batch compactly as one path, line, side,
+and comment per row. Comments on deleted lines also include the captured pre-change
+source text so the agent retains context that is absent from the worktree.
+
+Read-only diffs, including `Merged` sessions, keep changed-line navigation but hide the
+inline comment and batch-submission shortcuts.
 
 ## Prompt Input
 

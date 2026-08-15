@@ -2295,6 +2295,71 @@ fn seed_review_worktree_with_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+/// Seeds the review session as a real linked worktree so submitting its line
+/// comment can exercise the next agent turn without an isolation warning.
+fn seed_linked_review_worktree_with_diff(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    std::fs::remove_dir(&session_worktree)?;
+    let session_worktree_path = session_worktree
+        .to_str()
+        .ok_or("session worktree path must be valid UTF-8")?;
+    run_git(
+        &env.workdir,
+        &["worktree", "add", session_worktree_path, "wt/review-s"],
+    )?;
+    std::fs::create_dir_all(session_worktree.join("src"))?;
+    std::fs::write(
+        session_worktree.join("src/main.rs"),
+        "fn main() {\n    println!(\"review\");\n}\n",
+    )?;
+    run_git(&session_worktree, &["add", "."])?;
+    run_git(&session_worktree, &["commit", "-m", "add main"])?;
+
+    Ok(())
+}
+
+/// Installs a deterministic Codex app-server stub for the submitted line
+/// comment turn and any follow-up commit-message generation.
+fn seed_line_comment_codex_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let codex_path = env.stub_bin.join("codex");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'codex-cli 0.146.0\n'; exit 0; fi
+
+extract_id() {
+    printf '%s\n' "$1" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
+}
+
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{}}\n' "$request_id"
+            ;;
+        *'"method":"thread/start"'*|*'"method":"thread/resume"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{"thread":{"id":"line-comment-thread"}}}\n' "$request_id"
+            ;;
+        *'"method":"turn/start"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{"turn":{"id":"line-comment-turn"}}}\n' "$request_id"
+            printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"line-comment-turn"}}}'
+            sleep 1
+            printf '%s\n' '{"method":"item/completed","params":{"threadId":"line-comment-thread","turnId":"line-comment-turn","item":{"type":"agentMessage","id":"line-comment-answer","text":"{\"answer\":\"Line comment received.\",\"questions\":[],\"summary\":null}","phase":"final_answer"}}}'
+            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"line-comment-thread","turn":{"id":"line-comment-turn","status":"completed","items":[]}}}'
+            ;;
+    esac
+done
+"#;
+    std::fs::write(&codex_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
 /// Seeds the review session folder as a clean Git worktree.
 fn seed_clean_review_worktree(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let session_worktree = env.agentty_root.join("wt").join("review-s");
@@ -6655,6 +6720,19 @@ fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
                         "Merged session exposes only read-only review actions",
                     )
                     .press_key("?")
+                    .press_key("d")
+                    .wait_for_text("main.rs", 5000)
+                    .press_key("j")
+                    .wait_for_text("Enter: open", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Esc/Left: files", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "merged_diff_read_only",
+                        "Merged diff hides inline comment actions",
+                    )
+                    .press_key("q")
                     .press_key("q")
                     .press_key("s")
                     .wait_for_text("Sync complete", 10_000)
@@ -6666,7 +6744,7 @@ fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
                     )
             },
             |frame, report| {
-                assert_eq!(report.captures.len(), 3);
+                assert_eq!(report.captures.len(), 4);
                 let merged_frame = common::frame_from_capture(&report.captures[0]);
                 let merged_full = Region::full(merged_frame.cols(), merged_frame.rows());
                 assertion::assert_text_in_region(&merged_frame, "ACTIVE —— 1", &merged_full);
@@ -6683,6 +6761,13 @@ fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
                         "Merged help must hide `{mutating_action}`"
                     );
                 }
+
+                let diff_frame = common::frame_from_capture(&report.captures[2]);
+                let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
+                let diff_text = diff_frame.text_in_region(&diff_full);
+                assertion::assert_text_in_region(&diff_frame, "Esc/Left: files", &diff_full);
+                assert!(!diff_text.contains("Enter: comment"));
+                assert!(!diff_text.contains("s: submit comments"));
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Done", &full);
@@ -7011,6 +7096,7 @@ fn test_diff_changed_line_navigation() -> E2eResult {
                     .press_key("d")
                     .wait_for_text("main.rs", 5000)
                     .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_text("Esc/Left: files", 5000);
                 let scenario = (0..70).fold(scenario, |scenario, _| scenario.press_key("Down"));
@@ -7030,6 +7116,109 @@ fn test_diff_changed_line_navigation() -> E2eResult {
                 assertion::assert_text_in_region(frame, "changed line 70", &full);
                 assertion::assert_text_in_region(frame, "Esc/Left: files", &full);
                 assertion::assert_text_in_region(frame, "j/k: select line", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that multiple changed-line comments stay inline until one batch is
+/// submitted as the next session turn.
+#[test]
+fn test_diff_line_comments() -> E2eResult {
+    // Arrange — Ctrl+M emits Enter's carriage return consistently in PTY and VHS.
+    const ENTER_KEY: &str = "Ctrl+m";
+
+    // Act, Assert
+    FeatureTest::new("diff_line_comments")
+        .with_git()
+        .zola(
+            "Comment on changed lines",
+            "Write multiple inline diff comments and submit them together in the next turn.",
+            47,
+        )
+        .setup(|env| {
+            seed_review_ready_session(env)?;
+            seed_linked_review_worktree_with_diff(env)?;
+            seed_line_comment_codex_stub(env)?;
+            seed_sessions_startup_tab(env)
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("main.rs", 5000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .wait_for_text("Enter: open", 5000)
+                    .press_key(ENTER_KEY)
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key(ENTER_KEY)
+                    .wait_for_text("comment: |", 5000)
+                    .write_text("Explain the entry point.")
+                    .wait_for_text("Explain the entry point.|", 3000)
+                    .press_key(ENTER_KEY)
+                    .press_key("j")
+                    .press_key(ENTER_KEY)
+                    .write_text("Why print review?")
+                    .wait_for_text("Why print review?|", 3000)
+                    .press_key(ENTER_KEY)
+                    .wait_for_text("Enter: comment", 3000)
+                    .capture_labeled(
+                        "inline_line_comments",
+                        "Multiple comments remain visible inside the diff",
+                    )
+                    .viewing_pause_ms(1500)
+                    .press_key("s")
+                    .wait_for_text("Line comments:", 5000)
+                    .capture_labeled(
+                        "compact_line_comment_prompt",
+                        "Submitted comments use compact path and line references",
+                    )
+                    .wait_for_text("Line comment received.", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "line_comment_submitted",
+                        "Line comment submitted in the next session turn",
+                    )
+            },
+            |frame, report| {
+                let diff_frame = common::frame_from_capture(&report.captures[0]);
+                let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
+                assertion::assert_text_in_region(
+                    &diff_frame,
+                    "comment: Explain the entry point.",
+                    &diff_full,
+                );
+                assertion::assert_text_in_region(
+                    &diff_frame,
+                    "comment: Why print review?",
+                    &diff_full,
+                );
+
+                let submitted_frame = common::frame_from_capture(&report.captures[1]);
+                let submitted_full = Region::full(submitted_frame.cols(), submitted_frame.rows());
+                assertion::assert_text_in_region(
+                    &submitted_frame,
+                    "Line comments:",
+                    &submitted_full,
+                );
+                assertion::assert_text_in_region(
+                    &submitted_frame,
+                    "src/main.rs:1 [new]: Explain the entry point.",
+                    &submitted_full,
+                );
+                assertion::assert_text_in_region(
+                    &submitted_frame,
+                    "src/main.rs:2 [new]: Why print review?",
+                    &submitted_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Line comment received.", &full);
             },
         )?;
 
