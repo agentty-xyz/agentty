@@ -48,7 +48,7 @@ trait TerminalOperation {
     fn enter_alternate_screen(
         &self,
         stdout: &mut io::Stdout,
-        keyboard_enhancement_enabled: bool,
+        enhancement: TerminalEnhancement,
     ) -> io::Result<()>;
 
     /// Leaves the alternate screen, disables bracketed paste, and restores the
@@ -56,8 +56,15 @@ trait TerminalOperation {
     fn leave_alternate_screen(
         &self,
         stdout: &mut io::Stdout,
-        keyboard_enhancement_enabled: bool,
+        enhancement: TerminalEnhancement,
     ) -> io::Result<()>;
+}
+
+/// Terminal keyboard modes enabled for the active TUI session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TerminalEnhancement {
+    keyboard_enhancement_enabled: bool,
+    xterm_modified_keys_enabled: bool,
 }
 
 /// Production terminal operations backed by `crossterm`.
@@ -87,12 +94,12 @@ impl TerminalOperation for CrosstermTerminalOperation {
     fn enter_alternate_screen(
         &self,
         stdout: &mut io::Stdout,
-        keyboard_enhancement_enabled: bool,
+        enhancement: TerminalEnhancement,
     ) -> io::Result<()> {
-        if keyboard_enhancement_enabled {
+        if enhancement.keyboard_enhancement_enabled {
             execute!(
                 stdout,
-                EnableXtermCsiUModifiedKeys,
+                EnableXtermCsiUModifiedKeys(enhancement),
                 PushKeyboardEnhancementFlags(keyboard_enhancement_flags()),
                 EnterAlternateScreen,
                 EnableBracketedPaste
@@ -105,13 +112,13 @@ impl TerminalOperation for CrosstermTerminalOperation {
     fn leave_alternate_screen(
         &self,
         stdout: &mut io::Stdout,
-        keyboard_enhancement_enabled: bool,
+        enhancement: TerminalEnhancement,
     ) -> io::Result<()> {
-        if keyboard_enhancement_enabled {
+        if enhancement.keyboard_enhancement_enabled {
             execute!(
                 stdout,
                 PopKeyboardEnhancementFlags,
-                DisableXtermCsiUModifiedKeys,
+                DisableXtermCsiUModifiedKeys(enhancement),
                 DisableBracketedPaste,
                 LeaveAlternateScreen,
                 Show
@@ -125,19 +132,24 @@ impl TerminalOperation for CrosstermTerminalOperation {
 /// Shared production terminal operation implementation.
 static CROSSTERM_TERMINAL_OPERATION: CrosstermTerminalOperation = CrosstermTerminalOperation;
 
-/// Requests xterm/tmux modified-key reporting in CSI-u format.
+/// Conditionally requests xterm/tmux modified-key reporting in CSI-u format.
 ///
 /// `tmux` listens for xterm's `modifyOtherKeys` controls when deciding
 /// whether a pane application asked for extended keys. Crossterm's kitty
 /// keyboard-protocol push is still used for terminals that support the kitty
-/// stack, but the xterm request covers multiplexers that translate modified
-/// `Enter` through xterm-compatible controls.
+/// stack. Direct terminals must not receive this request because their xterm
+/// encoding for shifted punctuation is not understood by Crossterm 0.29;
+/// `tmux` translates the same input to supported CSI-u sequences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EnableXtermCsiUModifiedKeys;
+struct EnableXtermCsiUModifiedKeys(TerminalEnhancement);
 
 impl Command for EnableXtermCsiUModifiedKeys {
     fn write_ansi(&self, buffer: &mut impl fmt::Write) -> fmt::Result {
-        buffer.write_str("\x1B[>4;1f\x1B[>4;2m")
+        if self.0.xterm_modified_keys_enabled {
+            buffer.write_str("\x1B[>4;1f\x1B[>4;2m")?;
+        }
+
+        Ok(())
     }
 
     #[cfg(windows)]
@@ -146,13 +158,17 @@ impl Command for EnableXtermCsiUModifiedKeys {
     }
 }
 
-/// Restores xterm/tmux modified-key reporting resources to their defaults.
+/// Conditionally restores xterm/tmux modified-key reporting resources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DisableXtermCsiUModifiedKeys;
+struct DisableXtermCsiUModifiedKeys(TerminalEnhancement);
 
 impl Command for DisableXtermCsiUModifiedKeys {
     fn write_ansi(&self, buffer: &mut impl fmt::Write) -> fmt::Result {
-        buffer.write_str("\x1B[>4f\x1B[>4m")
+        if self.0.xterm_modified_keys_enabled {
+            buffer.write_str("\x1B[>4f\x1B[>4m")?;
+        }
+
+        Ok(())
     }
 
     #[cfg(windows)]
@@ -207,36 +223,34 @@ const _: () = {
 /// thread-affine: setup mutates its state before the runtime loop starts and
 /// cleanup runs from the same task via `Drop`.
 pub(crate) struct TerminalGuard {
-    keyboard_enhancement_enabled: Cell<bool>,
+    enhancement: Cell<TerminalEnhancement>,
 }
 
 impl TerminalGuard {
     /// Creates a guard that restores terminal state for the active TUI session.
     pub(crate) fn new() -> Self {
         Self {
-            keyboard_enhancement_enabled: Cell::new(false),
+            enhancement: Cell::new(TerminalEnhancement {
+                keyboard_enhancement_enabled: false,
+                xterm_modified_keys_enabled: false,
+            }),
         }
     }
 
-    /// Records whether setup enabled keyboard enhancement flags so cleanup can
-    /// pop them symmetrically.
-    fn set_keyboard_enhancement_enabled(&self, enabled: bool) {
-        self.keyboard_enhancement_enabled.set(enabled);
+    /// Records the enabled keyboard modes so cleanup can restore them.
+    fn set_enhancement(&self, enhancement: TerminalEnhancement) {
+        self.enhancement.set(enhancement);
     }
 
-    /// Returns whether cleanup must pop keyboard enhancement flags before
-    /// leaving the alternate screen.
-    fn keyboard_enhancement_enabled(&self) -> bool {
-        self.keyboard_enhancement_enabled.get()
+    /// Returns the keyboard modes that cleanup must restore.
+    fn enhancement(&self) -> TerminalEnhancement {
+        self.enhancement.get()
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        restore_terminal_state(
-            &CROSSTERM_TERMINAL_OPERATION,
-            self.keyboard_enhancement_enabled(),
-        );
+        restore_terminal_state(&CROSSTERM_TERMINAL_OPERATION, self.enhancement());
     }
 }
 
@@ -260,16 +274,28 @@ fn prepare_terminal_stdout_with_operation(
 ) -> io::Result<io::Stdout> {
     operation.enable_raw_mode()?;
 
-    let keyboard_enhancement_enabled = should_enable_keyboard_enhancement(operation);
-    guard.set_keyboard_enhancement_enabled(keyboard_enhancement_enabled);
+    let enhancement = terminal_enhancement(operation);
+    guard.set_enhancement(enhancement);
 
     let mut stdout = io::stdout();
-    operation.enter_alternate_screen(&mut stdout, keyboard_enhancement_enabled)?;
+    operation.enter_alternate_screen(&mut stdout, enhancement)?;
 
     Ok(stdout)
 }
 
-/// Returns whether setup should push keyboard enhancement flags.
+/// Selects the keyboard modes appropriate for the current terminal transport.
+fn terminal_enhancement(operation: &dyn TerminalOperation) -> TerminalEnhancement {
+    let is_tmux_session = operation.is_tmux_session();
+    let keyboard_enhancement_enabled =
+        should_enable_keyboard_enhancement(operation, is_tmux_session);
+
+    TerminalEnhancement {
+        keyboard_enhancement_enabled,
+        xterm_modified_keys_enabled: keyboard_enhancement_enabled && is_tmux_session,
+    }
+}
+
+/// Returns whether setup should push Kitty keyboard enhancement flags.
 ///
 /// Crossterm's support query is the preferred signal for local terminals. Over
 /// SSH, the query can fail or report unsupported when the outer terminal still
@@ -277,10 +303,13 @@ fn prepare_terminal_stdout_with_operation(
 /// it to keep modified `Enter` keys distinguishable. `tmux` panes get the same
 /// optimistic path because the multiplexer can answer capability probes
 /// differently from the terminal attached outside the pane.
-fn should_enable_keyboard_enhancement(operation: &dyn TerminalOperation) -> bool {
+fn should_enable_keyboard_enhancement(
+    operation: &dyn TerminalOperation,
+    is_tmux_session: bool,
+) -> bool {
     match operation.supports_keyboard_enhancement() {
         Ok(true) => true,
-        Ok(false) | Err(_) => operation.is_ssh_session() || operation.is_tmux_session(),
+        Ok(false) | Err(_) => operation.is_ssh_session() || is_tmux_session,
     }
 }
 
@@ -292,11 +321,11 @@ fn has_ssh_environment(mut get_var: impl FnMut(&str) -> Option<OsString>) -> boo
 }
 
 /// Restores terminal modes and ignores failures so drop paths do not panic.
-fn restore_terminal_state(operation: &dyn TerminalOperation, keyboard_enhancement_enabled: bool) {
+fn restore_terminal_state(operation: &dyn TerminalOperation, enhancement: TerminalEnhancement) {
     let mut stdout = io::stdout();
     // Best-effort: terminal may already be in normal state.
     let _ = operation.disable_raw_mode();
-    let _ = operation.leave_alternate_screen(&mut stdout, keyboard_enhancement_enabled);
+    let _ = operation.leave_alternate_screen(&mut stdout, enhancement);
 }
 
 #[cfg(test)]
@@ -305,6 +334,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+
+    /// Builds one expected terminal enhancement configuration.
+    fn enhancement_fixture(keyboard: bool, xterm: bool) -> TerminalEnhancement {
+        TerminalEnhancement {
+            keyboard_enhancement_enabled: keyboard,
+            xterm_modified_keys_enabled: xterm,
+        }
+    }
 
     /// Verifies setup returns raw-mode failures directly.
     #[test]
@@ -349,7 +386,7 @@ mod tests {
         operation
             .expect_enter_alternate_screen()
             .once()
-            .withf(|_, keyboard_enhancement_enabled| !keyboard_enhancement_enabled)
+            .withf(|_, enhancement| *enhancement == enhancement_fixture(false, false))
             .returning(|_, _| Err(io::Error::other("enter failed")));
 
         // Act
@@ -360,13 +397,14 @@ mod tests {
         assert_eq!(error.to_string(), "enter failed");
     }
 
-    /// Verifies setup enables keyboard enhancement when the terminal reports
-    /// support for the protocol.
+    /// Verifies direct-terminal startup omits xterm modified-key reporting,
+    /// which would swallow shifted punctuation such as `@`.
     #[test]
-    fn setup_terminal_enables_keyboard_enhancement_when_supported() {
+    fn setup_terminal_omits_xterm_modified_keys_when_supported_directly() {
         // Arrange
         let mut operation = MockTerminalOperation::new();
         let guard = TerminalGuard::new();
+        let mut xterm_startup_sequence = String::new();
         operation
             .expect_enable_raw_mode()
             .once()
@@ -376,17 +414,25 @@ mod tests {
             .once()
             .returning(|| Ok(true));
         operation
+            .expect_is_tmux_session()
+            .once()
+            .returning(|| false);
+        operation
             .expect_enter_alternate_screen()
             .once()
-            .withf(|_, keyboard_enhancement_enabled| *keyboard_enhancement_enabled)
+            .withf(|_, enhancement| *enhancement == enhancement_fixture(true, false))
             .returning(|_, _| Ok(()));
 
         // Act
         let result = prepare_terminal_stdout_with_operation(&operation, &guard);
+        EnableXtermCsiUModifiedKeys(guard.enhancement())
+            .write_ansi(&mut xterm_startup_sequence)
+            .expect("xterm startup sequence should render");
 
         // Assert
-        let _stdout = result.expect("setup should succeed when keyboard enhancement is supported");
-        assert!(guard.keyboard_enhancement_enabled());
+        let _stdout = result.expect("setup should use Kitty enhancement directly");
+        assert_eq!(guard.enhancement(), enhancement_fixture(true, false));
+        assert!(xterm_startup_sequence.is_empty());
     }
 
     /// Verifies support-query failures fall back to the legacy key mode so TUI
@@ -412,7 +458,7 @@ mod tests {
         operation
             .expect_enter_alternate_screen()
             .once()
-            .withf(|_, keyboard_enhancement_enabled| !keyboard_enhancement_enabled)
+            .withf(|_, enhancement| *enhancement == enhancement_fixture(false, false))
             .returning(|_, _| Ok(()));
 
         // Act
@@ -420,7 +466,7 @@ mod tests {
 
         // Assert
         let _stdout = result.expect("setup should fall back when support query fails");
-        assert!(!guard.keyboard_enhancement_enabled());
+        assert_eq!(guard.enhancement(), enhancement_fixture(false, false));
     }
 
     /// Verifies tmux sessions optimistically enable keyboard enhancement when
@@ -443,7 +489,7 @@ mod tests {
         operation
             .expect_enter_alternate_screen()
             .once()
-            .withf(|_, keyboard_enhancement_enabled| *keyboard_enhancement_enabled)
+            .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true))
             .returning(|_, _| Ok(()));
 
         // Act
@@ -451,7 +497,7 @@ mod tests {
 
         // Assert
         let _stdout = result.expect("setup should enable keyboard enhancement inside tmux");
-        assert!(guard.keyboard_enhancement_enabled());
+        assert_eq!(guard.enhancement(), enhancement_fixture(true, true));
     }
 
     /// Verifies tmux sessions optimistically enable keyboard enhancement even
@@ -474,7 +520,7 @@ mod tests {
         operation
             .expect_enter_alternate_screen()
             .once()
-            .withf(|_, keyboard_enhancement_enabled| *keyboard_enhancement_enabled)
+            .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true))
             .returning(|_, _| Ok(()));
 
         // Act
@@ -482,7 +528,7 @@ mod tests {
 
         // Assert
         let _stdout = result.expect("setup should enable keyboard enhancement inside tmux");
-        assert!(guard.keyboard_enhancement_enabled());
+        assert_eq!(guard.enhancement(), enhancement_fixture(true, true));
     }
 
     /// Verifies SSH sessions optimistically enable keyboard enhancement when
@@ -500,11 +546,15 @@ mod tests {
             .expect_supports_keyboard_enhancement()
             .once()
             .returning(|| Err(io::Error::other("timeout")));
+        operation
+            .expect_is_tmux_session()
+            .once()
+            .returning(|| false);
         operation.expect_is_ssh_session().once().returning(|| true);
         operation
             .expect_enter_alternate_screen()
             .once()
-            .withf(|_, keyboard_enhancement_enabled| *keyboard_enhancement_enabled)
+            .withf(|_, enhancement| *enhancement == enhancement_fixture(true, false))
             .returning(|_, _| Ok(()));
 
         // Act
@@ -512,7 +562,7 @@ mod tests {
 
         // Assert
         let _stdout = result.expect("setup should enable keyboard enhancement over SSH");
-        assert!(guard.keyboard_enhancement_enabled());
+        assert_eq!(guard.enhancement(), enhancement_fixture(true, false));
     }
 
     /// Verifies SSH sessions optimistically enable keyboard enhancement even
@@ -530,11 +580,15 @@ mod tests {
             .expect_supports_keyboard_enhancement()
             .once()
             .returning(|| Ok(false));
+        operation
+            .expect_is_tmux_session()
+            .once()
+            .returning(|| false);
         operation.expect_is_ssh_session().once().returning(|| true);
         operation
             .expect_enter_alternate_screen()
             .once()
-            .withf(|_, keyboard_enhancement_enabled| *keyboard_enhancement_enabled)
+            .withf(|_, enhancement| *enhancement == enhancement_fixture(true, false))
             .returning(|_, _| Ok(()));
 
         // Act
@@ -542,7 +596,7 @@ mod tests {
 
         // Assert
         let _stdout = result.expect("setup should enable keyboard enhancement over SSH");
-        assert!(guard.keyboard_enhancement_enabled());
+        assert_eq!(guard.enhancement(), enhancement_fixture(true, false));
     }
 
     /// Verifies SSH detection accepts the environment variables set by common
@@ -583,18 +637,28 @@ mod tests {
     #[test]
     fn xterm_modified_key_commands_request_and_reset_csi_u_reporting() {
         // Arrange
+        let mut disabled_enable_sequence = String::new();
+        let mut disabled_disable_sequence = String::new();
         let mut enable_sequence = String::new();
         let mut disable_sequence = String::new();
 
         // Act
-        EnableXtermCsiUModifiedKeys
+        EnableXtermCsiUModifiedKeys(enhancement_fixture(true, false))
+            .write_ansi(&mut disabled_enable_sequence)
+            .expect("disabled enable sequence should render");
+        DisableXtermCsiUModifiedKeys(enhancement_fixture(true, false))
+            .write_ansi(&mut disabled_disable_sequence)
+            .expect("disabled disable sequence should render");
+        EnableXtermCsiUModifiedKeys(enhancement_fixture(true, true))
             .write_ansi(&mut enable_sequence)
             .expect("enable sequence should render");
-        DisableXtermCsiUModifiedKeys
+        DisableXtermCsiUModifiedKeys(enhancement_fixture(true, true))
             .write_ansi(&mut disable_sequence)
             .expect("disable sequence should render");
 
         // Assert
+        assert!(disabled_enable_sequence.is_empty());
+        assert!(disabled_disable_sequence.is_empty());
         assert_eq!(enable_sequence, "\x1B[>4;1f\x1B[>4;2m");
         assert_eq!(disable_sequence, "\x1B[>4f\x1B[>4m");
     }
@@ -614,14 +678,14 @@ mod tests {
         operation
             .expect_leave_alternate_screen()
             .once()
-            .withf(|_, keyboard_enhancement_enabled| *keyboard_enhancement_enabled)
+            .withf(|_, enhancement| *enhancement == enhancement_fixture(true, true))
             .returning(move |_, _| {
                 leave_calls_for_expectation.fetch_add(1, Ordering::Relaxed);
                 Ok(())
             });
 
         // Act
-        restore_terminal_state(&operation, true);
+        restore_terminal_state(&operation, enhancement_fixture(true, true));
 
         // Assert
         assert_eq!(leave_calls.load(Ordering::Relaxed), 1);
