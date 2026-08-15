@@ -712,6 +712,24 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Seeds one review-ready session whose latest diff refresh found no changes.
+fn seed_clean_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+    seed_clean_review_worktree(env)?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_diff_stats(0, 0, false, "review-shortcut-0001", "XS")
+            .await
+    })?;
+
+    Ok(())
+}
+
 /// Seeds a review-ready worktree whose committed change conflicts with a
 /// newer commit on the stored base branch.
 fn seed_merge_conflict_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -2266,6 +2284,19 @@ fn seed_review_ready_session_with_review_request(
 /// Seeds the review session folder with a real git diff and GitHub remote so
 /// diff mode and background review-comment sync can run without live services.
 fn seed_review_worktree_with_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_clean_review_worktree(env)?;
+
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    std::fs::write(
+        session_worktree.join("src/main.rs"),
+        "fn main() {\n    println!(\"review\");\n}\n",
+    )?;
+
+    Ok(())
+}
+
+/// Seeds the review session folder as a clean Git worktree.
+fn seed_clean_review_worktree(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let session_worktree = env.agentty_root.join("wt").join("review-s");
     std::fs::create_dir_all(session_worktree.join("src"))?;
     run_git(&session_worktree, &["init", "-b", "main"])?;
@@ -2286,12 +2317,39 @@ fn seed_review_worktree_with_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::e
             "https://github.com/agentty-xyz/agentty.git",
         ],
     )?;
-    std::fs::write(
-        session_worktree.join("src/main.rs"),
-        "fn main() {\n    println!(\"review\");\n}\n",
-    )?;
 
     Ok(())
+}
+
+/// Installs a tmux stub that edits the clean review worktree when opened.
+fn install_worktree_edit_tmux_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let edited_file = env
+        .agentty_root
+        .join("wt")
+        .join("review-s")
+        .join("src/main.rs")
+        .to_string_lossy()
+        .replace('\'', "'\\''");
+    let tmux_path = env.stub_bin.join("tmux");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "new-window" ]; then
+  printf '%s\n' 'external worktree edit' > '{edited_file}'
+  printf '%s\n' '@42'
+fi
+"#
+    );
+    std::fs::write(&tmux_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&tmux_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
+/// Seeds a clean review session whose worktree-open action creates an edit.
+fn seed_clean_review_session_with_worktree_edit(env: &BuilderEnv) -> E2eResult {
+    seed_clean_review_ready_session(env)?;
+    install_worktree_edit_tmux_stub(env)
 }
 
 /// Seeds a review diff whose external driver stays busy long enough to prove
@@ -6754,6 +6812,78 @@ fn diff_preview_opens_from_session() -> E2eResult {
                 );
                 assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
                 assertion::assert_text_in_region(frame, "j/k: select file", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that a known-clean session neither advertises nor opens Diff mode.
+#[test]
+fn test_clean_session_hides_diff_action() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("clean_session_hides_diff_action")
+        .with_git()
+        .setup(seed_clean_review_ready_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("Enter: reply", 5000)
+                    .press_key("d")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "clean_session_view",
+                        "Clean session remains in chat after pressing d",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+
+                assertion::assert_text_in_region(frame, "Review-ready session shortcuts", &full);
+                assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                assertion::assert_not_visible(frame, "d: diff");
+                assertion::assert_not_visible(frame, "Loading diff...");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify opening a clean writable worktree makes subsequent edits inspectable.
+#[test]
+fn test_worktree_open_reenables_diff_action() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("worktree_open_reenables_diff_action")
+        .env("TMUX", "/tmp/tmux-agentty-test/default,1,0")
+        .with_git()
+        .setup(seed_clean_review_session_with_worktree_edit)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("Enter: reply", 5000)
+                    .capture_labeled("clean_session", "Clean session hides the diff action")
+                    .press_key("o")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("d")
+                    .wait_for_text("external worktree edit", 5000)
+                    .capture_labeled(
+                        "external_edit_diff",
+                        "Diff opened after editing through the writable worktree",
+                    )
+            },
+            |frame, report| {
+                let clean_frame = common::frame_from_capture(&report.captures[0]);
+                assertion::assert_not_visible(&clean_frame, "d: diff");
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "external worktree edit", &full);
+                assertion::assert_text_in_region(frame, "q/Esc: back", &full);
             },
         )?;
 

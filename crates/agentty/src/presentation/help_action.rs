@@ -149,6 +149,8 @@ pub(crate) struct ViewHelpState {
     /// Whether this session can start sync work under the current one-level
     /// stack consistency rules.
     pub(crate) can_rebase_session_branch: ViewActionAvailability,
+    /// Whether the current session has a diff available to inspect.
+    pub(crate) can_show_diff: ViewActionAvailability,
     /// Whether the current session can open the reply composer under stack
     /// rules.
     pub(crate) reply_to_session: ViewActionAvailability,
@@ -203,13 +205,14 @@ impl ViewActionSet {
             state.session_state,
             ViewSessionState::Review | ViewSessionState::AgentReview
         );
-        let can_show_diff = can_show_review
-            || matches!(
-                state.session_state,
-                ViewSessionState::Merged
-                    | ViewSessionState::Managed
-                    | ViewSessionState::ManagedResearch
-            );
+        let can_show_diff = state.can_show_diff.is_enabled()
+            && (can_show_review
+                || matches!(
+                    state.session_state,
+                    ViewSessionState::Merged
+                        | ViewSessionState::Managed
+                        | ViewSessionState::ManagedResearch
+                ));
 
         Self {
             continue_terminal_session: ViewActionAvailability::from_bool(matches!(
@@ -967,6 +970,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -993,6 +997,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Disabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1008,6 +1013,29 @@ mod tests {
     }
 
     #[test]
+    fn test_view_actions_hide_diff_when_session_diff_is_empty() {
+        // Arrange
+        let state = ViewHelpState {
+            can_fork_session: ViewActionAvailability::Enabled,
+            can_merge_session_branch: ViewActionAvailability::Enabled,
+            can_mutate_session_branch: ViewActionAvailability::Enabled,
+            can_open_worktree: ViewActionAvailability::Enabled,
+            can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Disabled,
+            reply_to_session: ViewActionAvailability::Enabled,
+            can_start_staged_session: ViewActionAvailability::Disabled,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Review,
+        };
+
+        // Act
+        let actions = view_actions(state);
+
+        // Assert
+        assert!(!actions.iter().any(|action| action.key == "d"));
+    }
+
+    #[test]
     fn merged_view_actions_keep_diff_and_hide_mutating_actions() {
         // Arrange
         let state = ViewHelpState {
@@ -1016,6 +1044,7 @@ mod tests {
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Enabled,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -1043,6 +1072,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1072,6 +1102,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1097,6 +1128,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1140,6 +1172,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1162,6 +1195,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Disabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1191,6 +1225,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Disabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Disabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1215,6 +1250,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Disabled,
             can_rebase_session_branch: ViewActionAvailability::Disabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1239,6 +1275,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1265,6 +1302,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1291,6 +1329,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Enabled,
@@ -1324,6 +1363,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Enabled,
@@ -1357,6 +1397,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1386,6 +1427,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1418,6 +1460,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1448,6 +1491,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1470,6 +1514,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Disabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1498,6 +1543,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Disabled,
             can_rebase_session_branch: ViewActionAvailability::Disabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1522,6 +1568,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1551,6 +1598,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1580,6 +1628,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Enabled,
@@ -1613,6 +1662,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Enabled,
@@ -1644,6 +1694,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1670,6 +1721,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1693,6 +1745,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1723,6 +1776,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1749,6 +1803,7 @@ mod tests {
                 can_merge_session_branch: ViewActionAvailability::Enabled,
                 can_mutate_session_branch: ViewActionAvailability::Enabled,
                 can_rebase_session_branch: ViewActionAvailability::Enabled,
+                can_show_diff: ViewActionAvailability::Enabled,
                 can_open_worktree: ViewActionAvailability::Enabled,
                 reply_to_session: ViewActionAvailability::Enabled,
                 can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1783,6 +1838,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1821,6 +1877,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1844,6 +1901,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1869,6 +1927,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1891,6 +1950,7 @@ mod tests {
             can_merge_session_branch: ViewActionAvailability::Enabled,
             can_mutate_session_branch: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Enabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
@@ -1946,6 +2006,7 @@ mod tests {
             can_mutate_session_branch: ViewActionAvailability::Disabled,
             can_open_worktree: ViewActionAvailability::Disabled,
             can_rebase_session_branch: ViewActionAvailability::Disabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Disabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
             publish_pull_request_action: None,
@@ -1991,6 +2052,7 @@ mod tests {
             can_mutate_session_branch: ViewActionAvailability::Disabled,
             can_open_worktree: ViewActionAvailability::Enabled,
             can_rebase_session_branch: ViewActionAvailability::Disabled,
+            can_show_diff: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Disabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
             publish_pull_request_action: None,

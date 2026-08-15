@@ -209,7 +209,10 @@ conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` 
 losing the typed draft. While that chat transcript is focused, the `d` diff-preview hint
 appears unless the latest successful refresh found an empty diff against the session's
 base branch; `d` opens text, binary, metadata-only, or diagnostic diff output. Leaving
-the preview returns to the composer with the draft intact. Full diffs load in the
+the preview returns to the composer with the draft intact. Before opening the writable
+session worktree, Agentty clears a known-empty result in memory and durable storage
+because external edits may follow. If durable invalidation fails, the worktree stays
+closed; otherwise `d` becomes available and reloads the diff. Full diffs load in the
 background; press `q` or `Esc` on **Loading diff...** to return immediately while a
 large repository is still being inspected.
 

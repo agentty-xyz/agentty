@@ -130,7 +130,7 @@ The full set in **Review** state, subject to session and forge availability:
 | `o`                 | Run a launch configuration in the worktree (`tmux`) |
 | `p`                 | Publish branch and create or refresh review request |
 | `c`                 | Show linked review-request comments                 |
-| `d`                 | Show diff                                           |
+| `d`                 | Show diff when the session has changes              |
 | `f`                 | Append or regenerate focused review output          |
 | `F`                 | Fork session with copied transcript history         |
 | `m`                 | Add to merge queue after confirmation               |
@@ -142,29 +142,41 @@ The full set in **Review** state, subject to session and forge availability:
 
 State-specific differences:
 
+- Sessions with a known-empty diff hide `d`; pressing `d` keeps Session View in place.
+  Before opening the writable worktree, Agentty invalidates that cached result so later
+  external edits remain inspectable across restarts. If durable invalidation fails, the
+  worktree stays closed.
+
 - **AgentReview** keeps the review shortcuts, including `r`. Pressing `r` starts session
   sync immediately and cancels the pending focused review so stale review output cannot
   appear after the rebase begins.
+
 - **InProgress** sessions use `Enter` to queue a follow-up message, keep `r` available
   to queue session sync, and keep `p` available to queue review-request creation behind
   the running turn. Each `Ctrl+c` retracts the newest queued message; when the queue is
   empty, `Ctrl+c` stops the active turn.
+
 - **Rebasing** sessions use `Enter` to queue a follow-up message behind the active
   session sync. Slash commands and branch actions remain unavailable until sync
   finishes.
+
 - Root **Review** and **AgentReview** sessions offer `F` to fork the current branch and
   copied transcript history into a new independent session; stacked children hide `F`.
+
 - **Draft** sessions use `Enter` to add a staged message and `s` to start the staged
   session. They hide `o` and `r` until launch and let `Ctrl+V`, `Ctrl+Shift+V`, or
   `Alt+V` open the composer with an image paste; stacked drafts also hide `m` and show
   `s` only when the parent is review-ready and the stack is idle.
+
 - **Question** sessions hide `r` until they return to review-ready state.
+
 - **Orchestrator** sessions use a campaign board above chat. On a parked plan, `a`
   approves the plan; after verification, `a` opens a choice between local merges and
   review requests. Worker parallelism comes from the global **Orchestrator Parallelism**
   setting. Read-only research waves also use that cap and can start without approval
   through **Auto-approve Research**. Controllers hide branch actions: `d`, `o`, `p`,
   `F`, `m`, and `r`.
+
 - Managed orchestration workers restrict direct Agentty actions. `d` opens their diff,
   `D` confirms a one-way detach into a regular user-owned session, and, when Agentty is
   running inside `tmux`, a worker in **Review** exposes `o` to open its materialized
@@ -173,22 +185,28 @@ State-specific differences:
   sync, cancel, linked review-comment, and direct question-answer actions stay hidden;
   `Ctrl+c` is ignored while the worker remains managed. After a managed merge removes
   the worktree, `d` reads the immutable diff archived during integration.
+
 - Temporary research children expose their transcript and `d` evidence while active, but
   hide `D` and `o`: their worktree is always reclaimed after report capture and cannot
   be transferred into a user-owned session. After cleanup, `d` reads the archived
   observed diff so unexpected writes remain inspectable.
+
 - Review-ready stacked parents with a materialized child keep `Enter`, `/`, `m`, and `r`
   while the stack is idle.
+
 - Sessions with a linked pull request or merge request use `c` to open Diff mode focused
   on its Comments section and hide `m`; merge the linked request through its forge
   instead of Agentty's local merge queue.
+
 - **Merged** sessions remain in Active and expose only read-only navigation, linked
   review comments, and `d` for the diff until list-mode `s` successfully syncs their
   local target branch.
+
 - **Done** and **Canceled** sessions offer `c` to start a continuation draft
   (confirmation popup). Done-session drafts use the merged commit hash when available;
   canceled-session drafts use the saved summary, transcript, or original prompt. Both
   terminal states hide linked review comments so continuation remains unambiguous.
+
 - **Queued** and **Merging** sessions are otherwise read-only (`q`, scroll, help).
   Linked review requests remain available from other session states with `c`.
 

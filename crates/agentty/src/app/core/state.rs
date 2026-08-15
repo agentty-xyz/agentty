@@ -49,7 +49,9 @@ use crate::domain::agent::AgentSelection;
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
-use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
+use crate::domain::session::{
+    FollowUpTaskAction, PublishBranchAction, Session, SessionDiffStats, SessionId, Status,
+};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -1175,7 +1177,7 @@ impl App {
     /// Opens the selected session worktree in tmux and optionally runs the
     /// first configured launch configuration. This is a no-op when Agentty
     /// was launched outside tmux.
-    pub async fn open_session_worktree_in_tmux(&self) {
+    pub async fn open_session_worktree_in_tmux(&mut self) {
         let selected_launch_configuration =
             self.configured_launch_configurations().into_iter().next();
 
@@ -1187,25 +1189,33 @@ impl App {
     /// provided launch configuration.
     ///
     /// Sessions without a materialized worktree and Agentty processes outside
-    /// tmux are treated as a no-op.
+    /// tmux are treated as a no-op. A successfully opened writable worktree
+    /// invalidates cached diff presence because external edits can begin
+    /// immediately.
     pub(crate) async fn open_session_worktree_in_tmux_with_command(
-        &self,
+        &mut self,
         launch_configuration: Option<&str>,
     ) {
         if !self.is_tmux_session() {
             return;
         }
 
-        let Some(session) = self.selected_session() else {
+        let Some((session_folder, session_id)) = self
+            .selected_session()
+            .map(|session| (session.folder.clone(), session.id.clone()))
+        else {
             return;
         };
-        if !self.services.fs_client().is_dir(session.folder.clone()) {
+        if !self.services.fs_client().is_dir(session_folder.clone()) {
+            return;
+        }
+        if !self.invalidate_session_diff_presence(&session_id).await {
             return;
         }
 
         let Some(window_id) = self
             .tmux_client
-            .open_window_for_folder(session.folder.clone())
+            .open_window_for_folder(session_folder)
             .await
         else {
             return;
@@ -1221,6 +1231,34 @@ impl App {
         self.tmux_client
             .run_command_in_window(window_id, launch_configuration.to_string())
             .await;
+    }
+
+    /// Marks one writable session worktree's cached diff presence unknown in
+    /// both the durable session row and loaded snapshot.
+    ///
+    /// Returns `false` without changing the snapshot when durable invalidation
+    /// fails, allowing callers to prevent external write access.
+    async fn invalidate_session_diff_presence(&mut self, session_id: &SessionId) -> bool {
+        if let Err(error) = self
+            .services
+            .db()
+            .sessions()
+            .mark_session_diff_unknown(session_id)
+            .await
+        {
+            warn!(
+                session_id = %session_id,
+                error = %error,
+                "failed to invalidate session diff presence before opening writable worktree"
+            );
+
+            return false;
+        }
+
+        self.sessions
+            .apply_session_diff_stats_updated(session_id, SessionDiffStats::Unknown);
+
+        true
     }
 
     /// Starts the session-view branch-publish action flow for one session.
