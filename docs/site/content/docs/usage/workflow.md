@@ -748,13 +748,21 @@ it and the transcript reports the fallback.
 it as a provisional title and generates a refined title in the background using the
 project's `Default Fast Model`. Title refinement runs for every session role, including
 managed read-only research sessions, and the isolated title prompt is itself read-only.
-Any prompt without an actionable session goal keeps the provisional title; the first
-later prompt with actionable intent then supplies the refined title. Draft sessions
-regenerate the title as more drafts are staged. Generated title candidates are ordered,
-so an empty response does not discard an earlier usable candidate, while a slow response
-cannot replace a newer accepted candidate, draft, or commit-derived title. Clarification
-answers and other follow-up messages never become fallback titles for an already-started
-session, even when its transcript detail is loaded lazily.
+Title generation uses the persisted original request, current title, session summary,
+and latest request as one stable context snapshot. The original request anchors the
+overall goal; later requests can establish a goal after context-only text or clarify the
+existing goal, but a narrow follow-up or clarification answer does not replace broader
+session intent. Each context field is shortened at a valid text boundary when necessary,
+so unusually large sessions retain every context category without exceeding a model's
+prompt transport limit. Draft sessions regenerate the title as more drafts are staged.
+
+Provider failures are logged and retried once. If both attempts fail, or the model finds
+no actionable goal, Agentty keeps the provisional title so a later substantive request
+can refine it. Candidates equivalent to the current title, original request, latest
+request, or one line of those requests after case and punctuation normalization are
+rejected as copies. Generated title candidates are ordered, so an empty response does
+not discard an earlier usable candidate, while a slow response cannot replace a newer
+accepted candidate, draft, or commit-derived title.
 
 ## Settings Scope
 

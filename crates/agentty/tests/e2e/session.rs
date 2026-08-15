@@ -515,8 +515,8 @@ fn seed_session_with_typed_marker_collision(
     Ok(())
 }
 
-/// Installs a deterministic Claude stub for non-actionable title generation
-/// and a resumed review turn.
+/// Installs a deterministic Claude stub for stable-context title generation
+/// and resumed review turns.
 fn seed_session_title_candidate_project(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -528,16 +528,22 @@ prompt=$(cat)
 case "$prompt" in
   *"Generate a concise, commit-style title"*)
     case "$prompt" in
-      *'\<user_request> Background context only. \</user_request>'*)
+      *'\<latest_request> Improve session title generation. \</latest_request>'*)
         answer=''
         ;;
+      *'\<original_request> Improve session title generation. \</original_request>'*'\<latest_request> Also reject punctuation-only copies. \</latest_request>'*)
+        answer='Stabilize session title generation'
+        ;;
       *)
-        answer='Review the project'
+        answer='Assess project quality'
         ;;
     esac
     ;;
-  *"review the project"*)
-    answer='Review complete. No files were changed.'
+  *"Also reject punctuation-only copies."*)
+    answer='Follow-up complete. No files were changed.'
+    ;;
+  *"Improve session title generation."*)
+    answer='The session title workflow is ready for a focused follow-up.'
     ;;
   *)
     answer='Got it. What would you like me to do?'
@@ -2892,12 +2898,12 @@ fn session_list_empty_state() -> E2eResult {
     Ok(())
 }
 
-/// Verify that a prompt without an actionable goal remains provisional until
-/// a later actionable request supplies the visible session title.
+/// Verify that a later narrow follow-up is titled from stable session context
+/// instead of becoming the whole visible session title.
 #[test]
-fn test_session_title_refines_after_non_actionable_prompt() -> E2eResult {
+fn test_session_title_uses_stable_context() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("session_title_refines_after_non_actionable_prompt")
+    FeatureTest::new("session_title_uses_stable_context")
         .with_git()
         .setup(seed_session_title_candidate_project)
         .run(
@@ -2908,32 +2914,38 @@ fn test_session_title_refines_after_non_actionable_prompt() -> E2eResult {
                     .press_key("a")
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
-                    .write_text("Background context only.")
-                    .wait_for_text("Background context only.", 3000)
+                    .write_text("Improve session title generation.")
+                    .wait_for_text("Improve session title generation.", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Got it. What would you like me to do?", 30000)
+                    .wait_for_text(
+                        "The session title workflow is ready for a focused follow-up.",
+                        30000,
+                    )
                     .wait_for_text("Enter: reply", 5000)
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
-                    .write_text("review the project")
-                    .wait_for_text("review the project", 3000)
+                    .write_text("Also reject punctuation-only copies.")
+                    .wait_for_text("Also reject punctuation-only copies.", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Review complete. No files were changed.", 30000)
-                    .wait_for_text("Review the project", 30000)
+                    .wait_for_text("Follow-up complete. No files were changed.", 30000)
+                    .wait_for_text("Stabilize session title generation", 30000)
                     .capture_labeled(
-                        "refined_session_title",
-                        "An actionable request replaces the provisional context-only title",
+                        "stable_context_title",
+                        "The session title preserves the durable overall goal",
                     )
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Review the project", &full);
                 assertion::assert_text_in_region(
                     frame,
-                    "Review complete. No files were changed.",
+                    "Stabilize session title generation",
                     &full,
                 );
-                assertion::assert_not_visible(frame, "Record background context");
+                assertion::assert_text_in_region(
+                    frame,
+                    "Follow-up complete. No files were changed.",
+                    &full,
+                );
             },
         )?;
 
