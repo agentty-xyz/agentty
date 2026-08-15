@@ -83,6 +83,9 @@ const RESOLVED_DECISION_REVIEW_TEXT: &str = "Resolved session decision honored."
 const REVIEW_REQUEST_TIMELINE_NOTICE_TEXT: &str =
     "Created PR https://github.com/agentty-xyz/agentty/pull/42";
 
+/// User-authored prompt retained in composer history after review resolution.
+const REVIEW_HISTORY_PROMPT_TEXT: &str = "Explain the review status loader";
+
 /// Stable policy phrase the focused-review stub expects in the prompt.
 ///
 /// This intentionally matches only the durable concept instead of one full
@@ -2497,7 +2500,7 @@ esac
 }
 
 /// Seeds the linked-review fixture with a delayed Claude turn so the feature
-/// scenario can observe the generated resolution prompt in progress.
+/// scenario can observe the review-resolution loader in progress.
 fn seed_review_comment_agent_resolution(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -2535,6 +2538,14 @@ fn seed_review_comment_agent_resolution(
         database
             .sessions()
             .update_session_model("review-shortcut-0001", "claude-haiku-4-5-20251001")
+            .await?;
+        database
+            .sessions()
+            .append_session_message(
+                "review-shortcut-0001",
+                SessionMessageKind::UserPrompt,
+                REVIEW_HISTORY_PROMPT_TEXT,
+            )
             .await
     })?;
 
@@ -7112,13 +7123,21 @@ fn session_review_comment_agent_resolution() -> E2eResult {
                         "Comments marked to address and deny before batch submission",
                     )
                     .press_key("Enter")
-                    .wait_for_text("Process the following selected forge review comments", 5000)
-                    .wait_for_text("Working...", 5000)
-                    .wait_for_stable_frame(300, 5000)
+                    .wait_for_text("Resolving 2 review comments...", 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "agent_review_comment_resolution",
                         "Address and deny batch submitted to the session agent",
+                    )
+                    .wait_for_text("Processed the selected review threads.", 15000)
+                    .wait_for_text("Enter: reply", 15000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .press_key("Up")
+                    .wait_for_text(REVIEW_HISTORY_PROMPT_TEXT, 5000)
+                    .capture_labeled(
+                        "review_comment_prompt_history",
+                        "Composer history retains only user-authored prompts",
                     )
             },
             |frame, report| {
@@ -7126,18 +7145,22 @@ fn session_review_comment_agent_resolution() -> E2eResult {
                 let selection_full = Region::full(selection_frame.cols(), selection_frame.rows());
                 assertion::assert_text_in_region(&selection_frame, "[A]", &selection_full);
                 assertion::assert_text_in_region(&selection_frame, "[D]", &selection_full);
+                let loader_frame = common::frame_from_capture(&report.captures[1]);
+                let loader_full = Region::full(loader_frame.cols(), loader_frame.rows());
+                assertion::assert_text_in_region(
+                    &loader_frame,
+                    "Resolving 2 review comments...",
+                    &loader_full,
+                );
                 let full = Region::full(frame.cols(), frame.rows());
 
-                assertion::assert_text_in_region(
+                assertion::assert_text_in_region(frame, REVIEW_HISTORY_PROMPT_TEXT, &full);
+                assertion::assert_not_visible(
                     frame,
                     "Process the following selected forge review comments",
-                    &full,
                 );
-                assertion::assert_text_in_region(frame, "Thread ID: thread-inline", &full);
-                assertion::assert_text_in_region(frame, "Requested action: Address", &full);
-                assertion::assert_text_in_region(frame, "Thread ID: thread-file", &full);
-                assertion::assert_text_in_region(frame, "Requested action: Deny", &full);
-                assertion::assert_text_in_region(frame, "Working...", &full);
+                assertion::assert_not_visible(frame, "Thread ID: thread-inline");
+                assertion::assert_not_visible(frame, "Requested action: Address");
             },
         )?;
 

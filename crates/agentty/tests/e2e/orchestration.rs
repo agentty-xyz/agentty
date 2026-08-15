@@ -908,8 +908,9 @@ fn managed_worker_review_hides_open_outside_tmux() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("j")
-                    .press_key("Enter")
-                    .wait_for_text("Managed by controller-0001", 5000)
+                    .compose(&common::open_selected_session_view_with_texts(&[
+                        "Managed by controller-0001",
+                    ]))
                     .compose(&common::open_help_overlay())
                     .capture_labeled(
                         "managed_worker_review_help",

@@ -1240,9 +1240,13 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line =
-            session_output_status_line(Status::InProgress, Some("Inspecting changed files"), None)
-                .expect("in-progress sessions should render a status line");
+        let status_line = session_output_status_line(
+            Status::InProgress,
+            Some("Inspecting changed files"),
+            None,
+            None,
+        )
+        .expect("in-progress sessions should render a status line");
 
         // Assert
         assert!(
@@ -1257,9 +1261,13 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line =
-            session_output_status_line(Status::InProgress, Some(COMMITTING_PROGRESS_LABEL), None)
-                .expect("in-progress sessions should render a status line");
+        let status_line = session_output_status_line(
+            Status::InProgress,
+            Some(COMMITTING_PROGRESS_LABEL),
+            None,
+            None,
+        )
+        .expect("in-progress sessions should render a status line");
 
         // Assert
         assert!(status_line.to_string().contains(COMMITTING_PROGRESS_LABEL));
@@ -1279,6 +1287,7 @@ mod tests {
             Status::AgentReview,
             None,
             Some("Reviewing changes with gpt-5.6-sol"),
+            None,
         )
         .expect("agent-review sessions should render a status line");
 
@@ -1295,7 +1304,7 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(Status::AgentReview, None, None)
+        let status_line = session_output_status_line(Status::AgentReview, None, None, None)
             .expect("agent-review sessions should render a status line");
 
         // Assert
@@ -1307,7 +1316,7 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(Status::Merging, None, None)
+        let status_line = session_output_status_line(Status::Merging, None, None, None)
             .expect("merging sessions should render a status line");
 
         // Assert

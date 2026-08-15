@@ -11,6 +11,8 @@ pub(crate) enum TransientMessageSlot {
     Summary,
     /// Focused review loading, result, or failure output.
     Review,
+    /// Active agent turn resolving selected forge review comments.
+    ReviewCommentResolution,
     /// Short-lived workflow feedback produced while finalizing a turn.
     WorkflowNotice,
     /// Live status for child sessions managed by an orchestrator.

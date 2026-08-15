@@ -323,10 +323,7 @@ impl Session {
             .messages()
             .iter()
             .rev()
-            .find_map(|message| {
-                (message.kind == crate::domain::session_message::SessionMessageKind::UserPrompt)
-                    .then_some(message.position)
-            })
+            .find_map(|message| message.kind.is_prompt().then_some(message.position))
     }
 
     /// Rebuilds the visible summary slot from the latest persisted summary.
@@ -361,6 +358,16 @@ impl Session {
             slot: TransientMessageSlot::Summary,
             turn_position: self.latest_user_prompt_position(),
         });
+    }
+
+    /// Resolves turn-scoped messages when a snapshot leaves an active turn.
+    pub(crate) fn reconcile_status_transition(&mut self, previous_status: Status) {
+        if previous_status == Status::InProgress && self.status != Status::InProgress {
+            self.transient_messages
+                .retract(TransientMessageSlot::ReviewCommentResolution);
+        }
+
+        self.reconcile_transient_messages();
     }
 
     /// Applies turn-bound lifecycle cleanup after reducer-owned snapshot sync.
@@ -1730,6 +1737,25 @@ pub(crate) mod tests {
                 .expect("branch workflow should retain the completed summary");
             assert_eq!(summary.body.text(), "Completed summary");
         }
+    }
+
+    #[test]
+    fn test_latest_user_prompt_position_tracks_generated_turn() {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().status(Status::Review).build();
+        session.transcript = Some(SessionTranscript::new(vec![
+            crate::domain::session_message::SessionMessage::conversation(
+                7,
+                crate::domain::session_message::SessionMessageKind::AgentPrompt,
+                "resolve comments",
+            ),
+        ]));
+
+        // Act
+        let latest_prompt_position = session.latest_user_prompt_position();
+
+        // Assert
+        assert_eq!(latest_prompt_position, Some(7));
     }
 
     #[test]

@@ -12,8 +12,12 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel
 use crate::domain::composer::PromptAttachment;
 use crate::domain::personality::PersonalitySummary;
 use crate::domain::review;
-use crate::domain::session::{Session, SessionId, Status};
+use crate::domain::session::{SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::domain::transient_message::{
+    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
+    TransientMessageSlot,
+};
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::infra::clipboard_image;
 use crate::presentation::app_mode::{ReviewCommentAction, ReviewCommentActionSelection};
@@ -110,13 +114,15 @@ impl App {
         snapshot: &ReviewCommentSnapshot,
         selections: &[ReviewCommentActionSelection],
     ) -> ReviewCommentResolutionOutcome {
-        let can_reply = self
+        let Some(session_index) = self
             .sessions
             .sessions()
             .iter()
-            .find(|session| session.id == *session_id)
-            .is_some_and(Session::allows_review_comment_reply);
-        if !can_reply {
+            .position(|session| session.id == *session_id)
+        else {
+            return ReviewCommentResolutionOutcome::KeepReviewComments;
+        };
+        if !self.sessions.sessions()[session_index].allows_review_comment_reply() {
             return ReviewCommentResolutionOutcome::KeepReviewComments;
         }
 
@@ -132,6 +138,7 @@ impl App {
             .sessions()
             .update_session_focused_review(session_id, None, None, None)
             .await;
+        let comment_count = thread_ids.len();
         let enqueued = self
             .sessions
             .reply_to_review_comments(&self.services, session_id, prompt, thread_ids)
@@ -139,6 +146,19 @@ impl App {
         if !enqueued {
             return ReviewCommentResolutionOutcome::KeepReviewComments;
         }
+
+        // Reply enqueueing cannot reorder the exclusively borrowed session state,
+        // so the validated index remains stable across the awaited operation.
+        let session = &mut self.sessions.sessions_mut()[session_index];
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Loading(review_comment_resolution_loading_text(
+                comment_count,
+            )),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::ReviewCommentResolution,
+            turn_position: None,
+        });
 
         ReviewCommentResolutionOutcome::ShowSession {
             session_id: session_id.clone(),
@@ -562,6 +582,17 @@ impl App {
     }
 }
 
+/// Formats the in-progress label for one accepted review-comment batch.
+fn review_comment_resolution_loading_text(comment_count: usize) -> String {
+    let noun = if comment_count == 1 {
+        "review comment"
+    } else {
+        "review comments"
+    };
+
+    format!("Resolving {comment_count} {noun}...")
+}
+
 /// Builds the agent-facing `/apply` prompt from focused-review suggestions.
 ///
 /// The prompt explicitly asks the agent to verify each suggestion against the
@@ -608,7 +639,7 @@ pub(crate) fn build_resolve_review_comment_prompt(
         .trim_end()
         .replace("{{ fenced_review_comments }}", &fenced_review_comments);
 
-    Some((TurnPrompt::from_text(prompt), thread_ids))
+    Some((TurnPrompt::from_agent_data(prompt), thread_ids))
 }
 
 /// Returns the actionable inline threads selected for a turn.
@@ -1050,7 +1081,7 @@ mod tests {
             prompt.attachments,
             [] as [ag_protocol::TurnPromptAttachment; 0]
         );
-        assert_eq!(prompt.text_source, TurnPromptTextSource::UserPrompt);
+        assert_eq!(prompt.text_source, TurnPromptTextSource::AgentData);
     }
 
     /// Ensures an already-satisfied address request can resolve without a new
@@ -1362,6 +1393,23 @@ mod tests {
         assert_eq!(duplicate_apply, PromptApplyOutcome::ClearComposer);
     }
 
+    #[test]
+    fn test_review_comment_resolution_loading_text_pluralizes_comment_count() {
+        // Arrange
+        let cases = [
+            (1, "Resolving 1 review comment..."),
+            (2, "Resolving 2 review comments..."),
+        ];
+
+        // Act, Assert
+        for (comment_count, expected) in cases {
+            assert_eq!(
+                review_comment_resolution_loading_text(comment_count),
+                expected
+            );
+        }
+    }
+
     #[tokio::test]
     async fn test_resolve_session_review_comments_keeps_page_when_enqueue_fails() {
         // Arrange
@@ -1407,8 +1455,12 @@ mod tests {
             "thread-current",
             ReviewCommentAction::Address,
         )];
+        let missing_session_id = SessionId::from("missing-session");
 
         // Act
+        let missing = app
+            .resolve_session_review_comments(&missing_session_id, &snapshot, &selections)
+            .await;
         let blocked = app
             .resolve_session_review_comments(&session_id, &snapshot, &selections)
             .await;
@@ -1422,6 +1474,7 @@ mod tests {
             .await;
 
         // Assert
+        assert_eq!(missing, ReviewCommentResolutionOutcome::KeepReviewComments);
         assert_eq!(blocked, ReviewCommentResolutionOutcome::KeepReviewComments);
         assert_eq!(
             empty_selection,

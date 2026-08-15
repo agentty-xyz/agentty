@@ -315,6 +315,7 @@ pub fn session_output_status_line(
     status: Status,
     active_progress: Option<&str>,
     review_status_message: Option<&str>,
+    review_comment_resolution_message: Option<&str>,
 ) -> Option<Line<'static>> {
     if !matches!(
         status,
@@ -328,8 +329,12 @@ pub fn session_output_status_line(
         return None;
     }
 
-    let status_message =
-        session_output_status_message(status, active_progress, review_status_message);
+    let status_message = session_output_status_message(
+        status,
+        active_progress,
+        review_status_message,
+        review_comment_resolution_message,
+    );
 
     Some(Line::from(vec![Span::styled(
         format!("{} {status_message}", session_output_status_icon(status)),
@@ -411,20 +416,29 @@ fn session_output_status_message(
     status: Status,
     active_progress: Option<&str>,
     review_status_message: Option<&str>,
+    review_comment_resolution_message: Option<&str>,
 ) -> String {
     match status {
-        Status::InProgress => active_progress
+        Status::InProgress => review_comment_resolution_message
             .map(str::trim)
-            .filter(|progress| !progress.is_empty())
+            .filter(|message| !message.is_empty())
             .map_or_else(
-                || "Working...".to_string(),
-                |progress| {
-                    if progress == COMMITTING_PROGRESS_LABEL {
-                        progress.to_string()
-                    } else {
-                        format!("Working... {progress}")
-                    }
+                || {
+                    active_progress
+                        .map(str::trim)
+                        .filter(|progress| !progress.is_empty())
+                        .map_or_else(
+                            || "Working...".to_string(),
+                            |progress| {
+                                if progress == COMMITTING_PROGRESS_LABEL {
+                                    progress.to_string()
+                                } else {
+                                    format!("Working... {progress}")
+                                }
+                            },
+                        )
                 },
+                ToString::to_string,
             ),
         Status::AgentReview => review_status_message
             .map(str::trim)
@@ -684,7 +698,7 @@ mod tests {
         let status = Status::Merged;
 
         // Act
-        let message = session_output_status_message(status, None, None);
+        let message = session_output_status_message(status, None, None, None);
         let icon = session_output_status_icon(status);
 
         // Assert

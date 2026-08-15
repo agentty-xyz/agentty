@@ -13,6 +13,8 @@ const USER_PROMPT_PREFIX: &str = " › ";
 pub enum SessionMessageKind {
     /// Raw user prompt text without TUI prompt markers or transcript padding.
     UserPrompt,
+    /// Generated agent-facing prompt retained for replay but hidden from chat.
+    AgentPrompt,
     /// Raw assistant answer text without transcript padding.
     AssistantAnswer,
     /// Generic workflow notice emitted by Agentty session workflows.
@@ -24,6 +26,7 @@ impl SessionMessageKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::UserPrompt => "user_prompt",
+            Self::AgentPrompt => "agent_prompt",
             Self::AssistantAnswer => "assistant_answer",
             Self::WorkflowNotice => "workflow_notice",
         }
@@ -32,7 +35,15 @@ impl SessionMessageKind {
     /// Returns whether this kind represents a raw conversation message that
     /// belongs in the normal `session_message` store.
     pub fn is_conversation_message(self) -> bool {
-        matches!(self, Self::UserPrompt | Self::AssistantAnswer)
+        matches!(
+            self,
+            Self::UserPrompt | Self::AgentPrompt | Self::AssistantAnswer
+        )
+    }
+
+    /// Returns whether this kind starts one user-visible or generated turn.
+    pub fn is_prompt(self) -> bool {
+        matches!(self, Self::UserPrompt | Self::AgentPrompt)
     }
 }
 
@@ -48,6 +59,7 @@ impl FromStr for SessionMessageKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "user_prompt" => Ok(Self::UserPrompt),
+            "agent_prompt" => Ok(Self::AgentPrompt),
             "assistant_answer" => Ok(Self::AssistantAnswer),
             "workflow_notice" => Ok(Self::WorkflowNotice),
             _ => Err(SessionMessageKindParseError {
@@ -243,7 +255,9 @@ fn transcript_content_hash(messages: &[SessionMessage]) -> u64 {
 /// preserve exact content so status blocks keep their spacing.
 pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String {
     match kind {
-        SessionMessageKind::UserPrompt => normalized_user_prompt_content(content),
+        SessionMessageKind::UserPrompt | SessionMessageKind::AgentPrompt => {
+            normalized_user_prompt_content(content)
+        }
         SessionMessageKind::AssistantAnswer => normalized_message_content(content),
         SessionMessageKind::WorkflowNotice => content.to_string(),
     }
@@ -253,7 +267,7 @@ impl SessionMessage {
     /// Appends this message to a formatted transcript display buffer.
     fn append_display_text(&self, output: &mut String) {
         match self.kind {
-            SessionMessageKind::UserPrompt => {
+            SessionMessageKind::UserPrompt | SessionMessageKind::AgentPrompt => {
                 append_user_prompt_display_text(output, &self.content);
             }
             SessionMessageKind::AssistantAnswer => {
@@ -346,17 +360,26 @@ mod tests {
     #[test]
     fn test_session_message_kind_round_trips_database_value() {
         // Arrange
-        let kind = SessionMessageKind::AssistantAnswer;
+        let kinds = [
+            SessionMessageKind::UserPrompt,
+            SessionMessageKind::AgentPrompt,
+            SessionMessageKind::AssistantAnswer,
+            SessionMessageKind::WorkflowNotice,
+        ];
 
         // Act
-        let parsed = kind
-            .as_str()
-            .parse::<SessionMessageKind>()
-            .expect("kind should parse");
+        let parsed = kinds.map(|kind| {
+            kind.as_str()
+                .parse::<SessionMessageKind>()
+                .expect("kind should parse")
+        });
 
         // Assert
-        assert_eq!(parsed, kind);
-        assert_eq!(kind.to_string(), "assistant_answer");
+        assert_eq!(parsed, kinds);
+        assert_eq!(SessionMessageKind::AgentPrompt.to_string(), "agent_prompt");
+        assert!(SessionMessageKind::AgentPrompt.is_conversation_message());
+        assert!(SessionMessageKind::AgentPrompt.is_prompt());
+        assert!(!SessionMessageKind::AssistantAnswer.is_prompt());
     }
 
     #[test]
@@ -430,6 +453,29 @@ mod tests {
         assert_eq!(
             transcript.replay_text().expect("expected replay text"),
             " › first\n   second\n\n"
+        );
+    }
+
+    #[test]
+    fn test_session_transcript_replays_generated_agent_prompt() {
+        // Arrange
+        let messages = vec![SessionMessage::conversation(
+            1,
+            SessionMessageKind::AgentPrompt,
+            "resolve review comments",
+        )];
+
+        // Act
+        let transcript = SessionTranscript::new(messages);
+
+        // Assert
+        assert_eq!(
+            transcript.replay_text().expect("expected replay text"),
+            " › resolve review comments\n\n"
+        );
+        assert_eq!(
+            stored_message_content(SessionMessageKind::AgentPrompt, "\n  generated  \n"),
+            "  generated"
         );
     }
 
