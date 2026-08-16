@@ -5,6 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
+use agentty::db::{Database, DbError};
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
@@ -23,6 +24,18 @@ const CONTROLLER_ID: &str = "controller-0001";
 const WORKER_ID: &str = "worker-a-0001";
 const CONTROLLER_REVISION_PROMPT: &str = "Revise the plan without changing branches";
 const CONTROLLER_REVISION_RESPONSE: &str = "Controller revision recorded.";
+
+/// Gives the controller a strictly newer fixture timestamp than its worker.
+async fn stabilize_controller_initial_selection(database: &Database) -> Result<(), DbError> {
+    database
+        .sessions()
+        .update_session_updated_at(WORKER_ID, 1)
+        .await?;
+    database
+        .sessions()
+        .update_session_updated_at(CONTROLLER_ID, 2)
+        .await
+}
 
 /// Seeds one parked campaign plus a linked managed worker for UI proofs.
 fn seed_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
@@ -92,10 +105,7 @@ fn seed_orchestrator_auto_review_scope(env: &BuilderEnv) -> E2eResult {
             .await?;
         }
 
-        database
-            .sessions()
-            .update_session_title(CONTROLLER_ID, "Managed feature delivery")
-            .await?;
+        stabilize_controller_initial_selection(&database).await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
     })
@@ -179,11 +189,9 @@ fn seed_orchestration_campaign_rows(env: &BuilderEnv) -> E2eResult {
             )
             .await?;
         // Keep the controller as the deterministic initial raw selection so
-        // one `j` press always reaches its grouped worker row.
-        database
-            .sessions()
-            .update_session_title(CONTROLLER_ID, "Managed feature delivery")
-            .await?;
+        // one `j` press always reaches its grouped worker row. Explicit
+        // timestamps avoid ties with the worker's later `created_at` value.
+        stabilize_controller_initial_selection(&database).await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
     });
@@ -382,10 +390,7 @@ fn seed_review_ready_managed_worker(env: &BuilderEnv) -> E2eResult {
             .await?;
         // The worker status update touches its row, so restore the same stable
         // initial selection ordering used by the base campaign seed.
-        database
-            .sessions()
-            .update_session_title(CONTROLLER_ID, "Managed feature delivery")
-            .await?;
+        stabilize_controller_initial_selection(&database).await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
     })
@@ -483,6 +488,7 @@ fn seed_archived_managed_worker(env: &BuilderEnv) -> E2eResult {
         sqlx::query("UPDATE session_orchestration SET status = 'Done'")
             .execute(database.pool())
             .await?;
+        stabilize_controller_initial_selection(&database).await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
     })
