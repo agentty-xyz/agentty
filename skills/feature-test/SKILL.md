@@ -220,12 +220,13 @@ Committed hash sidecars must be produced by the same pinned container definition
 uses. `container/e2e.Containerfile` supports both `linux/amd64` and `linux/arm64`, with
 architecture-specific checksums for the Rust installer, `prek`, `cargo-nextest`, `vhs`,
 and `ttyd`, plus the full recording stack (Chromium, `ffmpeg`, JetBrains Mono).
-Presubmit, postsubmit, and release checks pull the published image index from GHCR by
-digest, select its `linux/amd64` variant explicitly, and run the `test-agentty-e2e` hook
-inside it against a read-only checkout. The same index contains a native `linux/arm64`
-variant for recording on ARM64 hosts. The host needs a running Podman environment only —
-no local Chrome or VHS — and the localhost-socket sandbox restriction below does not
-apply inside the container.
+Presubmit, postsubmit, and release checks call `.github/workflows/e2e.yml`, whose job
+uses the published image index from GHCR as its digest-pinned container runtime, selects
+the `linux/amd64` variant explicitly, overrides the image user with the root user GitHub
+requires for workspace access, and runs the `test-agentty-e2e` hook directly. The same
+index contains a native `linux/arm64` variant for recording on ARM64 hosts. The host
+needs a running Podman environment only — no local Chrome or VHS — and the
+localhost-socket sandbox restriction below does not apply inside the container.
 
 The canonical feature preset records at 1600×800 with an 18-point font, matching the
 site poster dimensions and avoiding the excessive VHS and FFmpeg memory use caused by
@@ -294,11 +295,15 @@ test -s docs/site/static/features/{name}.gif || {
 
 Both host branches pull their native variant from the same published image index; do not
 run the other architecture through emulation because Rust compiler probes can crash
-before the test starts. The `--user` override is only for writable local recording. CI
-does not use it: the image retains its unprivileged UID 1001 default, and workflows
-mount the checkout read-only for `check` mode. Always perform the nonempty-file check
-after recording: VHS can exit successfully after creating its screenshots even when GIF
-finalization has not produced a usable artifact.
+before the test starts. Local recording uses the host user's UID so the bind-mounted
+workspace remains writable. The reusable CI workflow instead overrides the image's
+unprivileged default user with root so `actions/checkout` can populate the job's
+writable workspace; `check` mode verifies recording freshness without rewriting the
+feature artifacts. Because GitHub's mounted checkout retains a different owner, the
+workflow also registers the exact `GITHUB_WORKSPACE` path as a Git `safe.directory`
+before invoking `prek`. Always perform the nonempty-file check after recording: VHS can
+exit successfully after creating its screenshots even when GIF finalization has not
+produced a usable artifact.
 
 Review the changed GIF and `.{name}.hash` sidecar, then refresh the PNG poster for every
 regenerated GIF (section 4) before committing all three together. Testty records to a
@@ -326,12 +331,12 @@ workflow's `packages: write` permission cannot authorize an unconnected package 
 itself. `container/e2e.Containerfile` carries the `org.opencontainers.image.source`
 label to preserve the repository association on subsequent publications.
 
-Copy the reported digest into the `image` default in
-`.github/actions/run-e2e/action.yml` and the `published_e2e_image` assignment above. The
-pinned digest must remain an image index with both platforms; do not update the
-repository when either native test or either platform pull fails. Re-record every
-feature affected by a tool, browser, font, or rendering change and refresh its PNG
-poster before updating the digest and artifacts together.
+Copy the reported digest into the `container.image` value in `.github/workflows/e2e.yml`
+and the `published_e2e_image` assignment above. The pinned digest must remain an image
+index with both platforms; do not update the repository when either native test or
+either platform pull fails. Re-record every feature affected by a tool, browser, font,
+or rendering change and refresh its PNG poster before updating the digest and artifacts
+together.
 
 The following local flow remains available to maintainers with GHCR package-write
 permission. Use an explicit registry destination so a later single-image push cannot be

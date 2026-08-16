@@ -1,0 +1,29 @@
+name: Agentty E2E
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Run suite
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/agentty-xyz/agentty-e2e@sha256:d8bcf1bcc38f051c583ed75b614bde552df28646dc74772e31e61453b1b00079
+      # GitHub requires the default root user to access `GITHUB_WORKSPACE`.
+      # Local recording still uses the image's unprivileged default user.
+      options: --platform linux/amd64 --user 0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Trust checked-out repository
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Run end-to-end feature suite
+        run: prek run test-agentty-e2e --all-files --hook-stage manual

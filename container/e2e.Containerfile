@@ -1,11 +1,11 @@
 # Canonical Linux environment for the Agentty end-to-end feature suite.
 #
-# CI runs the `test-agentty-e2e` hook inside this image with a read-only
-# checkout, so `TESTTY_GIF_MODE=check` verifies committed GIF hash sidecars
-# without rewriting anything. Developers record or refresh feature artifacts
-# in the same image with a writable mount and `TESTTY_GIF_MODE=generate` (see
-# `skills/feature-test/SKILL.md`), which keeps committed hashes portable
-# between local recording and CI verification.
+# CI uses this image as the E2E job container and runs the `test-agentty-e2e`
+# hook with `TESTTY_GIF_MODE=check`, which verifies committed GIF hash sidecars
+# without rewriting them. Developers record or refresh feature artifacts in
+# the same image with a writable mount and `TESTTY_GIF_MODE=generate` (see
+# `skills/feature-test/SKILL.md`), which keeps committed hashes portable between
+# local recording and CI verification.
 # Every tool is pinned; upgrade pins deliberately and re-verify the committed
 # GIF hash sidecars.
 FROM debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS tool-downloads
@@ -102,9 +102,11 @@ ENV CARGO_HOME=/usr/local/cargo \
 # JetBrains Mono font VHS renders with by default, all from the pinned Debian
 # release (`ttyd` is pinned separately below). `check` mode needs none of the
 # recording stack, but one shared image for checking and recording is what
-# makes the hashes portable. CI bind-mounts a checkout owned by the host
-# runner user; keep git working when that owner differs from the container
-# user, so `prek` can enumerate files.
+# makes the hashes portable. Podman-based publication checks bind-mount the
+# checkout at `/workspace`; keep git working when its owner differs from the
+# image user, so `prek` can enumerate files. The reusable CI workflow runs the
+# job container as root and registers GitHub's exact workspace path as safe
+# before invoking `prek`.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \

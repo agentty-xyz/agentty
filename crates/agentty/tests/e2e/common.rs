@@ -1181,24 +1181,36 @@ pub(crate) fn wait_for_agentty_startup() -> Journey {
         .step(Step::wait_for_stable_frame(300, 5000))
 }
 
-/// Switch to a tab by pressing `Tab` and waiting for the tab label text.
+/// Switch to a tab by pressing `Tab` and waiting for page-specific content.
 ///
-/// Useful for navigating forward through the tab bar one step at a time.
+/// Waiting for content unique to the destination avoids accepting an
+/// unchanged but stable frame before a slower application processes the key.
 pub(crate) fn switch_to_tab(tab_name: &str) -> Journey {
     Journey::new(format!("switch_to_{tab_name}"))
-        .with_description(format!("Press Tab and wait for '{tab_name}' to appear"))
+        .with_description(format!("Press Tab and wait for the '{tab_name}' page"))
         .step(Step::press_key("Tab"))
-        .step(Step::wait_for_stable_frame(300, 3000))
+        .step(Step::wait_for_text(tab_page_marker(tab_name), 5000))
 }
 
-/// Switch to a tab by pressing `BackTab` and waiting for stability.
+/// Switch to a tab by pressing `BackTab` and waiting for page-specific content.
 ///
-/// Useful for navigating backward through the tab bar one step at a time.
+/// Waiting for content unique to the destination avoids accepting an
+/// unchanged but stable frame before a slower application processes the key.
 pub(crate) fn switch_to_tab_reverse(tab_name: &str) -> Journey {
     Journey::new(format!("switch_back_to_{tab_name}"))
-        .with_description(format!("Press BackTab and wait for '{tab_name}' to appear"))
+        .with_description(format!("Press BackTab and wait for the '{tab_name}' page"))
         .step(Step::press_key("BackTab"))
-        .step(Step::wait_for_stable_frame(300, 3000))
+        .step(Step::wait_for_text(tab_page_marker(tab_name), 5000))
+}
+
+/// Return content rendered only on the requested primary tab page.
+fn tab_page_marker(tab_name: &str) -> &'static str {
+    match tab_name {
+        "Projects" => "Activity",
+        "Sessions" => SESSION_LIST_FOOTER_MARKER,
+        "Settings" => "Default Smart Model",
+        _ => "<unsupported E2E tab>",
+    }
 }
 
 /// Open the quit confirmation dialog by pressing `q`.
@@ -1409,6 +1421,30 @@ pub(crate) fn create_session_with_prompt_and_return_to_list(prompt: &str) -> Jou
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_page_marker_maps_supported_tabs() {
+        // Arrange
+        let tab_names = ["Projects", "Sessions", "Settings"];
+
+        // Act
+        let markers = tab_names.map(tab_page_marker);
+
+        // Assert
+        assert_eq!(markers, ["Activity", "new session", "Default Smart Model"]);
+    }
+
+    #[test]
+    fn tab_page_marker_maps_unsupported_tab_to_missing_content() {
+        // Arrange
+        let tab_name = "Unknown";
+
+        // Act
+        let marker = tab_page_marker(tab_name);
+
+        // Assert
+        assert_eq!(marker, "<unsupported E2E tab>");
+    }
 
     #[test]
     fn match_session_view_texts_accepts_footer_and_all_markers() {
