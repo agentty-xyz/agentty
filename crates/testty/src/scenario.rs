@@ -70,7 +70,7 @@ impl Scenario {
         self.step(Step::wait_for_text(needle, timeout_ms))
     }
 
-    /// Wait for the terminal frame to stabilize.
+    /// Wait for terminal text, styling, and cursor state to stabilize.
     pub fn wait_for_stable_frame(self, stable_ms: u32, timeout_ms: u32) -> Self {
         self.step(Step::wait_for_stable_frame(stable_ms, timeout_ms))
     }

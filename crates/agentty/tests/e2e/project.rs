@@ -87,6 +87,7 @@ fn test_project_switcher() {
                     .wait_for_stable_frame(300, 3000)
                     .viewing_pause_ms(1000)
                     .press_key("Enter")
+                    .wait_for_text("Project: zeta-project", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("switched", "Sessions view scoped to the switched project")
@@ -95,6 +96,7 @@ fn test_project_switcher() {
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .press_key("Enter")
+                    .wait_for_text("Project: test-project", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled(

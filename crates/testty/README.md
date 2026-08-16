@@ -57,8 +57,8 @@ implemented" notice and exit non-zero until the behavior is wired up.
 
 ### Reliable • No flaky tests
 
-- **Auto-wait.** `wait_for_stable_frame` and `eventually` wait for the screen to settle
-  before asserting, so you never hard-code sleeps.
+- **Auto-wait.** `wait_for_stable_frame` waits for text, styling, and cursor state to
+  settle, while `eventually` retries semantic assertions, so you never hard-code sleeps.
 - **Screen-first assertions.** Check visible text, colors, and highlighted items, with
   ready-made helpers for tabs, dialogs, and footers.
 - **Full isolation.** Each test runs your real binary in its own workspace, so tests

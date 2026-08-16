@@ -120,7 +120,8 @@ impl Step {
         }
     }
 
-    /// Create a step that waits for the frame to stabilize.
+    /// Create a step that waits for terminal text, styling, and cursor state
+    /// to stabilize.
     pub fn wait_for_stable_frame(stable_ms: u32, timeout_ms: u32) -> Self {
         Self::WaitForStableFrame {
             stable_ms,
