@@ -20,16 +20,28 @@ jobs:
   source-tests:
     name: Source tests (${{ matrix.member }})
     runs-on: ubuntu-latest
+    env:
+      TRUNK_API_TOKEN_AVAILABLE: ${{ secrets.TRUNK_API_TOKEN != '' }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          - member: ag-agent
+            hook: test-ag-agent-src
+          - member: ag-clipboard
+            hook: test-ag-clipboard-src
           - member: ag-forge
             hook: test-ag-forge-src
           - member: ag-git
             hook: test-ag-git-src
+          - member: ag-harness
+            hook: test-ag-harness-src
           - member: ag-protocol
             hook: test-ag-protocol-src
+          - member: ag-session
+            hook: test-ag-session-src
+          - member: ag-store
+            hook: test-ag-store-src
           - member: ag-tui-text
             hook: test-ag-tui-text-src
           - member: agentty
@@ -49,7 +61,20 @@ jobs:
         uses: ./.github/actions/setup-rust-prek
 
       - name: Run source tests
+        id: source-tests
         run: prek run ${{ matrix.hook }} --all-files --hook-stage manual
+
+      - name: Upload source test results to Trunk
+        if: ${{ !cancelled() && env.TRUNK_API_TOKEN_AVAILABLE == 'true' }}
+        continue-on-error: true
+        uses: trunk-io/analytics-uploader@385f1ccdf345b4532dc4b6c665dd432b702b8e28 # v2
+        env:
+          TRUNK_API_TOKEN: ${{ secrets.TRUNK_API_TOKEN }}
+        with:
+          junit-paths: target/nextest/ci/junit.xml
+          org-slug: agentty
+          previous-step-outcome: ${{ steps.source-tests.outcome }}
+          token: ${{ secrets.TRUNK_API_TOKEN }}
 
   validate:
     name: Workspace checks
