@@ -1,6 +1,6 @@
 use ag_forge::{ReviewComment, ReviewCommentSnapshot, ReviewCommentThread};
 
-use super::app_mode::{ReviewCommentAction, ReviewCommentActionSelection};
+use super::app_mode::ReviewCommentSelection;
 
 /// One row in the grouped review-comment selector projection.
 pub(crate) enum GroupedReviewCommentRow<'a> {
@@ -119,45 +119,32 @@ pub(crate) fn selected_actionable_thread_id(
     })
 }
 
-/// Returns the action selected for one forge thread, when present.
-pub(crate) fn selected_action(
-    selections: &[ReviewCommentActionSelection],
-    thread_id: &str,
-) -> Option<ReviewCommentAction> {
+/// Returns whether one forge thread is selected for agent evaluation.
+pub(crate) fn is_selected(selections: &[ReviewCommentSelection], thread_id: &str) -> bool {
     selections
         .iter()
-        .find(|selection| selection.thread_id == thread_id)
-        .map(|selection| selection.action)
+        .any(|selection| selection.thread_id == thread_id)
 }
 
-/// Toggles one thread's batch action, replacing a different existing action.
-pub(crate) fn toggle_action(
-    selections: &mut Vec<ReviewCommentActionSelection>,
-    thread_id: &str,
-    action: ReviewCommentAction,
-) {
+/// Toggles one thread's inclusion in the next agent evaluation batch.
+pub(crate) fn toggle_selection(selections: &mut Vec<ReviewCommentSelection>, thread_id: &str) {
     if let Some(selection_index) = selections
         .iter()
         .position(|selection| selection.thread_id == thread_id)
     {
-        if selections[selection_index].action == action {
-            selections.remove(selection_index);
-        } else {
-            selections[selection_index].action = action;
-        }
+        selections.remove(selection_index);
 
         return;
     }
 
-    selections.push(ReviewCommentActionSelection {
-        action,
+    selections.push(ReviewCommentSelection {
         thread_id: thread_id.to_string(),
     });
 }
 
 /// Drops selections for threads that are no longer actionable after refresh.
 pub(crate) fn retain_actionable_selections(
-    selections: &mut Vec<ReviewCommentActionSelection>,
+    selections: &mut Vec<ReviewCommentSelection>,
     snapshot: &ReviewCommentSnapshot,
 ) {
     selections.retain(|selection| {
@@ -344,27 +331,25 @@ mod tests {
     }
 
     #[test]
-    fn test_toggle_action_adds_replaces_and_removes_thread_selection() {
+    fn test_toggle_selection_adds_and_removes_thread() {
         // Arrange
         let mut selections = Vec::new();
 
         // Act
-        toggle_action(&mut selections, "thread", ReviewCommentAction::Address);
-        toggle_action(&mut selections, "thread", ReviewCommentAction::Deny);
-        let replaced = selections.clone();
-        toggle_action(&mut selections, "thread", ReviewCommentAction::Deny);
+        toggle_selection(&mut selections, "thread");
+        let selected = selections.clone();
+        toggle_selection(&mut selections, "thread");
 
         // Assert
         assert_eq!(
-            replaced,
-            vec![ReviewCommentActionSelection {
-                action: ReviewCommentAction::Deny,
+            selected,
+            vec![ReviewCommentSelection {
                 thread_id: "thread".to_string(),
             }]
         );
         assert_eq!(
             selections,
-            [] as [crate::presentation::app_mode::ReviewCommentActionSelection; 0]
+            [] as [crate::presentation::app_mode::ReviewCommentSelection; 0]
         );
     }
 
@@ -373,16 +358,13 @@ mod tests {
         // Arrange
         let snapshot = snapshot_with_threads([thread("current", false), thread("resolved", true)]);
         let mut selections = vec![
-            ReviewCommentActionSelection {
-                action: ReviewCommentAction::Address,
+            ReviewCommentSelection {
                 thread_id: "current".to_string(),
             },
-            ReviewCommentActionSelection {
-                action: ReviewCommentAction::Deny,
+            ReviewCommentSelection {
                 thread_id: "resolved".to_string(),
             },
-            ReviewCommentActionSelection {
-                action: ReviewCommentAction::Address,
+            ReviewCommentSelection {
                 thread_id: "missing".to_string(),
             },
         ];
@@ -392,11 +374,8 @@ mod tests {
 
         // Assert
         assert_eq!(selections.len(), 1);
-        assert_eq!(
-            selected_action(&selections, "current"),
-            Some(ReviewCommentAction::Address)
-        );
-        assert_eq!(selected_action(&selections, "resolved"), None);
+        assert!(is_selected(&selections, "current"));
+        assert!(!is_selected(&selections, "resolved"));
     }
 
     /// Builds a snapshot from inline threads without standalone comments.

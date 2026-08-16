@@ -231,24 +231,24 @@ File-level comments similarly show that they have no attached code line instead 
 highlighting an arbitrary diff row. Current inline snippets use the same gutters and
 added/removed line colors as diff view.
 
-| Key           | Action                                                  |
-| ------------- | ------------------------------------------------------- |
-| `q` / `Esc`   | Return to session view                                  |
-| `j` / `k`     | Select previous/next comment                            |
-| `f`           | Focus the Files section                                 |
-| `Up` / `Down` | Scroll selected comment info                            |
-| `a`           | Toggle the selected actionable thread as address        |
-| `d`           | Toggle the selected actionable thread as deny           |
-| `Enter`       | Submit all marked address and deny actions to the agent |
+| Key           | Action                                   |
+| ------------- | ---------------------------------------- |
+| `q` / `Esc`   | Return to session view                   |
+| `j` / `k`     | Select previous/next comment             |
+| `f`           | Focus the Files section                  |
+| `Up` / `Down` | Scroll selected comment info             |
+| `Space`       | Toggle the selected actionable thread    |
+| `Enter`       | Submit all selected threads to the agent |
 
-Actionable rows start with `[ ]`, then show `[A]` for address or `[D]` for deny.
-Pressing the same action again clears that row; pressing the other action replaces it.
-`a`, `d`, and `Enter` appear only while the session can accept a turn, and `Enter`
-appears only after at least one row is marked. Unresolved outdated threads remain
-actionable through their forge thread ID, although their original code context is no
-longer available. Submission returns the session to **InProgress** with a count-aware
-resolution loader; the generated batch prompt remains hidden from chat. Resolved threads
-and standalone comments are read-only.
+Actionable rows start with `[ ]` and show `[x]` when selected. Pressing `Space` again
+clears that row. `Space` and `Enter` appear only while the session can accept a turn,
+and `Enter` appears only after at least one row is selected. Unresolved outdated threads
+remain actionable through their forge thread ID, although their original code context is
+no longer available. Submission returns the session to **InProgress** with a count-aware
+resolution loader; the generated batch prompt tells the agent to evaluate each selected
+comment, address it when needed, and post a very short explanation of what was done and
+why in every case. The prompt remains hidden from chat. Resolved threads and standalone
+comments are read-only.
 
 ## Publish Popup
 

@@ -1387,7 +1387,7 @@ impl Page for DiffPage<'_> {
                 .unwrap_or_default();
             let page =
                 review_comment::ReviewCommentPage::new(review_comment::ReviewCommentPageInput {
-                    comment_actions: &review_comments.comment_actions,
+                    selected_comments: &review_comments.selected_comments,
                     comment_error: review_comments.comment_error.as_deref(),
                     comment_snapshot: review_comments.comment_snapshot.as_ref(),
                     diff: self.diff,
@@ -1444,7 +1444,7 @@ impl Page for DiffPage<'_> {
                                 &rows,
                                 review_comments.selected_comment_index,
                             ),
-                        can_reply && !review_comments.comment_actions.is_empty(),
+                        can_reply && !review_comments.selected_comments.is_empty(),
                     )
                 })
         } else {

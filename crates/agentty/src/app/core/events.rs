@@ -43,9 +43,7 @@ use crate::presentation::app_mode::{
     DiffReviewComments, HelpContext,
 };
 #[cfg(test)]
-use crate::presentation::app_mode::{
-    DiffSidebarFocus, ReviewCommentAction, ReviewCommentActionSelection,
-};
+use crate::presentation::app_mode::{DiffSidebarFocus, ReviewCommentSelection};
 use crate::presentation::prompt::PromptAtMentionState;
 use crate::presentation::review_comment as review_comment_selection;
 
@@ -1126,7 +1124,7 @@ impl App {
             match result {
                 Ok(snapshot) => {
                     review_comment_selection::retain_actionable_selections(
-                        &mut review_comments.comment_actions,
+                        &mut review_comments.selected_comments,
                         &snapshot,
                     );
                     review_comments.selected_comment_index =
@@ -2599,13 +2597,11 @@ mod tests {
         app.mode = review_comment_diff_mode(
             "session-id",
             DiffReviewComments {
-                comment_actions: vec![
-                    ReviewCommentActionSelection {
-                        action: ReviewCommentAction::Address,
+                selected_comments: vec![
+                    ReviewCommentSelection {
                         thread_id: "selected".to_string(),
                     },
-                    ReviewCommentActionSelection {
-                        action: ReviewCommentAction::Deny,
+                    ReviewCommentSelection {
                         thread_id: "other".to_string(),
                     },
                 ],
@@ -2631,15 +2627,14 @@ mod tests {
             app.mode,
             AppMode::Diff {
                 review_comments: Some(DiffReviewComments {
-                    ref comment_actions,
+                    ref selected_comments,
                     comment_snapshot: Some(ref snapshot),
                     selected_comment_index: 1,
                     ..
                 }),
                 ..
             } if review_comment_selection::selected_thread_id(snapshot, 1) == Some("selected")
-                && comment_actions == &[ReviewCommentActionSelection {
-                    action: ReviewCommentAction::Deny,
+                && selected_comments == &[ReviewCommentSelection {
                     thread_id: "other".to_string(),
                 }]
         ));

@@ -148,30 +148,9 @@ impl DiffLineComments {
     }
 }
 
-/// User-selected handling for one actionable forge review thread.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReviewCommentAction {
-    /// Ask the session agent to implement the reviewer's requested change.
-    Address,
-    /// Ask the session agent to rebut the reviewer's requested change.
-    Deny,
-}
-
-impl ReviewCommentAction {
-    /// Returns the prompt label used to communicate the selected handling.
-    pub(crate) fn prompt_label(self) -> &'static str {
-        match self {
-            Self::Address => "Address",
-            Self::Deny => "Deny",
-        }
-    }
-}
-
-/// One actionable forge thread selected for batched agent handling.
+/// One actionable forge thread selected for batched agent evaluation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReviewCommentActionSelection {
-    /// Handling requested for the selected thread.
-    pub(crate) action: ReviewCommentAction,
+pub struct ReviewCommentSelection {
     /// Forge-native thread identifier.
     pub(crate) thread_id: String,
 }
@@ -179,8 +158,8 @@ pub struct ReviewCommentActionSelection {
 /// Review-comment data attached to the unified diff workspace.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DiffReviewComments {
-    /// Actionable threads marked for batched address or deny handling.
-    pub comment_actions: Vec<ReviewCommentActionSelection>,
+    /// Actionable threads selected for batched agent evaluation.
+    pub selected_comments: Vec<ReviewCommentSelection>,
     /// User-facing failure returned while loading review comments.
     pub comment_error: Option<String>,
     /// Loaded review-request comment snapshot.
@@ -199,7 +178,7 @@ impl DiffReviewComments {
     /// Creates the initial loading state for one linked review request.
     pub fn loading(request_id: u64) -> Self {
         Self {
-            comment_actions: Vec::new(),
+            selected_comments: Vec::new(),
             comment_error: None,
             comment_snapshot: None,
             is_loading_comments: true,

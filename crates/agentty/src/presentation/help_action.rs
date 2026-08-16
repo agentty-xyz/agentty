@@ -791,9 +791,8 @@ pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
         ));
     }
     actions.extend([
-        HelpAction::new("address", "a", "Mark comment for agent address"),
-        HelpAction::new("deny", "d", "Mark comment for agent denial"),
-        HelpAction::new("submit", "Enter", "Submit marked comments to the agent"),
+        HelpAction::new("select", "Space", "Toggle comment selection"),
+        HelpAction::new("submit", "Enter", "Submit selected comments to the agent"),
         HelpAction::new("help", "?", "Help"),
     ]);
 
@@ -888,21 +887,16 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
             actions.push(HelpAction::new("select comment", "j/k", "Select comment"));
             if context.can_mark_selected {
                 actions.push(HelpAction::new(
-                    "address",
-                    "a",
-                    "Toggle selected comment for agent address",
-                ));
-                actions.push(HelpAction::new(
-                    "deny",
-                    "d",
-                    "Toggle selected comment for agent denial",
+                    "select",
+                    "Space",
+                    "Toggle selected comment for agent evaluation",
                 ));
             }
             if context.can_submit {
                 actions.push(HelpAction::new(
                     "submit",
                     "Enter",
-                    "Submit marked comments to the agent",
+                    "Submit selected comments to the agent",
                 ));
             }
         }
@@ -2169,8 +2163,7 @@ mod tests {
                 "J/K/Up/Down",
                 "Enter/Esc",
                 "s",
-                "a",
-                "d",
+                "Space",
                 "Enter",
                 "?"
             ]
@@ -2246,7 +2239,7 @@ mod tests {
     }
 
     #[test]
-    fn test_review_comment_actions_include_enabled_batch_keys() {
+    fn test_review_comment_actions_include_selection_and_submit_keys() {
         // Arrange, Act
         let actions = diff_footer_actions(DiffFooterContext {
             can_mark_selected: true,
@@ -2261,7 +2254,7 @@ mod tests {
         // Assert
         assert_eq!(
             comment_keys,
-            ["q", "j/k", "a", "d", "Enter", "f/Esc", "Up/Down", "?"]
+            ["q", "j/k", "Space", "Enter", "f/Esc", "Up/Down", "?"]
         );
     }
 }

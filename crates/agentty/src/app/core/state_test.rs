@@ -715,7 +715,7 @@ async fn open_session_review_comments_requires_link_and_applies_background_snaps
         AppMode::Diff {
             ref diff,
             review_comments: Some(DiffReviewComments {
-                ref comment_actions,
+                ref selected_comments,
                 comment_error: None,
                 comment_snapshot: Some(ref snapshot),
                 is_loading_comments: false,
@@ -726,7 +726,7 @@ async fn open_session_review_comments_requires_link_and_applies_background_snaps
             ref session_id,
             scroll_offset: 0,
             ..
-        } if comment_actions.is_empty()
+        } if selected_comments.is_empty()
             && snapshot == &review_comment_snapshot()
             && diff == "review diff"
             && request_id > 0
