@@ -353,7 +353,9 @@ impl PtySession {
                         Some(self.run_eventually(*timeout, *poll, predicate.as_ref())?);
                 }
                 Step::Capture | Step::CaptureLabeled { .. } => {
-                    current_frame = Some(self.capture_frame());
+                    if current_frame.is_none() {
+                        current_frame = Some(self.capture_frame());
+                    }
                 }
                 Step::ViewingPause(_) => {
                     // No-op in PTY execution — only affects VHS tape output.
@@ -725,6 +727,50 @@ mod tests {
         assert!(
             frame.all_text().contains("done:hello"),
             "final frame must include output produced after the wait"
+        );
+    }
+
+    #[test]
+    fn execute_steps_captures_without_a_reusable_frame() {
+        // Arrange
+        let mut session = PtySessionBuilder::new("/bin/sh")
+            .args(["-c", "printf 'ready\\n'; sleep 60"])
+            .spawn()
+            .expect("failed to spawn shell script");
+        let steps = [Step::capture()];
+
+        // Act
+        let frame = session
+            .execute_steps(&steps)
+            .expect("step execution should succeed");
+
+        // Assert
+        assert!(frame.all_text().contains("ready"));
+    }
+
+    #[test]
+    fn execute_steps_reuses_wait_frame_for_capture() {
+        // Arrange — the second output arrives after the wait's read window but
+        // within a fresh capture's read window.
+        let mut session = PtySessionBuilder::new("/bin/sh")
+            .args([
+                "-c",
+                "sleep 0.2; printf 'ready\\n'; sleep 0.25; printf 'later\\n'; sleep 60",
+            ])
+            .spawn()
+            .expect("failed to spawn delayed shell script");
+        let steps = [Step::wait_for_text("ready", 3_000), Step::capture()];
+
+        // Act
+        let frame = session
+            .execute_steps(&steps)
+            .expect("step execution should succeed");
+
+        // Assert
+        assert!(frame.all_text().contains("ready"));
+        assert!(
+            !frame.all_text().contains("later"),
+            "capture must reuse the frame supplied by the preceding wait"
         );
     }
 

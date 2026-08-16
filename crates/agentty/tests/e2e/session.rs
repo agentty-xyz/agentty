@@ -7079,8 +7079,8 @@ fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
     Ok(())
 }
 
-/// Verify that `Enter` moves focus from a selected file into the right-hand
-/// patch and line navigation scrolls through the file's changed lines.
+/// Verify that the right-hand patch scrolls while Files remains focused, then
+/// `Enter` moves focus into changed-line navigation.
 #[test]
 fn test_diff_changed_line_navigation() -> E2eResult {
     // Arrange, Act, Assert
@@ -7096,7 +7096,15 @@ fn test_diff_changed_line_navigation() -> E2eResult {
                     .press_key("d")
                     .wait_for_text("main.rs", 5000)
                     .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
+                    .wait_for_stable_frame(200, 3000);
+                let scenario = (0..70).fold(scenario, |scenario, _| scenario.press_key("Down"));
+                let scenario = scenario
+                    .wait_for_text("changed line 70", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "diff_file_scroll",
+                        "Selected file scrolled without leaving Files focus",
+                    )
                     .press_key("Enter")
                     .wait_for_text("Esc/Left: files", 5000);
                 let scenario = (0..70).fold(scenario, |scenario, _| scenario.press_key("Down"));
@@ -7110,9 +7118,22 @@ fn test_diff_changed_line_navigation() -> E2eResult {
                         "Changed-line cursor scrolled through the selected file",
                     )
             },
-            |frame, _report| {
+            |frame, report| {
+                let file_focus_frame = common::frame_from_capture(&report.captures[0]);
+                let file_focus_full =
+                    Region::full(file_focus_frame.cols(), file_focus_frame.rows());
                 let full = Region::full(frame.cols(), frame.rows());
 
+                assertion::assert_text_in_region(
+                    &file_focus_frame,
+                    "changed line 70",
+                    &file_focus_full,
+                );
+                assertion::assert_text_in_region(
+                    &file_focus_frame,
+                    "j/k: select file",
+                    &file_focus_full,
+                );
                 assertion::assert_text_in_region(frame, "changed line 70", &full);
                 assertion::assert_text_in_region(frame, "Esc/Left: files", &full);
                 assertion::assert_text_in_region(frame, "j/k: select line", &full);
