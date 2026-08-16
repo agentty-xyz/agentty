@@ -3149,14 +3149,22 @@ mod tests {
     async fn review_comment_key_opens_diff_from_view() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let session = app
+            .sessions
+            .sessions_mut()
+            .iter_mut()
+            .find(|session| session.id == session_id)
+            .expect("session should exist");
+        attach_open_review_request(session);
+        session.status = Status::Review;
         app.mode = AppMode::View {
             session_id: session_id.clone().into(),
             scroll_offset: Some(0),
         };
         let view_context = view_context(&mut app).expect("expected view context");
         let pending_update = ViewPendingUpdate::from_context(&view_context);
-        let mut view_session_snapshot = reply_enabled_review_snapshot();
-        view_session_snapshot.review_comments = ViewActionState::Enabled;
+        let view_session_snapshot =
+            view_session_snapshot(&app, &view_context).expect("expected session snapshot");
 
         // Act
         let result = handle_primary_view_key(
@@ -3167,17 +3175,14 @@ mod tests {
             &pending_update,
         )
         .await;
-        let loading = matches!(app.mode, AppMode::DiffLoading { .. });
-        apply_next_session_diff(&mut app).await;
 
         // Assert
         assert_eq!(result, Some(false));
-        assert!(loading);
         assert!(matches!(
             app.mode,
-            AppMode::Diff {
+            AppMode::DiffLoading {
                 ref session_id,
-                review_comments: None,
+                sidebar_focus: DiffSidebarFocus::Comments,
                 ..
             } if session_id == &view_context.session_id
         ));
