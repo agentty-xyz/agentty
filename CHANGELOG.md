@@ -7,6 +7,47 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.0] - 2026-08-15
+
+### Added
+
+- agentty: support navigating changed lines and drafting multiple inline comments in
+  Diff view, then submit completed comments together in the next turn.
+- ag-harness: run policy-approved repository reads through model tools with bounded,
+  symlink-safe filesystem access and provider-compatible continuation history.
+- agentty: mark sessions with merge conflicts before synchronization without changing
+  their indexes or worktrees.
+
+### Changed
+
+- agentty: load full session diffs in the background with cancelable, stale-safe
+  requests for Diff view, focused reviews, and `/apply` freshness checks.
+- agentty: compact uninterrupted folder chains in diff trees while preserving full
+  paths, branch structure, and stable navigation.
+- agentty: hide Diff actions for sessions known to have no changes and invalidate the
+  cached availability after opening writable worktrees.
+- agentty: keep generated review-resolution prompts out of chat and composer history
+  while preserving them for transcript replay and session state.
+- deps: update `taiki-e/install-action` from `2.85.9` to `2.85.10`.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.0`.
+
+### Fixed
+
+- agentty: preserve completed focused reviews across project switches until durable
+  persistence settles.
+- agentty: preserve active session state and worker senders when database refreshes
+  fail.
+- agentty: preserve shifted punctuation in direct and SSH terminals by limiting xterm
+  CSI-u reporting to `tmux`.
+- agentty: preserve durable session goals in generated titles while retrying transient
+  provider failures and rejecting duplicated request text.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.14.7] - 2026-08-13
 
 ### Added
