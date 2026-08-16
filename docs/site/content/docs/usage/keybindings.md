@@ -270,27 +270,29 @@ and standalone comments are read-only.
 ## Diff Mode
 
 Pressing `d` from session view opens Diff mode focused on Files with the right panel
-showing the git diff. Press `Enter` on a file to focus its changes, then press `Enter`
-again to edit the selected changed line inline. After finishing with `Enter` or `Esc`,
-use `j` / `k` or the arrow keys to move the line cursor and press `Enter` to edit the
-selected line. `Esc`, `Left`, `h`, or `f` returns focus to the file tree. Linked review
-requests add a Comments section below Files; `c` focuses Comments while the file tree is
-focused, and `f` returns to Files. The Comments section keeps its own `Enter` action for
-submitting marked review threads. Press `s` to submit every inline diff comment together
-in the next turn.
+showing the git diff. While Files remains focused, use `Shift+j` / `Shift+k` or `Up` /
+`Down` to scroll the selected file without moving focus. Press `Enter` on a file to
+focus its changes, then press `Enter` again to edit the selected changed line inline.
+After finishing with `Enter` or `Esc`, use `j` / `k` or the arrow keys to move the line
+cursor and press `Enter` to edit the selected line. `Esc`, `Left`, `h`, or `f` returns
+focus to the file tree. Linked review requests add a Comments section below Files; `c`
+focuses Comments while the file tree is focused, and `f` returns to Files. The Comments
+section keeps its own `Enter` action for submitting marked review threads. Press `s` to
+submit every inline diff comment together in the next turn.
 
-| Key                | Action                                    |
-| ------------------ | ----------------------------------------- |
-| `q`                | Back to session                           |
-| `Esc`              | Focus Files, or leave from Files          |
-| `j` / `k`          | Select a file or changed line             |
-| `Enter`            | Focus a file, or edit/finish a comment    |
-| `Up` / `Down`      | Select a changed line or scroll a preview |
-| `Left` / `h` / `f` | Return to Files                           |
-| `p`                | Toggle markdown preview                   |
-| `c`                | Focus linked review comments              |
-| `s`                | Submit all inline comments                |
-| `?`                | Help                                      |
+| Key                   | Action                                                 |
+| --------------------- | ------------------------------------------------------ |
+| `q`                   | Back to session                                        |
+| `Esc`                 | Focus Files, or leave from Files                       |
+| `j` / `k`             | Select a file or changed line                          |
+| `Shift+j` / `Shift+k` | Scroll selected file, or select a changed line         |
+| `Enter`               | Focus a file, or edit/finish a comment                 |
+| `Up` / `Down`         | Scroll selected file, select a line, or scroll preview |
+| `Left` / `h` / `f`    | Return to Files                                        |
+| `p`                   | Toggle markdown preview                                |
+| `c`                   | Focus linked review comments                           |
+| `s`                   | Submit all inline comments                             |
+| `?`                   | Help                                                   |
 
 <a id="usage-diff-totals"></a> The diff panel title includes aggregate `+added` and
 `-removed` line totals. Every file and folder row in the left panel shows its own

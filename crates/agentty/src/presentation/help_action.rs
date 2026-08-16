@@ -772,7 +772,11 @@ pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
         HelpAction::new("files", "f/Esc/Left", "Focus changed files"),
         HelpAction::new("comments", "c", "Focus review comments"),
         HelpAction::new("preview", "p", "Toggle selected markdown preview"),
-        HelpAction::new("select line", "Up/Down", "Select changed line"),
+        HelpAction::new(
+            "scroll/select line",
+            "J/K/Up/Down",
+            "Scroll a file or select a changed line",
+        ),
     ];
     if can_comment {
         actions.push(HelpAction::new(
@@ -2162,7 +2166,7 @@ mod tests {
                 "f/Esc/Left",
                 "c",
                 "p",
-                "Up/Down",
+                "J/K/Up/Down",
                 "Enter/Esc",
                 "s",
                 "a",

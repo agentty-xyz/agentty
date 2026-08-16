@@ -533,6 +533,10 @@ fn apply_navigation_key(
     key: KeyEvent,
     navigation: &mut DiffKeyNavigation<'_>,
 ) -> bool {
+    if apply_unfocused_scroll_key(render_cache_store, content_area, key, navigation) {
+        return false;
+    }
+
     match key.code {
         KeyCode::Char(character @ ('j' | 'k'))
             if *navigation.focus == DiffFocus::Files && is_plain_char_key(key, character) =>
@@ -622,6 +626,45 @@ fn apply_navigation_key(
     }
 
     false
+}
+
+/// Applies a row-scroll key without moving focus out of the Files pane.
+fn apply_unfocused_scroll_key(
+    render_cache_store: &RenderCacheStore,
+    content_area: Rect,
+    key: KeyEvent,
+    navigation: &mut DiffKeyNavigation<'_>,
+) -> bool {
+    if *navigation.focus != DiffFocus::Files {
+        return false;
+    }
+    let direction = match key.code {
+        KeyCode::Down | KeyCode::Char('J' | 'j')
+            if is_unfocused_scroll_key(key, KeyCode::Down, 'j') =>
+        {
+            DiffContentDirection::Next
+        }
+        KeyCode::Up | KeyCode::Char('K' | 'k')
+            if is_unfocused_scroll_key(key, KeyCode::Up, 'k') =>
+        {
+            DiffContentDirection::Previous
+        }
+        _ => return false,
+    };
+    let mut content_navigation = navigation.content_navigation();
+    scroll_content_by_row(
+        &mut content_navigation,
+        content_area,
+        render_cache_store,
+        direction,
+    );
+
+    true
+}
+
+/// Returns whether a key scrolls the right pane while Files stays focused.
+fn is_unfocused_scroll_key(key: KeyEvent, arrow_key: KeyCode, character: char) -> bool {
+    key.code == arrow_key || is_shift_char_key(key, character)
 }
 
 /// Returns whether a key moves through the active right-hand content pane.
@@ -714,27 +757,7 @@ fn move_content_selection(
         render_cache_store.diff_layout_cache(),
         navigation.preview,
     ) {
-        let max_scroll_offset = diff_max_scroll_offset(
-            &DiffScrollLimitInput {
-                content_area,
-                diff: navigation.diff,
-                diff_layout_cache: render_cache_store.diff_layout_cache(),
-                line_comments: navigation.line_comments,
-                markdown_render_cache: render_cache_store.markdown_render_cache(),
-                preview: navigation.preview,
-                selected_index: navigation.file_explorer_selected_index,
-            },
-            navigation.scroll_cache,
-        );
-        *navigation.scroll_offset = match direction {
-            DiffContentDirection::Next => (*navigation.scroll_offset)
-                .min(max_scroll_offset)
-                .saturating_add(1)
-                .min(max_scroll_offset),
-            DiffContentDirection::Previous => (*navigation.scroll_offset)
-                .min(max_scroll_offset)
-                .saturating_sub(1),
-        };
+        scroll_content_by_row(navigation, content_area, render_cache_store, direction);
 
         return;
     }
@@ -759,6 +782,37 @@ fn move_content_selection(
             *navigation.scroll_offset,
         )
         .unwrap_or(*navigation.scroll_offset);
+}
+
+/// Scrolls the selected file or preview by one rendered row without changing
+/// pane focus or the selected changed-line cursor.
+fn scroll_content_by_row(
+    navigation: &mut DiffContentNavigation<'_>,
+    content_area: Rect,
+    render_cache_store: &RenderCacheStore,
+    direction: DiffContentDirection,
+) {
+    let max_scroll_offset = diff_max_scroll_offset(
+        &DiffScrollLimitInput {
+            content_area,
+            diff: navigation.diff,
+            diff_layout_cache: render_cache_store.diff_layout_cache(),
+            line_comments: navigation.line_comments,
+            markdown_render_cache: render_cache_store.markdown_render_cache(),
+            preview: navigation.preview,
+            selected_index: navigation.file_explorer_selected_index,
+        },
+        navigation.scroll_cache,
+    );
+    *navigation.scroll_offset = match direction {
+        DiffContentDirection::Next => (*navigation.scroll_offset)
+            .min(max_scroll_offset)
+            .saturating_add(1)
+            .min(max_scroll_offset),
+        DiffContentDirection::Previous => (*navigation.scroll_offset)
+            .min(max_scroll_offset)
+            .saturating_sub(1),
+    };
 }
 
 /// Returns whether the active selection is currently showing markdown preview
@@ -1600,6 +1654,47 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_file_focus_scrolls_with_arrows_and_shift_j_k() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::Diff {
+            session_id: "session-id".into(),
+            diff: scrollable_diff_fixture(),
+            scroll_offset: 0,
+            file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
+            selected_diff_line_index: 7,
+            preview: DiffPreview::default(),
+            review_comments: None,
+            restore: None,
+            scroll_cache: None,
+        };
+        let navigation = [
+            (KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 1),
+            (KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT), 2),
+            (KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), 1),
+            (KeyEvent::new(KeyCode::Char('k'), KeyModifiers::SHIFT), 0),
+        ];
+
+        // Act & Assert
+        for (key, expected_scroll_offset) in navigation {
+            let event_result = handle(&mut app, TEST_TERMINAL_SIZE, key);
+
+            assert!(matches!(event_result, EventResult::Continue));
+            assert!(matches!(
+                &app.mode,
+                AppMode::Diff {
+                    focus: DiffFocus::Files,
+                    scroll_offset,
+                    selected_diff_line_index: 7,
+                    ..
+                } if *scroll_offset == expected_scroll_offset
+            ));
+        }
     }
 
     #[tokio::test]
