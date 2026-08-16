@@ -2321,7 +2321,7 @@ fn seed_linked_review_worktree_with_diff(
 }
 
 /// Installs a deterministic Codex app-server stub for the submitted line
-/// comment turn and any follow-up commit-message generation.
+/// comment turn.
 fn seed_line_comment_codex_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let codex_path = env.stub_bin.join("codex");
     let script = r#"#!/bin/sh
@@ -2358,6 +2358,30 @@ done
     std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
 
     Ok(())
+}
+
+/// Installs a deterministic review provider so the automatic post-turn review
+/// reaches a visible terminal state before the final feature capture.
+fn seed_line_comment_review_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"No review findings.\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}'
+"#;
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultReviewAgent", "claude"),
+            ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+        ],
+    )
 }
 
 /// Seeds the review session folder as a clean Git worktree.
@@ -5291,7 +5315,9 @@ fn build_orchestration_scenario(scenario: Scenario) -> Scenario {
             "Review the independent plan before fan-out",
         )
         .press_key("a")
-        .wait_for_stable_frame(500, 5000)
+        .wait_for_text("Phase: Running", 10000)
+        .wait_for_text("Protocol worker [protocol]: running", 10000)
+        .wait_for_text("UI worker [ui]: running", 10000)
         .capture_labeled("live_status", "Monitor workers on the campaign board")
         .press_key("q")
         .wait_for_text("Phase: Running", 10000)
@@ -7162,6 +7188,7 @@ fn test_diff_line_comments() -> E2eResult {
             seed_review_ready_session(env)?;
             seed_linked_review_worktree_with_diff(env)?;
             seed_line_comment_codex_stub(env)?;
+            seed_line_comment_review_stub(env)?;
             seed_sessions_startup_tab(env)
         })
         .run(
@@ -7175,7 +7202,7 @@ fn test_diff_line_comments() -> E2eResult {
                     .wait_for_stable_frame(200, 3000)
                     .wait_for_text("Enter: open", 5000)
                     .press_key(ENTER_KEY)
-                    .wait_for_stable_frame(200, 3000)
+                    .wait_for_text("Enter: comment", 5000)
                     .press_key(ENTER_KEY)
                     .wait_for_text("comment: |", 5000)
                     .write_text("Explain the entry point.")
@@ -7186,7 +7213,8 @@ fn test_diff_line_comments() -> E2eResult {
                     .write_text("Why print review?")
                     .wait_for_text("Why print review?|", 3000)
                     .press_key(ENTER_KEY)
-                    .wait_for_text("Enter: comment", 3000)
+                    .wait_for_text("comment: Why print review?", 3000)
+                    .wait_for_stable_frame(1000, 5000)
                     .capture_labeled(
                         "inline_line_comments",
                         "Multiple comments remain visible inside the diff",
@@ -7194,12 +7222,14 @@ fn test_diff_line_comments() -> E2eResult {
                     .viewing_pause_ms(1500)
                     .press_key("s")
                     .wait_for_text("Line comments:", 5000)
-                    .capture_labeled(
-                        "compact_line_comment_prompt",
-                        "Submitted comments use compact path and line references",
-                    )
+                    .wait_for_text("src/main.rs:1 [new]: Explain the entry point.", 5000)
+                    .wait_for_text("src/main.rs:2 [new]: Why print review?", 5000)
+                    .wait_for_text("Ctrl+c: stop", 5000)
                     .wait_for_text("Line comment received.", 5000)
-                    .wait_for_stable_frame(300, 5000)
+                    .wait_for_text("Enter: reply", 5000)
+                    .wait_for_text("[Commit] No changes to commit.", 5000)
+                    .wait_for_text("No review findings.", 5000)
+                    .wait_for_stable_frame(1000, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "line_comment_submitted",
@@ -7218,24 +7248,6 @@ fn test_diff_line_comments() -> E2eResult {
                     &diff_frame,
                     "comment: Why print review?",
                     &diff_full,
-                );
-
-                let submitted_frame = common::frame_from_capture(&report.captures[1]);
-                let submitted_full = Region::full(submitted_frame.cols(), submitted_frame.rows());
-                assertion::assert_text_in_region(
-                    &submitted_frame,
-                    "Line comments:",
-                    &submitted_full,
-                );
-                assertion::assert_text_in_region(
-                    &submitted_frame,
-                    "src/main.rs:1 [new]: Explain the entry point.",
-                    &submitted_full,
-                );
-                assertion::assert_text_in_region(
-                    &submitted_frame,
-                    "src/main.rs:2 [new]: Why print review?",
-                    &submitted_full,
                 );
 
                 let full = Region::full(frame.cols(), frame.rows());

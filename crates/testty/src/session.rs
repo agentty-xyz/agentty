@@ -221,12 +221,13 @@ impl PtySession {
         }
     }
 
-    /// Wait until the terminal frame stabilizes (no changes for
-    /// `stable_duration`).
+    /// Wait until the terminal frame stabilizes (no text, style, or cursor
+    /// changes for `stable_duration`).
     ///
-    /// The method requires at least one frame change from the initial empty
-    /// state before the stability timer starts. This prevents returning an
-    /// empty frame when the binary has not yet produced any output.
+    /// The method requires at least one raw output byte before the stability
+    /// timer starts. This prevents returning the initial empty frame when the
+    /// binary has not produced output while allowing textless states such as
+    /// styled blank cells or cursor changes to stabilize.
     ///
     /// # Errors
     ///
@@ -237,17 +238,26 @@ impl PtySession {
         timeout: Duration,
     ) -> Result<TerminalFrame, PtySessionError> {
         let deadline = std::time::Instant::now() + timeout;
-        let mut previous_text = String::new();
+        let mut previous_frame = Vec::new();
         let mut stable_since = std::time::Instant::now();
         let mut seen_change = false;
 
         loop {
             self.drain_output(Duration::from_millis(100));
             let frame = TerminalFrame::new(self.cols, self.rows, &self.output_buffer);
-            let current_text = frame.all_text();
+            if self.output_buffer.is_empty() {
+                if std::time::Instant::now() >= deadline {
+                    return Err(PtySessionError::Timeout(
+                        "Frame did not stabilize within timeout".to_string(),
+                    ));
+                }
 
-            if current_text != previous_text {
-                previous_text = current_text;
+                continue;
+            }
+            let current_frame = frame.contents_formatted();
+
+            if current_frame != previous_frame {
+                previous_frame = current_frame;
                 stable_since = std::time::Instant::now();
                 seen_change = true;
             } else if seen_change
@@ -614,6 +624,7 @@ impl PtySessionBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::CellColor;
 
     #[test]
     fn pty_session_builder_forwards_args() {
@@ -803,6 +814,29 @@ mod tests {
         );
     }
 
+    /// Verifies that textless terminal output can stabilize when it changes
+    /// cursor state without rendering visible text.
+    #[test]
+    fn wait_for_stable_frame_returns_after_cursor_only_output() {
+        // Arrange — move and hide the cursor without writing visible text.
+        let script = "printf '\\033[2;2H\\033[?25l'; sleep 60";
+        let mut session = PtySessionBuilder::new("/bin/sh")
+            .args(["-c", script])
+            .spawn()
+            .expect("failed to spawn cursor-only shell script");
+
+        // Act
+        let frame = session
+            .wait_for_stable_frame(Duration::from_millis(200), Duration::from_secs(5))
+            .expect("cursor-only frame should stabilize");
+
+        // Assert
+        assert!(
+            frame.all_text().is_empty(),
+            "cursor-only frame should remain textless"
+        );
+    }
+
     /// Verifies that `wait_for_stable_frame` returns a non-empty frame once
     /// the binary has rendered output and the frame stops changing.
     #[test]
@@ -833,5 +867,36 @@ mod tests {
             text.contains("hello"),
             "stable frame should contain echoed output, got: '{text}'"
         );
+    }
+
+    /// Verifies style-only redraws reset the stability window even when the
+    /// visible text does not change.
+    #[test]
+    fn wait_for_stable_frame_tracks_style_changes() {
+        // Arrange — repaint the same text in alternating colors for longer
+        // than the stability window, then leave the final blue frame visible.
+        let script = concat!(
+            "printf '\\033[31mready'; ",
+            "sleep 0.1; printf '\\r\\033[32mready'; ",
+            "sleep 0.1; printf '\\r\\033[31mready'; ",
+            "sleep 0.1; printf '\\r\\033[32mready'; ",
+            "sleep 0.1; printf '\\r\\033[31mready'; ",
+            "sleep 0.1; printf '\\r\\033[32mready'; ",
+            "sleep 0.1; printf '\\r\\033[31mready'; ",
+            "sleep 0.1; printf '\\r\\033[34mready'; ",
+            "sleep 60",
+        );
+        let mut session = PtySessionBuilder::new("/bin/sh")
+            .args(["-c", script])
+            .spawn()
+            .expect("failed to spawn styled shell script");
+
+        // Act
+        let frame = session
+            .wait_for_stable_frame(Duration::from_millis(250), Duration::from_secs(5))
+            .expect("styled frame should stabilize");
+
+        // Assert
+        assert_eq!(frame.fg_color(0, 0), Some(CellColor::new(0, 0, 128)));
     }
 }
