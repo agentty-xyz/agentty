@@ -1108,7 +1108,9 @@ where
 /// they have not yet written user prompts into the persisted transcript.
 /// Started sessions read typed user rows so generated agent prompts remain
 /// available for provider replay without entering user-facing history.
-fn session_prompt_history_entries(session: &crate::domain::session::Session) -> Vec<String> {
+pub(super) fn session_prompt_history_entries(
+    session: &crate::domain::session::Session,
+) -> Vec<String> {
     if session.status == Status::Draft && session.is_draft_session() {
         return vec![session.prompt.clone()];
     }

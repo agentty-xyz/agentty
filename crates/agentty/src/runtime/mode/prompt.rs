@@ -768,6 +768,19 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
     apply_prompt_workflow_outcome(app, outcome, None);
 }
 
+/// Submits a normal text prompt assembled by another interactive mode.
+///
+/// The owning mode has already chosen normal turn submission, so a leading
+/// slash remains user text instead of reopening slash-command routing.
+pub(crate) async fn submit_current_text_prompt(app: &mut App) {
+    let Some(mut prompt_context) = prompt_context(app) else {
+        return;
+    };
+    prompt_context.input_mode = PromptInputMode::Text;
+
+    handle_prompt_submit_key(app, &prompt_context).await;
+}
+
 /// Dispatches one clipboard-image paste intent for the active prompt.
 async fn handle_prompt_image_paste(app: &mut App, prompt_context: &PromptContext) {
     paste_image_into_active_prompt(app, &prompt_context.session_id).await;
@@ -3865,6 +3878,40 @@ mod tests {
                 input, slash_state, ..
             } if input.text() == "/model" && slash_state.stage == PromptSlashStage::Agent
         ));
+    }
+
+    #[tokio::test]
+    async fn test_submit_current_text_prompt_ignores_missing_context_and_demotes_slash_text() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        let original_mode = std::mem::replace(&mut app.mode, AppMode::List);
+
+        // Act
+        submit_current_text_prompt(&mut app).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
+
+        // Arrange
+        app.mode = original_mode;
+
+        // Act
+        submit_current_text_prompt(&mut app).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::View { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_submit_current_text_prompt_submits_normal_prompt() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("follow up", None).await;
+
+        // Act
+        submit_current_text_prompt(&mut app).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::View { .. }));
     }
 
     #[tokio::test]

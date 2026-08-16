@@ -324,6 +324,10 @@ async fn process_paste_event(app: &mut App, pasted_text: &str) {
         mode::question::handle_paste(app, pasted_text);
     }
 
+    if matches!(&app.mode, AppMode::Diff { .. }) {
+        mode::diff::handle_paste(app, pasted_text);
+    }
+
     if let AppMode::PublishBranchInput {
         input,
         locked_upstream_ref: None,
@@ -357,7 +361,10 @@ mod tests {
     use crate::domain::question::QuestionItem;
     use crate::domain::session::{Session, SessionRole, SessionSize, SessionStats, Status};
     use crate::domain::transient_message::TransientMessageStore;
-    use crate::presentation::app_mode::{AppMode, ChatFocus};
+    use crate::presentation::app_mode::{
+        AppMode, ChatFocus, DiffFocus, DiffLineCommentAnchor, DiffLineComments, DiffLineSide,
+        DiffPreview,
+    };
     use crate::presentation::prompt::{
         PromptAttachmentState, PromptHistoryState, PromptSlashState,
     };
@@ -375,6 +382,15 @@ mod tests {
             "reader failures must not become events"
         );
 
+        Box::pin(std::future::ready(Ok(EventResult::Continue)))
+    }
+
+    /// Continues after a key event without applying mode behavior.
+    fn continue_for_key_event<'handler>(
+        _app: &'handler mut App,
+        _terminal: &'handler mut (),
+        _key: KeyEvent,
+    ) -> Pin<Box<dyn Future<Output = io::Result<EventResult>> + 'handler>> {
         Box::pin(std::future::ready(Ok(EventResult::Continue)))
     }
 
@@ -755,6 +771,61 @@ mod tests {
                 selected_option_index: None,
                 ..
             } if input.text() == "custom\nanswer"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_process_event_with_key_handler_pastes_into_inline_diff_comment() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let mut line_comments = DiffLineComments::default();
+        line_comments.start_editing(DiffLineCommentAnchor {
+            content: "review();".to_string(),
+            line: 1,
+            path: "src/main.rs".to_string(),
+            side: DiffLineSide::New,
+        });
+        app.mode = AppMode::Diff {
+            diff: "diff --git a/src/main.rs b/src/main.rs\n+review();\n".to_string(),
+            file_explorer_selected_index: 1,
+            focus: DiffFocus::Content,
+            line_comments,
+            preview: DiffPreview::default(),
+            review_comments: None,
+            restore: None,
+            scroll_cache: None,
+            scroll_offset: 0,
+            selected_diff_line_index: 0,
+            session_id: "session-1".into(),
+        };
+        let mut terminal = ();
+
+        // Act
+        let result = process_event_with_key_handler(
+            &mut app,
+            &mut terminal,
+            Some(Event::Paste("first line\r\nsecond line".to_string())),
+            continue_for_key_event,
+        )
+        .await;
+        let key_result = process_event_with_key_handler(
+            &mut app,
+            &mut terminal,
+            Some(Event::Key(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::NONE,
+            ))),
+            continue_for_key_event,
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert!(matches!(key_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. }
+                if line_comments.comments[0].input.text() == "first line"
         ));
     }
 

@@ -44,7 +44,8 @@ use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
 use crate::presentation::app_mode::{
-    AppMode, DiffFocus, DiffPreview, HelpContext, ReviewCommentAction, ReviewCommentActionSelection,
+    AppMode, DiffFocus, DiffLineComments, DiffPreview, HelpContext, ReviewCommentAction,
+    ReviewCommentActionSelection,
 };
 
 /// Builds a filesystem mock that delegates operations to local disk.
@@ -3815,9 +3816,11 @@ async fn test_refresh_sessions_loads_diff_help_detail_when_another_session_is_se
     app.sessions.select_session_index(Some(selected_index));
     app.mode = AppMode::Help {
         context: HelpContext::Diff {
+            can_comment: true,
             diff: String::new(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,

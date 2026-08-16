@@ -8,7 +8,145 @@ use super::prompt::{
 };
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
-use crate::domain::session::{PublishBranchAction, SessionId};
+use crate::domain::session::{
+    PublishBranchAction, Session, SessionId, Status, can_reply_to_session_in_stack,
+};
+
+/// Side of a unified diff that owns one selected changed line.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiffLineSide {
+    /// Added line in the post-change file.
+    New,
+    /// Deleted line in the pre-change file.
+    Old,
+}
+
+impl DiffLineSide {
+    /// Returns the stable agent-facing label for this side.
+    pub(crate) fn prompt_label(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Old => "old",
+        }
+    }
+}
+
+/// Repository location and source text for one selected changed line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiffLineCommentAnchor {
+    /// Changed line text without its diff marker.
+    pub(crate) content: String,
+    /// One-based line number on the owning diff side.
+    pub(crate) line: u32,
+    /// Repository-relative changed file path.
+    pub(crate) path: String,
+    /// Pre-change or post-change side that owns `line`.
+    pub(crate) side: DiffLineSide,
+}
+
+impl DiffLineCommentAnchor {
+    /// Builds one compact next-turn prompt line, retaining deleted source text.
+    pub(crate) fn prompt_line(&self, comment: &str) -> String {
+        match self.side {
+            DiffLineSide::New => format!(
+                "- {}:{} [{}]: {}",
+                self.path,
+                self.line,
+                self.side.prompt_label(),
+                comment.trim(),
+            ),
+            DiffLineSide::Old => format!(
+                "- {}:{} [{}, source={:?}]: {}",
+                self.path,
+                self.line,
+                self.side.prompt_label(),
+                self.content,
+                comment.trim(),
+            ),
+        }
+    }
+}
+
+/// One editable comment attached to a changed diff line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiffLineComment {
+    /// Changed source line that owns this comment.
+    pub(crate) anchor: DiffLineCommentAnchor,
+    /// User-authored inline comment text.
+    pub(crate) input: InputState,
+}
+
+/// Inline comments accumulated while the unified diff remains open.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DiffLineComments {
+    /// Index of the comment currently receiving text input.
+    pub(crate) editing_index: Option<usize>,
+    /// Comments retained in the order in which their lines were selected.
+    pub(crate) comments: Vec<DiffLineComment>,
+}
+
+impl DiffLineComments {
+    /// Starts editing the existing comment for `anchor` or inserts a new one.
+    pub(crate) fn start_editing(&mut self, anchor: DiffLineCommentAnchor) -> usize {
+        let editing_index = self
+            .comments
+            .iter()
+            .position(|comment| comment.anchor == anchor)
+            .unwrap_or_else(|| {
+                self.comments.push(DiffLineComment {
+                    anchor,
+                    input: InputState::default(),
+                });
+
+                self.comments.len().saturating_sub(1)
+            });
+        self.editing_index = Some(editing_index);
+
+        editing_index
+    }
+
+    /// Returns the input currently receiving inline comment keystrokes.
+    pub(crate) fn editing_input_mut(&mut self) -> Option<&mut InputState> {
+        self.editing_index
+            .and_then(|editing_index| self.comments.get_mut(editing_index))
+            .map(|comment| &mut comment.input)
+    }
+
+    /// Finishes editing and removes a comment whose text is blank.
+    pub(crate) fn finish_editing(&mut self) {
+        let Some(editing_index) = self.editing_index.take() else {
+            return;
+        };
+        if self
+            .comments
+            .get(editing_index)
+            .is_some_and(|comment| comment.input.text().trim().is_empty())
+        {
+            self.comments.remove(editing_index);
+        }
+    }
+
+    /// Returns whether an inline comment currently owns keyboard focus.
+    pub(crate) fn is_editing(&self) -> bool {
+        self.editing_index.is_some()
+    }
+
+    /// Builds one next-turn prompt containing every completed comment.
+    pub(crate) fn prompt_text(&self) -> String {
+        let comments = self
+            .comments
+            .iter()
+            .filter(|comment| !comment.input.text().trim().is_empty())
+            .map(|comment| comment.anchor.prompt_line(comment.input.text()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if comments.is_empty() {
+            return comments;
+        }
+
+        format!("Line comments:\n{comments}")
+    }
+}
 
 /// User-selected handling for one actionable forge review thread.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -315,6 +453,7 @@ impl QuestionModeSnapshot {
 /// When the user opens diff preview from prompt mode (`d` key while the chat
 /// transcript is focused), the composer state is snapshotted here so it can be
 /// restored when leaving the diff view.
+#[derive(Clone)]
 pub struct PromptModeSnapshot {
     /// Restorable file and directory mention dropdown state.
     pub at_mention_state: Option<PromptAtMentionState>,
@@ -370,6 +509,19 @@ impl DiffRestoreTarget {
             DiffRestoreTarget::Question(snapshot) => snapshot.into_question_mode(),
         }
     }
+}
+
+/// Returns whether the visible diff may collect and submit inline comments.
+pub(crate) fn allows_diff_line_comment_reply(
+    session: &Session,
+    sessions: &[Session],
+    restore: Option<&DiffRestoreTarget>,
+) -> bool {
+    !matches!(restore, Some(DiffRestoreTarget::Question(_)))
+        && session.status.allows_chat_composer()
+        && session.accepts_user_turns()
+        && (session.status == Status::Draft
+            || can_reply_to_session_in_stack(sessions, session.id.as_str()))
 }
 
 /// Tracks which panel has input focus on the session chat page.
@@ -534,6 +686,8 @@ pub enum AppMode {
         file_explorer_selected_index: usize,
         /// Panel currently receiving changed-file navigation input.
         focus: DiffFocus,
+        /// Inline changed-line comments accumulated for the next turn.
+        line_comments: DiffLineComments,
         /// Sticky rendered-markdown preview state for the selected file.
         preview: DiffPreview,
         /// Optional linked review-request comments rendered below the files.
@@ -623,12 +777,16 @@ pub enum HelpContext {
     },
     /// Diff-view help context and restorable diff state.
     Diff {
+        /// Whether this session may collect inline comments for a reply.
+        can_comment: bool,
         /// Raw git diff to restore after help closes.
         diff: String,
         /// Selected file-tree row to restore.
         file_explorer_selected_index: usize,
         /// Panel that held keyboard focus before help opened.
         focus: DiffFocus,
+        /// Inline changed-line comments accumulated before help opened.
+        line_comments: DiffLineComments,
         /// Rendered-markdown preview state to restore.
         preview: DiffPreview,
         /// Optional linked review-request comments to restore.
@@ -687,7 +845,7 @@ impl HelpContext {
                 *can_view_review_comments,
             ),
             HelpContext::List { keybindings } => keybindings.clone(),
-            HelpContext::Diff { .. } => help_action::diff_actions(),
+            HelpContext::Diff { can_comment, .. } => help_action::diff_actions(*can_comment),
         }
     }
 
@@ -705,9 +863,11 @@ impl HelpContext {
                 scroll_offset,
             },
             HelpContext::Diff {
+                can_comment: _,
                 diff,
                 file_explorer_selected_index,
                 focus,
+                line_comments,
                 preview,
                 review_comments,
                 restore,
@@ -718,6 +878,7 @@ impl HelpContext {
                 diff,
                 file_explorer_selected_index,
                 focus,
+                line_comments,
                 preview,
                 review_comments: review_comments.map(|review_comments| *review_comments),
                 restore,
@@ -739,6 +900,82 @@ impl HelpContext {
 mod tests {
     use super::*;
     use crate::domain::session::PublishBranchAction;
+
+    #[test]
+    fn test_diff_line_comments_edit_and_build_compact_prompt() {
+        // Arrange
+        let anchor = DiffLineCommentAnchor {
+            content: "println!(\"review\");".to_string(),
+            line: 12,
+            path: "src/main.rs".to_string(),
+            side: DiffLineSide::New,
+        };
+        let mut line_comments = DiffLineComments::default();
+
+        // Act
+        line_comments.start_editing(anchor.clone());
+        line_comments
+            .editing_input_mut()
+            .expect("new comment should be editable")
+            .insert_text("Please explain this change.");
+        line_comments.finish_editing();
+        let prompt = line_comments.prompt_text();
+
+        // Assert
+        assert_eq!(
+            prompt,
+            "Line comments:\n- src/main.rs:12 [new]: Please explain this change."
+        );
+        assert!(!line_comments.is_editing());
+
+        // Act — selecting the same line edits the existing comment.
+        let editing_index = line_comments.start_editing(anchor);
+
+        // Assert
+        assert_eq!(editing_index, 0);
+        assert_eq!(line_comments.comments.len(), 1);
+    }
+
+    #[test]
+    fn test_deleted_diff_line_prompt_includes_captured_source() {
+        // Arrange
+        let anchor = DiffLineCommentAnchor {
+            content: "let message = \"old\";".to_string(),
+            line: 7,
+            path: "src/old.rs".to_string(),
+            side: DiffLineSide::Old,
+        };
+
+        // Act
+        let prompt_line = anchor.prompt_line("Keep this behavior.");
+
+        // Assert
+        assert_eq!(
+            prompt_line,
+            "- src/old.rs:7 [old, source=\"let message = \\\"old\\\";\"]: Keep this behavior."
+        );
+    }
+
+    #[test]
+    fn test_diff_line_comments_remove_blank_editor() {
+        // Arrange
+        let mut line_comments = DiffLineComments::default();
+        line_comments.start_editing(DiffLineCommentAnchor {
+            content: "removed".to_string(),
+            line: 3,
+            path: "src/lib.rs".to_string(),
+            side: DiffLineSide::Old,
+        });
+
+        // Act
+        line_comments.finish_editing();
+        line_comments.finish_editing();
+
+        // Assert
+        assert!(line_comments.comments.is_empty());
+        assert!(line_comments.editing_input_mut().is_none());
+        assert!(line_comments.prompt_text().is_empty());
+    }
 
     #[test]
     fn test_confirmation_view_mode_into_view_mode_restores_view_identity() {

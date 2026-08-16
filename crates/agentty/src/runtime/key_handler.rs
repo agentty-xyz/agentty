@@ -98,13 +98,19 @@ where
                 let size = terminal.size().map_err(backend_err)?;
                 let terminal_rect = Rect::new(0, 0, size.width, size.height);
                 let content_area = content_area_for_terminal(terminal_rect);
+                let submit_line_comments = mode::diff::should_submit_line_comments(app, key);
 
-                Ok(mode::diff::handle_with_cache(
+                let result = mode::diff::handle_with_cache(
                     app,
                     presentation.render_cache_store(),
                     content_area,
                     key,
-                ))
+                );
+                if submit_line_comments && matches!(app.mode, AppMode::Prompt { .. }) {
+                    mode::prompt::submit_current_text_prompt(app).await;
+                }
+
+                Ok(result)
             }
             AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
             AppMode::LaunchConfigurationSelector { .. } => {
@@ -916,6 +922,7 @@ fn handle_regenerate_review_confirmation(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use crossterm::event::KeyModifiers;
@@ -926,7 +933,11 @@ mod tests {
     use crate::domain::session_message::SessionTranscript;
     use crate::infra::tmux::MockTmuxClient;
     use crate::presentation::app_mode::{
-        ConfirmationViewMode, DiffFocus, DiffPreview, DiffReviewComments,
+        ConfirmationViewMode, DiffFocus, DiffLineCommentAnchor, DiffLineComments, DiffLineSide,
+        DiffPreview, DiffRestoreTarget, DiffReviewComments, PromptModeSnapshot,
+    };
+    use crate::presentation::prompt::{
+        PromptAttachmentState, PromptHistoryState, PromptSlashState,
     };
 
     fn session_replay_text(session: &crate::domain::session::Session) -> String {
@@ -1750,6 +1761,7 @@ mod tests {
             diff: String::new(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: Some(DiffReviewComments {
@@ -1786,6 +1798,98 @@ mod tests {
                 ..
             } if session_id == "session-id"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_key_event_submits_completed_diff_comments() {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_test_app().await;
+        let session = crate::test_support::SessionFixtureBuilder::new()
+            .id("session-id")
+            .folder(base_dir.path().to_path_buf())
+            .status(crate::domain::session::Status::Review)
+            .build();
+        app.sessions =
+            crate::test_support::session_manager_with_handles(vec![session], HashMap::new()).into();
+        let mut line_comments = DiffLineComments::default();
+        line_comments.start_editing(DiffLineCommentAnchor {
+            content: "review();".to_string(),
+            line: 1,
+            path: "src/main.rs".to_string(),
+            side: DiffLineSide::New,
+        });
+        line_comments
+            .editing_input_mut()
+            .expect("seeded comment should be editable")
+            .insert_text("Explain this call");
+        line_comments.finish_editing();
+        app.mode = AppMode::Diff {
+            diff: "diff --git a/src/main.rs b/src/main.rs\n+review();\n".to_string(),
+            file_explorer_selected_index: 1,
+            focus: DiffFocus::Content,
+            line_comments,
+            selected_diff_line_index: 0,
+            preview: DiffPreview::default(),
+            review_comments: None,
+            restore: Some(Box::new(DiffRestoreTarget::Prompt(PromptModeSnapshot {
+                at_mention_state: None,
+                attachment_state: PromptAttachmentState::default(),
+                history_state: PromptHistoryState::default(),
+                input: crate::domain::input::InputState::with_text("/keep draft".to_string()),
+                scroll_offset: None,
+                session_id: "session-id".into(),
+                slash_state: PromptSlashState::default(),
+            }))),
+            scroll_cache: None,
+            session_id: "session-id".into(),
+            scroll_offset: 0,
+        };
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        let event_result = handle_key_event(
+            &mut app,
+            &PresentationState::default(),
+            &mut terminal,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(app.mode, AppMode::View { .. }));
+
+        // Arrange
+        app.mode = AppMode::Diff {
+            diff: "diff --git a/src/main.rs b/src/main.rs\n+review();\n".to_string(),
+            file_explorer_selected_index: 1,
+            focus: DiffFocus::Content,
+            line_comments: DiffLineComments::default(),
+            selected_diff_line_index: 0,
+            preview: DiffPreview::default(),
+            review_comments: None,
+            restore: None,
+            scroll_cache: None,
+            session_id: "session-id".into(),
+            scroll_offset: 0,
+        };
+        app.clear_redraw();
+        assert!(!app.needs_redraw());
+
+        // Act
+        let no_submit_result = handle_key_event(
+            &mut app,
+            &PresentationState::default(),
+            &mut terminal,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(no_submit_result, Ok(EventResult::Continue)));
+        assert!(matches!(app.mode, AppMode::Diff { .. }));
+        assert!(app.needs_redraw());
     }
 
     #[tokio::test]

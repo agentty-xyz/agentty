@@ -91,7 +91,7 @@ pub(crate) fn rotating_message<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::app_mode::DiffFocus;
+    use crate::presentation::app_mode::{DiffFocus, DiffLineComments};
     use crate::presentation::help_action::{
         self, ViewActionAvailability, ViewHelpState, ViewSessionState,
     };
@@ -159,6 +159,7 @@ mod tests {
             diff: String::new(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: crate::presentation::app_mode::DiffPreview::default(),
             review_comments: None,

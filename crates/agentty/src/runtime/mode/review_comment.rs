@@ -25,6 +25,7 @@ pub(crate) async fn handle_with_cache(
         diff,
         file_explorer_selected_index,
         focus,
+        line_comments,
         preview,
         review_comments: Some(mut review_comments),
         restore,
@@ -52,6 +53,7 @@ pub(crate) async fn handle_with_cache(
             diff,
             file_explorer_selected_index,
             focus,
+            line_comments,
             preview,
             review_comments: Some(review_comments),
             restore,
@@ -86,6 +88,7 @@ pub(crate) async fn handle_with_cache(
         diff,
         file_explorer_selected_index,
         focus,
+        line_comments,
         preview,
         review_comments: Some(review_comments),
         restore,
@@ -280,7 +283,9 @@ mod tests {
 
     use super::*;
     use crate::domain::session::{SessionId, SessionRole, Status};
-    use crate::presentation::app_mode::{DiffFocus, DiffPreview, DiffReviewComments};
+    use crate::presentation::app_mode::{
+        DiffFocus, DiffLineComments, DiffPreview, DiffReviewComments,
+    };
     use crate::test_support::SessionFixtureBuilder;
 
     fn comment_snapshot() -> ReviewCommentSnapshot {
@@ -316,6 +321,7 @@ mod tests {
             diff: String::new(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: Some(DiffReviewComments {

@@ -216,9 +216,22 @@ closed; otherwise `d` becomes available and reloads the diff. Full diffs load in
 background; press `q` or `Esc` on **Loading diff...** to return immediately while a
 large repository is still being inspected.
 
-Inside diff view, press `Enter` on a file to move focus from the file tree to its patch.
-The first added or removed line becomes the active line; use `j` / `k` or the arrow keys
-to move through changed lines while Agentty keeps the cursor visible. Press `Esc`,
+Inside diff view, press `Enter` on a file to move focus from the file tree to its patch,
+then press `Enter` again to open an inline editor beneath the selected added or removed
+line. Type the feedback, then press `Enter` or `Esc` to finish without leaving Diff
+mode. Use `j` / `k` or the arrow keys to move through changed lines while Agentty keeps
+the cursor visible, and press `Enter` on any selected line to add or edit its comment.
+Finishing empty text removes the comment. Completed comments keep a distinct inset
+background, and the active editor uses the stronger selection highlight. The linked
+review-request Comments section retains its separate `Enter` action for submitting
+marked review threads. Press `s` to submit every finished line comment together as the
+next session turn. The submitted prompt uses one compact row per comment with its
+repository-relative path, old or new side, and line number, and keeps draft instructions
+or image attachments that were present before opening the diff. Deleted-line rows also
+include their captured pre-change source text because that context is absent from the
+current worktree. Inline comment editing and submission are available only when the
+session can accept a reply. Read-only diffs such as `Merged` sessions keep line
+navigation but omit the comment actions from the footer and help overlay. Press `Esc`,
 `Left`, `h`, or `f` to return to the file tree. Select a changed markdown file and press
 `p` to render its complete post-change worktree content, including supported Mermaid
 diagrams. Preview remains active across file navigation; non-markdown selections keep

@@ -2,16 +2,19 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::{App, AppEvent};
+use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
-#[cfg(test)]
-use crate::presentation::app_mode::DiffRestoreTarget;
 use crate::presentation::app_mode::{
-    AppMode, DiffFocus, DiffPreview, DiffPreviewUnavailableReason, DiffReviewComments,
-    DiffScrollCache, DiffSidebarFocus, HelpContext, ViewportRect,
+    AppMode, DiffFocus, DiffLineCommentAnchor, DiffLineComments, DiffPreview,
+    DiffPreviewUnavailableReason, DiffRestoreTarget, DiffReviewComments, DiffScrollCache,
+    DiffSidebarFocus, HelpContext, PromptModeSnapshot, ViewportRect,
+    allows_diff_line_comment_reply,
 };
+use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
 use crate::runtime::EventResult;
+use crate::runtime::mode::input_key;
 use crate::ui::component::file_explorer::FileExplorer;
-use crate::ui::{RenderCacheStore, page};
+use crate::ui::{RenderCacheStore, diff_util, page};
 
 /// Handles key input while the app is in `AppMode::Diff`.
 ///
@@ -25,6 +28,10 @@ pub(crate) fn handle_with_cache(
     content_area: Rect,
     key: KeyEvent,
 ) -> EventResult {
+    if handle_line_comment_edit_key(app, key) {
+        return EventResult::Continue;
+    }
+
     if handle_help_key(app, key) {
         return EventResult::Continue;
     }
@@ -74,6 +81,7 @@ pub(crate) fn enter_diff_mode(
         diff,
         file_explorer_selected_index: 0,
         focus: DiffFocus::Files,
+        line_comments: DiffLineComments::default(),
         preview: DiffPreview::default(),
         review_comments,
         restore: restore.map(Box::new),
@@ -90,11 +98,13 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
         return false;
     }
 
+    let can_comment = can_reply_with_line_comments(app);
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
     if let AppMode::Diff {
         diff,
         file_explorer_selected_index,
         focus,
+        line_comments,
         preview,
         review_comments,
         restore,
@@ -106,9 +116,11 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
     {
         app.mode = AppMode::Help {
             context: HelpContext::Diff {
+                can_comment,
                 diff,
                 file_explorer_selected_index,
                 focus,
+                line_comments,
                 preview,
                 review_comments: review_comments.map(Box::new),
                 restore,
@@ -171,11 +183,13 @@ fn handle_navigation_key(
     content_area: Rect,
     key: KeyEvent,
 ) {
+    let can_reply_with_line_comments = can_reply_with_line_comments(app);
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
     let AppMode::Diff {
         diff,
         mut file_explorer_selected_index,
         mut focus,
+        line_comments,
         mut preview,
         mut review_comments,
         restore,
@@ -194,6 +208,7 @@ fn handle_navigation_key(
         diff: &diff,
         file_explorer_selected_index: &mut file_explorer_selected_index,
         focus: &mut focus,
+        line_comments: &line_comments,
         preview: &mut preview,
         review_comments: &mut review_comments,
         scroll_cache: &mut scroll_cache,
@@ -201,6 +216,12 @@ fn handle_navigation_key(
         selected_diff_line_index: &mut selected_diff_line_index,
         session_id: &session_id,
     };
+    let line_comment_anchor = selected_line_comment_anchor(
+        render_cache_store,
+        key,
+        &navigation,
+        can_reply_with_line_comments,
+    );
     let selection_changed =
         apply_navigation_key(app, render_cache_store, content_area, key, &mut navigation);
 
@@ -219,6 +240,7 @@ fn handle_navigation_key(
         diff,
         file_explorer_selected_index,
         focus,
+        line_comments,
         preview,
         review_comments,
         restore,
@@ -227,6 +249,250 @@ fn handle_navigation_key(
         selected_diff_line_index,
         session_id,
     };
+    if let Some(anchor) = line_comment_anchor {
+        start_line_comment_edit(app, render_cache_store, content_area, anchor);
+    } else if should_submit_line_comments(app, key) {
+        open_line_comment_prompt(app);
+    }
+}
+
+/// Returns whether `s` requests submission of all completed inline comments.
+pub(crate) fn should_submit_line_comments(app: &App, key: KeyEvent) -> bool {
+    let AppMode::Diff {
+        focus,
+        line_comments,
+        ..
+    } = &app.mode
+    else {
+        return false;
+    };
+
+    can_reply_with_line_comments(app)
+        && is_plain_char_key(key, 's')
+        && *focus == DiffFocus::Content
+        && !line_comments.is_editing()
+        && !line_comments.comments.is_empty()
+}
+
+/// Returns the selected changed line when `Enter` is pressed in the patch.
+fn selected_line_comment_anchor(
+    render_cache_store: &RenderCacheStore,
+    key: KeyEvent,
+    navigation: &DiffKeyNavigation<'_>,
+    can_reply_with_line_comments: bool,
+) -> Option<DiffLineCommentAnchor> {
+    let review_comments_are_focused = navigation
+        .review_comments
+        .as_ref()
+        .is_some_and(|review_comments| review_comments.sidebar_focus == DiffSidebarFocus::Comments);
+    if !can_reply_with_line_comments
+        || key.code != KeyCode::Enter
+        || key.modifiers != KeyModifiers::NONE
+        || *navigation.focus != DiffFocus::Content
+        || review_comments_are_focused
+        || selected_preview_is_visible(
+            navigation.diff,
+            *navigation.file_explorer_selected_index,
+            render_cache_store.diff_layout_cache(),
+            navigation.preview,
+        )
+    {
+        return None;
+    }
+
+    render_cache_store
+        .diff_layout_cache()
+        .content(navigation.diff)
+        .selected_changed_line(
+            *navigation.file_explorer_selected_index,
+            *navigation.selected_diff_line_index,
+        )
+}
+
+/// Starts inline editing without leaving the selected changed line.
+fn start_line_comment_edit(
+    app: &mut App,
+    render_cache_store: &RenderCacheStore,
+    content_area: Rect,
+    anchor: DiffLineCommentAnchor,
+) {
+    let AppMode::Diff {
+        diff,
+        file_explorer_selected_index,
+        line_comments,
+        scroll_cache,
+        scroll_offset,
+        selected_diff_line_index,
+        ..
+    } = &mut app.mode
+    else {
+        return;
+    };
+
+    line_comments.start_editing(anchor);
+    *scroll_cache = None;
+    let layout = page::diff::diff_changed_line_layout(
+        diff,
+        line_comments,
+        *file_explorer_selected_index,
+        content_area,
+        render_cache_store.diff_layout_cache(),
+    );
+    let Some(selected_range) = layout.changed_line_ranges.get(*selected_diff_line_index) else {
+        return;
+    };
+    let viewport_height = usize::from(layout.render_layout.viewport_height);
+    if viewport_height == 0 {
+        *scroll_offset = 0;
+
+        return;
+    }
+    let comment_row = selected_range.end;
+    let current_start = usize::from(*scroll_offset);
+    let current_end = current_start.saturating_add(viewport_height);
+    if comment_row >= current_end {
+        let next_scroll_offset = comment_row
+            .saturating_add(1)
+            .saturating_sub(viewport_height);
+        *scroll_offset = u16::try_from(next_scroll_offset).unwrap_or(u16::MAX);
+    }
+    *scroll_offset = diff_util::clamp_diff_scroll_offset(
+        *scroll_offset,
+        layout.line_count,
+        layout.render_layout.viewport_height,
+    );
+}
+
+/// Applies one key to the active inline editor before diff shortcuts run.
+fn handle_line_comment_edit_key(app: &mut App, key: KeyEvent) -> bool {
+    let AppMode::Diff {
+        line_comments,
+        scroll_cache,
+        ..
+    } = &mut app.mode
+    else {
+        return false;
+    };
+    if !line_comments.is_editing() {
+        return false;
+    }
+
+    if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
+        let previous_count = line_comments.comments.len();
+        line_comments.finish_editing();
+        if line_comments.comments.len() != previous_count {
+            *scroll_cache = None;
+        }
+
+        return true;
+    }
+    if let Some(command) =
+        input_key::command_for_key(key, input_key::InputCapabilities::SINGLE_LINE)
+        && let Some(input) = line_comments.editing_input_mut()
+    {
+        input.apply(command);
+    }
+
+    true
+}
+
+/// Inserts pasted text into the active single-line diff comment editor.
+pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
+    let AppMode::Diff { line_comments, .. } = &mut app.mode else {
+        return;
+    };
+    let Some(input) = line_comments.editing_input_mut() else {
+        return;
+    };
+
+    input.insert_text(&input_key::normalize_single_line_pasted_text(pasted_text));
+}
+
+/// Replaces Diff mode with one next-turn prompt containing every comment.
+fn open_line_comment_prompt(app: &mut App) {
+    let (line_comments, restored_prompt, session_id) = match &app.mode {
+        AppMode::Diff {
+            line_comments,
+            restore,
+            session_id,
+            ..
+        } => {
+            let restored_prompt = match restore.as_deref() {
+                Some(DiffRestoreTarget::Prompt(snapshot)) => Some(snapshot.clone()),
+                Some(DiffRestoreTarget::Question(_)) => return,
+                None => None,
+            };
+
+            (line_comments.clone(), restored_prompt, session_id.clone())
+        }
+        _ => return,
+    };
+    let Some(session) = app.sessions.session_for_id(session_id.as_str()) else {
+        return;
+    };
+    if !allows_diff_line_comment_reply(session, app.sessions.sessions(), None) {
+        return;
+    }
+    let history_entries = super::session_view::session_prompt_history_entries(session);
+
+    let slash_state = app.prompt_slash_state();
+    let mut snapshot = restored_prompt.unwrap_or_else(|| PromptModeSnapshot {
+        at_mention_state: None,
+        attachment_state: PromptAttachmentState::default(),
+        history_state: PromptHistoryState::new(history_entries),
+        input: InputState::default(),
+        scroll_offset: None,
+        session_id,
+        slash_state,
+    });
+    append_line_comments(&mut snapshot, &line_comments);
+    app.mode = snapshot.into_prompt_mode();
+}
+
+/// Returns whether the active diff can collect comments for one agent reply.
+fn can_reply_with_line_comments(app: &App) -> bool {
+    let AppMode::Diff {
+        restore,
+        session_id,
+        ..
+    } = &app.mode
+    else {
+        return false;
+    };
+    let Some(session) = app.sessions.session_for_id(session_id.as_str()) else {
+        return false;
+    };
+
+    allows_diff_line_comment_reply(session, app.sessions.sessions(), restore.as_deref())
+}
+
+/// Appends every structured line-comment block without losing image positions.
+fn append_line_comments(snapshot: &mut PromptModeSnapshot, line_comments: &DiffLineComments) {
+    let comment_blocks = line_comments.prompt_text();
+    if comment_blocks.is_empty() {
+        return;
+    }
+    let separator = if snapshot.input.is_empty() {
+        ""
+    } else {
+        "\n\n"
+    };
+    let insertion = format!("{separator}{comment_blocks}");
+    snapshot.input.move_end();
+    let insertion_start = snapshot.input.cursor;
+    snapshot
+        .attachment_state
+        .remember_current_revision(&snapshot.input);
+    snapshot.input.insert_text(&insertion);
+    snapshot.attachment_state.sync_after_edit(
+        &snapshot.input,
+        insertion_start,
+        insertion_start,
+        snapshot.input.cursor,
+    );
+    snapshot.at_mention_state = None;
+    snapshot.history_state.reset_navigation();
+    snapshot.slash_state.reset();
 }
 
 /// Mutable diff-mode values affected by one navigation key.
@@ -234,6 +500,7 @@ struct DiffKeyNavigation<'a> {
     diff: &'a str,
     file_explorer_selected_index: &'a mut usize,
     focus: &'a mut DiffFocus,
+    line_comments: &'a DiffLineComments,
     preview: &'a mut DiffPreview,
     review_comments: &'a mut Option<DiffReviewComments>,
     scroll_cache: &'a mut Option<DiffScrollCache>,
@@ -249,6 +516,7 @@ impl DiffKeyNavigation<'_> {
             diff: self.diff,
             file_explorer_selected_index: *self.file_explorer_selected_index,
             focus: self.focus,
+            line_comments: self.line_comments,
             preview: self.preview,
             scroll_cache: self.scroll_cache,
             scroll_offset: self.scroll_offset,
@@ -339,7 +607,9 @@ fn apply_navigation_key(
             }
         }
         KeyCode::Char('c')
-            if is_plain_char_key(key, 'c') && navigation.review_comments.is_some() =>
+            if *navigation.focus == DiffFocus::Files
+                && is_plain_char_key(key, 'c')
+                && navigation.review_comments.is_some() =>
         {
             *navigation.focus = DiffFocus::Files;
             focus_review_comments(
@@ -371,6 +641,7 @@ struct DiffContentNavigation<'a> {
     diff: &'a str,
     file_explorer_selected_index: usize,
     focus: &'a mut DiffFocus,
+    line_comments: &'a DiffLineComments,
     preview: &'a DiffPreview,
     scroll_cache: &'a mut Option<DiffScrollCache>,
     scroll_offset: &'a mut u16,
@@ -409,9 +680,9 @@ fn focus_selected_file_changes(
 
         return;
     }
-
     let changed_line_layout = page::diff::diff_changed_line_layout(
         navigation.diff,
+        navigation.line_comments,
         navigation.file_explorer_selected_index,
         content_area,
         render_cache_store.diff_layout_cache(),
@@ -444,13 +715,16 @@ fn move_content_selection(
         navigation.preview,
     ) {
         let max_scroll_offset = diff_max_scroll_offset(
-            navigation.diff,
-            content_area,
-            navigation.file_explorer_selected_index,
+            &DiffScrollLimitInput {
+                content_area,
+                diff: navigation.diff,
+                diff_layout_cache: render_cache_store.diff_layout_cache(),
+                line_comments: navigation.line_comments,
+                markdown_render_cache: render_cache_store.markdown_render_cache(),
+                preview: navigation.preview,
+                selected_index: navigation.file_explorer_selected_index,
+            },
             navigation.scroll_cache,
-            render_cache_store.diff_layout_cache(),
-            render_cache_store.markdown_render_cache(),
-            navigation.preview,
         );
         *navigation.scroll_offset = match direction {
             DiffContentDirection::Next => (*navigation.scroll_offset)
@@ -467,6 +741,7 @@ fn move_content_selection(
 
     let changed_line_layout = page::diff::diff_changed_line_layout(
         navigation.diff,
+        navigation.line_comments,
         navigation.file_explorer_selected_index,
         content_area,
         render_cache_store.diff_layout_cache(),
@@ -646,35 +921,42 @@ fn is_shift_char_key(key: KeyEvent, character: char) -> bool {
         )
 }
 
+/// Inputs used to resolve and cache the active diff scroll limit.
+struct DiffScrollLimitInput<'a> {
+    content_area: Rect,
+    diff: &'a str,
+    diff_layout_cache: &'a page::diff::DiffLayoutCache,
+    line_comments: &'a DiffLineComments,
+    markdown_render_cache: &'a crate::ui::markdown::MarkdownRenderCache,
+    preview: &'a DiffPreview,
+    selected_index: usize,
+}
+
 /// Returns the max valid scroll offset for the active diff selection.
 fn diff_max_scroll_offset(
-    diff: &str,
-    content_area: Rect,
-    selected_index: usize,
+    input: &DiffScrollLimitInput<'_>,
     scroll_cache: &mut Option<DiffScrollCache>,
-    diff_layout_cache: &page::diff::DiffLayoutCache,
-    markdown_render_cache: &crate::ui::markdown::MarkdownRenderCache,
-    preview: &DiffPreview,
 ) -> u16 {
     if let Some(cached_scroll_limit) = scroll_cache
-        && cached_scroll_limit.content_area == viewport_rect(content_area)
-        && cached_scroll_limit.file_explorer_selected_index == selected_index
+        && cached_scroll_limit.content_area == viewport_rect(input.content_area)
+        && cached_scroll_limit.file_explorer_selected_index == input.selected_index
     {
         return cached_scroll_limit.max_scroll_offset;
     }
 
     let max_scroll_offset = page::diff::diff_view_max_scroll_offset(
-        diff,
-        selected_index,
-        content_area,
-        diff_layout_cache,
-        markdown_render_cache,
-        preview,
+        input.diff,
+        input.line_comments,
+        input.selected_index,
+        input.content_area,
+        input.diff_layout_cache,
+        input.markdown_render_cache,
+        input.preview,
     );
 
     *scroll_cache = Some(DiffScrollCache {
-        content_area: viewport_rect(content_area),
-        file_explorer_selected_index: selected_index,
+        content_area: viewport_rect(input.content_area),
+        file_explorer_selected_index: input.selected_index,
         max_scroll_offset,
     });
 
@@ -758,6 +1040,7 @@ mod tests {
             diff: diff.to_string(),
             file_explorer_selected_index,
             focus,
+            line_comments: DiffLineComments::default(),
             preview,
             review_comments: None,
             restore: None,
@@ -872,6 +1155,7 @@ mod tests {
             scroll_offset: 7,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -915,6 +1199,7 @@ mod tests {
             scroll_offset: 7,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -951,6 +1236,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Content,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1009,13 +1295,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_enter_focuses_first_changed_line() {
+    async fn test_handle_enter_from_files_focuses_first_changed_line() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.mode = AppMode::Diff {
             diff: scrollable_diff_fixture(),
             file_explorer_selected_index: 1,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             preview: DiffPreview::default(),
             review_comments: None,
             restore: None,
@@ -1038,9 +1325,13 @@ mod tests {
             app.mode,
             AppMode::Diff {
                 focus: DiffFocus::Content,
+                line_comments: DiffLineComments {
+                    editing_index: None,
+                    ref comments,
+                },
                 selected_diff_line_index: 0,
                 ..
-            }
+            } if comments.is_empty()
         ));
     }
 
@@ -1122,6 +1413,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_enter_does_not_edit_line_when_review_comments_are_focused() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let mut review_comments = DiffReviewComments::loading(1);
+        review_comments.sidebar_focus = DiffSidebarFocus::Comments;
+        app.mode = AppMode::Diff {
+            diff: "diff --git a/src/main.rs b/src/main.rs\n+review();\n".to_string(),
+            file_explorer_selected_index: 1,
+            focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
+            selected_diff_line_index: 0,
+            preview: DiffPreview::default(),
+            review_comments: Some(review_comments),
+            restore: None,
+            scroll_cache: None,
+            scroll_offset: 0,
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                line_comments: DiffLineComments { ref comments, .. },
+                review_comments: Some(DiffReviewComments {
+                    sidebar_focus: DiffSidebarFocus::Comments,
+                    ..
+                }),
+                ..
+            } if comments.is_empty()
+        ));
+    }
+
+    #[tokio::test]
     async fn test_handle_preview_arrow_keys_scroll_both_directions() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
@@ -1172,6 +1504,7 @@ mod tests {
             diff: scrollable_diff_fixture(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Content,
+            line_comments: DiffLineComments::default(),
             preview: DiffPreview::default(),
             review_comments: None,
             restore: None,
@@ -1242,6 +1575,7 @@ mod tests {
             scroll_offset: 3,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Content,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 2,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1278,6 +1612,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Content,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1314,6 +1649,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Content,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1369,6 +1705,7 @@ mod tests {
             scroll_offset: 10,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1403,6 +1740,7 @@ mod tests {
             scroll_offset: 10,
             file_explorer_selected_index: 1,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1438,6 +1776,7 @@ mod tests {
             scroll_offset: 10,
             file_explorer_selected_index: 1,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1473,6 +1812,7 @@ mod tests {
             scroll_offset: 10,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1508,6 +1848,7 @@ mod tests {
             scroll_offset: 5,
             file_explorer_selected_index: 3,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::Ready {
                 content: "# Preview".to_string(),
@@ -1557,6 +1898,7 @@ mod tests {
             scroll_offset: u16::MAX,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Content,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 39,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1594,6 +1936,7 @@ mod tests {
             scroll_offset: u16::MAX,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Content,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 39,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1634,6 +1977,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1654,6 +1998,18 @@ mod tests {
             ))),
             scroll_cache: None,
         };
+
+        // Act — question-origin diffs cannot become text prompt composers.
+        open_line_comment_prompt(&mut app);
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff {
+                restore: Some(restore),
+                ..
+            } if matches!(restore.as_ref(), DiffRestoreTarget::Question(_))
+        ));
 
         // Act
         let event_result = handle(
@@ -1690,6 +2046,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1736,6 +2093,7 @@ mod tests {
             scroll_offset: 0,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1766,6 +2124,7 @@ mod tests {
             scroll_offset: 3,
             file_explorer_selected_index: 1,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1854,6 +2213,7 @@ mod tests {
             scroll_offset: 3,
             file_explorer_selected_index: 1,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1960,6 +2320,7 @@ mod tests {
             scroll_offset: 4,
             file_explorer_selected_index: 2,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -1994,6 +2355,7 @@ mod tests {
             diff: "diff output".to_string(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: Some(DiffReviewComments::loading(1)),
@@ -2030,6 +2392,452 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_collects_inline_comments_before_building_next_turn() {
+        // Arrange
+        let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
+        let diff = concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -1 +1,2 @@\n",
+            " fn main() {}\n",
+            "+println!(\"review\");\n",
+            "+review();\n",
+        );
+        app.mode = diff_mode_fixture(diff, 1, DiffFocus::Content, DiffPreview::default());
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('B'), KeyModifiers::SHIFT),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        // Assert — both comments stay inside Diff mode until explicit submit.
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. }
+                if line_comments.comments.len() == 2
+                    && line_comments.comments[0].input.text() == "A"
+                    && line_comments.comments[1].input.text() == "B"
+        ));
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                focus: crate::presentation::app_mode::ChatFocus::Input,
+                input,
+                session_id,
+                ..
+            } if session_id == "session-id"
+                && input.text() == concat!(
+                    "Line comments:\n",
+                    "- src/main.rs:2 [new]: A\n",
+                    "- src/main.rs:3 [new]: B",
+                )
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_merged_diff_rejects_inline_comment_creation_and_submission() {
+        // Arrange
+        let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
+        app.sessions.sessions_mut()[0].status = crate::domain::session::Status::Merged;
+        let diff = "diff --git a/src/main.rs b/src/main.rs\n+review();\n";
+        app.mode = diff_mode_fixture(diff, 1, DiffFocus::Content, DiffPreview::default());
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. } if line_comments.comments.is_empty()
+        ));
+
+        // Arrange
+        if let AppMode::Diff { line_comments, .. } = &mut app.mode {
+            line_comments.start_editing(DiffLineCommentAnchor {
+                content: "review();".to_string(),
+                line: 1,
+                path: "src/main.rs".to_string(),
+                side: crate::presentation::app_mode::DiffLineSide::New,
+            });
+            line_comments
+                .editing_input_mut()
+                .expect("seeded inline comment should be editable")
+                .insert_text("read-only comment");
+            line_comments.finish_editing();
+        }
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        );
+        open_line_comment_prompt(&mut app);
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Help {
+                context: HelpContext::Diff {
+                    can_comment: false,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_start_line_comment_edit_handles_layout_edges() {
+        // Arrange
+        let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
+        let diff = scrollable_diff_fixture();
+        let anchor = DiffLineCommentAnchor {
+            content: "line 39".to_string(),
+            line: 40,
+            path: "src/main.rs".to_string(),
+            side: crate::presentation::app_mode::DiffLineSide::New,
+        };
+
+        // Act
+        start_line_comment_edit(
+            &mut app,
+            &RenderCacheStore::default(),
+            TEST_TERMINAL_SIZE,
+            anchor.clone(),
+        );
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
+
+        // Arrange
+        app.mode = diff_mode_fixture(&diff, 1, DiffFocus::Content, DiffPreview::default());
+        if let AppMode::Diff {
+            selected_diff_line_index,
+            ..
+        } = &mut app.mode
+        {
+            *selected_diff_line_index = usize::MAX;
+        }
+
+        // Act
+        start_line_comment_edit(
+            &mut app,
+            &RenderCacheStore::default(),
+            TEST_TERMINAL_SIZE,
+            anchor.clone(),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff {
+                line_comments,
+                scroll_offset: 0,
+                ..
+            } if line_comments.is_editing()
+        ));
+
+        // Arrange
+        app.mode = diff_mode_fixture(&diff, 1, DiffFocus::Content, DiffPreview::default());
+
+        // Act
+        start_line_comment_edit(
+            &mut app,
+            &RenderCacheStore::default(),
+            Rect::new(0, 0, 80, 0),
+            anchor.clone(),
+        );
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                scroll_offset: 0,
+                ..
+            }
+        ));
+
+        // Arrange
+        app.mode = diff_mode_fixture(&diff, 1, DiffFocus::Content, DiffPreview::default());
+        if let AppMode::Diff {
+            selected_diff_line_index,
+            ..
+        } = &mut app.mode
+        {
+            *selected_diff_line_index = 39;
+        }
+
+        // Act
+        start_line_comment_edit(
+            &mut app,
+            &RenderCacheStore::default(),
+            TEST_TERMINAL_SIZE,
+            anchor,
+        );
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff { scroll_offset, .. } if scroll_offset > 0
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_blank_line_comment_clears_cached_layout() {
+        // Arrange
+        let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
+        let diff = "diff --git a/src/main.rs b/src/main.rs\n+review();\n";
+        app.mode = diff_mode_fixture(diff, 1, DiffFocus::Content, DiffPreview::default());
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        if let AppMode::Diff { scroll_cache, .. } = &mut app.mode {
+            *scroll_cache = Some(DiffScrollCache {
+                content_area: viewport_rect(TEST_TERMINAL_SIZE),
+                file_explorer_selected_index: 1,
+                max_scroll_offset: 0,
+            });
+        }
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff {
+                line_comments,
+                scroll_cache: None,
+                ..
+            } if line_comments.comments.is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_line_comment_paste_ignores_non_editing_modes() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+
+        // Act
+        handle_paste(&mut app, "ignored");
+        let should_submit = should_submit_line_comments(
+            &app,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
+        assert!(!should_submit);
+
+        // Arrange
+        app.mode = diff_mode_fixture(
+            "diff --git a/src/main.rs b/src/main.rs\n+review();\n",
+            1,
+            DiffFocus::Content,
+            DiffPreview::default(),
+        );
+
+        // Act
+        handle_paste(&mut app, "ignored");
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. } if line_comments.comments.is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_open_line_comment_prompt_handles_mode_and_prompt_restore() {
+        // Arrange
+        let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
+        app.mode = AppMode::List;
+
+        // Act
+        open_line_comment_prompt(&mut app);
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
+
+        // Arrange
+        app.mode = diff_mode_fixture(
+            "diff --git a/src/main.rs b/src/main.rs\n+review();\n",
+            1,
+            DiffFocus::Content,
+            DiffPreview::default(),
+        );
+        if let AppMode::Diff {
+            line_comments,
+            restore,
+            ..
+        } = &mut app.mode
+        {
+            line_comments.start_editing(DiffLineCommentAnchor {
+                content: "review();".to_string(),
+                line: 1,
+                path: "src/main.rs".to_string(),
+                side: crate::presentation::app_mode::DiffLineSide::New,
+            });
+            line_comments
+                .editing_input_mut()
+                .expect("comment should be editable")
+                .insert_text("Explain this call");
+            line_comments.finish_editing();
+            *restore = Some(Box::new(DiffRestoreTarget::Prompt(
+                non_default_prompt_snapshot(),
+            )));
+        }
+
+        // Act
+        open_line_comment_prompt(&mut app);
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, .. }
+                if input.text().starts_with(RESTORE_DRAFT_TEXT)
+                    && input.text().ends_with("Explain this call")
+        ));
+
+        // Arrange
+        app.mode = diff_mode_fixture(
+            "diff --git a/src/main.rs b/src/main.rs\n+review();\n",
+            1,
+            DiffFocus::Content,
+            DiffPreview::default(),
+        );
+        if let AppMode::Diff { session_id, .. } = &mut app.mode {
+            *session_id = "missing-session".into();
+        }
+
+        // Act
+        open_line_comment_prompt(&mut app);
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::Diff { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_handle_paste_inserts_first_line_into_active_diff_comment() {
+        // Arrange
+        let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
+        let diff = "diff --git a/src/main.rs b/src/main.rs\n+review();\n";
+        app.mode = diff_mode_fixture(diff, 1, DiffFocus::Content, DiffPreview::default());
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        // Act
+        handle_paste(&mut app, "first line\r\nsecond line");
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. }
+                if line_comments.comments[0].input.text() == "first line"
+        ));
+    }
+
+    #[test]
+    fn test_append_line_comment_preserves_draft_and_attachment() {
+        // Arrange
+        let mut snapshot = non_default_prompt_snapshot();
+        let mut line_comments = DiffLineComments::default();
+        let anchor = DiffLineCommentAnchor {
+            content: "updated()".to_string(),
+            line: 9,
+            path: "src/lib.rs".to_string(),
+            side: crate::presentation::app_mode::DiffLineSide::Old,
+        };
+        line_comments.start_editing(anchor);
+        line_comments
+            .editing_input_mut()
+            .expect("comment should be editable")
+            .insert_text("Update this call");
+        line_comments.finish_editing();
+
+        // Act
+        append_line_comments(&mut snapshot, &line_comments);
+
+        // Assert
+        assert!(snapshot.input.text().starts_with(RESTORE_DRAFT_TEXT));
+        assert!(snapshot.input.text().ends_with(
+            "Line comments:\n- src/lib.rs:9 [old, source=\"updated()\"]: Update this call"
+        ));
+        assert_eq!(snapshot.attachment_state.attachments.len(), 1);
+        assert_eq!(snapshot.history_state.selected_index, None);
+        assert!(snapshot.at_mention_state.is_none());
+
+        // Arrange
+        let empty_comments = DiffLineComments::default();
+        let unchanged_text = snapshot.input.text().to_string();
+
+        // Act
+        append_line_comments(&mut snapshot, &empty_comments);
+
+        // Assert
+        assert_eq!(snapshot.input.text(), unchanged_text);
+    }
+
+    #[tokio::test]
     async fn test_handle_preview_key_loads_renders_event_and_toggles_off() {
         // Arrange
         let mut mock_git_client = ag_git::MockGitClient::new();
@@ -2049,6 +2857,7 @@ mod tests {
             diff: "diff --git a/README.md b/README.md\n+preview".to_string(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -2104,6 +2913,7 @@ mod tests {
             diff: "diff --git a/docs/README.md b/docs/README.md\n+preview".to_string(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -2139,6 +2949,7 @@ mod tests {
             diff: "diff --git a/docs/README.md b/docs/README.md\n+preview".to_string(),
             file_explorer_selected_index: 1,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::Ready {
                 content: "# Preview".to_string(),
@@ -2193,6 +3004,7 @@ mod tests {
             .to_string(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::Ready {
                 content: "# First".to_string(),
@@ -2243,6 +3055,7 @@ mod tests {
             diff: "diff --git a/README.md b/README.md\n+preview".to_string(),
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: None,
@@ -2280,6 +3093,7 @@ mod tests {
         let diff_layout_cache = page::diff::DiffLayoutCache::default();
         let markdown_render_cache = crate::ui::markdown::MarkdownRenderCache::default();
         let preview = DiffPreview::default();
+        let line_comments = DiffLineComments::default();
         let mut scroll_cache = Some(DiffScrollCache {
             content_area: viewport_rect(TEST_TERMINAL_SIZE),
             file_explorer_selected_index: 0,
@@ -2288,13 +3102,16 @@ mod tests {
 
         // Act
         let max_scroll_offset = diff_max_scroll_offset(
-            &diff,
-            TEST_TERMINAL_SIZE,
-            0,
+            &DiffScrollLimitInput {
+                content_area: TEST_TERMINAL_SIZE,
+                diff: &diff,
+                diff_layout_cache: &diff_layout_cache,
+                line_comments: &line_comments,
+                markdown_render_cache: &markdown_render_cache,
+                preview: &preview,
+                selected_index: 0,
+            },
             &mut scroll_cache,
-            &diff_layout_cache,
-            &markdown_render_cache,
-            &preview,
         );
 
         // Assert — the cached limit is returned verbatim without recomputing.

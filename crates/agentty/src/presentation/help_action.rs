@@ -756,41 +756,101 @@ fn prompt_action_help_action(session_state: ViewSessionState) -> HelpAction {
 ///
 /// The help overlay is a complete cross-focus reference; the compact footer
 /// below filters actions to those usable in the current sidebar state.
-pub(crate) fn diff_actions() -> Vec<HelpAction> {
-    vec![
+pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
+    let mut actions = vec![
         HelpAction::new("back", "q", "Back to session"),
         HelpAction::new("select item", "j/k", "Select file or comment"),
-        HelpAction::new("open file", "Enter", "Focus selected file changes"),
+        HelpAction::new(
+            if can_comment { "open/comment" } else { "open" },
+            "Enter",
+            if can_comment {
+                "Open selected file or edit selected changed line"
+            } else {
+                "Open selected file"
+            },
+        ),
         HelpAction::new("files", "f/Esc/Left", "Focus changed files"),
         HelpAction::new("comments", "c", "Focus review comments"),
         HelpAction::new("preview", "p", "Toggle selected markdown preview"),
         HelpAction::new("select line", "Up/Down", "Select changed line"),
+    ];
+    if can_comment {
+        actions.push(HelpAction::new(
+            "save comment",
+            "Enter/Esc",
+            "Finish the inline comment",
+        ));
+        actions.push(HelpAction::new(
+            "submit comments",
+            "s",
+            "Submit all inline comments",
+        ));
+    }
+    actions.extend([
         HelpAction::new("address", "a", "Mark comment for agent address"),
         HelpAction::new("deny", "d", "Mark comment for agent denial"),
         HelpAction::new("submit", "Enter", "Submit marked comments to the agent"),
         HelpAction::new("help", "?", "Help"),
-    ]
+    ]);
+
+    actions
+}
+
+/// Inputs that select compact actions for the current Diff footer state.
+#[derive(Clone, Copy)]
+pub(crate) struct DiffFooterContext {
+    /// Whether the selected forge comment can be marked for handling.
+    pub(crate) can_mark_selected: bool,
+    /// Whether marked forge comments can be submitted.
+    pub(crate) can_submit: bool,
+    /// Changed-file panel that currently receives navigation input.
+    pub(crate) focus: DiffFocus,
+    /// Whether the diff includes a linked forge-comment sidebar.
+    pub(crate) has_review_comments: bool,
+    /// Inline changed-line comment state for footer editing actions.
+    pub(crate) line_comment_state: DiffLineCommentFooterState,
+    /// Sidebar section that currently controls the right pane.
+    pub(crate) sidebar_focus: DiffSidebarFocus,
+}
+
+/// Inline-comment state that changes the compact Diff footer actions.
+#[derive(Clone, Copy)]
+pub(crate) enum DiffLineCommentFooterState {
+    /// One inline comment currently receives keyboard input.
+    Editing,
+    /// The visible session cannot accept an inline-comment reply.
+    ReadOnly,
+    /// Diff navigation is active with this many completed comments.
+    Ready {
+        /// Number of inline comments ready for batch submission.
+        comment_count: usize,
+    },
 }
 
 /// Returns compact diff footer actions for the page-level hint line.
-pub(crate) fn diff_footer_actions(
-    has_review_comments: bool,
-    sidebar_focus: DiffSidebarFocus,
-    focus: DiffFocus,
-    can_mark_selected: bool,
-    can_submit: bool,
-) -> Vec<HelpAction> {
+pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction> {
+    if matches!(
+        context.line_comment_state,
+        DiffLineCommentFooterState::Editing
+    ) {
+        return vec![HelpAction::new(
+            "save comment",
+            "Enter/Esc",
+            "Finish the inline comment",
+        )];
+    }
+
     let mut actions = vec![HelpAction::new("back", "q/Esc", "Back to session")];
-    match sidebar_focus {
-        DiffSidebarFocus::Files if focus == DiffFocus::Files => {
+    match context.sidebar_focus {
+        DiffSidebarFocus::Files if context.focus == DiffFocus::Files => {
             actions.push(HelpAction::new("select file", "j/k", "Select file"));
             actions.push(HelpAction::new(
-                "open file",
+                "open",
                 "Enter",
-                "Focus selected file changes",
+                "Focus the selected file's changed lines",
             ));
             actions.push(HelpAction::new("preview", "p", "Toggle markdown preview"));
-            if has_review_comments {
+            if context.has_review_comments {
                 actions.push(HelpAction::new("comments", "c", "Focus review comments"));
             }
         }
@@ -798,11 +858,31 @@ pub(crate) fn diff_footer_actions(
             actions[0] = HelpAction::new("back", "q", "Back to session");
             actions.push(HelpAction::new("files", "Esc/Left", "Focus changed files"));
             actions.push(HelpAction::new("select line", "j/k", "Select changed line"));
+            if matches!(
+                context.line_comment_state,
+                DiffLineCommentFooterState::Ready { .. }
+            ) {
+                actions.push(HelpAction::new(
+                    "comment",
+                    "Enter",
+                    "Edit a comment below the selected line",
+                ));
+            }
+            if matches!(
+                context.line_comment_state,
+                DiffLineCommentFooterState::Ready { comment_count } if comment_count > 0
+            ) {
+                actions.push(HelpAction::new(
+                    "submit comments",
+                    "s",
+                    "Submit all inline comments",
+                ));
+            }
         }
         DiffSidebarFocus::Comments => {
             actions[0] = HelpAction::new("back", "q", "Back to session");
             actions.push(HelpAction::new("select comment", "j/k", "Select comment"));
-            if can_mark_selected {
+            if context.can_mark_selected {
                 actions.push(HelpAction::new(
                     "address",
                     "a",
@@ -814,7 +894,7 @@ pub(crate) fn diff_footer_actions(
                     "Toggle selected comment for agent denial",
                 ));
             }
-            if can_submit {
+            if context.can_submit {
                 actions.push(HelpAction::new(
                     "submit",
                     "Enter",
@@ -823,7 +903,7 @@ pub(crate) fn diff_footer_actions(
             }
         }
     }
-    if sidebar_focus == DiffSidebarFocus::Comments {
+    if context.sidebar_focus == DiffSidebarFocus::Comments {
         actions.push(HelpAction::new("files", "f/Esc", "Focus changed files"));
         actions.push(HelpAction::new(
             "scroll pane",
@@ -2056,15 +2136,21 @@ mod tests {
     #[test]
     fn test_read_only_detail_and_diff_action_groups_expose_expected_keys() {
         // Arrange, Act
-        let diff_keys = diff_actions()
+        let diff_keys = diff_actions(true)
             .iter()
             .map(|action| action.key)
             .collect::<Vec<_>>();
-        let file_footer_keys =
-            diff_footer_actions(true, DiffSidebarFocus::Files, DiffFocus::Files, true, true)
-                .iter()
-                .map(|action| action.key)
-                .collect::<Vec<_>>();
+        let file_footer_keys = diff_footer_actions(DiffFooterContext {
+            can_mark_selected: true,
+            can_submit: true,
+            focus: DiffFocus::Files,
+            has_review_comments: true,
+            line_comment_state: DiffLineCommentFooterState::Ready { comment_count: 0 },
+            sidebar_focus: DiffSidebarFocus::Files,
+        })
+        .iter()
+        .map(|action| action.key)
+        .collect::<Vec<_>>();
 
         // Assert
         assert_eq!(
@@ -2077,6 +2163,8 @@ mod tests {
                 "c",
                 "p",
                 "Up/Down",
+                "Enter/Esc",
+                "s",
                 "a",
                 "d",
                 "Enter",
@@ -2089,31 +2177,81 @@ mod tests {
     #[test]
     fn test_diff_content_footer_exposes_line_navigation_and_file_return() {
         // Arrange, Act
-        let content_footer_keys = diff_footer_actions(
-            true,
-            DiffSidebarFocus::Files,
-            DiffFocus::Content,
-            false,
-            false,
-        )
+        let content_footer_keys = diff_footer_actions(DiffFooterContext {
+            can_mark_selected: false,
+            can_submit: false,
+            focus: DiffFocus::Content,
+            has_review_comments: true,
+            line_comment_state: DiffLineCommentFooterState::Ready { comment_count: 2 },
+            sidebar_focus: DiffSidebarFocus::Files,
+        })
         .iter()
         .map(|action| action.key)
         .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(content_footer_keys, ["q", "Esc/Left", "j/k", "?"]);
+        assert_eq!(
+            content_footer_keys,
+            ["q", "Esc/Left", "j/k", "Enter", "s", "?"]
+        );
+    }
+
+    #[test]
+    fn test_read_only_diff_hides_inline_comment_actions() {
+        // Arrange, Act
+        let help_labels = diff_actions(false)
+            .iter()
+            .map(|action| action.footer_label)
+            .collect::<Vec<_>>();
+        let footer_keys = diff_footer_actions(DiffFooterContext {
+            can_mark_selected: false,
+            can_submit: false,
+            focus: DiffFocus::Content,
+            has_review_comments: false,
+            line_comment_state: DiffLineCommentFooterState::ReadOnly,
+            sidebar_focus: DiffSidebarFocus::Files,
+        })
+        .iter()
+        .map(|action| action.key)
+        .collect::<Vec<_>>();
+
+        // Assert
+        assert!(!help_labels.contains(&"open/comment"));
+        assert!(!help_labels.contains(&"save comment"));
+        assert!(!help_labels.contains(&"submit comments"));
+        assert_eq!(footer_keys, ["q", "Esc/Left", "j/k", "?"]);
+    }
+
+    #[test]
+    fn test_diff_content_footer_limits_actions_while_editing_comment() {
+        // Arrange, Act
+        let editing_keys = diff_footer_actions(DiffFooterContext {
+            can_mark_selected: false,
+            can_submit: false,
+            focus: DiffFocus::Content,
+            has_review_comments: false,
+            line_comment_state: DiffLineCommentFooterState::Editing,
+            sidebar_focus: DiffSidebarFocus::Files,
+        })
+        .iter()
+        .map(|action| action.key)
+        .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(editing_keys, ["Enter/Esc"]);
     }
 
     #[test]
     fn test_review_comment_actions_include_enabled_batch_keys() {
         // Arrange, Act
-        let actions = diff_footer_actions(
-            true,
-            DiffSidebarFocus::Comments,
-            DiffFocus::Files,
-            true,
-            true,
-        );
+        let actions = diff_footer_actions(DiffFooterContext {
+            can_mark_selected: true,
+            can_submit: true,
+            focus: DiffFocus::Files,
+            has_review_comments: true,
+            line_comment_state: DiffLineCommentFooterState::Ready { comment_count: 0 },
+            sidebar_focus: DiffSidebarFocus::Comments,
+        });
         let comment_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert

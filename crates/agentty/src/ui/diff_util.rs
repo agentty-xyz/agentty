@@ -12,6 +12,7 @@ const GUTTER_EXTRA_WIDTH: usize = 2;
 const LINE_NUMBER_COLUMN_COUNT: usize = 2;
 const LAYOUT_MARGIN: u16 = 1;
 const MIN_GUTTER_WIDTH: usize = 1;
+const NO_NEWLINE_MARKER: &str = r"\ No newline at end of file";
 const SCROLLBAR_WIDTH: usize = 1;
 const SIGN_COLUMN_WIDTH: usize = 1;
 
@@ -102,7 +103,8 @@ pub fn parse_hunk_header(line: &str) -> Option<(u32, u32, u32, u32)> {
 }
 
 /// Parse a full unified diff into structured [`DiffLine`] entries with line
-/// numbers.
+/// numbers. Git's no-newline marker is retained without advancing either
+/// source counter.
 pub fn parse_diff_lines(diff: &str) -> Vec<DiffLine<'_>> {
     let mut result = Vec::new();
     let mut old_line: u32 = 0;
@@ -127,6 +129,13 @@ pub fn parse_diff_lines(diff: &str) -> Vec<DiffLine<'_>> {
             }
             result.push(DiffLine {
                 kind: DiffLineKind::HunkHeader,
+                old_line: None,
+                new_line: None,
+                content: line,
+            });
+        } else if line == NO_NEWLINE_MARKER {
+            result.push(DiffLine {
+                kind: DiffLineKind::Context,
                 old_line: None,
                 new_line: None,
                 content: line,
@@ -1272,6 +1281,27 @@ index abc..def 100644
         assert_eq!(lines[8].content, "removed");
         assert_eq!(lines[8].old_line, Some(3));
         assert_eq!(lines[8].new_line, None);
+    }
+
+    #[test]
+    fn test_parse_diff_lines_does_not_count_no_newline_marker() {
+        // Arrange
+        let diff = concat!(
+            "diff --git a/file.rs b/file.rs\n",
+            "@@ -1 +1 @@\n",
+            "-old\n",
+            "\\ No newline at end of file\n",
+            "+new\n",
+        );
+
+        // Act
+        let lines = parse_diff_lines(diff);
+
+        // Assert
+        assert_eq!(lines[3].content, r"\ No newline at end of file");
+        assert_eq!(lines[3].old_line, None);
+        assert_eq!(lines[3].new_line, None);
+        assert_eq!(lines[4].new_line, Some(1));
     }
 
     #[test]
