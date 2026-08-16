@@ -7368,9 +7368,9 @@ fn test_session_review_comments() -> E2eResult {
                     )
                     .press_key("j")
                     .wait_for_text("Original code context unavailable.", 5000)
-                    .wait_for_text("a: address", 5000)
-                    .press_key("a")
-                    .wait_for_text("[A]", 5000)
+                    .wait_for_text("Space: select", 5000)
+                    .press_key("Space")
+                    .wait_for_text("[x]", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
                         "outdated_review_comment",
@@ -7404,8 +7404,7 @@ fn test_session_review_comments() -> E2eResult {
 
                 let files_focus_region = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Files", &files_focus_region);
-                assertion::assert_not_visible(frame, "a: address");
-                assertion::assert_not_visible(frame, "d: deny");
+                assertion::assert_not_visible(frame, "Space: select");
                 assertion::assert_not_visible(frame, "Enter: submit");
             },
         )?;
@@ -7433,7 +7432,7 @@ fn test_review_comments_escape_focuses_files() -> E2eResult {
                     .press_key("d")
                     .wait_for_text("c: comments", 5000)
                     .press_key("c")
-                    .wait_for_text("a: address", 5000)
+                    .wait_for_text("Space: select", 5000)
                     .wait_for_text("q: back", 5000)
                     .wait_for_text("f/Esc: files", 5000)
                     .press_key("Esc")
@@ -7445,7 +7444,7 @@ fn test_review_comments_escape_focuses_files() -> E2eResult {
 
                 assertion::assert_text_in_region(frame, "Files", &full);
                 assertion::assert_text_in_region(frame, "c: comments", &full);
-                assertion::assert_not_visible(frame, "a: address");
+                assertion::assert_not_visible(frame, "Space: select");
             },
         )?;
 
@@ -7508,10 +7507,9 @@ fn assert_outdated_review_comment(frame: &TerminalFrame) {
     assertion::assert_text_in_region(frame, "unresolved  ·  outdated", &full);
     assertion::assert_text_in_region(frame, "Original code context unavailable.", &full);
     assertion::assert_text_in_region(frame, "This comment refers to an earlier diff.", &full);
-    assertion::assert_text_in_region(frame, "[A]", &full);
+    assertion::assert_text_in_region(frame, "[x]", &full);
     assertion::assert_not_visible(frame, "println!(\"review\")");
-    assertion::assert_text_in_region(frame, "a: address", &full);
-    assertion::assert_text_in_region(frame, "d: den", &full);
+    assertion::assert_text_in_region(frame, "Space: select", &full);
     assertion::assert_text_in_region(frame, "j/k: select comment", &full);
 }
 
@@ -7634,8 +7632,8 @@ fn binary_diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
     Ok(())
 }
 
-/// Verify actionable review threads can be marked to address or deny and
-/// submitted to the active session agent as one batch.
+/// Verify actionable review threads can be selected and submitted to the
+/// active session agent as one evaluation batch.
 #[test]
 fn session_review_comment_agent_resolution() -> E2eResult {
     // Arrange, Act, Assert
@@ -7643,8 +7641,8 @@ fn session_review_comment_agent_resolution() -> E2eResult {
         .with_git()
         .with_terminal_size(160, 60)
         .zola(
-            "Batch review comment actions",
-            "Mark linked review comments to address or deny, then submit one agent batch.",
+            "Batch review comment selection",
+            "Select linked review comments, then submit one agent evaluation batch.",
             45,
         )
         .setup(seed_review_comment_agent_resolution)
@@ -7657,23 +7655,23 @@ fn session_review_comment_agent_resolution() -> E2eResult {
                     .press_key("d")
                     .wait_for_text("c: comments", 5000)
                     .press_key("c")
-                    .wait_for_text("a: address", 5000)
-                    .press_key("a")
-                    .wait_for_text("[A]", 5000)
+                    .wait_for_text("Space: select", 5000)
+                    .press_key("Space")
+                    .wait_for_text("[x]", 5000)
                     .press_key("j")
-                    .press_key("d")
-                    .wait_for_text("[D]", 5000)
+                    .press_key("Space")
+                    .wait_for_text("Selected 2", 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "review_comment_batch",
-                        "Comments marked to address and deny before batch submission",
+                        "Comments selected before batch evaluation",
                     )
                     .press_key("Enter")
                     .wait_for_text("Resolving 2 review comments...", 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "agent_review_comment_resolution",
-                        "Address and deny batch submitted to the session agent",
+                        "Selected comments submitted to the session agent",
                     )
                     .wait_for_text("Processed the selected review threads.", 15000)
                     .wait_for_text("Enter: reply", 15000)
@@ -7689,8 +7687,8 @@ fn session_review_comment_agent_resolution() -> E2eResult {
             |frame, report| {
                 let selection_frame = common::frame_from_capture(&report.captures[0]);
                 let selection_full = Region::full(selection_frame.cols(), selection_frame.rows());
-                assertion::assert_text_in_region(&selection_frame, "[A]", &selection_full);
-                assertion::assert_text_in_region(&selection_frame, "[D]", &selection_full);
+                assertion::assert_text_in_region(&selection_frame, "[x]", &selection_full);
+                assertion::assert_text_in_region(&selection_frame, "Selected 2", &selection_full);
                 let loader_frame = common::frame_from_capture(&report.captures[1]);
                 let loader_full = Region::full(loader_frame.cols(), loader_frame.rows());
                 assertion::assert_text_in_region(
@@ -7703,10 +7701,10 @@ fn session_review_comment_agent_resolution() -> E2eResult {
                 assertion::assert_text_in_region(frame, REVIEW_HISTORY_PROMPT_TEXT, &full);
                 assertion::assert_not_visible(
                     frame,
-                    "Process the following selected forge review comments",
+                    "Evaluate the following selected forge review comments",
                 );
                 assertion::assert_not_visible(frame, "Thread ID: thread-inline");
-                assertion::assert_not_visible(frame, "Requested action: Address");
+                assertion::assert_not_visible(frame, "Requested action:");
             },
         )?;
 

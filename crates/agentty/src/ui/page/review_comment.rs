@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::domain::session::Session;
-use crate::presentation::app_mode::{ReviewCommentAction, ReviewCommentActionSelection};
+use crate::presentation::app_mode::ReviewCommentSelection;
 use crate::presentation::review_comment as review_comment_selection;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 use crate::ui::diff_util::DiffLine;
@@ -23,7 +23,7 @@ const CODE_CONTEXT_RADIUS: usize = 3;
 
 /// List and detail renderer embedded in the unified Diff workspace.
 pub struct ReviewCommentPage<'a> {
-    comment_actions: &'a [ReviewCommentActionSelection],
+    selected_comments: &'a [ReviewCommentSelection],
     comment_error: Option<&'a str>,
     comment_snapshot: Option<&'a ReviewCommentSnapshot>,
     diff: &'a str,
@@ -46,8 +46,8 @@ pub struct ReviewCommentRenderCaches<'a> {
 /// Borrowed inputs needed to construct one review-comment panel renderer.
 #[derive(Clone, Copy)]
 pub struct ReviewCommentPageInput<'a> {
-    /// Actionable threads marked for batched address or deny handling.
-    pub comment_actions: &'a [ReviewCommentActionSelection],
+    /// Actionable threads selected for batched agent evaluation.
+    pub selected_comments: &'a [ReviewCommentSelection],
     /// User-facing failure returned by the forge comment load.
     pub comment_error: Option<&'a str>,
     /// Loaded general comments and inline review threads.
@@ -70,7 +70,7 @@ impl<'a> ReviewCommentPage<'a> {
     /// Creates review-comment panels for one session frame.
     pub fn new(input: ReviewCommentPageInput<'a>) -> Self {
         let ReviewCommentPageInput {
-            comment_actions,
+            selected_comments,
             comment_error,
             comment_snapshot,
             diff,
@@ -82,7 +82,7 @@ impl<'a> ReviewCommentPage<'a> {
         } = input;
 
         Self {
-            comment_actions,
+            selected_comments,
             comment_error,
             comment_snapshot,
             diff,
@@ -105,8 +105,8 @@ impl<'a> ReviewCommentPage<'a> {
     ) {
         let item_count = review_comment_item_count(self.comment_snapshot);
         let title = format!(
-            " Comments ({item_count}) · Marked {} ",
-            self.comment_actions.len()
+            " Comments ({item_count}) · Selected {} ",
+            self.selected_comments.len()
         );
         let (items, selection_rows) = if rows.is_empty() {
             (
@@ -117,7 +117,7 @@ impl<'a> ReviewCommentPage<'a> {
                 Vec::new(),
             )
         } else {
-            comment_list_items(rows, self.comment_actions)
+            comment_list_items(rows, self.selected_comments)
         };
         let list = List::new(items)
             .block(
@@ -234,29 +234,24 @@ pub(crate) fn review_comment_selected_is_actionable(
     )
 }
 
-/// Builds the batch-action marker aligned before one inline thread row.
-fn review_comment_action_marker(
+/// Builds the selection marker aligned before one inline thread row.
+fn review_comment_selection_marker(
     thread: &ReviewCommentThread,
-    selections: &[ReviewCommentActionSelection],
+    selections: &[ReviewCommentSelection],
 ) -> Span<'static> {
     if !thread.is_actionable() {
         return Span::raw("    ");
     }
 
-    match review_comment_selection::selected_action(selections, &thread.id) {
-        Some(ReviewCommentAction::Address) => Span::styled(
-            "[A] ",
+    if review_comment_selection::is_selected(selections, &thread.id) {
+        Span::styled(
+            "[x] ",
             Style::default()
                 .fg(style::palette::success())
                 .add_modifier(Modifier::BOLD),
-        ),
-        Some(ReviewCommentAction::Deny) => Span::styled(
-            "[D] ",
-            Style::default()
-                .fg(style::palette::danger())
-                .add_modifier(Modifier::BOLD),
-        ),
-        None => Span::styled("[ ] ", Style::default().fg(style::palette::text_muted())),
+        )
+    } else {
+        Span::styled("[ ] ", Style::default().fg(style::palette::text_muted()))
     }
 }
 
@@ -264,7 +259,7 @@ fn review_comment_action_marker(
 /// corresponding list-row index.
 fn comment_list_items(
     rows: &[review_comment_selection::GroupedReviewCommentRow<'_>],
-    selections: &[ReviewCommentActionSelection],
+    selections: &[ReviewCommentSelection],
 ) -> (Vec<ListItem<'static>>, Vec<usize>) {
     let mut items = Vec::with_capacity(rows.len());
     let mut selection_rows = Vec::with_capacity(rows.len());
@@ -292,7 +287,7 @@ fn comment_list_items(
 /// Builds the compact label shown for one selectable comment entry.
 fn comment_entry_label(
     entry: review_comment_selection::ReviewCommentEntry<'_>,
-    selections: &[ReviewCommentActionSelection],
+    selections: &[ReviewCommentSelection],
 ) -> Line<'static> {
     match entry {
         review_comment_selection::ReviewCommentEntry::General(comment) => Line::from(vec![
@@ -311,7 +306,7 @@ fn comment_entry_label(
                 .map_or("unknown", |comment| comment.author.as_str());
 
             Line::from(vec![
-                review_comment_action_marker(thread, selections),
+                review_comment_selection_marker(thread, selections),
                 Span::styled(anchor, Style::default().fg(style::palette::accent())),
                 Span::styled(
                     format!(" · {author}"),
@@ -666,7 +661,7 @@ mod tests {
         scroll_offset: u16,
         terminal_size: (u16, u16),
     ) -> ratatui::buffer::Buffer {
-        render_review_comment_page_with_actions(
+        render_review_comment_page_with_selections(
             snapshot,
             &[],
             comment_error,
@@ -677,9 +672,9 @@ mod tests {
         )
     }
 
-    fn render_review_comment_page_with_actions(
+    fn render_review_comment_page_with_selections(
         snapshot: Option<&ReviewCommentSnapshot>,
-        comment_actions: &[ReviewCommentActionSelection],
+        selected_comments: &[ReviewCommentSelection],
         comment_error: Option<&str>,
         is_loading_comments: bool,
         selected_comment_index: usize,
@@ -697,7 +692,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 let page = ReviewCommentPage::new(ReviewCommentPageInput {
-                    comment_actions,
+                    selected_comments,
                     comment_error,
                     comment_snapshot: snapshot,
                     diff: SAMPLE_DIFF,
@@ -775,34 +770,27 @@ mod tests {
     }
 
     #[test]
-    fn test_render_shows_batched_address_and_deny_markers() {
+    fn test_render_shows_selected_comment_markers() {
         // Arrange
-        let mut address_thread = inline_thread(2);
-        address_thread.id = "address".to_string();
-        let mut deny_thread = inline_thread(3);
-        deny_thread.id = "deny".to_string();
+        let mut selected_thread = inline_thread(2);
+        selected_thread.id = "selected".to_string();
+        let mut unselected_thread = inline_thread(3);
+        unselected_thread.id = "unselected".to_string();
         let mut resolved_thread = inline_thread(4);
         resolved_thread.id = "resolved".to_string();
         resolved_thread.is_resolved = true;
         let snapshot = ReviewCommentSnapshot {
             pr_level_comments: Vec::new(),
-            threads: vec![address_thread, deny_thread, resolved_thread],
+            threads: vec![selected_thread, unselected_thread, resolved_thread],
         };
-        let comment_actions = vec![
-            ReviewCommentActionSelection {
-                action: ReviewCommentAction::Address,
-                thread_id: "address".to_string(),
-            },
-            ReviewCommentActionSelection {
-                action: ReviewCommentAction::Deny,
-                thread_id: "deny".to_string(),
-            },
-        ];
+        let selected_comments = vec![ReviewCommentSelection {
+            thread_id: "selected".to_string(),
+        }];
 
         // Act
-        let buffer = render_review_comment_page_with_actions(
+        let buffer = render_review_comment_page_with_selections(
             Some(&snapshot),
-            &comment_actions,
+            &selected_comments,
             None,
             false,
             0,
@@ -812,8 +800,8 @@ mod tests {
         let text = buffer_text(&buffer);
 
         // Assert
-        assert!(text.contains("[A] src/main.rs:2"));
-        assert!(text.contains("[D] src/main.rs:3"));
+        assert!(text.contains("[x] src/main.rs:2"));
+        assert!(text.contains("[ ] src/main.rs:3"));
         assert!(text.contains("src/main.rs:4"));
     }
 

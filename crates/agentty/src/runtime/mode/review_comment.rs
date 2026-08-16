@@ -5,8 +5,7 @@ use ratatui::layout::Rect;
 use crate::app::App;
 use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
 use crate::presentation::app_mode::{
-    AppMode, DiffReviewComments, DiffScrollCache, DiffSidebarFocus, ReviewCommentAction,
-    ReviewCommentActionSelection,
+    AppMode, DiffReviewComments, DiffScrollCache, DiffSidebarFocus, ReviewCommentSelection,
 };
 use crate::presentation::review_comment;
 use crate::runtime::EventResult;
@@ -44,11 +43,11 @@ pub(crate) async fn handle_with_cache(
         page::review_comment::review_comment_item_count(review_comments.comment_snapshot.as_ref());
     if key.code == KeyCode::Enter
         && key.modifiers == KeyModifiers::NONE
-        && !review_comments.comment_actions.is_empty()
+        && !review_comments.selected_comments.is_empty()
         && let Some(snapshot) = review_comments.comment_snapshot.as_ref()
     {
         let snapshot = snapshot.clone();
-        let submitted_actions = review_comments.comment_actions.clone();
+        let submitted_comments = review_comments.selected_comments.clone();
         app.mode = AppMode::Diff {
             diff,
             file_explorer_selected_index,
@@ -63,7 +62,7 @@ pub(crate) async fn handle_with_cache(
             scroll_offset,
         };
         let outcome = app
-            .resolve_session_review_comments(&session_id, &snapshot, &submitted_actions)
+            .resolve_session_review_comments(&session_id, &snapshot, &submitted_comments)
             .await;
         apply_review_comment_resolution_outcome(app, outcome);
 
@@ -119,11 +118,11 @@ fn handle_review_comment_navigation(
     scroll_offset: &mut u16,
 ) {
     if input.can_reply {
-        toggle_selected_comment_action(
+        toggle_selected_comment(
             &key,
             review_comments.comment_snapshot.as_ref(),
             review_comments.selected_comment_index,
-            &mut review_comments.comment_actions,
+            &mut review_comments.selected_comments,
         );
     }
     match key.code {
@@ -219,25 +218,23 @@ fn session_allows_review_comment_reply(app: &App, session_id: &str) -> bool {
         .is_some_and(crate::domain::session::Session::allows_review_comment_reply)
 }
 
-/// Applies an address or deny toggle to the selected actionable thread.
-fn toggle_selected_comment_action(
+/// Toggles the selected actionable thread in the next agent batch.
+fn toggle_selected_comment(
     key: &KeyEvent,
     comment_snapshot: Option<&ReviewCommentSnapshot>,
     selected_comment_index: usize,
-    comment_actions: &mut Vec<ReviewCommentActionSelection>,
+    selected_comments: &mut Vec<ReviewCommentSelection>,
 ) {
-    let action = match key.code {
-        KeyCode::Char('a') if key.modifiers == KeyModifiers::NONE => ReviewCommentAction::Address,
-        KeyCode::Char('d') if key.modifiers == KeyModifiers::NONE => ReviewCommentAction::Deny,
-        _ => return,
-    };
+    if key.code != KeyCode::Char(' ') || key.modifiers != KeyModifiers::NONE {
+        return;
+    }
     let Some(thread_id) = comment_snapshot.and_then(|snapshot| {
         review_comment::selected_actionable_thread_id(snapshot, selected_comment_index)
     }) else {
         return;
     };
 
-    review_comment::toggle_action(comment_actions, thread_id, action);
+    review_comment::toggle_selection(selected_comments, thread_id);
 }
 
 /// Applies presentation navigation returned by the review-comment workflow.
@@ -313,7 +310,7 @@ mod tests {
     fn review_comment_mode(
         session_id: &str,
         comment_snapshot: Option<ReviewCommentSnapshot>,
-        comment_actions: Vec<ReviewCommentActionSelection>,
+        selected_comments: Vec<ReviewCommentSelection>,
         selected_comment_index: usize,
         scroll_offset: u16,
     ) -> AppMode {
@@ -325,7 +322,7 @@ mod tests {
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
             review_comments: Some(DiffReviewComments {
-                comment_actions,
+                selected_comments,
                 comment_error: None,
                 is_loading_comments: comment_snapshot.is_none(),
                 comment_snapshot,
@@ -341,7 +338,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_marks_address_replaces_with_deny_and_toggles_off() {
+    async fn test_handle_uses_space_as_only_comment_selection_key() {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         app.sessions.push_session(
@@ -352,8 +349,8 @@ mod tests {
         );
         app.mode = review_comment_mode("session-id", Some(comment_snapshot()), Vec::new(), 0, 0);
 
-        // Act
-        for key_code in [KeyCode::Char('a'), KeyCode::Char('d'), KeyCode::Char('d')] {
+        // Act, Assert
+        for key_code in [KeyCode::Char('a'), KeyCode::Char('d')] {
             handle_with_cache(
                 &mut app,
                 &RenderCacheStore::default(),
@@ -362,17 +359,51 @@ mod tests {
             )
             .await;
         }
-
-        // Assert
         assert!(matches!(
             app.mode,
             AppMode::Diff {
                 review_comments: Some(DiffReviewComments {
-                    ref comment_actions,
+                    ref selected_comments,
                     ..
                 }),
                 ..
-            } if comment_actions.is_empty()
+            } if selected_comments.is_empty()
+        ));
+        handle_with_cache(
+            &mut app,
+            &RenderCacheStore::default(),
+            Rect::new(0, 0, 80, 24),
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+        )
+        .await;
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                review_comments: Some(DiffReviewComments {
+                    ref selected_comments,
+                    ..
+                }),
+                ..
+            } if selected_comments == &[ReviewCommentSelection {
+                thread_id: "thread-id".to_string(),
+            }]
+        ));
+        handle_with_cache(
+            &mut app,
+            &RenderCacheStore::default(),
+            Rect::new(0, 0, 80, 24),
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+        )
+        .await;
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                review_comments: Some(DiffReviewComments {
+                    ref selected_comments,
+                    ..
+                }),
+                ..
+            } if selected_comments.is_empty()
         ));
     }
 
@@ -394,7 +425,7 @@ mod tests {
             &mut app,
             &RenderCacheStore::default(),
             Rect::new(0, 0, 80, 24),
-            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
         )
         .await;
 
@@ -403,11 +434,11 @@ mod tests {
             app.mode,
             AppMode::Diff {
                 review_comments: Some(DiffReviewComments {
-                    ref comment_actions,
+                    ref selected_comments,
                     ..
                 }),
                 ..
-            } if comment_actions.is_empty()
+            } if selected_comments.is_empty()
         ));
     }
 
@@ -570,8 +601,7 @@ mod tests {
         submit_app.mode = review_comment_mode(
             "missing-session",
             Some(comment_snapshot()),
-            vec![ReviewCommentActionSelection {
-                action: ReviewCommentAction::Address,
+            vec![ReviewCommentSelection {
                 thread_id: "thread-id".to_string(),
             }],
             1,
@@ -583,7 +613,7 @@ mod tests {
             &mut selected_app,
             &RenderCacheStore::default(),
             Rect::new(0, 0, 80, 24),
-            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
         )
         .await;
         handle_with_cache(
@@ -599,25 +629,25 @@ mod tests {
             selected_app.mode,
             AppMode::Diff {
                 review_comments: Some(DiffReviewComments {
-                    ref comment_actions,
+                    ref selected_comments,
                     selected_comment_index: 1,
                     ..
                 }),
                 scroll_offset: 3,
                 ..
-            } if comment_actions.is_empty()
+            } if selected_comments.is_empty()
         ));
         assert!(matches!(
             submit_app.mode,
             AppMode::Diff {
                 review_comments: Some(DiffReviewComments {
-                    ref comment_actions,
+                    ref selected_comments,
                     selected_comment_index: 1,
                     ..
                 }),
                 scroll_offset: 3,
                 ..
-            } if comment_actions.len() == 1
+            } if selected_comments.len() == 1
         ));
     }
 

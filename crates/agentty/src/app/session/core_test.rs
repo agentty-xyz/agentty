@@ -44,8 +44,7 @@ use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
 use crate::presentation::app_mode::{
-    AppMode, DiffFocus, DiffLineComments, DiffPreview, HelpContext, ReviewCommentAction,
-    ReviewCommentActionSelection,
+    AppMode, DiffFocus, DiffLineComments, DiffPreview, HelpContext, ReviewCommentSelection,
 };
 
 /// Builds a filesystem mock that delegates operations to local disk.
@@ -2740,14 +2739,13 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
         .worker_service
         .test_agent_channels
         .insert(session_id.clone(), Arc::new(mock_channel));
-    let comment_actions = vec![ReviewCommentActionSelection {
-        action: ReviewCommentAction::Address,
+    let selected_comments = vec![ReviewCommentSelection {
         thread_id: "thread-42".to_string(),
     }];
 
     // Act
     let outcome = app
-        .resolve_session_review_comments(&session_id, &snapshot, &comment_actions)
+        .resolve_session_review_comments(&session_id, &snapshot, &selected_comments)
         .await;
     done_rx.recv().await.expect("turn should start");
     app.sessions.sync_from_handles();

@@ -46,19 +46,19 @@ when present. Press `c` on a linked review request to open its comments in a spl
 unresolved threads, resolved threads, and standalone review-request comments are grouped
 on the left, while the selected entry's metadata, attached current-diff context, and
 conversation appear on the right. In **Review**, **AgentReview**, or **Question**, press
-`a` to send the selected actionable inline thread to the active session agent or `A` to
-send every actionable inline thread. Standalone comments are read-only because they do
-not have forge thread IDs. After submission, the session returns to **InProgress** and
-shows a count-aware `Resolving … review comments...` loader without exposing the
-generated agent instructions as a user message. Conversation bodies render Markdown and
-common embedded HTML through the same shared text-rendering path used by review-request
-details. Forge-authored description and comment input is capped at `1 MiB` before
-normalization; truncated bodies end with `[Forge content truncated at 1 MiB.]`. The
-timer ticks only while the session is actively working. `Done` sessions use `c` to start
-a continuation draft and no longer expose review comments. File-level comments show an
-explicit no-line-context message instead of a synthetic code anchor. Each session stores
-the project's Smart reasoning default when it is created, so later default changes
-affect new sessions without relabeling existing ones.
+`Space` to select actionable inline threads, then press `Enter` to send the selection to
+the active session agent. Standalone comments are read-only because they do not have
+forge thread IDs. After submission, the session returns to **InProgress** and shows a
+count-aware `Resolving … review comments...` loader without exposing the generated agent
+instructions as a user message. Conversation bodies render Markdown and common embedded
+HTML through the same shared text-rendering path used by review-request details.
+Forge-authored description and comment input is capped at `1 MiB` before normalization;
+truncated bodies end with `[Forge content truncated at 1 MiB.]`. The timer ticks only
+while the session is actively working. `Done` sessions use `c` to start a continuation
+draft and no longer expose review comments. File-level comments show an explicit
+no-line-context message instead of a synthetic code anchor. Each session stores the
+project's Smart reasoning default when it is created, so later default changes affect
+new sessions without relabeling existing ones.
 
 The top status bar shows the current version and update status, and rotates short
 page-scoped `FYI:` messages once per minute in the **Sessions** list and session chat
@@ -609,11 +609,11 @@ can retry without reporting a false terminal cancellation.
   final check can still race with Agentty's update. Failed background pushes or metadata
   evaluation keep the manual `p` flow available for retry and surface the existing
   review-request sync warning.
-- In Diff mode's Comments section, mark actionable inline threads with `a` to address or
-  `d` to deny, then press `Enter` to submit all marked threads in one agent turn.
-  Address actions request the relevant worktree change; deny actions request a concise
-  technical rebuttal. Press `f` to return to the Files section without leaving Diff
-  mode.
+- In Diff mode's Comments section, press `Space` to select actionable inline threads,
+  then press `Enter` to submit them in one agent turn. The agent evaluates each comment,
+  makes a worktree change when needed, and posts a very short explanation of what was
+  done and why whether or not a change was needed. Press `f` to return to the Files
+  section without leaving Diff mode.
 - Agent-driven review-comment turns report one structured outcome for each submitted
   inline thread. After Agentty commits the work and successfully pushes an already
   published branch, it posts the agent's concise reply for every valid allowlisted
