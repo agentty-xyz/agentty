@@ -189,6 +189,12 @@ model call; aggregate its count by `gen_ai.provider.name` to separate providers.
 default service names are `ag-harness-qwen`, `ag-harness-kimi`, and `ag-harness-muse`,
 while `OTEL_SERVICE_NAME` remains an application-level override.
 
+The planned lifecycle telemetry design will:
+
+- Emit typed, ordered turn, model, and tool lifecycle events.
+- Derive OpenTelemetry metrics and traces from those events; applications own export.
+- Keep sensitive prompts, reasoning, and tool content disabled by default.
+
 ```mermaid
 flowchart LR
     C["ModelClient lifecycle"] --> M["Duration histogram"]
@@ -242,9 +248,10 @@ best cost and performance:
 
 - [x] **Read tool round trip.** Complete a model-requested repository read.
 - [ ] **Write tool round trip.** Complete a model-requested repository write.
+- [ ] **Lifecycle telemetry.** Stream typed turn, model, and tool events with
+  application-owned OpenTelemetry export.
 - [ ] **Persisted session round trip.** Run sequential turns in one resumable session,
-  persist model and tool history, and stream typed lifecycle events to the host
-  application.
+  and persist model and tool history.
 - [x] **Second provider.** Integrate Kimi through the structured-output contract.
 
 ## Roadmap
