@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::chat_completion;
+use crate::lifecycle::LifecycleObserver;
 use crate::model::{
-    Model, ModelClient, ModelCompletion, ModelError, ModelMetadataError, ModelRequest,
-    ModelResponse, ModelWithMetadata,
+    ModelClient, ModelCompletion, ModelError, ModelMetadataError, ModelRequest, ModelWithMetadata,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
@@ -47,6 +47,14 @@ impl Muse {
         Self::from_environment(model, |name| env::var(name))
     }
 
+    /// Sends metadata-only request lifecycle events to `observer`.
+    #[must_use]
+    pub fn with_lifecycle_observer(mut self, observer: impl LifecycleObserver + 'static) -> Self {
+        self.client = self.client.with_lifecycle_observer(observer);
+
+        self
+    }
+
     fn from_environment(
         model: impl Into<String>,
         mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
@@ -61,13 +69,6 @@ impl Muse {
         })?;
 
         Ok(Self { client })
-    }
-}
-
-#[async_trait]
-impl Model for Muse {
-    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
-        self.client.complete(request).await
     }
 }
 
@@ -109,7 +110,8 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::{model, tool};
+    use crate::model::{self, CompletionMetadata, Model};
+    use crate::tool;
 
     fn person_schema_value() -> Value {
         json!({
@@ -260,6 +262,21 @@ mod tests {
         assert_eq!(error, model::ModelMetadataError::EmptyModel);
     }
 
+    #[test]
+    fn configures_lifecycle_observer() {
+        // Arrange
+        let muse = Muse::from_environment(MUSE_SPARK_1_2, default_environment)
+            .expect("fixture environment should be valid");
+
+        // Act
+        let muse = muse.with_lifecycle_observer(|_| {});
+        let metadata = muse.client.metadata();
+
+        // Assert
+        assert_eq!(metadata.provider(), "meta");
+        assert_eq!(metadata.model(), MUSE_SPARK_1_2);
+    }
+
     #[tokio::test]
     async fn completes_native_json_schema_request() {
         // Arrange
@@ -280,7 +297,7 @@ mod tests {
                     "message": {"content": r#"{"name":"Ada"}"#}
                 }]
             })))
-            .expect(1)
+            .expect(2)
             .mount(&server)
             .await;
         let model = muse(&server);
@@ -290,6 +307,10 @@ mod tests {
             .complete_with_metadata(request("extract the name"))
             .await
             .expect("Muse request should succeed");
+        let (response, optional_metadata) = model
+            .complete_with_optional_metadata(request("extract the name"))
+            .await
+            .expect("Muse request with optional metadata should succeed");
 
         // Assert
         assert_eq!(
@@ -297,6 +318,13 @@ mod tests {
             Some(&json!({ "name": "Ada" }))
         );
         assert_eq!(completion.metadata().finish_reason(), "stop");
+        assert_eq!(response.output(), Some(&json!({ "name": "Ada" })));
+        assert_eq!(
+            optional_metadata
+                .as_ref()
+                .map(CompletionMetadata::finish_reason),
+            Some("stop")
+        );
     }
 
     #[tokio::test]

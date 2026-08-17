@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, ModelResponseType};
 use crate::provider::{self, KimiConfig, MuseConfig, QwenConfig};
 use crate::schema_contract::{OutputSchema, OutputValidationError};
 use crate::{chat_completion, telemetry, tool};
@@ -22,11 +23,29 @@ pub trait Model: Send + Sync {
     /// Returns [`ModelError`] when the provider request fails or its response
     /// cannot be converted to the provider-neutral response.
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError>;
+
+    /// Completes one model request and returns normalized metadata when
+    /// available.
+    ///
+    /// Response-only implementations inherit a default that returns `None`.
+    /// [`ModelWithMetadata`] implementations return `Some` automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError`] under the same conditions as [`Model::complete`].
+    async fn complete_with_optional_metadata(
+        &self,
+        request: ModelRequest,
+    ) -> Result<(ModelResponse, Option<CompletionMetadata>), ModelError> {
+        self.complete(request)
+            .await
+            .map(|response| (response, None))
+    }
 }
 
-/// Object-safe model extension that returns normalized completion metadata.
+/// Object-safe model boundary that guarantees normalized completion metadata.
 #[async_trait]
-pub trait ModelWithMetadata: Model {
+pub trait ModelWithMetadata: Send + Sync {
     /// Completes one model request and returns normalized provider metadata.
     ///
     /// # Errors
@@ -39,6 +58,28 @@ pub trait ModelWithMetadata: Model {
     ) -> Result<ModelCompletion, ModelError>;
 }
 
+#[async_trait]
+impl<ModelType> Model for ModelType
+where
+    ModelType: ModelWithMetadata + ?Sized,
+{
+    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        self.complete_with_metadata(request)
+            .await
+            .map(ModelCompletion::into_response)
+    }
+
+    async fn complete_with_optional_metadata(
+        &self,
+        request: ModelRequest,
+    ) -> Result<(ModelResponse, Option<CompletionMetadata>), ModelError> {
+        let completion = self.complete_with_metadata(request).await?;
+        let ModelCompletion { metadata, response } = completion;
+
+        Ok((response, Some(metadata)))
+    }
+}
+
 /// Application-facing client for provider-neutral model requests.
 ///
 /// Provider request execution remains private so every request passes through
@@ -46,6 +87,7 @@ pub trait ModelWithMetadata: Model {
 /// validation.
 pub struct ModelClient {
     backend: chat_completion::ChatCompletionBackend,
+    lifecycle: LifecycleEmitter,
     metadata: ModelMetadata,
 }
 
@@ -101,6 +143,14 @@ impl ModelClient {
         &self.metadata
     }
 
+    /// Sends metadata-only request lifecycle events to `observer`.
+    #[must_use]
+    pub fn with_lifecycle_observer(mut self, observer: impl LifecycleObserver + 'static) -> Self {
+        self.lifecycle = LifecycleEmitter::new(observer);
+
+        self
+    }
+
     /// Completes one model request through the shared telemetry and
     /// structured-output lifecycle.
     ///
@@ -125,19 +175,40 @@ impl ModelClient {
         request: ModelRequest,
     ) -> Result<ModelCompletion, ModelError> {
         let _duration = telemetry::RequestDuration::start(self.metadata());
-        let response = self.backend.generate(&request).await?;
+        let lifecycle = if request.lifecycle_observed() {
+            None
+        } else {
+            self.lifecycle
+                .start_model_request(Some(self.metadata.clone()), 0, None)
+        };
+        let result = async {
+            let response = self.backend.generate(&request).await?;
 
-        match response {
-            chat_completion::GeneratedResponse::Output { metadata, output } => request
-                .schema()
-                .parse_and_validate(&output)
-                .map(ModelResponse::from_output)
-                .map(|response| ModelCompletion::new(metadata, response))
-                .map_err(ModelError::from),
-            chat_completion::GeneratedResponse::ToolCall { call, metadata } => Ok(
-                ModelCompletion::new(metadata, ModelResponse::tool_call(call)),
-            ),
+            match response {
+                chat_completion::GeneratedResponse::Output { metadata, output } => request
+                    .schema()
+                    .parse_and_validate(&output)
+                    .map(ModelResponse::from_output)
+                    .map(|response| ModelCompletion::new(metadata, response))
+                    .map_err(ModelError::from),
+                chat_completion::GeneratedResponse::ToolCall { call, metadata } => Ok(
+                    ModelCompletion::new(metadata, ModelResponse::tool_call(call)),
+                ),
+            }
         }
+        .await;
+
+        if let Some(lifecycle) = lifecycle {
+            match &result {
+                Ok(completion) => lifecycle.completed(
+                    Some(completion.metadata.clone()),
+                    completion.response.response_type(),
+                ),
+                Err(error) => lifecycle.failed(error.error_type()),
+            }
+        }
+
+        result
     }
 
     fn chat_completion(
@@ -150,14 +221,11 @@ impl ModelClient {
         let (provider, model) = backend.identity();
         let metadata = ModelMetadata::new(provider, model)?;
 
-        Ok(Self { backend, metadata })
-    }
-}
-
-#[async_trait]
-impl Model for ModelClient {
-    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
-        ModelClient::complete(self, request).await
+        Ok(Self {
+            backend,
+            lifecycle: LifecycleEmitter::default(),
+            metadata,
+        })
     }
 }
 
@@ -225,6 +293,7 @@ pub enum ModelMetadataError {
 /// Provider-neutral input for one model request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelRequest {
+    lifecycle_observed: bool,
     messages: Vec<ModelMessage>,
     prompt: String,
     schema: OutputSchema,
@@ -237,6 +306,7 @@ impl ModelRequest {
         let prompt = prompt.into();
 
         Self {
+            lifecycle_observed: false,
             messages: vec![ModelMessage::User(prompt.clone())],
             prompt,
             schema,
@@ -275,6 +345,14 @@ impl ModelRequest {
 
     pub(crate) fn messages(&self) -> &[ModelMessage] {
         &self.messages
+    }
+
+    pub(crate) fn lifecycle_observed(&self) -> bool {
+        self.lifecycle_observed
+    }
+
+    pub(crate) fn mark_lifecycle_observed(&mut self) {
+        self.lifecycle_observed = true;
     }
 
     pub(crate) fn record_tool_result(&mut self, call: tool::ToolCall, content: String) {
@@ -478,6 +556,13 @@ impl ModelResponse {
 
     fn tool_call(call: tool::ToolCall) -> Self {
         Self::ToolCall(call)
+    }
+
+    pub(crate) fn response_type(&self) -> ModelResponseType {
+        match self {
+            Self::Output(_) => ModelResponseType::Output,
+            Self::ToolCall(_) => ModelResponseType::ToolCall,
+        }
     }
 }
 
@@ -700,11 +785,90 @@ impl From<OutputValidationError> for ModelError {
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::sync::{Arc, Mutex};
 
     use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
     use crate::tool::{ReadArguments, ToolCall};
+
+    struct ResponseOnlyModel;
+
+    #[async_trait]
+    impl Model for ResponseOnlyModel {
+        async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, ModelError> {
+            Ok(ModelResponse::Output(json!({ "name": "Ada" })))
+        }
+    }
+
+    struct MetadataModel;
+
+    #[async_trait]
+    impl ModelWithMetadata for MetadataModel {
+        async fn complete_with_metadata(
+            &self,
+            _request: ModelRequest,
+        ) -> Result<ModelCompletion, ModelError> {
+            Ok(ModelCompletion::new(
+                CompletionMetadata::new(
+                    "stop".to_string(),
+                    Some("response-id".to_string()),
+                    None,
+                    None,
+                    None,
+                ),
+                ModelResponse::Output(json!({ "name": "Ada" })),
+            ))
+        }
+    }
+
+    fn test_request() -> ModelRequest {
+        let schema =
+            OutputSchema::new(json!({ "type": "object" })).expect("fixture schema should be valid");
+
+        ModelRequest::new("prompt", schema)
+    }
+
+    #[tokio::test]
+    async fn response_only_model_defaults_optional_metadata_to_none() {
+        // Arrange
+        let model = ResponseOnlyModel;
+
+        // Act
+        let (response, metadata) = model
+            .complete_with_optional_metadata(test_request())
+            .await
+            .expect("response-only model should complete");
+
+        // Assert
+        assert_eq!(response.output(), Some(&json!({ "name": "Ada" })));
+        assert!(metadata.is_none());
+    }
+
+    #[tokio::test]
+    async fn metadata_model_automatically_implements_model_paths() {
+        // Arrange
+        let model = MetadataModel;
+
+        // Act
+        let response = Model::complete(&model, test_request())
+            .await
+            .expect("metadata model should complete through Model");
+        let (optional_response, metadata) =
+            Model::complete_with_optional_metadata(&model, test_request())
+                .await
+                .expect("metadata model should expose optional metadata");
+
+        // Assert
+        assert_eq!(response.output(), Some(&json!({ "name": "Ada" })));
+        assert_eq!(optional_response.output(), Some(&json!({ "name": "Ada" })));
+        assert_eq!(
+            metadata.as_ref().and_then(CompletionMetadata::response_id),
+            Some("response-id")
+        );
+    }
 
     #[test]
     fn client_exposes_provider_and_model() {
@@ -726,6 +890,117 @@ mod tests {
             metadata,
             &ModelMetadata::new("alibaba_cloud", "qwen-plus").expect("metadata should be valid")
         );
+    }
+
+    #[tokio::test]
+    async fn client_observes_success_unless_request_is_already_observed() {
+        // Arrange
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": r#"{"name":"Ada"}"#}
+                }]
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observed_events = Arc::clone(&events);
+        let client = ModelClient::qwen(QwenConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.uri(),
+            model: "qwen-plus".to_string(),
+        })
+        .expect("fixture configuration should be valid")
+        .with_lifecycle_observer(move |event| {
+            observed_events
+                .lock()
+                .expect("event recorder should not be poisoned")
+                .push(event);
+        });
+        let schema = OutputSchema::new(json!({
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"]
+        }))
+        .expect("fixture schema should be valid");
+        let mut observed_request = ModelRequest::new("prompt", schema.clone());
+        observed_request.mark_lifecycle_observed();
+
+        // Act
+        client
+            .complete(ModelRequest::new("prompt", schema))
+            .await
+            .expect("request should succeed");
+        client
+            .complete(observed_request)
+            .await
+            .expect("externally observed request should succeed");
+
+        // Assert
+        let events = events
+            .lock()
+            .expect("event recorder should not be poisoned");
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            events[0].kind(),
+            crate::LifecycleEventKind::ModelRequestStarted { .. }
+        ));
+        assert!(matches!(
+            events[1].kind(),
+            crate::LifecycleEventKind::ModelRequestCompleted { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn client_observes_classified_failure() {
+        // Arrange
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("offline"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observed_events = Arc::clone(&events);
+        let client = ModelClient::qwen(QwenConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.uri(),
+            model: "qwen-plus".to_string(),
+        })
+        .expect("fixture configuration should be valid")
+        .with_lifecycle_observer(move |event| {
+            observed_events
+                .lock()
+                .expect("event recorder should not be poisoned")
+                .push(event);
+        });
+        let schema =
+            OutputSchema::new(json!({ "type": "object" })).expect("fixture schema should be valid");
+
+        // Act
+        let error = client
+            .complete(ModelRequest::new("prompt", schema))
+            .await
+            .expect_err("provider failure should be returned");
+
+        // Assert
+        assert_eq!(error.error_type(), ModelErrorType::Provider);
+        let events = events
+            .lock()
+            .expect("event recorder should not be poisoned");
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            events[1].kind(),
+            crate::LifecycleEventKind::ModelRequestFailed {
+                error_type: ModelErrorType::Provider,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

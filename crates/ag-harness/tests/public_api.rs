@@ -1,10 +1,11 @@
 //! External-consumer coverage for the `ag-harness` model traits.
 
 use std::error::Error;
+use std::sync::{Arc, Mutex};
 
 use ag_harness::{
-    CompletionMetadata, CompletionUsage, Model, ModelCompletion, ModelError, ModelRequest,
-    ModelResponse, ModelWithMetadata, OutputSchema, OutputSchemaError,
+    CompletionMetadata, CompletionUsage, Harness, LifecycleEventKind, Model, ModelCompletion,
+    ModelError, ModelRequest, ModelResponse, ModelWithMetadata, OutputSchema, OutputSchemaError,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -19,15 +20,6 @@ impl Model for ExternalModel {
 }
 
 struct ExternalMetadataModel;
-
-#[async_trait]
-impl Model for ExternalMetadataModel {
-    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
-        self.complete_with_metadata(request)
-            .await
-            .map(ModelCompletion::into_response)
-    }
-}
 
 #[async_trait]
 impl ModelWithMetadata for ExternalMetadataModel {
@@ -62,25 +54,35 @@ fn request() -> Result<ModelRequest, OutputSchemaError> {
     ))
 }
 
-#[test]
-fn external_response_only_provider_implements_model() {
+#[tokio::test]
+async fn external_response_only_provider_implements_model() -> Result<(), Box<dyn Error>> {
     // Arrange
     fn assert_model<ModelType: Model>() {}
+    let model = ExternalModel;
 
-    // Act and Assert
+    // Act
+    let (response, metadata) = model.complete_with_optional_metadata(request()?).await?;
+
+    // Assert
     assert_model::<ExternalModel>();
+    assert_eq!(response.output(), Some(&json!({ "name": "Ada" })));
+    assert!(metadata.is_none());
+
+    Ok(())
 }
 
 #[tokio::test]
 async fn external_provider_constructs_metadata_completion_through_dynamic_dispatch()
 -> Result<(), Box<dyn Error>> {
     // Arrange
+    fn assert_model<ModelType: Model>() {}
     let model: Box<dyn ModelWithMetadata> = Box::new(ExternalMetadataModel);
 
     // Act
     let completion = model.complete_with_metadata(request()?).await?;
 
     // Assert
+    assert_model::<ExternalMetadataModel>();
     assert_eq!(
         completion.response().output(),
         Some(&json!({ "name": "Ada" }))
@@ -96,6 +98,40 @@ async fn external_provider_constructs_metadata_completion_through_dynamic_dispat
             .and_then(|usage| usage.total_tokens()),
         Some(6)
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_metadata_provider_reaches_harness_lifecycle() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observed_events = Arc::clone(&events);
+    let harness = Harness::new(ExternalMetadataModel).with_lifecycle_observer(move |event| {
+        observed_events
+            .lock()
+            .expect("event recorder should not be poisoned")
+            .push(event);
+    });
+
+    // Act
+    let output = harness
+        .run("extract the name", request()?.schema().clone())
+        .await?;
+
+    // Assert
+    assert_eq!(output, json!({ "name": "Ada" }));
+    let events = events
+        .lock()
+        .expect("event recorder should not be poisoned");
+    assert!(events.iter().any(|event| matches!(
+        event.kind(),
+        LifecycleEventKind::ModelRequestCompleted {
+            completion: Some(metadata),
+            ..
+        } if metadata.response_id() == Some("external-response")
+            && metadata.usage().and_then(|usage| usage.total_tokens()) == Some(6)
+    )));
 
     Ok(())
 }

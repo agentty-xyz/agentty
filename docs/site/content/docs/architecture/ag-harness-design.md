@@ -63,7 +63,8 @@ request's `OutputSchema`. Provider request execution remains private so applicat
 cannot bypass this lifecycle. `ModelClient` validates and retains the provider and model
 identity during construction, before any request starts.
 
-`ModelWithMetadata` adds object-safe completion metadata without changing `Model`.
+`ModelWithMetadata` guarantees completion metadata and automatically implements the
+optional metadata path on `Model`; response-only `Model` implementations remain valid.
 
 Provider-owned adapters and compatibility rules live under the private `provider`
 module. API-family clients remain separate so multiple providers can reuse a wire
@@ -191,11 +192,8 @@ model call; aggregate its count by `gen_ai.provider.name` to separate providers.
 default service names are `ag-harness-qwen`, `ag-harness-kimi`, and `ag-harness-muse`,
 while `OTEL_SERVICE_NAME` remains an application-level override.
 
-The planned lifecycle telemetry design will:
-
-- Emit typed, ordered turn, model, and tool lifecycle events.
-- Derive OpenTelemetry metrics and traces from those events; applications own export.
-- Keep sensitive prompts, reasoning, and tool content disabled by default.
+Lifecycle telemetry emits typed, ordered, metadata-only turn, model, and tool events.
+Applications will own OpenTelemetry projection and export.
 
 ```mermaid
 flowchart LR
