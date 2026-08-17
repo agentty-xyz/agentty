@@ -780,6 +780,11 @@ pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
     ];
     if can_comment {
         actions.push(HelpAction::new(
+            "select rows",
+            "Shift+V",
+            "Start visual changed-row selection",
+        ));
+        actions.push(HelpAction::new(
             "save comment",
             "Enter/Esc",
             "Finish the inline comment",
@@ -823,6 +828,8 @@ pub(crate) enum DiffLineCommentFooterState {
     Editing,
     /// The visible session cannot accept an inline-comment reply.
     ReadOnly,
+    /// Visual changed-row selection is active for one range comment.
+    Selecting,
     /// Diff navigation is active with this many completed comments.
     Ready {
         /// Number of inline comments ready for batch submission.
@@ -841,6 +848,17 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
             "Enter/Esc",
             "Finish the inline comment",
         )];
+    }
+    if matches!(
+        context.line_comment_state,
+        DiffLineCommentFooterState::Selecting
+    ) {
+        return vec![
+            HelpAction::new("back", "q", "Back to session"),
+            HelpAction::new("cancel", "Esc", "Cancel row selection"),
+            HelpAction::new("extend", "j/k", "Extend row selection"),
+            HelpAction::new("comment", "Enter", "Comment on selected rows"),
+        ];
     }
 
     let mut actions = vec![HelpAction::new("back", "q/Esc", "Back to session")];
@@ -2161,6 +2179,7 @@ mod tests {
                 "c",
                 "p",
                 "J/K/Up/Down",
+                "Shift+V",
                 "Enter/Esc",
                 "s",
                 "Space",
@@ -2236,6 +2255,25 @@ mod tests {
 
         // Assert
         assert_eq!(editing_keys, ["Enter/Esc"]);
+    }
+
+    #[test]
+    fn test_diff_content_footer_exposes_visual_row_selection_actions() {
+        // Arrange, Act
+        let selecting_keys = diff_footer_actions(DiffFooterContext {
+            can_mark_selected: false,
+            can_submit: false,
+            focus: DiffFocus::Content,
+            has_review_comments: false,
+            line_comment_state: DiffLineCommentFooterState::Selecting,
+            sidebar_focus: DiffSidebarFocus::Files,
+        })
+        .iter()
+        .map(|action| action.key)
+        .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(selecting_keys, ["q", "Esc", "j/k", "Enter"]);
     }
 
     #[test]
