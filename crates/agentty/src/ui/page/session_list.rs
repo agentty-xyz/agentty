@@ -1286,7 +1286,7 @@ mod tests {
             crate::test_support::titled_session_fixture("done-1", Status::Done);
         archived_session.in_progress_total_seconds = 3_661;
         let sessions = vec![active_session, archived_session];
-        let expected_width = u16::try_from("1h1m1s".chars().count()).unwrap_or(u16::MAX);
+        let expected_width = u16::try_from("1h 1m 1s".chars().count()).unwrap_or(u16::MAX);
         let rows = prepared_session_rows(&sessions, ReasoningLevel::default(), None, 160);
 
         // Act
@@ -1428,7 +1428,7 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("2m0s"));
+        assert!(text.contains("2m 0s"));
     }
 
     #[test]
@@ -1457,7 +1457,7 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("2m5s"));
+        assert!(text.contains("2m 5s"));
     }
 
     #[test]

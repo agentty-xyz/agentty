@@ -22,13 +22,13 @@ tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
   versions are listed here too.
 - **Sessions**: List, create, and manage agent sessions for the active project. Rows
   show a size marker prefix (for example `[XL]`), the current `agent/model` with its
-  reasoning level, and a live active-work `Timer` column. The list shows only populated
-  merge queue, active, and archive groups, with a session count in each group heading.
-  Archive rows use subdued text so completed work is visually distinct from current
-  sessions. When there are no sessions, it prompts you to press `a` to start one. Press
-  `p` to open a project switcher popup that lists registered projects in
-  most-recently-opened order and switches the active project without leaving the
-  Sessions view.
+  reasoning level, and a live active-work `Timer` column whose time units are separated
+  for readability (for example, `11m 23s`). The list shows only populated merge queue,
+  active, and archive groups, with a session count in each group heading. Archive rows
+  use subdued text so completed work is visually distinct from current sessions. When
+  there are no sessions, it prompts you to press `a` to start one. Press `p` to open a
+  project switcher popup that lists registered projects in most-recently-opened order
+  and switches the active project without leaving the Sessions view.
 - **Settings**: Configure the color theme, orchestrator parallelism, automatic approval
   for read-only research waves, per-role smart/fast/review model and reasoning defaults,
   the optional `Last used model as default` mode, the session commit coauthor trailer,

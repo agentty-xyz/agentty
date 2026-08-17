@@ -1240,7 +1240,7 @@ fn seed_child_worktree_for_onto_rebase(
     Ok(parent_tip)
 }
 
-/// Seeds one review-ready session with a persisted reasoning level.
+/// Seeds one review-ready session with a persisted reasoning level and timer.
 fn seed_session_with_reasoning_level(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
 
@@ -1251,6 +1251,14 @@ fn seed_session_with_reasoning_level(env: &BuilderEnv) -> Result<(), Box<dyn std
         database
             .sessions()
             .update_session_reasoning_level("review-shortcut-0001", ReasoningLevel::Medium)
+            .await?;
+        database
+            .sessions()
+            .update_session_status_with_timing_at("review-shortcut-0001", "InProgress", 0)
+            .await?;
+        database
+            .sessions()
+            .update_session_status_with_timing_at("review-shortcut-0001", "Review", 125)
             .await
     })?;
 
@@ -3457,8 +3465,7 @@ fn test_session_pre_commit_hook_warning() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the Sessions tab model column includes the effective reasoning
-/// level next to the model name.
+/// Verify that the Sessions tab separates timer units and shows reasoning.
 #[test]
 fn session_list_model_reasoning_level() -> E2eResult {
     // Arrange, Act, Assert
@@ -3471,14 +3478,16 @@ fn session_list_model_reasoning_level() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("gpt-5.6-sol [medium]", 5000)
+                    .wait_for_text("2m 5s", 5000)
                     .capture_labeled(
                         "model_reasoning",
-                        "Session row model column with reasoning level",
+                        "Session row with readable model and timer details",
                     )
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "gpt-5.6-sol [medium]", &full);
+                assertion::assert_text_in_region(frame, "2m 5s", &full);
             },
         )?;
 

@@ -522,7 +522,7 @@ mod tests {
         // Assert
         assert_eq!(header_lines.len(), 2);
         assert!(header_lines[0].to_string().contains("..."));
-        assert!(header_lines[1].to_string().contains("Timer: 1h1m0s"));
+        assert!(header_lines[1].to_string().contains("Timer: 1h 1m 0s"));
     }
 
     #[test]
@@ -568,7 +568,7 @@ mod tests {
             early_metadata.find("Model: gpt-5.6-sol") < early_metadata.find("Reasoning: high"),
             "model should appear before reasoning in metadata text"
         );
-        assert!(later_metadata.contains("Timer: 1h1m0s"));
+        assert!(later_metadata.contains("Timer: 1h 1m 0s"));
     }
 
     #[test]
@@ -585,7 +585,7 @@ mod tests {
 
         // Assert
         assert_eq!(earlier_metadata, later_metadata);
-        assert!(earlier_metadata.contains("Timer: 1h1m0s"));
+        assert!(earlier_metadata.contains("Timer: 1h 1m 0s"));
     }
 
     #[test]

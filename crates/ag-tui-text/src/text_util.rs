@@ -325,7 +325,7 @@ pub fn format_token_count(count: u64) -> String {
     count.to_string()
 }
 
-/// Formats elapsed seconds as a compact `1h1m1s` label.
+/// Formats elapsed seconds as a compact `1h 1m 1s` label.
 ///
 /// Hours and minutes are omitted when their value is zero, but seconds are
 /// always rendered so live timers never lose sub-minute visibility.
@@ -341,11 +341,11 @@ pub fn format_duration_compact(duration_seconds: i64) -> String {
     let mut label = String::new();
 
     if hour_count > 0 {
-        let _ = write!(label, "{hour_count}h");
+        let _ = write!(label, "{hour_count}h ");
     }
 
     if minute_count > 0 {
-        let _ = write!(label, "{minute_count}m");
+        let _ = write!(label, "{minute_count}m ");
     }
 
     let _ = write!(label, "{second_count}s");
@@ -598,11 +598,11 @@ mod tests {
         // Assert
         assert_eq!(zero, "0s");
         assert_eq!(less_than_one_minute, "59s");
-        assert_eq!(one_minute, "1m0s");
-        assert_eq!(two_minutes, "2m0s");
-        assert_eq!(one_hour, "1h0s");
-        assert_eq!(one_hour_one_minute_one_second, "1h1m1s");
-        assert_eq!(one_day_one_hour_one_minute_one_second, "25h1m1s");
+        assert_eq!(one_minute, "1m 0s");
+        assert_eq!(two_minutes, "2m 0s");
+        assert_eq!(one_hour, "1h 0s");
+        assert_eq!(one_hour_one_minute_one_second, "1h 1m 1s");
+        assert_eq!(one_day_one_hour_one_minute_one_second, "25h 1m 1s");
     }
 
     #[test]
