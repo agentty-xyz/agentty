@@ -898,6 +898,7 @@ impl App {
             base_branch: source.settings.base_branch,
             settings: SessionCreationSettings {
                 agent: source.settings.agent,
+                permission_mode: source.settings.permission_mode,
                 personality_id: source.settings.personality_id,
                 reasoning_level: source.settings.reasoning_level,
                 role: SessionRole::Worker,
@@ -1041,6 +1042,10 @@ fn build_api_session(
         .as_deref()
         .and_then(|value| value.parse::<ReasoningLevel>().ok())
         .unwrap_or_default();
+    let permission_mode = row
+        .permission_mode
+        .parse::<ag_agent::PermissionMode>()
+        .map_err(|error| ApiSessionError::InvalidData(format!("session `{}`: {error}", row.id)))?;
     let role = row
         .role
         .as_deref()
@@ -1074,6 +1079,7 @@ fn build_api_session(
             base_branch: row.base_branch,
             is_draft: row.is_draft,
             parent_session_id: row.parent_session_id.map(SessionId::from),
+            permission_mode,
             personality_id: row.personality_id,
             project_id,
             reasoning_level,
@@ -1178,7 +1184,7 @@ fn managed_session_error(session_id: &SessionId, action: &str) -> ApiSessionErro
 mod tests {
     use ag_agent::{
         AgentKind, AgentModel, AgentRequestKind, AgentSelection, AppServerTurnResponse,
-        MockAppServerClient,
+        MockAppServerClient, PermissionMode,
     };
     use ag_forge::ForgeKind;
 
@@ -1543,6 +1549,7 @@ mod tests {
             model: "gpt-5.6-sol".to_string(),
             output_tokens: 60,
             parent_session_id: Some("parent-1".to_string()),
+            permission_mode: "read_only".to_string(),
             personality_id: Some("reviewer".to_string()),
             project_id: Some(7),
             prompt: "staged prompt".to_string(),
@@ -1634,6 +1641,7 @@ mod tests {
         assert_eq!(session.queued_messages, ["queued message"]);
         assert_eq!(session.settings.project_id, 7);
         assert_eq!(session.settings.parent_session_id, Some("parent-1".into()));
+        assert_eq!(session.settings.permission_mode, PermissionMode::ReadOnly);
         assert_eq!(session.settings.personality_id.as_deref(), Some("reviewer"));
         assert_eq!(
             session.settings.agent,
@@ -1658,6 +1666,8 @@ mod tests {
         missing_project.project_id = None;
         let mut invalid_status = session_row();
         invalid_status.status = "Unknown".to_string();
+        let mut invalid_permission_mode = session_row();
+        invalid_permission_mode.permission_mode = "invalid".to_string();
         let invalid_message = SessionMessageRow {
             content: "content".to_string(),
             kind: "unknown".to_string(),
@@ -1677,6 +1687,9 @@ mod tests {
             .expect_err("project is required");
         let invalid_status_error = build_api_session(invalid_status, Vec::new(), Vec::new())
             .expect_err("status should be validated");
+        let invalid_permission_mode_error =
+            build_api_session(invalid_permission_mode, Vec::new(), Vec::new())
+                .expect_err("permission mode should be validated");
         let invalid_message_error =
             build_api_session(session_row(), vec![invalid_message], Vec::new())
                 .expect_err("message kind should be validated");
@@ -1696,6 +1709,10 @@ mod tests {
         ));
         assert!(matches!(
             invalid_status_error,
+            ApiSessionError::InvalidData(_)
+        ));
+        assert!(matches!(
+            invalid_permission_mode_error,
             ApiSessionError::InvalidData(_)
         ));
         assert!(matches!(
@@ -2528,6 +2545,10 @@ mod tests {
         );
         assert_eq!(inherited_session.settings.speed_mode, SpeedMode::Fast);
         assert_eq!(
+            inherited_session.settings.permission_mode,
+            PermissionMode::ReadOnly
+        );
+        assert_eq!(
             inherited_session.settings.personality_id.as_deref(),
             Some("inherited-personality")
         );
@@ -2552,7 +2573,57 @@ mod tests {
             default_session_model
         );
         assert_eq!(ordinary_session.settings.speed_mode, SpeedMode::Normal);
+        assert_eq!(
+            ordinary_session.settings.permission_mode,
+            PermissionMode::AutoEdit
+        );
         assert_eq!(app.sessions.default_session_model(), default_session_model);
+    }
+
+    #[tokio::test]
+    async fn runtime_backend_rejects_invalid_permission_mode_retrieval_and_inheritance() {
+        // Arrange
+        let (mut app, _temp_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
+        let project_id = app.active_project_id();
+        let source_session_id = request_session_creation(
+            &mut app,
+            CreateSessionRequest {
+                inherit_from_session_id: None,
+                mode: CreateSessionMode::Draft,
+                project_id,
+            },
+        )
+        .await
+        .expect("source session should be created");
+        sqlx::query("UPDATE session SET permission_mode = 'invalid' WHERE id = ?")
+            .bind(source_session_id.as_str())
+            .execute(&pool)
+            .await
+            .expect("source permission mode should be corrupted");
+
+        // Act
+        let retrieval_error = request_session(&mut app, source_session_id.clone())
+            .await
+            .expect_err("invalid permission mode retrieval should fail");
+        let inheritance_error = request_session_creation(
+            &mut app,
+            CreateSessionRequest {
+                inherit_from_session_id: Some(source_session_id),
+                mode: CreateSessionMode::Draft,
+                project_id,
+            },
+        )
+        .await
+        .expect_err("invalid permission mode inheritance should fail");
+
+        // Assert
+        for error in [retrieval_error, inheritance_error] {
+            assert!(matches!(
+                error,
+                ApiSessionError::InvalidData(message)
+                    if message.contains("Unknown permission mode: invalid")
+            ));
+        }
     }
 
     #[tokio::test]
@@ -2672,6 +2743,12 @@ mod tests {
             .update_session_speed_mode(session_id, SpeedMode::Fast)
             .await
             .expect("source speed mode should update");
+        app.services
+            .db()
+            .sessions()
+            .update_session_permission_mode(session_id, PermissionMode::ReadOnly)
+            .await
+            .expect("source permission mode should update");
         app.services
             .db()
             .sessions()

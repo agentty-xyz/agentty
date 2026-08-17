@@ -766,6 +766,7 @@ mod tests {
                 model: AgentKind::Codex.default_model().as_str(),
                 orchestration_task_id: None,
                 parent_session_id: None,
+                permission_mode: ag_agent::PermissionMode::AutoEdit,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),

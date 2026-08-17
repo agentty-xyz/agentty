@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn test_prompt_suggestion_list_for_command_stage_has_description() {
         // Arrange
-        let input = InputState::with_text("/m".to_string());
+        let input = InputState::with_text("/model".to_string());
         let slash_state = PromptSlashState::default();
 
         // Act
@@ -872,7 +872,7 @@ mod tests {
         // Assert
         assert_eq!(
             labels,
-            vec!["/model", "/personality", "/reasoning", "/speed"]
+            vec!["/model", "/mode", "/personality", "/reasoning", "/speed"]
         );
         assert_eq!(menu.selected_index, 0);
     }

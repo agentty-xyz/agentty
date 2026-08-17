@@ -13,7 +13,10 @@ pub enum PermissionMode {
 }
 
 impl PermissionMode {
-    /// Returns the wire label used for persistence and display.
+    /// Ordered permission-mode options shown by interactive selectors.
+    pub const ALL: [PermissionMode; 2] = [PermissionMode::AutoEdit, PermissionMode::ReadOnly];
+
+    /// Returns the wire label used for persistence and provider invocation.
     pub fn label(self) -> &'static str {
         match self {
             Self::AutoEdit => "auto_edit",

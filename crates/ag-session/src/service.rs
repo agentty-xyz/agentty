@@ -248,7 +248,10 @@ mod tests {
     use ag_forge::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
 
     use super::*;
-    use crate::{SessionMessage, SessionMessageKind, SessionRole, SessionSettings, SessionStatus};
+    use crate::{
+        PermissionMode, SessionMessage, SessionMessageKind, SessionRole, SessionSettings,
+        SessionStatus,
+    };
 
     #[derive(Default)]
     struct FakeBackend {
@@ -427,6 +430,7 @@ mod tests {
                 base_branch: "main".to_string(),
                 is_draft: false,
                 parent_session_id: None,
+                permission_mode: PermissionMode::AutoEdit,
                 personality_id: Some("reviewer".to_string()),
                 project_id: 7,
                 reasoning_level: ReasoningLevel::High,

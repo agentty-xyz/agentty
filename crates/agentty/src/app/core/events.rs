@@ -112,6 +112,11 @@ pub(crate) enum AppEvent {
         personality_id: Option<String>,
         session_id: SessionId,
     },
+    /// Indicates a session provider permission mode has been persisted.
+    SessionPermissionModeUpdated {
+        permission_mode: crate::domain::permission::PermissionMode,
+        session_id: SessionId,
+    },
     /// Indicates a session reasoning-level selection has been persisted.
     SessionReasoningLevelUpdated {
         reasoning_level: crate::domain::agent::ReasoningLevel,
@@ -260,6 +265,8 @@ pub(super) struct AppEventBatch {
     pub(super) session_orchestration_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_queued_sync_resolved_ids: HashSet<SessionId>,
     pub(super) session_personality_updates: HashMap<SessionId, Option<String>>,
+    pub(super) session_permission_mode_updates:
+        HashMap<SessionId, crate::domain::permission::PermissionMode>,
     pub(super) session_reasoning_level_updates:
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
     pub(super) session_speed_mode_updates: HashMap<SessionId, crate::domain::agent::SpeedMode>,
@@ -387,6 +394,7 @@ impl AppEventBatch {
             || !self.session_model_updates.is_empty()
             || !self.session_orchestration_progress_updates.is_empty()
             || !self.session_personality_updates.is_empty()
+            || !self.session_permission_mode_updates.is_empty()
             || !self.session_progress_updates.is_empty()
             || !self.session_queued_sync_resolved_ids.is_empty()
             || !self.session_review_comment_snapshots.is_empty()
@@ -445,6 +453,13 @@ impl AppEventBatch {
             } => {
                 self.session_personality_updates
                     .insert(session_id, personality_id);
+            }
+            AppEvent::SessionPermissionModeUpdated {
+                permission_mode,
+                session_id,
+            } => {
+                self.session_permission_mode_updates
+                    .insert(session_id, permission_mode);
             }
             AppEvent::SessionReasoningLevelUpdated {
                 reasoning_level,
@@ -582,6 +597,7 @@ impl AppEventBatch {
             | AppEvent::AgentCliVersionsUpdated { .. }
             | AppEvent::UpdateStatusChanged { .. }
             | AppEvent::SessionPersonalityUpdated { .. }
+            | AppEvent::SessionPermissionModeUpdated { .. }
             | AppEvent::SessionReasoningLevelUpdated { .. }
             | AppEvent::SessionSpeedModeUpdated { .. }
             | AppEvent::RefreshSessions
@@ -687,6 +703,7 @@ impl AppEventBatch {
             | AppEvent::UpdateStatusChanged { .. }
             | AppEvent::SessionModelUpdated { .. }
             | AppEvent::SessionPersonalityUpdated { .. }
+            | AppEvent::SessionPermissionModeUpdated { .. }
             | AppEvent::SessionReasoningLevelUpdated { .. }
             | AppEvent::SessionSpeedModeUpdated { .. }
             | AppEvent::RefreshSessions
@@ -1442,6 +1459,13 @@ impl App {
         {
             self.sessions
                 .apply_session_personality_updated(&session_id, personality_id);
+        }
+
+        for (session_id, permission_mode) in
+            std::mem::take(&mut event_batch.session_permission_mode_updates)
+        {
+            self.sessions
+                .apply_session_permission_mode_updated(&session_id, permission_mode);
         }
 
         for (session_id, reasoning_level) in
