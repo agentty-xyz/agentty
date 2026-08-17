@@ -5,7 +5,8 @@ use thiserror::Error;
 
 use crate::chat_completion;
 use crate::model::{
-    Model, ModelClient, ModelError, ModelMetadataError, ModelRequest, ModelResponse,
+    Model, ModelClient, ModelCompletion, ModelError, ModelMetadataError, ModelRequest,
+    ModelResponse, ModelWithMetadata,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
@@ -67,6 +68,16 @@ impl Muse {
 impl Model for Muse {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
         self.client.complete(request).await
+    }
+}
+
+#[async_trait]
+impl ModelWithMetadata for Muse {
+    async fn complete_with_metadata(
+        &self,
+        request: ModelRequest,
+    ) -> Result<ModelCompletion, ModelError> {
+        self.client.complete_with_metadata(request).await
     }
 }
 
@@ -275,13 +286,17 @@ mod tests {
         let model = muse(&server);
 
         // Act
-        let response = model
-            .complete(request("extract the name"))
+        let completion = model
+            .complete_with_metadata(request("extract the name"))
             .await
             .expect("Muse request should succeed");
 
         // Assert
-        assert_eq!(response.output(), Some(&json!({ "name": "Ada" })));
+        assert_eq!(
+            completion.response().output(),
+            Some(&json!({ "name": "Ada" }))
+        );
+        assert_eq!(completion.metadata().finish_reason(), "stop");
     }
 
     #[tokio::test]

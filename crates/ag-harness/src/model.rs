@@ -24,6 +24,21 @@ pub trait Model: Send + Sync {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError>;
 }
 
+/// Object-safe model extension that returns normalized completion metadata.
+#[async_trait]
+pub trait ModelWithMetadata: Model {
+    /// Completes one model request and returns normalized provider metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError`] when the provider request fails or its response
+    /// cannot be converted to the provider-neutral response.
+    async fn complete_with_metadata(
+        &self,
+        request: ModelRequest,
+    ) -> Result<ModelCompletion, ModelError>;
+}
+
 /// Application-facing client for provider-neutral model requests.
 ///
 /// Provider request execution remains private so every request passes through
@@ -94,18 +109,34 @@ impl ModelClient {
     /// Returns [`ModelError`] when the provider request fails or its response
     /// cannot be converted to the provider-neutral response.
     pub async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        self.complete_with_metadata(request)
+            .await
+            .map(ModelCompletion::into_response)
+    }
+
+    /// Completes one model request and returns normalized provider metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError`] when the provider request fails or its response
+    /// cannot be converted to the provider-neutral response.
+    pub async fn complete_with_metadata(
+        &self,
+        request: ModelRequest,
+    ) -> Result<ModelCompletion, ModelError> {
         let _duration = telemetry::RequestDuration::start(self.metadata());
         let response = self.backend.generate(&request).await?;
 
         match response {
-            chat_completion::GeneratedResponse::Output(output) => request
+            chat_completion::GeneratedResponse::Output { metadata, output } => request
                 .schema()
                 .parse_and_validate(&output)
                 .map(ModelResponse::from_output)
+                .map(|response| ModelCompletion::new(metadata, response))
                 .map_err(ModelError::from),
-            chat_completion::GeneratedResponse::ToolCall(call) => {
-                Ok(ModelResponse::tool_call(call))
-            }
+            chat_completion::GeneratedResponse::ToolCall { call, metadata } => Ok(
+                ModelCompletion::new(metadata, ModelResponse::tool_call(call)),
+            ),
         }
     }
 
@@ -127,6 +158,16 @@ impl ModelClient {
 impl Model for ModelClient {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
         ModelClient::complete(self, request).await
+    }
+}
+
+#[async_trait]
+impl ModelWithMetadata for ModelClient {
+    async fn complete_with_metadata(
+        &self,
+        request: ModelRequest,
+    ) -> Result<ModelCompletion, ModelError> {
+        ModelClient::complete_with_metadata(self, request).await
     }
 }
 
@@ -259,6 +300,152 @@ pub(crate) enum ModelMessage {
     },
 }
 
+/// One model response paired with normalized provider completion metadata.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelCompletion {
+    metadata: CompletionMetadata,
+    response: ModelResponse,
+}
+
+impl ModelCompletion {
+    /// Creates a completion from normalized metadata and a model response.
+    pub fn new(metadata: CompletionMetadata, response: ModelResponse) -> Self {
+        Self { metadata, response }
+    }
+
+    /// Returns the normalized metadata reported by the provider.
+    pub fn metadata(&self) -> &CompletionMetadata {
+        &self.metadata
+    }
+
+    /// Returns the provider-neutral model response.
+    pub fn response(&self) -> &ModelResponse {
+        &self.response
+    }
+
+    /// Consumes the completion and returns its provider-neutral response.
+    pub fn into_response(self) -> ModelResponse {
+        self.response
+    }
+}
+
+/// Provider-reported facts about one completed model request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletionMetadata {
+    finish_reason: String,
+    response_id: Option<String>,
+    response_model: Option<String>,
+    system_fingerprint: Option<String>,
+    usage: Option<CompletionUsage>,
+}
+
+impl CompletionMetadata {
+    /// Creates normalized provider completion metadata.
+    pub fn new(
+        finish_reason: String,
+        response_id: Option<String>,
+        response_model: Option<String>,
+        system_fingerprint: Option<String>,
+        usage: Option<CompletionUsage>,
+    ) -> Self {
+        Self {
+            finish_reason,
+            response_id,
+            response_model,
+            system_fingerprint,
+            usage,
+        }
+    }
+
+    /// Returns the provider's reason that generation stopped.
+    pub fn finish_reason(&self) -> &str {
+        &self.finish_reason
+    }
+
+    /// Returns the provider-assigned response identifier, when reported.
+    pub fn response_id(&self) -> Option<&str> {
+        self.response_id.as_deref()
+    }
+
+    /// Returns the model identifier reported in the response, when present.
+    pub fn response_model(&self) -> Option<&str> {
+        self.response_model.as_deref()
+    }
+
+    /// Returns the provider's backend fingerprint, when reported.
+    pub fn system_fingerprint(&self) -> Option<&str> {
+        self.system_fingerprint.as_deref()
+    }
+
+    /// Returns provider-reported token usage, when present.
+    pub fn usage(&self) -> Option<&CompletionUsage> {
+        self.usage.as_ref()
+    }
+}
+
+/// Provider-reported token counts for one completed model request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompletionUsage {
+    cache_hit: Option<u64>,
+    cache_miss: Option<u64>,
+    input: Option<u64>,
+    output: Option<u64>,
+    reasoning: Option<u64>,
+    total: Option<u64>,
+}
+
+impl CompletionUsage {
+    /// Creates normalized provider-reported token usage.
+    pub fn new(
+        cache_hit_tokens: Option<u64>,
+        cache_miss_tokens: Option<u64>,
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+        reasoning_tokens: Option<u64>,
+        total_tokens: Option<u64>,
+    ) -> Self {
+        Self {
+            cache_hit: cache_hit_tokens,
+            cache_miss: cache_miss_tokens,
+            input: input_tokens,
+            output: output_tokens,
+            reasoning: reasoning_tokens,
+            total: total_tokens,
+        }
+    }
+
+    /// Returns input tokens served from a provider cache, when reported.
+    pub fn cache_hit_tokens(self) -> Option<u64> {
+        self.cache_hit
+    }
+
+    /// Returns input tokens that missed a provider cache, when reported.
+    pub fn cache_miss_tokens(self) -> Option<u64> {
+        self.cache_miss
+    }
+
+    /// Returns the provider-reported input token count.
+    pub fn input_tokens(self) -> Option<u64> {
+        self.input
+    }
+
+    /// Returns the provider-reported output token count.
+    pub fn output_tokens(self) -> Option<u64> {
+        self.output
+    }
+
+    /// Returns output tokens used for provider-exposed reasoning, when
+    /// reported.
+    pub fn reasoning_tokens(self) -> Option<u64> {
+        self.reasoning
+    }
+
+    /// Returns the provider-reported total token count.
+    pub fn total_tokens(self) -> Option<u64> {
+        self.total
+    }
+}
+
 /// Provider-neutral output from one model request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelResponse {
@@ -368,10 +555,133 @@ pub enum ModelError {
     },
 }
 
+/// Stable, low-cardinality classification for a [`ModelError`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ModelErrorType {
+    /// Request construction or another unclassified client-side failure.
+    Request,
+    /// Network transport failed before a provider response was decoded.
+    Transport,
+    /// The provider returned an unsuccessful HTTP response.
+    Provider,
+    /// The provider returned a malformed response envelope.
+    InvalidProviderResponse,
+    /// The provider returned an unusable or incomplete successful response.
+    InvalidResponse,
+    /// The provider cannot satisfy the requested output contract.
+    UnsupportedOutput,
+    /// The response exceeded a configured safety bound.
+    ResponseTooLarge,
+    /// Terminal output failed JSON parsing or local schema validation.
+    InvalidOutput,
+    /// A native tool call was missing, malformed, or unsupported.
+    InvalidToolCall,
+}
+
+impl ModelErrorType {
+    /// Returns the stable value intended for telemetry attributes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Request => "request_error",
+            Self::Transport => "transport_error",
+            Self::Provider => "provider_error",
+            Self::InvalidProviderResponse => "invalid_provider_response",
+            Self::InvalidResponse => "invalid_response",
+            Self::UnsupportedOutput => "unsupported_output",
+            Self::ResponseTooLarge => "response_too_large",
+            Self::InvalidOutput => "invalid_output",
+            Self::InvalidToolCall => "invalid_tool_call",
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("{source}")]
+struct ClassifiedRequestError {
+    error_type: ModelErrorType,
+    #[source]
+    source: Box<dyn Error + Send + Sync>,
+}
+
+#[derive(Debug, Error)]
+#[error("{provider} returned HTTP {status}: {body}")]
+struct ProviderRequestError {
+    body: String,
+    provider: &'static str,
+    #[source]
+    source: reqwest::Error,
+    status: reqwest::StatusCode,
+}
+
 impl ModelError {
     /// Wraps a provider transport or response-decoding failure.
     pub fn request(error: impl Error + Send + Sync + 'static) -> Self {
         Self::Request(Box::new(error))
+    }
+
+    /// Returns a stable, low-cardinality classification for this failure.
+    pub fn error_type(&self) -> ModelErrorType {
+        match self {
+            Self::Request(source) => {
+                if source.downcast_ref::<ProviderRequestError>().is_some() {
+                    ModelErrorType::Provider
+                } else {
+                    source
+                        .downcast_ref::<ClassifiedRequestError>()
+                        .map_or(ModelErrorType::Request, |error| error.error_type)
+                }
+            }
+            Self::InvalidResponse | Self::IncompleteResponse { .. } => {
+                ModelErrorType::InvalidResponse
+            }
+            Self::ResponseBodyTooLarge | Self::ResponseContentTooLarge => {
+                ModelErrorType::ResponseTooLarge
+            }
+            Self::UnsupportedOutputSchema { .. } => ModelErrorType::UnsupportedOutput,
+            Self::InvalidJson { .. } | Self::SchemaViolation { .. } => {
+                ModelErrorType::InvalidOutput
+            }
+            Self::MissingToolCall
+            | Self::MultipleToolCalls
+            | Self::ToolCallWithContent
+            | Self::TerminalResponseWithToolCalls
+            | Self::UnsupportedToolType { .. }
+            | Self::UnsupportedToolName { .. }
+            | Self::InvalidToolArguments { .. } => ModelErrorType::InvalidToolCall,
+        }
+    }
+
+    /// Returns the provider HTTP status associated with this failure, when
+    /// available.
+    pub fn http_status(&self) -> Option<u16> {
+        match self {
+            Self::Request(source) => source
+                .downcast_ref::<ProviderRequestError>()
+                .map(|error| error.status.as_u16()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn provider_request(
+        provider: &'static str,
+        body: String,
+        source: reqwest::Error,
+        status: reqwest::StatusCode,
+    ) -> Self {
+        Self::Request(Box::new(ProviderRequestError {
+            body,
+            provider,
+            source,
+            status,
+        }))
+    }
+
+    pub(crate) fn classified_request(
+        error_type: ModelErrorType,
+        source: Box<dyn Error + Send + Sync>,
+    ) -> Self {
+        Self::Request(Box::new(ClassifiedRequestError { error_type, source }))
     }
 }
 
@@ -522,6 +832,55 @@ mod tests {
     }
 
     #[test]
+    fn completion_exposes_normalized_metadata_and_response() {
+        // Arrange
+        let usage = CompletionUsage::new(Some(5), Some(8), Some(13), Some(21), Some(3), Some(34));
+        let metadata = CompletionMetadata::new(
+            "stop".to_string(),
+            Some("response-1".to_string()),
+            Some("provider-model".to_string()),
+            Some("fingerprint-1".to_string()),
+            Some(usage),
+        );
+        let response = ModelResponse::from_output(json!({ "name": "Ada" }));
+        let completion = ModelCompletion::new(metadata, response.clone());
+
+        // Act
+        let completion_metadata = completion.metadata();
+        let completion_response = completion.response();
+
+        // Assert
+        assert_eq!(completion_metadata.finish_reason(), "stop");
+        assert_eq!(completion_metadata.response_id(), Some("response-1"));
+        assert_eq!(completion_metadata.response_model(), Some("provider-model"));
+        assert_eq!(
+            completion_metadata.system_fingerprint(),
+            Some("fingerprint-1")
+        );
+        assert_eq!(completion_metadata.usage(), Some(&usage));
+        assert_eq!(usage.cache_hit_tokens(), Some(5));
+        assert_eq!(usage.cache_miss_tokens(), Some(8));
+        assert_eq!(usage.input_tokens(), Some(13));
+        assert_eq!(usage.output_tokens(), Some(21));
+        assert_eq!(usage.reasoning_tokens(), Some(3));
+        assert_eq!(usage.total_tokens(), Some(34));
+        assert_eq!(completion_response, &response);
+        assert_eq!(completion.into_response(), response);
+    }
+
+    #[test]
+    fn completion_metadata_preserves_absent_provider_fields() {
+        // Arrange
+        let metadata = CompletionMetadata::new("stop".to_string(), None, None, None, None);
+
+        // Act and Assert
+        assert_eq!(metadata.response_id(), None);
+        assert_eq!(metadata.response_model(), None);
+        assert_eq!(metadata.system_fingerprint(), None);
+        assert_eq!(metadata.usage(), None);
+    }
+
+    #[test]
     fn response_debug_redacts_provider_reasoning() {
         // Arrange
         let secret_reasoning = "private reasoning from repository context";
@@ -575,6 +934,133 @@ mod tests {
 
         // Assert
         assert_eq!(message, "model request failed: connection refused");
+    }
+
+    #[test]
+    fn classifies_model_errors_with_stable_telemetry_values() {
+        // Arrange
+        let errors = [
+            (
+                ModelError::request(io::Error::other("request")),
+                ModelErrorType::Request,
+            ),
+            (ModelError::InvalidResponse, ModelErrorType::InvalidResponse),
+            (
+                ModelError::IncompleteResponse {
+                    reason: "length".to_string(),
+                },
+                ModelErrorType::InvalidResponse,
+            ),
+            (
+                ModelError::ResponseBodyTooLarge,
+                ModelErrorType::ResponseTooLarge,
+            ),
+            (
+                ModelError::ResponseContentTooLarge,
+                ModelErrorType::ResponseTooLarge,
+            ),
+            (
+                ModelError::UnsupportedOutputSchema {
+                    reason: "object required".to_string(),
+                },
+                ModelErrorType::UnsupportedOutput,
+            ),
+            (
+                ModelError::InvalidJson {
+                    reason: "invalid".to_string(),
+                },
+                ModelErrorType::InvalidOutput,
+            ),
+            (
+                ModelError::SchemaViolation {
+                    path: "$".to_string(),
+                    reason: "invalid".to_string(),
+                },
+                ModelErrorType::InvalidOutput,
+            ),
+            (ModelError::MissingToolCall, ModelErrorType::InvalidToolCall),
+            (
+                ModelError::MultipleToolCalls,
+                ModelErrorType::InvalidToolCall,
+            ),
+            (
+                ModelError::ToolCallWithContent,
+                ModelErrorType::InvalidToolCall,
+            ),
+            (
+                ModelError::TerminalResponseWithToolCalls,
+                ModelErrorType::InvalidToolCall,
+            ),
+            (
+                ModelError::UnsupportedToolType {
+                    kind: "custom".to_string(),
+                },
+                ModelErrorType::InvalidToolCall,
+            ),
+            (
+                ModelError::UnsupportedToolName {
+                    name: "write".to_string(),
+                },
+                ModelErrorType::InvalidToolCall,
+            ),
+            (
+                ModelError::InvalidToolArguments {
+                    reason: "invalid".to_string(),
+                },
+                ModelErrorType::InvalidToolCall,
+            ),
+        ];
+
+        // Act
+        let classifications =
+            errors.map(|(error, expected)| (error.error_type(), expected, error.http_status()));
+
+        // Assert
+        assert!(
+            classifications
+                .into_iter()
+                .all(|(actual, expected, status)| actual == expected && status.is_none())
+        );
+        assert_eq!(ModelErrorType::Request.as_str(), "request_error");
+        assert_eq!(ModelErrorType::Transport.as_str(), "transport_error");
+        assert_eq!(ModelErrorType::Provider.as_str(), "provider_error");
+        assert_eq!(
+            ModelErrorType::InvalidProviderResponse.as_str(),
+            "invalid_provider_response"
+        );
+        assert_eq!(ModelErrorType::InvalidResponse.as_str(), "invalid_response");
+        assert_eq!(
+            ModelErrorType::UnsupportedOutput.as_str(),
+            "unsupported_output"
+        );
+        assert_eq!(
+            ModelErrorType::ResponseTooLarge.as_str(),
+            "response_too_large"
+        );
+        assert_eq!(ModelErrorType::InvalidOutput.as_str(), "invalid_output");
+        assert_eq!(
+            ModelErrorType::InvalidToolCall.as_str(),
+            "invalid_tool_call"
+        );
+    }
+
+    #[test]
+    fn classified_request_retains_source_and_type() {
+        // Arrange
+        let error = ModelError::classified_request(
+            ModelErrorType::Transport,
+            io::Error::other("connection reset").into(),
+        );
+
+        // Act
+        let source = std::error::Error::source(&error)
+            .and_then(std::error::Error::source)
+            .expect("classified request should retain its original source");
+
+        // Assert
+        assert_eq!(error.error_type(), ModelErrorType::Transport);
+        assert_eq!(error.http_status(), None);
+        assert_eq!(source.to_string(), "connection reset");
     }
 
     #[test]

@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -65,8 +66,14 @@ pub(crate) struct ChatCompletionProviderPolicy {
 
 /// Provider-neutral result of decoding one Chat Completions choice.
 pub(crate) enum GeneratedResponse {
-    Output(String),
-    ToolCall(tool::ToolCall),
+    Output {
+        metadata: model::CompletionMetadata,
+        output: String,
+    },
+    ToolCall {
+        call: tool::ToolCall,
+        metadata: model::CompletionMetadata,
+    },
 }
 
 /// Shared structured-output backend for OpenAI-compatible Chat Completions
@@ -126,13 +133,13 @@ impl ChatCompletionBackend {
             .await
             .map_err(|error| self.map_completion_error(error))?
             .ok_or(model::ModelError::InvalidResponse)?;
-        let (finish_reason, content, reasoning_content, tool_calls) = completion.into_parts();
-        match finish_reason.as_str() {
+        let (metadata, content, reasoning_content, tool_calls) = completion.into_parts();
+        match metadata.finish_reason() {
             "stop" if !tool_calls.is_empty() => {
                 Err(model::ModelError::TerminalResponseWithToolCalls)
             }
             "stop" => content
-                .map(GeneratedResponse::Output)
+                .map(|output| GeneratedResponse::Output { metadata, output })
                 .ok_or(model::ModelError::InvalidResponse),
             "tool_calls" => Self::decode_tool_call(
                 request,
@@ -143,9 +150,10 @@ impl ChatCompletionBackend {
                     .then_some(reasoning_content)
                     .flatten(),
                 tool_calls,
+                metadata,
             ),
             _ => Err(model::ModelError::IncompleteResponse {
-                reason: schema_contract::bounded_diagnostic(finish_reason),
+                reason: schema_contract::bounded_diagnostic(metadata.finish_reason()),
             }),
         }
     }
@@ -258,14 +266,20 @@ impl ChatCompletionBackend {
                 body,
                 source,
                 status,
-            } => model::ModelError::request(ProviderHttpError {
-                body,
-                provider: self.policy.display_name,
-                source,
-                status,
-            }),
+            } => {
+                model::ModelError::provider_request(self.policy.display_name, body, source, status)
+            }
+            error @ ChatCompletionError::InvalidResponse(_) => {
+                model::ModelError::classified_request(
+                    model::ModelErrorType::InvalidProviderResponse,
+                    error.into(),
+                )
+            }
             ChatCompletionError::ResponseBodyTooLarge => model::ModelError::ResponseBodyTooLarge,
-            error => model::ModelError::request(error),
+            error @ ChatCompletionError::Transport(_) => model::ModelError::classified_request(
+                model::ModelErrorType::Transport,
+                error.into(),
+            ),
         }
     }
 
@@ -274,6 +288,7 @@ impl ChatCompletionBackend {
         content: Option<&str>,
         reasoning_content: Option<String>,
         mut calls: Vec<ChatCompletionToolCall>,
+        metadata: model::CompletionMetadata,
     ) -> Result<GeneratedResponse, model::ModelError> {
         if content.is_some_and(|content| !content.is_empty()) {
             return Err(model::ModelError::ToolCallWithContent);
@@ -310,11 +325,10 @@ impl ChatCompletionBackend {
                 }
             })?;
 
-        Ok(GeneratedResponse::ToolCall(tool::ToolCall::read(
-            call.id,
-            arguments,
-            reasoning_content,
-        )))
+        Ok(GeneratedResponse::ToolCall {
+            call: tool::ToolCall::read(call.id, arguments, reasoning_content),
+            metadata,
+        })
     }
 }
 
@@ -344,7 +358,7 @@ impl<'a> ChatCompletionRequest<'a> {
 /// Provider-independent fields extracted from the first completion choice.
 pub(crate) struct ChatCompletion {
     content: Option<String>,
-    finish_reason: String,
+    metadata: model::CompletionMetadata,
     reasoning_content: Option<String>,
     tool_calls: Vec<ChatCompletionToolCall>,
 }
@@ -354,7 +368,7 @@ impl ChatCompletion {
     pub(crate) fn new(finish_reason: String, content: Option<String>) -> Self {
         Self {
             content,
-            finish_reason,
+            metadata: model::CompletionMetadata::new(finish_reason, None, None, None, None),
             reasoning_content: None,
             tool_calls: Vec::new(),
         }
@@ -364,13 +378,13 @@ impl ChatCompletion {
     fn into_parts(
         self,
     ) -> (
-        String,
+        model::CompletionMetadata,
         Option<String>,
         Option<String>,
         Vec<ChatCompletionToolCall>,
     ) {
         (
-            self.finish_reason,
+            self.metadata,
             self.content,
             self.reasoning_content,
             self.tool_calls,
@@ -436,8 +450,9 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
         let response = serde_json::from_slice::<ChatCompletionResponse>(&body)
             .map_err(ChatCompletionError::InvalidResponse)?;
 
-        Ok(response.choices.into_iter().next().map(|choice| {
+        Ok(response.into_completion().map(|(choice, metadata)| {
             let mut completion = ChatCompletion::new(choice.finish_reason, choice.message.content);
+            completion.metadata = metadata;
             completion.reasoning_content = choice.message.reasoning_content;
             completion.tool_calls = choice.message.tool_calls.unwrap_or_default();
 
@@ -541,16 +556,6 @@ impl ChatCompletionError {
     }
 }
 
-#[derive(Debug, Error)]
-#[error("{provider} returned HTTP {status}: {body}")]
-struct ProviderHttpError {
-    body: String,
-    provider: &'static str,
-    #[source]
-    source: reqwest::Error,
-    status: reqwest::StatusCode,
-}
-
 #[derive(Serialize)]
 struct ChatCompletionPayload<'a> {
     messages: Vec<ChatCompletionMessagePayload>,
@@ -641,6 +646,36 @@ struct ChatCompletionFunction<'a> {
 #[derive(Deserialize)]
 struct ChatCompletionResponse {
     choices: Vec<ChatCompletionChoice>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    model: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    system_fingerprint: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    usage: Option<ChatCompletionUsage>,
+}
+
+impl ChatCompletionResponse {
+    fn into_completion(self) -> Option<(ChatCompletionChoice, model::CompletionMetadata)> {
+        let Self {
+            choices,
+            id,
+            model: response_model,
+            system_fingerprint,
+            usage,
+        } = self;
+        let choice = choices.into_iter().next()?;
+        let metadata = model::CompletionMetadata::new(
+            choice.finish_reason.clone(),
+            id,
+            response_model,
+            system_fingerprint,
+            usage.map(model::CompletionUsage::from),
+        );
+
+        Some((choice, metadata))
+    }
 }
 
 #[derive(Deserialize)]
@@ -656,6 +691,68 @@ struct ChatCompletionMessage {
     reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<ChatCompletionToolCall>>,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionUsage {
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    completion_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    completion_tokens_details: Option<CompletionTokenDetails>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    prompt_cache_hit_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    prompt_cache_miss_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    prompt_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    prompt_tokens_details: Option<PromptTokenDetails>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    total_tokens: Option<u64>,
+}
+
+impl From<ChatCompletionUsage> for model::CompletionUsage {
+    fn from(usage: ChatCompletionUsage) -> Self {
+        Self::new(
+            usage.prompt_cache_hit_tokens.or_else(|| {
+                usage
+                    .prompt_tokens_details
+                    .as_ref()
+                    .and_then(|details| details.cached_tokens)
+            }),
+            usage.prompt_cache_miss_tokens,
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage
+                .completion_tokens_details
+                .and_then(|details| details.reasoning_tokens),
+            usage.total_tokens,
+        )
+    }
+}
+
+#[derive(Deserialize)]
+struct CompletionTokenDetails {
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    reasoning_tokens: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct PromptTokenDetails {
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    cached_tokens: Option<u64>,
+}
+
+fn deserialize_optional<'de, DeserializerType, ValueType>(
+    deserializer: DeserializerType,
+) -> Result<Option<ValueType>, DeserializerType::Error>
+where
+    DeserializerType: Deserializer<'de>,
+    ValueType: DeserializeOwned,
+{
+    let value = Value::deserialize(deserializer)?;
+
+    Ok(serde_json::from_value(value).ok())
 }
 
 #[derive(Deserialize)]
@@ -753,6 +850,122 @@ mod tests {
     }
 
     #[test]
+    fn decodes_complete_metadata_from_first_choice() {
+        // Arrange
+        let response = serde_json::from_value::<ChatCompletionResponse>(serde_json::json!({
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": r#"{"name":"Ada"}"#}
+                },
+                {
+                    "finish_reason": "length",
+                    "message": {"content": "ignored"}
+                }
+            ],
+            "id": "response-1",
+            "model": "provider-model",
+            "system_fingerprint": "fingerprint-1",
+            "usage": {
+                "completion_tokens": 21,
+                "completion_tokens_details": {"reasoning_tokens": 3},
+                "prompt_cache_hit_tokens": 5,
+                "prompt_cache_miss_tokens": 8,
+                "prompt_tokens": 13,
+                "prompt_tokens_details": {"cached_tokens": 99},
+                "total_tokens": 34,
+                "unknown_usage_field": 55
+            },
+            "unknown_response_field": true
+        }))
+        .expect("complete response metadata should decode");
+
+        // Act
+        let (choice, metadata) = response
+            .into_completion()
+            .expect("first completion choice should exist");
+        let usage = metadata.usage().expect("usage should be retained");
+
+        // Assert
+        assert_eq!(choice.message.content.as_deref(), Some(r#"{"name":"Ada"}"#));
+        assert_eq!(metadata.finish_reason(), "stop");
+        assert_eq!(metadata.response_id(), Some("response-1"));
+        assert_eq!(metadata.response_model(), Some("provider-model"));
+        assert_eq!(metadata.system_fingerprint(), Some("fingerprint-1"));
+        assert_eq!(usage.cache_hit_tokens(), Some(5));
+        assert_eq!(usage.cache_miss_tokens(), Some(8));
+        assert_eq!(usage.input_tokens(), Some(13));
+        assert_eq!(usage.output_tokens(), Some(21));
+        assert_eq!(usage.reasoning_tokens(), Some(3));
+        assert_eq!(usage.total_tokens(), Some(34));
+    }
+
+    #[test]
+    fn decodes_partial_usage_without_estimating_missing_counts() {
+        // Arrange
+        let response = serde_json::from_value::<ChatCompletionResponse>(serde_json::json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {"content": null}
+            }],
+            "id": 42,
+            "model": ["unexpected"],
+            "system_fingerprint": {"unexpected": true},
+            "usage": {
+                "completion_tokens": "unknown",
+                "completion_tokens_details": {"reasoning_tokens": -1},
+                "prompt_tokens_details": {"cached_tokens": 7}
+            }
+        }))
+        .expect("partial usage should decode");
+
+        // Act
+        let (_, metadata) = response
+            .into_completion()
+            .expect("completion choice should exist");
+        let usage = metadata.usage().expect("partial usage should be retained");
+
+        // Assert
+        assert_eq!(usage.cache_hit_tokens(), Some(7));
+        assert_eq!(usage.cache_miss_tokens(), None);
+        assert_eq!(usage.input_tokens(), None);
+        assert_eq!(usage.output_tokens(), None);
+        assert_eq!(usage.reasoning_tokens(), None);
+        assert_eq!(usage.total_tokens(), None);
+        assert_eq!(metadata.response_id(), None);
+        assert_eq!(metadata.response_model(), None);
+        assert_eq!(metadata.system_fingerprint(), None);
+    }
+
+    #[test]
+    fn preserves_missing_metadata_and_empty_choices() {
+        // Arrange
+        let response = serde_json::from_value::<ChatCompletionResponse>(serde_json::json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": "{}"}
+            }]
+        }))
+        .expect("minimal response should decode");
+        let empty_response = serde_json::from_value::<ChatCompletionResponse>(serde_json::json!({
+            "choices": []
+        }))
+        .expect("empty choices should decode");
+
+        // Act
+        let (_, metadata) = response
+            .into_completion()
+            .expect("minimal response should retain its choice");
+
+        // Assert
+        assert_eq!(metadata.response_id(), None);
+        assert_eq!(metadata.response_model(), None);
+        assert_eq!(metadata.system_fingerprint(), None);
+        assert_eq!(metadata.usage(), None);
+        assert!(empty_response.into_completion().is_none());
+    }
+
+    #[test]
     fn rejects_success_chunk_that_exceeds_remaining_capacity() {
         // Arrange
         let mut body = vec![0; SUCCESS_BODY_LIMIT_BYTES - 1];
@@ -783,6 +996,35 @@ mod tests {
                 .expect("transport failure should retain its source")
                 .to_string(),
             "connection reset"
+        );
+    }
+
+    #[test]
+    fn normalizes_transport_error_classification() {
+        // Arrange
+        let backend = ChatCompletionBackend::with_client(
+            "test-key".to_string(),
+            "https://example.com/v1".to_string(),
+            "model".to_string(),
+            ChatCompletionProviderPolicy {
+                display_name: "Provider",
+                structured_output: StructuredOutputMode::JsonSchema,
+                telemetry_name: "provider",
+                unsupported_schema_reason: "object schema required",
+            },
+            default_client(),
+        );
+        let transport_error = ChatCompletionError::transport(io::Error::other("offline"));
+
+        // Act
+        let error = backend.map_completion_error(transport_error);
+
+        // Assert
+        assert_eq!(error.error_type(), model::ModelErrorType::Transport);
+        assert_eq!(error.http_status(), None);
+        assert_eq!(
+            error.to_string(),
+            "model request failed: Chat Completions transport failed: offline"
         );
     }
 

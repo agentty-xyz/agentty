@@ -216,7 +216,7 @@ mod tests {
             r#"{"name":"Ada"}"#,
         )
         .await;
-        let model = qwen(&server);
+        let model: Box<dyn model::Model> = Box::new(qwen(&server));
 
         // Act
         let response = model
@@ -226,6 +226,58 @@ mod tests {
 
         // Assert
         assert_eq!(response.output(), Some(&json!({ "name": "Ada" })));
+    }
+
+    #[tokio::test]
+    async fn completes_with_normalized_provider_metadata() {
+        // Arrange
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": r#"{"name":"Ada"}"#}
+                }],
+                "id": "response-1",
+                "model": "qwen-plus-2026-08-16",
+                "system_fingerprint": "fingerprint-1",
+                "usage": {
+                    "completion_tokens": 9,
+                    "completion_tokens_details": {"reasoning_tokens": 2},
+                    "prompt_tokens": 12,
+                    "prompt_tokens_details": {"cached_tokens": 4},
+                    "total_tokens": 21
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let model: Box<dyn model::ModelWithMetadata> = Box::new(qwen(&server));
+
+        // Act
+        let completion = model
+            .complete_with_metadata(request("extract the name"))
+            .await
+            .expect("Qwen completion metadata should decode");
+        let metadata = completion.metadata();
+        let usage = metadata.usage().expect("Qwen usage should be retained");
+
+        // Assert
+        assert_eq!(
+            completion.response().output(),
+            Some(&json!({ "name": "Ada" }))
+        );
+        assert_eq!(metadata.finish_reason(), "stop");
+        assert_eq!(metadata.response_id(), Some("response-1"));
+        assert_eq!(metadata.response_model(), Some("qwen-plus-2026-08-16"));
+        assert_eq!(metadata.system_fingerprint(), Some("fingerprint-1"));
+        assert_eq!(usage.input_tokens(), Some(12));
+        assert_eq!(usage.output_tokens(), Some(9));
+        assert_eq!(usage.total_tokens(), Some(21));
+        assert_eq!(usage.cache_hit_tokens(), Some(4));
+        assert_eq!(usage.cache_miss_tokens(), None);
+        assert_eq!(usage.reasoning_tokens(), Some(2));
     }
 
     #[tokio::test]
@@ -511,7 +563,7 @@ mod tests {
         // Assert
         assert!(matches!(
             output,
-            crate::chat_completion::GeneratedResponse::Output(output)
+            crate::chat_completion::GeneratedResponse::Output { output, .. }
                 if output == r#"{"name":"Ada"}"#
         ));
     }
@@ -832,6 +884,8 @@ mod tests {
             .and_then(|source| source.downcast_ref::<reqwest::Error>())
             .expect("HTTP failure should retain its reqwest source");
         assert_eq!(source.status(), Some(reqwest::StatusCode::UNAUTHORIZED));
+        assert_eq!(error.error_type(), model::ModelErrorType::Provider);
+        assert_eq!(error.http_status(), Some(401));
     }
 
     #[tokio::test]
@@ -883,5 +937,15 @@ mod tests {
 
         // Assert
         assert!(matches!(error, model::ModelError::Request(_)));
+        assert_eq!(
+            error.error_type(),
+            model::ModelErrorType::InvalidProviderResponse
+        );
+        assert_eq!(error.http_status(), None);
+        assert!(
+            error.to_string().starts_with(
+                "model request failed: Chat Completions returned an invalid response:"
+            )
+        );
     }
 }
