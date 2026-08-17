@@ -7,6 +7,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.1] - 2026-08-16
+
+### Added
+
+- agentty: select contiguous changed-row ranges with `Shift+V` and attach inline
+  comments to the selected ranges.
+- ci: publish source, workspace, and end-to-end test results to Trunk when configured.
+
+### Changed
+
+- agentty: resolve selected review comments together with `Space` toggles and `Enter`
+  submission.
+- agentty: format session timers with spaces between hours, minutes, and seconds.
+- ci: run end-to-end tests through a shared workflow using the digest-pinned container.
+- docs: clarify the open-source code review roadmap title.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.1`.
+
+### Fixed
+
+- testty: keep stable-frame waits sensitive to terminal style and cursor redraws while
+  rejecting empty startup output.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.15.0] - 2026-08-15
 
 ### Added
