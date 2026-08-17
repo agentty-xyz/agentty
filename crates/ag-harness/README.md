@@ -14,3 +14,5 @@ let output = harness.run(prompt, output_schema).await?;
 
 Provide `MODEL_API_KEY`, a repository root, explicitly allowed tools, a prompt, and an
 `OutputSchema`. Expect schema-validated JSON or a typed error.
+
+Use `ModelWithMetadata::complete_with_metadata()` for normalized completion metadata.

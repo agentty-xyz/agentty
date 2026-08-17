@@ -63,6 +63,8 @@ request's `OutputSchema`. Provider request execution remains private so applicat
 cannot bypass this lifecycle. `ModelClient` validates and retains the provider and model
 identity during construction, before any request starts.
 
+`ModelWithMetadata` adds object-safe completion metadata without changing `Model`.
+
 Provider-owned adapters and compatibility rules live under the private `provider`
 module. API-family clients remain separate so multiple providers can reuse a wire
 protocol without sharing provider policy.
