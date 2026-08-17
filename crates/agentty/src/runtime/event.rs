@@ -362,8 +362,8 @@ mod tests {
     use crate::domain::session::{Session, SessionRole, SessionSize, SessionStats, Status};
     use crate::domain::transient_message::TransientMessageStore;
     use crate::presentation::app_mode::{
-        AppMode, ChatFocus, DiffFocus, DiffLineCommentAnchor, DiffLineComments, DiffLineSide,
-        DiffPreview,
+        AppMode, ChatFocus, DiffFocus, DiffLineCommentAnchor, DiffLineCommentTarget,
+        DiffLineComments, DiffLineSide, DiffPreview,
     };
     use crate::presentation::prompt::{
         PromptAttachmentState, PromptHistoryState, PromptSlashState,
@@ -779,12 +779,12 @@ mod tests {
         // Arrange
         let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
         let mut line_comments = DiffLineComments::default();
-        line_comments.start_editing(DiffLineCommentAnchor {
+        line_comments.start_editing_target(DiffLineCommentTarget::single(DiffLineCommentAnchor {
             content: "review();".to_string(),
             line: 1,
             path: "src/main.rs".to_string(),
             side: DiffLineSide::New,
-        });
+        }));
         app.mode = AppMode::Diff {
             diff: "diff --git a/src/main.rs b/src/main.rs\n+review();\n".to_string(),
             file_explorer_selected_index: 1,

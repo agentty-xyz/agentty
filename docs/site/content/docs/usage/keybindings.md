@@ -274,11 +274,15 @@ showing the git diff. While Files remains focused, use `Shift+j` / `Shift+k` or 
 `Down` to scroll the selected file without moving focus. Press `Enter` on a file to
 focus its changes, then press `Enter` again to edit the selected changed line inline.
 After finishing with `Enter` or `Esc`, use `j` / `k` or the arrow keys to move the line
-cursor and press `Enter` to edit the selected line. `Esc`, `Left`, `h`, or `f` returns
-focus to the file tree. Linked review requests add a Comments section below Files; `c`
-focuses Comments while the file tree is focused, and `f` returns to Files. The Comments
-section keeps its own `Enter` action for submitting marked review threads. Press `s` to
-submit every inline diff comment together in the next turn.
+cursor and press `Enter` to edit the selected line. Press `Shift+V` to start a visual
+changed-row selection, extend it with the same navigation keys, then press `Enter` to
+comment on the range or `Esc` to cancel the selection. The range stays highlighted while
+its inline editor is open and after the comment is finished, so the comment's source
+remains visible. `Esc`, `Left`, `h`, or `f` returns focus to the file tree when no
+visual selection is active. Linked review requests add a Comments section below Files;
+`c` focuses Comments while the file tree is focused, and `f` returns to Files. The
+Comments section keeps its own `Enter` action for submitting marked review threads.
+Press `s` to submit every inline diff comment together in the next turn.
 
 | Key                   | Action                                                 |
 | --------------------- | ------------------------------------------------------ |
@@ -286,6 +290,7 @@ submit every inline diff comment together in the next turn.
 | `Esc`                 | Focus Files, or leave from Files                       |
 | `j` / `k`             | Select a file or changed line                          |
 | `Shift+j` / `Shift+k` | Scroll selected file, or select a changed line         |
+| `Shift+V`             | Start visual changed-row selection                     |
 | `Enter`               | Focus a file, or edit/finish a comment                 |
 | `Up` / `Down`         | Scroll selected file, select a line, or scroll preview |
 | `Left` / `h` / `f`    | Return to Files                                        |
@@ -308,14 +313,15 @@ markdown file loads automatically, while folders and other file types continue s
 their normal diff. Deleted, binary, oversized, and unreadable markdown files show a
 short availability notice. Press `p` again to return to raw diff lines.
 
-Each line comment stays visible beneath its changed line while Diff mode remains open.
-Press `Enter` again on a commented line to edit it; clearing its text and finishing
-removes it. Completed comments use a distinct inset background, while the active editor
-uses the stronger selection highlight. `s` combines all finished comments with any draft
-text and image attachments that were present before opening the diff, then submits the
-batch as one session turn. The chat renders the batch compactly as one path, line, side,
-and comment per row. Comments on deleted lines also include the captured pre-change
-source text so the agent retains context that is absent from the worktree.
+Each comment stays visible beneath its changed line or selected range while Diff mode
+remains open. Press `Enter` again on the same line or range to edit it; clearing its
+text and finishing removes it. Completed comments use a distinct inset background, while
+the active editor uses the stronger selection highlight. `s` combines all finished
+comments with any draft text and image attachments that were present before opening the
+diff, then submits the batch as one session turn. The chat renders the batch compactly
+as one path, line or range, side, and comment per row. Comments containing deleted lines
+also include their captured pre-change source text so the agent retains context that is
+absent from the worktree.
 
 Read-only diffs, including `Merged` sessions, keep changed-line navigation but hide the
 inline comment and batch-submission shortcuts.

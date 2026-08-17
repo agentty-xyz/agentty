@@ -5,7 +5,7 @@ use crate::app::{App, AppEvent};
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
 use crate::presentation::app_mode::{
-    AppMode, DiffFocus, DiffLineCommentAnchor, DiffLineComments, DiffPreview,
+    AppMode, DiffFocus, DiffLineCommentTarget, DiffLineComments, DiffPreview,
     DiffPreviewUnavailableReason, DiffRestoreTarget, DiffReviewComments, DiffScrollCache,
     DiffSidebarFocus, HelpContext, PromptModeSnapshot, ViewportRect,
     allows_diff_line_comment_reply,
@@ -189,7 +189,7 @@ fn handle_navigation_key(
         diff,
         mut file_explorer_selected_index,
         mut focus,
-        line_comments,
+        mut line_comments,
         mut preview,
         mut review_comments,
         restore,
@@ -208,7 +208,7 @@ fn handle_navigation_key(
         diff: &diff,
         file_explorer_selected_index: &mut file_explorer_selected_index,
         focus: &mut focus,
-        line_comments: &line_comments,
+        line_comments: &mut line_comments,
         preview: &mut preview,
         review_comments: &mut review_comments,
         scroll_cache: &mut scroll_cache,
@@ -216,14 +216,24 @@ fn handle_navigation_key(
         selected_diff_line_index: &mut selected_diff_line_index,
         session_id: &session_id,
     };
-    let line_comment_anchor = selected_line_comment_anchor(
+    let row_selection_key_handled = handle_row_selection_key(
         render_cache_store,
         key,
-        &navigation,
+        &mut navigation,
         can_reply_with_line_comments,
     );
-    let selection_changed =
-        apply_navigation_key(app, render_cache_store, content_area, key, &mut navigation);
+    let line_comment_target = (!row_selection_key_handled)
+        .then(|| {
+            selected_line_comment_target(
+                render_cache_store,
+                key,
+                &navigation,
+                can_reply_with_line_comments,
+            )
+        })
+        .flatten();
+    let selection_changed = !row_selection_key_handled
+        && apply_navigation_key(app, render_cache_store, content_area, key, &mut navigation);
 
     if selection_changed && preview.is_enabled() {
         refresh_selected_preview(
@@ -249,8 +259,8 @@ fn handle_navigation_key(
         selected_diff_line_index,
         session_id,
     };
-    if let Some(anchor) = line_comment_anchor {
-        start_line_comment_edit(app, render_cache_store, content_area, anchor);
+    if let Some(target) = line_comment_target {
+        start_line_comment_edit(app, render_cache_store, content_area, target);
     } else if should_submit_line_comments(app, key) {
         open_line_comment_prompt(app);
     }
@@ -271,16 +281,54 @@ pub(crate) fn should_submit_line_comments(app: &App, key: KeyEvent) -> bool {
         && is_plain_char_key(key, 's')
         && *focus == DiffFocus::Content
         && !line_comments.is_editing()
+        && !line_comments.is_selecting()
         && !line_comments.comments.is_empty()
 }
 
-/// Returns the selected changed line when `Enter` is pressed in the patch.
-fn selected_line_comment_anchor(
+/// Handles `Shift+V` row-selection entry and `Esc` cancellation.
+fn handle_row_selection_key(
+    render_cache_store: &RenderCacheStore,
+    key: KeyEvent,
+    navigation: &mut DiffKeyNavigation<'_>,
+    can_reply_with_line_comments: bool,
+) -> bool {
+    if navigation.line_comments.is_selecting() && key.code == KeyCode::Esc {
+        navigation.line_comments.cancel_selection();
+
+        return true;
+    }
+    let review_comments_are_focused = navigation
+        .review_comments
+        .as_ref()
+        .is_some_and(|review_comments| review_comments.sidebar_focus == DiffSidebarFocus::Comments);
+    if !can_reply_with_line_comments
+        || !is_shift_char_key(key, 'v')
+        || *navigation.focus != DiffFocus::Content
+        || review_comments_are_focused
+        || selected_preview_is_visible(
+            navigation.diff,
+            *navigation.file_explorer_selected_index,
+            render_cache_store.diff_layout_cache(),
+            navigation.preview,
+        )
+    {
+        return false;
+    }
+
+    navigation
+        .line_comments
+        .start_selection(*navigation.selected_diff_line_index);
+
+    true
+}
+
+/// Returns the selected changed rows when `Enter` is pressed in the patch.
+fn selected_line_comment_target(
     render_cache_store: &RenderCacheStore,
     key: KeyEvent,
     navigation: &DiffKeyNavigation<'_>,
     can_reply_with_line_comments: bool,
-) -> Option<DiffLineCommentAnchor> {
+) -> Option<DiffLineCommentTarget> {
     let review_comments_are_focused = navigation
         .review_comments
         .as_ref()
@@ -300,21 +348,35 @@ fn selected_line_comment_anchor(
         return None;
     }
 
-    render_cache_store
+    let content = render_cache_store
         .diff_layout_cache()
-        .content(navigation.diff)
-        .selected_changed_line(
-            *navigation.file_explorer_selected_index,
-            *navigation.selected_diff_line_index,
-        )
+        .content(navigation.diff);
+    let (start_changed_line_index, end_changed_line_index) = navigation
+        .line_comments
+        .selected_row_bounds(*navigation.selected_diff_line_index);
+    if start_changed_line_index == end_changed_line_index {
+        return content
+            .selected_changed_line(
+                *navigation.file_explorer_selected_index,
+                start_changed_line_index,
+            )
+            .map(DiffLineCommentTarget::single);
+    }
+    let anchors = content.selected_changed_lines(
+        *navigation.file_explorer_selected_index,
+        start_changed_line_index,
+        end_changed_line_index,
+    );
+
+    DiffLineCommentTarget::from_anchors(anchors)
 }
 
-/// Starts inline editing without leaving the selected changed line.
+/// Starts inline editing without leaving the selected changed rows.
 fn start_line_comment_edit(
     app: &mut App,
     render_cache_store: &RenderCacheStore,
     content_area: Rect,
-    anchor: DiffLineCommentAnchor,
+    target: DiffLineCommentTarget,
 ) {
     let AppMode::Diff {
         diff,
@@ -322,14 +384,19 @@ fn start_line_comment_edit(
         line_comments,
         scroll_cache,
         scroll_offset,
-        selected_diff_line_index,
         ..
     } = &mut app.mode
     else {
         return;
     };
 
-    line_comments.start_editing(anchor);
+    let content = render_cache_store.diff_layout_cache().content(diff);
+    let Some(comment_changed_line_index) =
+        content.changed_line_index_for_anchor(*file_explorer_selected_index, target.last_anchor())
+    else {
+        return;
+    };
+    line_comments.start_editing_target(target);
     *scroll_cache = None;
     let layout = page::diff::diff_changed_line_layout(
         diff,
@@ -338,9 +405,7 @@ fn start_line_comment_edit(
         content_area,
         render_cache_store.diff_layout_cache(),
     );
-    let Some(selected_range) = layout.changed_line_ranges.get(*selected_diff_line_index) else {
-        return;
-    };
+    let selected_range = &layout.changed_line_ranges[comment_changed_line_index];
     let viewport_height = usize::from(layout.render_layout.viewport_height);
     if viewport_height == 0 {
         *scroll_offset = 0;
@@ -500,7 +565,7 @@ struct DiffKeyNavigation<'a> {
     diff: &'a str,
     file_explorer_selected_index: &'a mut usize,
     focus: &'a mut DiffFocus,
-    line_comments: &'a DiffLineComments,
+    line_comments: &'a mut DiffLineComments,
     preview: &'a mut DiffPreview,
     review_comments: &'a mut Option<DiffReviewComments>,
     scroll_cache: &'a mut Option<DiffScrollCache>,
@@ -587,11 +652,13 @@ fn apply_navigation_key(
             );
         }
         KeyCode::Esc | KeyCode::Left if *navigation.focus == DiffFocus::Content => {
+            navigation.line_comments.cancel_selection();
             *navigation.focus = DiffFocus::Files;
         }
         KeyCode::Char(character @ ('f' | 'h'))
             if *navigation.focus == DiffFocus::Content && is_plain_char_key(key, character) =>
         {
+            navigation.line_comments.cancel_selection();
             *navigation.focus = DiffFocus::Files;
         }
         KeyCode::Char('p')
@@ -1036,7 +1103,7 @@ mod tests {
     use ratatui::layout::Rect;
 
     use super::*;
-    use crate::presentation::app_mode::DiffReviewComments;
+    use crate::presentation::app_mode::{DiffLineCommentAnchor, DiffReviewComments};
 
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 12);
 
@@ -1382,6 +1449,7 @@ mod tests {
                 line_comments: DiffLineComments {
                     editing_index: None,
                     ref comments,
+                    ..
                 },
                 selected_diff_line_index: 0,
                 ..
@@ -2570,6 +2638,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_shift_v_selects_changed_rows_for_one_comment() {
+        // Arrange
+        let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
+        let diff = concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -0,0 +1,3 @@\n",
+            "+first();\n",
+            "+second();\n",
+            "+third();\n",
+        );
+        app.mode = diff_mode_fixture(diff, 1, DiffFocus::Content, DiffPreview::default());
+        let expected_target = DiffLineCommentTarget::from_anchors(vec![
+            DiffLineCommentAnchor {
+                content: "first();".to_string(),
+                line: 1,
+                path: "src/main.rs".to_string(),
+                side: crate::presentation::app_mode::DiffLineSide::New,
+            },
+            DiffLineCommentAnchor {
+                content: "second();".to_string(),
+                line: 2,
+                path: "src/main.rs".to_string(),
+                side: crate::presentation::app_mode::DiffLineSide::New,
+            },
+        ])
+        .expect("first two changed rows should create a range target");
+
+        // Act — start downward selection, then cancel without leaving content focus.
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff {
+                focus: DiffFocus::Content,
+                line_comments,
+                selected_diff_line_index: 1,
+                ..
+            } if !line_comments.is_selecting()
+        ));
+
+        // Act — select upward from the second row and open one range editor.
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::SHIFT),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff {
+                line_comments,
+                selected_diff_line_index: 0,
+                ..
+            } if line_comments.is_editing()
+                && line_comments.is_selecting()
+                && line_comments.comments[0].target == expected_target
+        ));
+
+        // Act — completed comments cannot submit while a new range is active.
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. }
+                if !line_comments.is_editing() && !line_comments.is_selecting()
+        ));
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT),
+        );
+        let should_submit = should_submit_line_comments(
+            &app,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(!should_submit);
+    }
+
+    #[tokio::test]
     async fn test_merged_diff_rejects_inline_comment_creation_and_submission() {
         // Arrange
         let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
@@ -2581,23 +2768,31 @@ mod tests {
         handle(
             &mut app,
             TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         );
 
         // Assert
         assert!(matches!(
             &app.mode,
-            AppMode::Diff { line_comments, .. } if line_comments.comments.is_empty()
+            AppMode::Diff { line_comments, .. }
+                if line_comments.comments.is_empty() && !line_comments.is_selecting()
         ));
 
         // Arrange
         if let AppMode::Diff { line_comments, .. } = &mut app.mode {
-            line_comments.start_editing(DiffLineCommentAnchor {
-                content: "review();".to_string(),
-                line: 1,
-                path: "src/main.rs".to_string(),
-                side: crate::presentation::app_mode::DiffLineSide::New,
-            });
+            line_comments.start_editing_target(DiffLineCommentTarget::single(
+                DiffLineCommentAnchor {
+                    content: "review();".to_string(),
+                    line: 1,
+                    path: "src/main.rs".to_string(),
+                    side: crate::presentation::app_mode::DiffLineSide::New,
+                },
+            ));
             line_comments
                 .editing_input_mut()
                 .expect("seeded inline comment should be editable")
@@ -2636,23 +2831,49 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
         let diff = scrollable_diff_fixture();
-        let anchor = DiffLineCommentAnchor {
-            content: "line 39".to_string(),
-            line: 40,
-            path: "src/main.rs".to_string(),
-            side: crate::presentation::app_mode::DiffLineSide::New,
-        };
+        let render_cache_store = RenderCacheStore::default();
+        let target = DiffLineCommentTarget::single(
+            render_cache_store
+                .diff_layout_cache()
+                .content(&diff)
+                .selected_changed_line(1, 39)
+                .expect("last changed line should resolve from the diff"),
+        );
 
         // Act
         start_line_comment_edit(
             &mut app,
-            &RenderCacheStore::default(),
+            &render_cache_store,
             TEST_TERMINAL_SIZE,
-            anchor.clone(),
+            target.clone(),
         );
 
         // Assert
         assert!(matches!(app.mode, AppMode::List));
+
+        // Arrange
+        app.mode = diff_mode_fixture(&diff, 1, DiffFocus::Content, DiffPreview::default());
+        let missing_target = DiffLineCommentTarget::single(DiffLineCommentAnchor {
+            content: "missing line".to_string(),
+            line: 999,
+            path: "src/main.rs".to_string(),
+            side: crate::presentation::app_mode::DiffLineSide::New,
+        });
+
+        // Act
+        start_line_comment_edit(
+            &mut app,
+            &render_cache_store,
+            TEST_TERMINAL_SIZE,
+            missing_target,
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. }
+                if !line_comments.is_editing() && line_comments.comments.is_empty()
+        ));
 
         // Arrange
         app.mode = diff_mode_fixture(&diff, 1, DiffFocus::Content, DiffPreview::default());
@@ -2667,9 +2888,9 @@ mod tests {
         // Act
         start_line_comment_edit(
             &mut app,
-            &RenderCacheStore::default(),
+            &render_cache_store,
             TEST_TERMINAL_SIZE,
-            anchor.clone(),
+            target.clone(),
         );
 
         // Assert
@@ -2677,9 +2898,10 @@ mod tests {
             &app.mode,
             AppMode::Diff {
                 line_comments,
-                scroll_offset: 0,
+                scroll_offset,
+                selected_diff_line_index: usize::MAX,
                 ..
-            } if line_comments.is_editing()
+            } if line_comments.is_editing() && *scroll_offset > 0
         ));
 
         // Arrange
@@ -2688,9 +2910,9 @@ mod tests {
         // Act
         start_line_comment_edit(
             &mut app,
-            &RenderCacheStore::default(),
+            &render_cache_store,
             Rect::new(0, 0, 80, 0),
-            anchor.clone(),
+            target.clone(),
         );
 
         // Assert
@@ -2713,12 +2935,7 @@ mod tests {
         }
 
         // Act
-        start_line_comment_edit(
-            &mut app,
-            &RenderCacheStore::default(),
-            TEST_TERMINAL_SIZE,
-            anchor,
-        );
+        start_line_comment_edit(&mut app, &render_cache_store, TEST_TERMINAL_SIZE, target);
 
         // Assert
         assert!(matches!(
@@ -2823,12 +3040,14 @@ mod tests {
             ..
         } = &mut app.mode
         {
-            line_comments.start_editing(DiffLineCommentAnchor {
-                content: "review();".to_string(),
-                line: 1,
-                path: "src/main.rs".to_string(),
-                side: crate::presentation::app_mode::DiffLineSide::New,
-            });
+            line_comments.start_editing_target(DiffLineCommentTarget::single(
+                DiffLineCommentAnchor {
+                    content: "review();".to_string(),
+                    line: 1,
+                    path: "src/main.rs".to_string(),
+                    side: crate::presentation::app_mode::DiffLineSide::New,
+                },
+            ));
             line_comments
                 .editing_input_mut()
                 .expect("comment should be editable")
@@ -2902,7 +3121,7 @@ mod tests {
             path: "src/lib.rs".to_string(),
             side: crate::presentation::app_mode::DiffLineSide::Old,
         };
-        line_comments.start_editing(anchor);
+        line_comments.start_editing_target(DiffLineCommentTarget::single(anchor));
         line_comments
             .editing_input_mut()
             .expect("comment should be editable")

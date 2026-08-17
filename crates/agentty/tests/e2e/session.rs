@@ -7267,6 +7267,77 @@ fn test_diff_line_comments() -> E2eResult {
     Ok(())
 }
 
+/// Verify that `Shift+V` selects a changed-row range for one inline comment.
+#[test]
+fn test_diff_row_selection_comments() -> E2eResult {
+    // Arrange — Ctrl+M emits Enter's carriage return consistently in PTY and VHS.
+    const ENTER_KEY: &str = "Ctrl+m";
+
+    // Act, Assert
+    FeatureTest::new("diff_row_selection_comments")
+        .with_git()
+        .setup(|env| {
+            seed_review_ready_session(env)?;
+            seed_linked_review_worktree_with_diff(env)?;
+            seed_sessions_startup_tab(env)
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("main.rs", 5000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key(ENTER_KEY)
+                    .wait_for_text("Enter: comment", 5000)
+                    .write_text("V")
+                    .wait_for_text("Esc: cancel", 5000)
+                    .press_key("j")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "selected_comment_rows",
+                        "Visual line selection highlights a changed-row range",
+                    )
+                    .press_key(ENTER_KEY)
+                    .wait_for_text("comment: |", 5000)
+                    .write_text("Explain these lines.")
+                    .wait_for_text("Explain these lines.|", 3000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "editing_row_range_comment",
+                        "Selected rows stay highlighted while entering the comment",
+                    )
+                    .press_key(ENTER_KEY)
+                    .wait_for_text("comment: Explain these lines.", 3000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "row_range_comment",
+                        "The completed comment keeps its source range highlighted",
+                    )
+            },
+            |frame, report| {
+                let selection_frame = common::frame_from_capture(&report.captures[0]);
+                let selection_full = Region::full(selection_frame.cols(), selection_frame.rows());
+                assertion::assert_text_in_region(&selection_frame, "Esc: cancel", &selection_full);
+
+                let editor_frame = common::frame_from_capture(&report.captures[1]);
+                let editor_full = Region::full(editor_frame.cols(), editor_frame.rows());
+                assertion::assert_text_in_region(
+                    &editor_frame,
+                    "comment: Explain these lines.|",
+                    &editor_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "comment: Explain these lines.", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that `p` toggles a changed markdown file between raw diff and a
 /// rendered markdown/mermaid preview.
 #[test]

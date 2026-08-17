@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use ag_forge::ReviewCommentSnapshot;
 
 use super::help_action::{
@@ -67,35 +69,122 @@ impl DiffLineCommentAnchor {
     }
 }
 
-/// One editable comment attached to a changed diff line.
+/// Ordered changed rows that share one inline comment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiffLineCommentTarget {
+    /// First changed row in this target.
+    first_anchor: DiffLineCommentAnchor,
+    /// Additional changed rows in visual top-to-bottom order.
+    remaining_anchors: Vec<DiffLineCommentAnchor>,
+}
+
+impl DiffLineCommentTarget {
+    /// Creates a target containing one changed row.
+    pub(crate) fn single(anchor: DiffLineCommentAnchor) -> Self {
+        Self {
+            first_anchor: anchor,
+            remaining_anchors: Vec::new(),
+        }
+    }
+
+    /// Creates a nonempty target from changed rows in visual order.
+    pub(crate) fn from_anchors(anchors: Vec<DiffLineCommentAnchor>) -> Option<Self> {
+        let mut anchors = anchors.into_iter();
+        let first_anchor = anchors.next()?;
+
+        Some(Self {
+            first_anchor,
+            remaining_anchors: anchors.collect(),
+        })
+    }
+
+    /// Returns the top changed row in this comment target.
+    pub(crate) fn first_anchor(&self) -> &DiffLineCommentAnchor {
+        &self.first_anchor
+    }
+
+    /// Returns the bottom changed row used to place the inline editor.
+    pub(crate) fn last_anchor(&self) -> &DiffLineCommentAnchor {
+        self.remaining_anchors.last().unwrap_or(&self.first_anchor)
+    }
+
+    /// Iterates through every changed row in visual order.
+    fn anchors(&self) -> impl Iterator<Item = &DiffLineCommentAnchor> {
+        std::iter::once(&self.first_anchor).chain(self.remaining_anchors.iter())
+    }
+
+    /// Builds one compact next-turn prompt line for this row target.
+    fn prompt_line(&self, comment: &str) -> String {
+        let first_anchor = &self.first_anchor;
+        if self.remaining_anchors.is_empty() {
+            return first_anchor.prompt_line(comment);
+        }
+        let last_anchor = self.last_anchor();
+        let mut location =
+            if first_anchor.path == last_anchor.path && first_anchor.side == last_anchor.side {
+                format!(
+                    "{}:{}-{} [{}]",
+                    first_anchor.path,
+                    first_anchor.line,
+                    last_anchor.line,
+                    first_anchor.side.prompt_label(),
+                )
+            } else {
+                format!(
+                    "{}:{} [{}]..{}:{} [{}]",
+                    first_anchor.path,
+                    first_anchor.line,
+                    first_anchor.side.prompt_label(),
+                    last_anchor.path,
+                    last_anchor.line,
+                    last_anchor.side.prompt_label(),
+                )
+            };
+        let deleted_source = self
+            .anchors()
+            .filter(|anchor| anchor.side == DiffLineSide::Old)
+            .map(|anchor| anchor.content.as_str())
+            .collect::<Vec<_>>();
+        if !deleted_source.is_empty() {
+            let _ = write!(location, ", deleted source={deleted_source:?}");
+        }
+
+        format!("- {location}: {}", comment.trim())
+    }
+}
+
+/// One editable comment attached to one or more changed diff rows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DiffLineComment {
-    /// Changed source line that owns this comment.
-    pub(crate) anchor: DiffLineCommentAnchor,
     /// User-authored inline comment text.
     pub(crate) input: InputState,
+    /// Changed source rows that own this comment.
+    pub(crate) target: DiffLineCommentTarget,
 }
 
 /// Inline comments accumulated while the unified diff remains open.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct DiffLineComments {
-    /// Index of the comment currently receiving text input.
-    pub(crate) editing_index: Option<usize>,
     /// Comments retained in the order in which their lines were selected.
     pub(crate) comments: Vec<DiffLineComment>,
+    /// Index of the comment currently receiving text input.
+    pub(crate) editing_index: Option<usize>,
+    /// Changed-row index where visual line selection started.
+    pub(crate) selection_anchor_index: Option<usize>,
 }
 
 impl DiffLineComments {
-    /// Starts editing the existing comment for `anchor` or inserts a new one.
-    pub(crate) fn start_editing(&mut self, anchor: DiffLineCommentAnchor) -> usize {
+    /// Starts editing the existing comment for `target` or inserts a new one,
+    /// retaining any active visual row selection until editing finishes.
+    pub(crate) fn start_editing_target(&mut self, target: DiffLineCommentTarget) -> usize {
         let editing_index = self
             .comments
             .iter()
-            .position(|comment| comment.anchor == anchor)
+            .position(|comment| comment.target == target)
             .unwrap_or_else(|| {
                 self.comments.push(DiffLineComment {
-                    anchor,
                     input: InputState::default(),
+                    target,
                 });
 
                 self.comments.len().saturating_sub(1)
@@ -105,6 +194,32 @@ impl DiffLineComments {
         editing_index
     }
 
+    /// Starts visual changed-row selection at `selected_index`.
+    pub(crate) fn start_selection(&mut self, selected_index: usize) {
+        self.selection_anchor_index.get_or_insert(selected_index);
+    }
+
+    /// Cancels visual changed-row selection.
+    pub(crate) fn cancel_selection(&mut self) {
+        self.selection_anchor_index = None;
+    }
+
+    /// Returns whether changed-row visual selection is active.
+    pub(crate) fn is_selecting(&self) -> bool {
+        self.selection_anchor_index.is_some()
+    }
+
+    /// Returns normalized inclusive bounds for the active row selection or
+    /// cursor.
+    pub(crate) fn selected_row_bounds(&self, selected_index: usize) -> (usize, usize) {
+        let anchor_index = self.selection_anchor_index.unwrap_or(selected_index);
+
+        (
+            anchor_index.min(selected_index),
+            anchor_index.max(selected_index),
+        )
+    }
+
     /// Returns the input currently receiving inline comment keystrokes.
     pub(crate) fn editing_input_mut(&mut self) -> Option<&mut InputState> {
         self.editing_index
@@ -112,11 +227,12 @@ impl DiffLineComments {
             .map(|comment| &mut comment.input)
     }
 
-    /// Finishes editing and removes a comment whose text is blank.
+    /// Finishes editing, clears visual selection, and removes blank comments.
     pub(crate) fn finish_editing(&mut self) {
         let Some(editing_index) = self.editing_index.take() else {
             return;
         };
+        self.selection_anchor_index = None;
         if self
             .comments
             .get(editing_index)
@@ -137,7 +253,7 @@ impl DiffLineComments {
             .comments
             .iter()
             .filter(|comment| !comment.input.text().trim().is_empty())
-            .map(|comment| comment.anchor.prompt_line(comment.input.text()))
+            .map(|comment| comment.target.prompt_line(comment.input.text()))
             .collect::<Vec<_>>()
             .join("\n");
         if comments.is_empty() {
@@ -892,7 +1008,7 @@ mod tests {
         let mut line_comments = DiffLineComments::default();
 
         // Act
-        line_comments.start_editing(anchor.clone());
+        line_comments.start_editing_target(DiffLineCommentTarget::single(anchor.clone()));
         line_comments
             .editing_input_mut()
             .expect("new comment should be editable")
@@ -908,7 +1024,8 @@ mod tests {
         assert!(!line_comments.is_editing());
 
         // Act — selecting the same line edits the existing comment.
-        let editing_index = line_comments.start_editing(anchor);
+        let editing_index =
+            line_comments.start_editing_target(DiffLineCommentTarget::single(anchor));
 
         // Assert
         assert_eq!(editing_index, 0);
@@ -936,15 +1053,105 @@ mod tests {
     }
 
     #[test]
+    fn test_diff_line_comment_target_formats_new_and_mixed_row_ranges() {
+        // Arrange
+        let new_target = DiffLineCommentTarget::from_anchors(vec![
+            DiffLineCommentAnchor {
+                content: "first();".to_string(),
+                line: 4,
+                path: "src/main.rs".to_string(),
+                side: DiffLineSide::New,
+            },
+            DiffLineCommentAnchor {
+                content: "second();".to_string(),
+                line: 5,
+                path: "src/main.rs".to_string(),
+                side: DiffLineSide::New,
+            },
+        ])
+        .expect("new-line range should create a target");
+        let mixed_target = DiffLineCommentTarget::from_anchors(vec![
+            DiffLineCommentAnchor {
+                content: "old();".to_string(),
+                line: 7,
+                path: "src/old.rs".to_string(),
+                side: DiffLineSide::Old,
+            },
+            DiffLineCommentAnchor {
+                content: "new();".to_string(),
+                line: 8,
+                path: "src/new.rs".to_string(),
+                side: DiffLineSide::New,
+            },
+        ])
+        .expect("mixed range should create a target");
+
+        // Act
+        let new_prompt = new_target.prompt_line("Explain this range.");
+        let mixed_prompt = mixed_target.prompt_line("Preserve the behavior.");
+        let last_anchor = mixed_target.last_anchor();
+        let empty_target = DiffLineCommentTarget::from_anchors(Vec::new());
+
+        // Assert
+        assert_eq!(new_prompt, "- src/main.rs:4-5 [new]: Explain this range.");
+        assert_eq!(
+            mixed_prompt,
+            "- src/old.rs:7 [old]..src/new.rs:8 [new], deleted source=[\"old();\"]: Preserve the \
+             behavior."
+        );
+        assert_eq!(last_anchor.content, "new();");
+        assert_eq!(empty_target, None);
+    }
+
+    #[test]
+    fn test_diff_line_comments_tracks_visual_row_selection() {
+        // Arrange
+        let mut line_comments = DiffLineComments::default();
+        let target = DiffLineCommentTarget::single(DiffLineCommentAnchor {
+            content: "selected();".to_string(),
+            line: 4,
+            path: "src/lib.rs".to_string(),
+            side: DiffLineSide::New,
+        });
+
+        // Act
+        line_comments.start_selection(3);
+        line_comments.start_selection(9);
+        let upward_bounds = line_comments.selected_row_bounds(1);
+        let downward_bounds = line_comments.selected_row_bounds(5);
+        line_comments.start_editing_target(target);
+
+        // Assert
+        assert!(line_comments.is_selecting());
+        assert!(line_comments.is_editing());
+        assert_eq!(upward_bounds, (1, 3));
+        assert_eq!(downward_bounds, (3, 5));
+
+        // Act
+        line_comments.finish_editing();
+
+        // Assert
+        assert!(!line_comments.is_selecting());
+        assert_eq!(line_comments.selected_row_bounds(5), (5, 5));
+
+        // Act
+        line_comments.start_selection(5);
+        line_comments.cancel_selection();
+
+        // Assert
+        assert!(!line_comments.is_selecting());
+    }
+
+    #[test]
     fn test_diff_line_comments_remove_blank_editor() {
         // Arrange
         let mut line_comments = DiffLineComments::default();
-        line_comments.start_editing(DiffLineCommentAnchor {
+        line_comments.start_editing_target(DiffLineCommentTarget::single(DiffLineCommentAnchor {
             content: "removed".to_string(),
             line: 3,
             path: "src/lib.rs".to_string(),
             side: DiffLineSide::Old,
-        });
+        }));
 
         // Act
         line_comments.finish_editing();

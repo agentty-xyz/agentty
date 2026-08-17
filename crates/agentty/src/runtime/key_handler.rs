@@ -933,8 +933,9 @@ mod tests {
     use crate::domain::session_message::SessionTranscript;
     use crate::infra::tmux::MockTmuxClient;
     use crate::presentation::app_mode::{
-        ConfirmationViewMode, DiffFocus, DiffLineCommentAnchor, DiffLineComments, DiffLineSide,
-        DiffPreview, DiffRestoreTarget, DiffReviewComments, PromptModeSnapshot,
+        ConfirmationViewMode, DiffFocus, DiffLineCommentAnchor, DiffLineCommentTarget,
+        DiffLineComments, DiffLineSide, DiffPreview, DiffRestoreTarget, DiffReviewComments,
+        PromptModeSnapshot,
     };
     use crate::presentation::prompt::{
         PromptAttachmentState, PromptHistoryState, PromptSlashState,
@@ -1812,12 +1813,12 @@ mod tests {
         app.sessions =
             crate::test_support::session_manager_with_handles(vec![session], HashMap::new()).into();
         let mut line_comments = DiffLineComments::default();
-        line_comments.start_editing(DiffLineCommentAnchor {
+        line_comments.start_editing_target(DiffLineCommentTarget::single(DiffLineCommentAnchor {
             content: "review();".to_string(),
             line: 1,
             path: "src/main.rs".to_string(),
             side: DiffLineSide::New,
-        });
+        }));
         line_comments
             .editing_input_mut()
             .expect("seeded comment should be editable")
