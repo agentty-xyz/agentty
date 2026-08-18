@@ -313,10 +313,12 @@ automatically; press `f` for a manual one.
 Session output renders common Markdown blocks in agent answers and persisted user
 messages, including headings, lists, block quotes, code fences, and pipe tables. Tables
 are aligned to the output panel width so compact comparison data stays readable in the
-terminal transcript. Leading horizontal whitespace in pasted prompts is preserved after
-submission, including nested indentation in multiline text. Tabs render at four-column
-tab stops. Transcript messages and workflow notices use one empty line between messages,
-regardless of padding stored with the message content.
+terminal transcript. Inline `$\rightarrow$` math renders as the Unicode `→` symbol;
+unsupported dollar-delimited expressions remain literal. Leading horizontal whitespace
+in pasted prompts is preserved after submission, including nested indentation in
+multiline text. Tabs render at four-column tab stops. Transcript messages and workflow
+notices use one empty line between messages, regardless of padding stored with the
+message content.
 
 <a id="usage-session-mermaid"></a> Complete ```` ```mermaid ```` fenced blocks in
 session output render as Unicode diagrams. Simple `graph`/`flowchart` diagrams with

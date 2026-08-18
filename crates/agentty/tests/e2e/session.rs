@@ -322,6 +322,36 @@ fn seed_session_with_inline_markdown_punctuation(
     Ok(())
 }
 
+/// Seeds one review-ready session whose transcript contains inline right-arrow
+/// math syntax.
+fn seed_session_with_inline_math(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular("inline-math-0001", "claude-opus-5", "main", "Review")
+            .with_title("Inline math output"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .append_session_message(
+                "inline-math-0001",
+                SessionMessageKind::AssistantAnswer,
+                r"Continue $\rightarrow$, then **$\rightarrow$** and *$\rightarrow$*.
+Display $$text **$\rightarrow$** and *$\rightarrow$* text$$ literally.
+Code **`$\rightarrow$`** and *`$\rightarrow$`* literally.",
+            )
+            .await
+    })?;
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("inline-m"))?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session whose transcript contains mermaid flowchart,
 /// entity-relationship, and sequence fenced blocks. The flowchart includes an
 /// extended shape, an `&` fan-out, and bidirectional arrows, while the sequence
@@ -3862,6 +3892,50 @@ fn session_view_inline_markdown_punctuation_spacing() -> E2eResult {
                 );
                 assertion::assert_not_visible(frame, "( session_messages_from_rows )");
                 assertion::assert_not_visible(frame, "[ Image #1 ]");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that inline right-arrow math syntax renders as a Unicode arrow in
+/// session chat.
+#[test]
+fn session_view_inline_right_arrow_math() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_inline_right_arrow_math")
+        .setup(seed_session_with_inline_math)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Continue →, then → and →.", 5000)
+                    .wait_for_text(
+                        r"Display $$text **$\rightarrow$** and *$\rightarrow$* text$$ literally.",
+                        5000,
+                    )
+                    .wait_for_text(r"Code `$\rightarrow$` and `$\rightarrow$` literally.", 5000)
+                    .capture_labeled(
+                        "inline_right_arrow_math",
+                        "Session view with rendered inline right-arrow math",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Continue →, then → and →.", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    r"Display $$text **$\rightarrow$** and *$\rightarrow$* text$$ literally.",
+                    &full,
+                );
+                assertion::assert_text_in_region(
+                    frame,
+                    r"Code `$\rightarrow$` and `$\rightarrow$` literally.",
+                    &full,
+                );
+                assertion::assert_not_visible(frame, r"Continue $\rightarrow$");
             },
         )?;
 

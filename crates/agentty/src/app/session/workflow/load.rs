@@ -323,11 +323,7 @@ impl SessionManager {
         let review_request = parse_review_request(&row);
         let draft_attachments =
             draft::load_staged_draft_attachments(*fs_client, base, &session_id).await;
-        let questions = session_detail
-            .as_ref()
-            .and_then(|detail| detail.questions.as_deref())
-            .and_then(parse_questions_json)
-            .unwrap_or_default();
+        let questions = Self::loaded_session_questions(session_detail.as_ref());
         let reasoning_level_override = row
             .reasoning_level_override
             .as_deref()
@@ -401,6 +397,13 @@ impl SessionManager {
             };
 
         (session_detail, session_status, session_transcript)
+    }
+
+    fn loaded_session_questions(session_detail: Option<&SessionDetailRow>) -> Vec<QuestionItem> {
+        session_detail
+            .and_then(|detail| detail.questions.as_deref())
+            .and_then(parse_questions_json)
+            .unwrap_or_default()
     }
 
     fn loaded_orchestration_metadata(
