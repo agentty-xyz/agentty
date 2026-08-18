@@ -16,3 +16,5 @@ Provide `MODEL_API_KEY`, a repository root, explicitly allowed tools, a prompt, 
 `OutputSchema`. Expect schema-validated JSON or a typed error.
 
 Use `ModelWithMetadata::complete_with_metadata()` for normalized completion metadata.
+
+Attach `with_lifecycle_observer()` to receive ordered metadata-only lifecycle events.

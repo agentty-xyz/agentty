@@ -6,6 +6,7 @@
 mod chat_completion;
 mod file_system;
 mod harness;
+mod lifecycle;
 mod model;
 mod policy;
 mod provider;
@@ -16,6 +17,10 @@ mod tool;
 
 pub use file_system::{FileSystem, LocalFileSystem};
 pub use harness::{Harness, TurnError};
+pub use lifecycle::{
+    LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, ModelResponseType,
+    ToolErrorType, TurnErrorType,
+};
 pub use model::{
     CompletionMetadata, CompletionUsage, Model, ModelClient, ModelCompletion, ModelError,
     ModelErrorType, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,
