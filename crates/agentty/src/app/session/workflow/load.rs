@@ -307,25 +307,16 @@ impl SessionManager {
         }
         session_worktree_availability.insert(session_id.clone(), has_session_folder);
 
-        let (session_detail, loaded_transcript) =
-            load_active_session_detail(db, *active_session_id, &row.id).await;
-        let (session_status, session_transcript) =
-            if let Some(existing_handle) = handles.get(&session_id) {
-                status_and_transcript_from_existing_handle(
-                    existing_handle,
-                    persisted_status,
-                    loaded_transcript.as_ref(),
-                )
-            } else {
-                let transcript = insert_loaded_session_handle(
-                    handles,
-                    session_id.clone(),
-                    persisted_status,
-                    loaded_transcript,
-                );
-
-                (persisted_status, transcript)
-            };
+        let (session_detail, session_status, session_transcript) =
+            Self::load_session_detail_and_transcript(
+                db,
+                *active_session_id,
+                handles,
+                &session_id,
+                &row.id,
+                persisted_status,
+            )
+            .await;
         let session_agent =
             migrate_session_off_retired_model(db, &row.id, &row.agent, &row.model, session_status)
                 .await;
@@ -379,6 +370,37 @@ impl SessionManager {
             size: persisted_size,
             speed_mode,
         }));
+    }
+
+    async fn load_session_detail_and_transcript(
+        db: &AppRepositories,
+        active_session_id: Option<&str>,
+        handles: &mut HashMap<SessionId, SessionHandles>,
+        session_id: &SessionId,
+        row_id: &str,
+        persisted_status: Status,
+    ) -> (Option<SessionDetailRow>, Status, Option<SessionTranscript>) {
+        let (session_detail, loaded_transcript) =
+            load_active_session_detail(db, active_session_id, row_id).await;
+        let (session_status, session_transcript) =
+            if let Some(existing_handle) = handles.get(session_id) {
+                status_and_transcript_from_existing_handle(
+                    existing_handle,
+                    persisted_status,
+                    loaded_transcript.as_ref(),
+                )
+            } else {
+                let transcript = insert_loaded_session_handle(
+                    handles,
+                    session_id.clone(),
+                    persisted_status,
+                    loaded_transcript,
+                );
+
+                (persisted_status, transcript)
+            };
+
+        (session_detail, session_status, session_transcript)
     }
 
     fn loaded_orchestration_metadata(
