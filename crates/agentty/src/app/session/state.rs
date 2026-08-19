@@ -5,6 +5,7 @@ use std::time::{Instant, SystemTime};
 use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{Session, SessionDiffStats, SessionHandles, SessionId, Status};
+use crate::domain::transient_message::{TransientMessage, TransientMessageSlot};
 
 /// Cached ahead/behind snapshots for one session branch.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -244,6 +245,30 @@ impl SessionState {
         session.reconcile_status_transition(previous_status);
     }
 
+    /// Mirrors one queued workflow row into live handles and the active render
+    /// snapshot when that project is currently loaded.
+    pub(crate) fn upsert_queued_action(&mut self, session_id: &str, message: TransientMessage) {
+        if let Some(session_handles) = self.runtime.handle(session_id) {
+            session_handles.upsert_queued_action(message.clone());
+        }
+
+        if let Some(session) = self.session_mut_for_id(session_id) {
+            session.transient_messages.upsert(message);
+        }
+    }
+
+    /// Removes one queued workflow row from live handles and the active
+    /// render snapshot when that project is currently loaded.
+    pub(crate) fn resolve_queued_action(&mut self, session_id: &str, slot: TransientMessageSlot) {
+        if let Some(session_handles) = self.runtime.handle(session_id) {
+            session_handles.resolve_queued_action(slot);
+        }
+
+        if let Some(session) = self.session_mut_for_id(session_id) {
+            session.transient_messages.retract(slot);
+        }
+    }
+
     /// Copies current values from runtime handles into plain `Session` fields.
     ///
     /// The runtime uses targeted `sync_session_from_handle()` calls for
@@ -449,6 +474,9 @@ impl SessionState {
         }
 
         session.queued_messages = session_handles.queued_message_snapshot();
+        for queued_action in session_handles.queued_action_snapshot() {
+            session.transient_messages.upsert(queued_action);
+        }
     }
 
     /// Advances the selected follow-up task for one session in the requested

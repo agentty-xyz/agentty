@@ -548,6 +548,8 @@ impl SessionManager {
 
     /// Shows one manual branch-publish action as an inline session-chat task.
     pub(crate) fn start_branch_publish(&mut self, session_id: &str, loading_label: String) {
+        self.state
+            .resolve_queued_action(session_id, TransientMessageSlot::BranchPublish);
         if let Some(session) = self
             .state
             .sessions
@@ -571,45 +573,37 @@ impl SessionManager {
         order: u64,
         queued_label: String,
     ) {
-        if let Some(session) = self
+        let turn_position = self
             .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session.transient_messages.upsert(TransientMessage {
+            .session_for_id(session_id)
+            .and_then(Session::latest_user_prompt_position);
+        self.state.upsert_queued_action(
+            session_id,
+            TransientMessage {
                 anchor: TransientMessageAnchor::Tail,
                 body: TransientMessageBody::Queued(QueuedAction::new(order, queued_label)),
                 lifecycle: TransientMessageLifecycle::UntilResolved,
                 slot: TransientMessageSlot::BranchPublish,
-                turn_position: session.latest_user_prompt_position(),
-            });
-        }
+                turn_position,
+            },
+        );
     }
 
     /// Removes a queued review-request row that resolved without starting.
     pub(crate) fn resolve_queued_branch_publish(&mut self, session_id: &str) {
-        if let Some(session) = self
-            .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session
-                .transient_messages
-                .retract(TransientMessageSlot::BranchPublish);
-        }
+        self.state
+            .resolve_queued_action(session_id, TransientMessageSlot::BranchPublish);
     }
 
     /// Shows one session sync waiting behind the active turn.
     pub(crate) fn queue_session_sync(&mut self, session_id: &str, order: u64) {
-        if let Some(session) = self
+        let turn_position = self
             .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session.transient_messages.upsert(TransientMessage {
+            .session_for_id(session_id)
+            .and_then(Session::latest_user_prompt_position);
+        self.state.upsert_queued_action(
+            session_id,
+            TransientMessage {
                 anchor: TransientMessageAnchor::Tail,
                 body: TransientMessageBody::Queued(QueuedAction::new(
                     order,
@@ -617,27 +611,21 @@ impl SessionManager {
                 )),
                 lifecycle: TransientMessageLifecycle::UntilResolved,
                 slot: TransientMessageSlot::SyncQueue,
-                turn_position: session.latest_user_prompt_position(),
-            });
-        }
+                turn_position,
+            },
+        );
     }
 
     /// Removes a queued-sync row after its worker command resolves or starts.
     pub(crate) fn resolve_queued_session_sync(&mut self, session_id: &str) {
-        if let Some(session) = self
-            .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session
-                .transient_messages
-                .retract(TransientMessageSlot::SyncQueue);
-        }
+        self.state
+            .resolve_queued_action(session_id, TransientMessageSlot::SyncQueue);
     }
 
     /// Replaces manual branch-publish progress with its inline final result.
     pub(crate) fn finish_branch_publish(&mut self, session_id: &str, body: TransientMessageBody) {
+        self.state
+            .resolve_queued_action(session_id, TransientMessageSlot::BranchPublish);
         if let Some(session) = self
             .state
             .sessions
@@ -661,6 +649,8 @@ impl SessionManager {
         session_id: &str,
         persistent_notice: &str,
     ) -> bool {
+        self.state
+            .resolve_queued_action(session_id, TransientMessageSlot::BranchPublish);
         let appended_to_handle =
             self.append_workflow_notice_to_handle(session_id, persistent_notice);
         if appended_to_handle {

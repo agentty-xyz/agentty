@@ -3420,6 +3420,7 @@ impl SessionManager {
         if let Ok(mut queued_messages) = handles.queued_messages.lock() {
             queued_messages.clear();
         }
+        handles.clear_queued_actions();
 
         match handles.cancel_token.lock() {
             Ok(cancel_token) => cancel_token.cancel(),
