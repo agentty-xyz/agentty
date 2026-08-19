@@ -1,113 +1,27 @@
-# TUI E2E Testing Framework
+# testty
 
-Rust-native TUI end-to-end testing framework using PTY-driven semantic assertions,
-native frame rendering, and VHS-driven GIF capture. Published to crates.io in lockstep
-with the rest of the workspace via `.github/workflows/publish-crates-io.yml`; consumers
-expect a stable curated API surface.
+Published Rust-native TUI E2E framework and language-agnostic `testty` CLI.
 
-## Entry Points
+## Public API
 
-- `src/lib.rs` is the public crate root and lists the user-facing modules.
-- `src/session.rs` owns PTY execution and runtime driving.
-- `src/scenario.rs`, `src/step.rs`, and `src/assertion.rs` own the user-facing test API.
-- `src/journey.rs` provides composable journey building blocks for declarative test
-  authoring.
-- `src/proof.rs` and `src/proof/` own the proof pipeline: report collection, backend
-  trait, and output renderers.
-- `src/spec.rs` and `src/spec/` own the declarative YAML scenario layer: `model.rs`
-  holds the pure-data spec types, `runtime.rs` lowers them onto the engine and evaluates
-  expectations. This powers `testty run scenario.yaml`.
-- `src/feature.rs` provides the `FeatureDemo` builder for scenario execution with
-  hash-cached VHS GIF generation.
-- `src/main.rs` is the `testty` command-line binary, auto-detected by Cargo alongside
-  the library. `cargo install testty` provides the executable.
-- `README.md` is the primary usage guide and should stay aligned with the public API.
+- Keep public items module-qualified; do not add crate-root re-exports. Keep renderer
+  plumbing private.
+- Treat `tests/public_api.rs` as the compatibility tripwire. Update it deliberately with
+  public-surface changes and document breaking changes in `README.md` and
+  `docs/upgrading.md`; an intentional break requires a workspace major version.
+- Preserve the layered assertion API: `match_*` returns structured `MatchResult` for
+  composition, while `assert_*` and `recipe::expect_*` remain panic adapters.
+- Preserve existing `#[non_exhaustive]` guarantees; compatibility tests must destructure
+  those types with rest patterns and fallback arms.
 
-## CLI Binary
+## Boundaries
 
-`src/main.rs` is the language-agnostic `testty` command-line front end, so non-Rust
-projects can drive TUI end-to-end scenarios without writing Rust harness code. The `run`
-verb is implemented: it loads a YAML scenario via `testty::spec`, drives the binary
-under test, and reports pass/fail through the exit code. The remaining verbs (`schema`,
-`proof open`, `proof gallery`, `update`) are still stubbed (each prints "not yet
-implemented" to stderr and exits non-zero). Later tasks replace those
-`Command::dispatch` arms with real behavior.
+- Keep CLI verbs thin: parse and validate in `src/main.rs`, then delegate to the
+  library. Update `README.md` and framework docs when CLI behavior changes.
+- In tests, inject snapshot update mode through `SnapshotConfig::with_update_mode()`; do
+  not mutate process-global environment variables.
+- Keep proof-backend geometry and rendering plumbing internal unless it is intentionally
+  added to the curated public API.
 
-Verbs:
-
-- `run <scenario> [--bin <BIN>] [--proof <DIR>]`: execute a scenario file.
-- `schema`: print the scenario JSON schema.
-- `proof open <html>`: open a single proof report.
-- `proof gallery <dir>`: build a gallery from proof reports.
-- `update`: update stored scenario snapshots.
-
-How to extend:
-
-1. Add or adjust the verb in the `Command` / `ProofCommand` enums in `src/main.rs`.
-1. Add an arg-parsing test under `#[cfg(test)] mod tests` first (TDD).
-1. Replace the matching `not_implemented` arm in `Command::dispatch` with real logic.
-
-Keep verb behavior thin: parse and validate arguments in `src/main.rs`, delegate
-execution to the library API. When verbs gain real behavior, update `README.md` and the
-framework docs under `docs/site/content/docs/`. The binary's arg-parsing tests run via
-the `test-testty-src` hook, which uses `--lib --bins`.
-
-## Visibility Discipline
-
-- The `renderer` module is `pub(crate)`. It is implementation detail for the proof
-  backends and is not part of the public API.
-- Anything new that is purely plumbing for backends (cell→pixel geometry, glyph
-  blitting, etc.) belongs inside `pub(crate) mod`s — do not re-add external `pub mod`
-  exports for internal helpers.
-- Public items are addressable only via their owning module — do not add crate-root
-  re-exports. New user-facing types should live in (or be re-exported from) the module
-  that owns their domain, and downstream code must import them through that module path.
-- `tests/public_api.rs` is the compile-time tripwire for the documented stable surface.
-  It pins the per-module public items plus the documented auxiliary stable items
-  (`testty::recipe`, `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`,
-  `SnapshotConfig::with_update_env_var`, `SnapshotConfig::with_update_mode`,
-  `SnapshotConfig::is_update_mode`). Update it deliberately whenever the published
-  surface changes and bump the testty major version in lockstep with the upgrade note in
-  the testty `README.md`.
-
-## Layered Assertion API
-
-- `assertion::match_*` functions return `Result<(), Box<AssertionFailure>>` (aliased as
-  `MatchResult`) and carry the structured failure context (`Expected` variant, optional
-  `Region`, matched spans, frame excerpt, pre-formatted message). The failure is boxed
-  so the `Ok` path stays a single pointer-sized return. Use this layer for any new
-  composable, retrying, soft-batched, or proof-report surface.
-- `assertion::assert_*` functions are thin panic adapters that delegate to the matching
-  `match_*`. Keep them so historical tests that expected panic-on-failure stay
-  byte-compatible without a major version bump.
-- `recipe::match_*` and `recipe::expect_*` mirror the same split for the high-level
-  recipe helpers (selected/unselected tab, instruction visible, keybinding hint, footer
-  action, dialog title, status message, not visible). Compose `recipe::match_*` with
-  `SoftAssertions` and `ProofReport` flows; `recipe::expect_*` stays as a panic adapter
-  for source-compatible tests.
-- `AssertionFailure`, `Expected`, and `feature::GifStatus` are all `#[non_exhaustive]`.
-  New fields and variants stay non-breaking as long as `tests/public_api.rs` still uses
-  `..` rest-patterns and a fallback `_` arm when destructuring them, so update those
-  tripwire patterns whenever the structured surface evolves.
-
-## Snapshot Update Mode
-
-Update mode is triggered by an environment variable whose name defaults to
-`TUI_TEST_UPDATE`, exposed as `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`. Downstream
-crates that need a different name can override it via the
-`SnapshotConfig::with_update_env_var` builder.
-
-For tests and other programmatic callers, `SnapshotConfig::with_update_mode(bool)`
-injects the update-mode decision directly and bypasses the env var entirely. Always
-prefer this injected boundary over mutating process-global env state from a test — the
-Rust 2024 `std::env::set_var` and `std::env::remove_var` APIs are `unsafe` because
-cargo's parallel test harness can run other threads that read or write the environment
-concurrently, and unique variable names do not make those calls safe.
-
-## Releasing testty
-
-testty is released in lockstep with the rest of the workspace. The crate inherits its
-version from `[workspace.package]` in the root `Cargo.toml` via
-`version.workspace = true`, and `.github/workflows/publish-crates-io.yml` runs
-`cargo publish -p testty` alongside `ag-forge` and `agentty` on every version tag push.
-Do not bump `crates/testty/Cargo.toml` independently.
+`testty` shares the workspace version and release. Do not version or publish it
+independently; keep `.github/workflows/publish-crates-io.yml` ordered correctly.

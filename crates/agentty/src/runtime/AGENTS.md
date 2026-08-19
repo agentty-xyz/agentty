@@ -1,15 +1,9 @@
-# Runtime Module
+# Runtime Layer
 
-Terminal runtime loop and mode dispatch.
+Owns the foreground terminal lifecycle, input polling, and mode dispatch.
 
-## Entry Points
-
-- `core.rs` owns the foreground terminal lifecycle and main event loop.
-- `event.rs` owns input polling and app-event integration.
-- `key_handler.rs` and `mode.rs` route key handling by `AppMode`.
-
-## Change Guidance
-
-- Keep runtime orchestration free of direct host filesystem access.
-- Dispatch pasted-image intents to the app layer; keep clipboard access, persistence,
-  path canonicalization, and external-path validation behind infra traits.
+- Keep business workflows in `app` and frame rendering in `ui`.
+- Keep direct filesystem, process, clock, and clipboard access out of runtime. Dispatch
+  user intent to app/infra boundaries.
+- When key handling changes, keep rendered help actions and
+  `docs/site/content/docs/usage/keybindings.md` aligned.
