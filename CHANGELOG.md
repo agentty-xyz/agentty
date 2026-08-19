@@ -7,6 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.2] - 2026-08-18
+
+### Added
+
+- ag-harness: expose normalized completion metadata, token usage, stable error
+  classifications, and ordered model and tool lifecycle events.
+- agentty: add a `/mode` picker for persistent `Auto Edit` and fail-closed `Read Only`
+  session permissions.
+
+### Changed
+
+- agentty: preserve queued publish and synchronization actions across project switches.
+- deps: update `async-trait`, `h2`, `taiki-e/install-action`, and `thiserror`.
+- docs: focus repository guidance on durable boundaries, invariants, and source-of-truth
+  workflows.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.2`.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.15.1] - 2026-08-16
 
 ### Added
