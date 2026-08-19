@@ -359,6 +359,7 @@ mod tests {
                     AgentModel::Gpt56Sol,
                 ),
                 parent_session_id: None,
+                permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
                 personality_id: None,
                 project_name: "project".to_string(),
                 prompt: String::new(),

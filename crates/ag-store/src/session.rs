@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use ag_agent::{self as agent, AgentKind, AgentModel, ReasoningLevel, SessionStats, SpeedMode};
+use ag_agent::{
+    self as agent, AgentKind, AgentModel, PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
+};
 use ag_session::{FocusedReviewStatus, SessionMessageKind};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
@@ -62,6 +64,8 @@ pub struct PersistedSessionCreation<'a> {
     pub orchestration_task_id: Option<i64>,
     /// Optional parent session id for one-level stacked drafts.
     pub parent_session_id: Option<&'a str>,
+    /// Provider permission mode captured for the session.
+    pub permission_mode: PermissionMode,
     /// Workspace personality selected for future turns, when present.
     pub personality_id: Option<&'a str>,
     /// Owning project identifier.
@@ -122,6 +126,8 @@ pub struct SessionRow {
     pub output_tokens: i64,
     /// Parent session id when this is a one-level stacked draft.
     pub parent_session_id: Option<String>,
+    /// Persisted provider permission mode for future turns.
+    pub permission_mode: String,
     /// Workspace personality selected for future turns, when present.
     pub personality_id: Option<String>,
     /// Owning project identifier, when present.
@@ -187,6 +193,8 @@ pub struct SessionListRow {
     pub output_tokens: i64,
     /// Parent session id when this row is a one-level stacked draft.
     pub parent_session_id: Option<String>,
+    /// Persisted provider permission mode for future turns.
+    pub permission_mode: String,
     /// Workspace personality selected for future turns, when present.
     pub personality_id: Option<String>,
     /// Owning project identifier, when present.
@@ -440,6 +448,12 @@ pub trait SessionRepository: Send + Sync {
         session_id: &str,
     ) -> Result<ReasoningLevel, DbError>;
 
+    /// Loads the persisted provider permission mode for future turns.
+    async fn load_session_permission_mode(
+        &self,
+        session_id: &str,
+    ) -> Result<PermissionMode, DbError>;
+
     /// Loads the persisted session response-speed preference.
     async fn load_session_speed_mode(&self, session_id: &str) -> Result<SpeedMode, DbError>;
 
@@ -554,6 +568,13 @@ pub trait SessionRepository: Send + Sync {
         &self,
         id: &str,
         reasoning_level: ReasoningLevel,
+    ) -> Result<(), DbError>;
+
+    /// Updates the persisted provider permission mode for future turns.
+    async fn update_session_permission_mode(
+        &self,
+        id: &str,
+        permission_mode: PermissionMode,
     ) -> Result<(), DbError>;
 
     /// Updates the persisted session response-speed preference.
@@ -715,6 +736,7 @@ struct SessionRowMetadata {
     model: String,
     output_tokens: i64,
     parent_session_id: Option<String>,
+    permission_mode: String,
     personality_id: Option<String>,
     project_id: Option<i64>,
     published_upstream_ref: Option<String>,
@@ -751,6 +773,7 @@ impl SessionRowMetadata {
             model: self.model,
             output_tokens: self.output_tokens,
             parent_session_id: self.parent_session_id,
+            permission_mode: self.permission_mode,
             personality_id: self.personality_id,
             project_id: self.project_id,
             prompt,
@@ -788,6 +811,7 @@ impl SessionRowMetadata {
             model: self.model,
             output_tokens: self.output_tokens,
             parent_session_id: self.parent_session_id,
+            permission_mode: self.permission_mode,
             personality_id: self.personality_id,
             project_id: self.project_id,
             published_upstream_ref: self.published_upstream_ref,
@@ -821,6 +845,7 @@ struct SessionJoinRow {
     model: String,
     output_tokens: i64,
     parent_session_id: Option<String>,
+    permission_mode: String,
     personality_id: Option<String>,
     project_id: Option<i64>,
     prompt: String,
@@ -908,6 +933,7 @@ impl SessionJoinRow {
             model,
             output_tokens,
             parent_session_id,
+            permission_mode,
             personality_id,
             project_id,
             prompt,
@@ -947,6 +973,7 @@ impl SessionJoinRow {
             model,
             output_tokens,
             parent_session_id,
+            permission_mode,
             personality_id,
             project_id,
             published_upstream_ref,
@@ -1201,6 +1228,7 @@ WHERE id = ?
                 model,
                 orchestration_task_id: None,
                 parent_session_id: None,
+                permission_mode: PermissionMode::AutoEdit,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
@@ -1234,6 +1262,7 @@ WHERE id = ?
                 model,
                 orchestration_task_id: None,
                 parent_session_id: Some(parent_session_id),
+                permission_mode: PermissionMode::AutoEdit,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
@@ -1266,6 +1295,7 @@ WHERE id = ?
                 model,
                 orchestration_task_id: None,
                 parent_session_id: None,
+                permission_mode: PermissionMode::AutoEdit,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
@@ -1289,6 +1319,7 @@ WHERE id = ?
             model,
             orchestration_task_id,
             parent_session_id,
+            permission_mode,
             personality_id,
             project_id,
             reasoning_level,
@@ -1308,6 +1339,7 @@ WHERE id = ?
                 model,
                 orchestration_task_id,
                 parent_session_id,
+                permission_mode,
                 personality_id,
                 project_id,
                 reasoning_level,
@@ -1343,6 +1375,7 @@ SELECT session.base_branch AS base_branch,
        session.model AS model,
        session.output_tokens AS output_tokens,
        session.parent_session_id,
+       session.permission_mode AS permission_mode,
        session.personality_id,
        session.project_id,
        session.prompt AS prompt,
@@ -1420,6 +1453,7 @@ SELECT session.base_branch AS base_branch,
        session.model AS model,
        session.output_tokens AS output_tokens,
        session.parent_session_id,
+       session.permission_mode AS permission_mode,
        session.personality_id,
        session.project_id,
        session.prompt AS prompt,
@@ -1481,6 +1515,7 @@ SELECT session.base_branch AS base_branch,
        session.model AS model,
        session.output_tokens AS output_tokens,
        session.parent_session_id,
+       session.permission_mode AS permission_mode,
        session.personality_id,
        session.project_id,
        '' AS "prompt!: String",
@@ -1737,6 +1772,22 @@ WHERE id = ?
 
         Ok(value
             .and_then(|value| value.parse::<ReasoningLevel>().ok())
+            .unwrap_or_default())
+    }
+
+    async fn load_session_permission_mode(
+        &self,
+        session_id: &str,
+    ) -> Result<PermissionMode, DbError> {
+        let value = sqlx::query_scalar!(
+            r"SELECT permission_mode FROM session WHERE id = ?",
+            session_id
+        )
+        .fetch_optional(&self.0)
+        .await?;
+
+        Ok(value
+            .and_then(|value| value.parse::<PermissionMode>().ok())
             .unwrap_or_default())
     }
 
@@ -2275,6 +2326,30 @@ WHERE id = ?
         Ok(())
     }
 
+    async fn update_session_permission_mode(
+        &self,
+        id: &str,
+        permission_mode: PermissionMode,
+    ) -> Result<(), DbError> {
+        let now = self.now();
+
+        sqlx::query!(
+            r#"
+UPDATE session
+SET permission_mode = ?,
+    updated_at = ?
+WHERE id = ?
+            "#,
+            permission_mode.label(),
+            now,
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
     async fn update_session_speed_mode(
         &self,
         id: &str,
@@ -2608,6 +2683,8 @@ struct InsertSessionRow<'a> {
     orchestration_task_id: Option<i64>,
     /// Optional parent session id for one-level stacked drafts.
     parent_session_id: Option<&'a str>,
+    /// Provider permission mode captured for the session.
+    permission_mode: PermissionMode,
     /// Workspace personality selected for future turns, when present.
     personality_id: Option<&'a str>,
     /// Owning project identifier.
@@ -2637,6 +2714,7 @@ async fn insert_session_with_draft_mode(
         model,
         orchestration_task_id,
         parent_session_id,
+        permission_mode,
         personality_id,
         project_id,
         reasoning_level,
@@ -2657,6 +2735,7 @@ INSERT INTO session (
     has_diff,
     is_draft,
     parent_session_id,
+    permission_mode,
     personality_id,
     project_id,
     reasoning_level,
@@ -2667,7 +2746,7 @@ INSERT INTO session (
     created_at,
     updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
     )
     .bind(id)
@@ -2679,6 +2758,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     .bind(Option::<bool>::None)
     .bind(is_draft)
     .bind(parent_session_id)
+    .bind(permission_mode.label())
     .bind(personality_id)
     .bind(project_id)
     .bind(reasoning_level.as_str())
@@ -2786,6 +2866,7 @@ mod tests {
                 model: "gpt-5.6-sol".to_string(),
                 output_tokens: 29,
                 parent_session_id: Some("parent-session".to_string()),
+                permission_mode: "read_only".to_string(),
                 personality_id: Some("reviewer".to_string()),
                 project_id: Some(7),
                 prompt: "Implement feature".to_string(),
@@ -2927,11 +3008,7 @@ WHERE id = ?
 
     /// Persists source-only linkage and counters on the fork source row.
     async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
-        database
-            .sessions()
-            .update_session_personality_id("source-session", Some("reviewer".to_string()))
-            .await
-            .expect("failed to update personality id");
+        seed_fork_snapshot_source_settings(database).await;
         database
             .sessions()
             .persist_session_turn_metadata(
@@ -3027,6 +3104,20 @@ WHERE id = ?
             .expect("failed to update review request");
     }
 
+    /// Persists the session settings that a fork must inherit.
+    async fn seed_fork_snapshot_source_settings(database: &AppRepositories) {
+        database
+            .sessions()
+            .update_session_permission_mode("source-session", PermissionMode::ReadOnly)
+            .await
+            .expect("failed to update permission mode");
+        database
+            .sessions()
+            .update_session_personality_id("source-session", Some("reviewer".to_string()))
+            .await
+            .expect("failed to update personality id");
+    }
+
     /// Persists active-work timing fields on the fork source row.
     async fn seed_fork_snapshot_source_timing(database: &AppRepositories, pool: &SqlitePool) {
         database
@@ -3059,6 +3150,11 @@ WHERE id = ?
         assert_eq!(source_row.deleted_lines, 3);
         assert_eq!(source_row.has_diff, Some(true));
         assert_eq!(source_row.size, "S");
+        assert_eq!(source_row.permission_mode, "read_only");
+        assert_eq!(
+            source_row.permission_mode.parse::<PermissionMode>(),
+            Ok(PermissionMode::ReadOnly)
+        );
         assert!(source_reset_row.is_draft);
         assert_eq!(source_row.personality_id.as_deref(), Some("reviewer"));
         assert_eq!(
@@ -3132,6 +3228,7 @@ WHERE id = ?
         assert_eq!(fork_row.deleted_lines, 0);
         assert_eq!(fork_row.has_diff, None);
         assert_eq!(fork_row.size, "XS");
+        assert_eq!(fork_row.permission_mode, "read_only");
         assert_eq!(fork_row.questions, None);
         assert_eq!(fork_row.published_upstream_ref, None);
         assert_eq!(fork_row.review_request, None);
@@ -3362,6 +3459,11 @@ WHERE id IN ('a-older', 'z-newer')
             .load_session_review_request("fork-session")
             .await
             .expect("failed to load fork review request");
+        let fork_permission_mode = database
+            .sessions()
+            .load_session_permission_mode("fork-session")
+            .await
+            .expect("failed to load fork permission mode");
 
         assert_source_reset_state(
             source_row,
@@ -3369,6 +3471,7 @@ WHERE id IN ('a-older', 'z-newer')
             source_review_request.as_ref(),
         );
         assert_fork_reset_state(fork_row, &fork_reset_row, fork_review_request.as_ref());
+        assert_eq!(fork_permission_mode, PermissionMode::ReadOnly);
     }
 
     #[tokio::test]

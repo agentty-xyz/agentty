@@ -745,20 +745,27 @@ leading slash already inserted. This replaces any prompt draft previously saved 
 returning to the sessions list:
 
 The command picker filters as you type, accepts contains or fuzzy abbreviations such as
-`/o` for `/model`, and wraps between its first and last options when you navigate with
-`j` / `k` or `Up` / `Down`.
+`/son` for `/reasoning`, and wraps between its first and last options when you navigate
+with `j` / `k` or `Up` / `Down`.
 
 | Command        | Description                                                   |
 | -------------- | ------------------------------------------------------------- |
 | `/apply`       | Verify focused-review suggestions, then apply the valid ones. |
 | `/model`       | Switch the model for the current session.                     |
+| `/mode`        | Choose auto-edit or read-only permissions for chat turns.     |
 | `/personality` | Choose an agent personality for the current session.          |
 | `/reasoning`   | Override the reasoning level for the current session.         |
 | `/speed`       | Choose normal or fast responses for this session.             |
 
-`/apply` requires a completed focused review (`f` key). `/model` offers only locally
+`/apply` requires a completed focused review (`f` key). `/mode` stores a session-scoped
+permission mode for following chat turns. `Auto Edit` uses the agent's standard editing
+permissions. During those chat turns, `Read Only` prevents repository and filesystem
+writes. The composer title always shows the current permission as `Auto Edit` or
+`Read Only`, after the response speed when that provider supports speed control. In
+`Read Only`, agents do not ask for write access; when a requested change requires edits,
+they suggest switching to `Auto Edit` with `/mode`. `/model` offers only locally
 available backends; see [Agents & Models](@/docs/agents/backends.md). `/speed` is
-available for Claude and Codex sessions. The selected mode is stored with the session,
+available for Claude and Codex sessions. The selected speed is stored with the session,
 shown after the reasoning level in the session header and beside the composer title, and
 applied to following turns. Gemini and Antigravity sessions have no speed control, so
 their header and composer omit the speed display entirely. Fast responses use the

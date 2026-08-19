@@ -23,7 +23,7 @@ use crate::domain::session::{SessionId, SessionRole, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::domain::turn_prompt::TurnPrompt;
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
 use crate::infra::db::AppRepositories;
 use crate::infra::process;
 
@@ -33,6 +33,8 @@ use crate::infra::process;
 /// into an unbounded drain. Events beyond this budget remain queued for the
 /// consumer's next await/try-receive cycle.
 const TURN_EVENT_PROGRESS_COALESCE_BUDGET: usize = 64;
+/// Agent-facing behavior appended to ordinary read-only chat turns.
+const READ_ONLY_CHAT_PROMPT: &str = include_str!("../../template/read_only_chat_prompt.md");
 
 /// Live transcript source exposed to provider transports for replay.
 #[derive(Debug)]
@@ -165,27 +167,32 @@ pub(super) async fn run_channel_turn(
     let main_checkout_snapshot = match MainCheckoutSnapshot::capture(context).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
-            SessionManager::cleanup_prompt_attachment_paths(
-                context.fs_client.clone(),
-                prompt.local_image_paths().cloned().collect(),
-            )
-            .await;
-            let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
-            let result = post_turn::apply_turn_result(
+            return finalize_turn_setup_failure(
+                context,
                 &post_turn_context,
                 turn_metadata,
-                post_turn::TurnPersonalityPersistence::default(),
-                Err(AgentError::Backend(error.to_string())),
+                &prompt,
+                &error,
             )
             .await;
-            post_turn::finalize_channel_turn(&finalizer_context, &result).await;
-
-            return result.map(|_| ());
         }
     };
 
     let session_project_id = load_session_project_id(&context.db, &context.session_id).await;
-    let permission_mode = load_session_permission_mode(&context.db, &context.session_id).await;
+    let permission_mode = match load_session_permission_mode(&context.db, &context.session_id).await
+    {
+        Ok(permission_mode) => permission_mode,
+        Err(error) => {
+            return finalize_turn_setup_failure(
+                context,
+                &post_turn_context,
+                turn_metadata,
+                &prompt,
+                &error,
+            )
+            .await;
+        }
+    };
     let reasoning_level = load_session_reasoning_level(&context.db, &context.session_id).await;
     let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
     let continuation = load_turn_continuation(context, replay_transcript).await;
@@ -194,12 +201,7 @@ pub(super) async fn run_channel_turn(
         prompt: personality,
     } = resolve_turn_personality(context).await;
 
-    let agent_prompt = crate::app::orchestration::controller_prompt(
-        &context.db,
-        &context.session_id,
-        prompt.clone(),
-    )
-    .await;
+    let agent_prompt = prepare_agent_prompt(context, prompt.clone(), permission_mode).await;
     let req = TurnRequest {
         continuation,
         folder: context.folder.clone(),
@@ -260,6 +262,66 @@ pub(super) async fn run_channel_turn(
     result.map(|_| ())
 }
 
+/// Applies role-specific controller and read-only chat instructions.
+async fn prepare_agent_prompt(
+    context: &SessionWorkerContext,
+    prompt: TurnPrompt,
+    permission_mode: PermissionMode,
+) -> TurnPrompt {
+    let session_role = load_session_role(&context.db, &context.session_id).await;
+    let agent_prompt =
+        crate::app::orchestration::controller_prompt(&context.db, &context.session_id, prompt)
+            .await;
+
+    apply_read_only_chat_prompt(agent_prompt, permission_mode, session_role)
+}
+
+/// Adds mode-switch guidance only to user-owned read-only chat sessions.
+fn apply_read_only_chat_prompt(
+    prompt: TurnPrompt,
+    permission_mode: PermissionMode,
+    session_role: SessionRole,
+) -> TurnPrompt {
+    if permission_mode != PermissionMode::ReadOnly || session_role != SessionRole::Worker {
+        return prompt;
+    }
+
+    let agent_prompt = prompt.agent_text();
+
+    TurnPrompt {
+        attachments: prompt.attachments,
+        text: format!("{READ_ONLY_CHAT_PROMPT}\n\n{agent_prompt}"),
+        text_source: TurnPromptTextSource::AgentData,
+    }
+}
+
+/// Cleans up and reports a failure that occurs after turn setup has started
+/// but before the provider request can run.
+async fn finalize_turn_setup_failure(
+    context: &SessionWorkerContext,
+    post_turn_context: &post_turn::PostTurnContext,
+    turn_metadata: TurnMetadata,
+    prompt: &TurnPrompt,
+    error: &SessionError,
+) -> Result<(), SessionError> {
+    SessionManager::cleanup_prompt_attachment_paths(
+        context.fs_client.clone(),
+        prompt.local_image_paths().cloned().collect(),
+    )
+    .await;
+    let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
+    let result = post_turn::apply_turn_result(
+        post_turn_context,
+        turn_metadata,
+        post_turn::TurnPersonalityPersistence::default(),
+        Err(AgentError::Backend(error.to_string())),
+    )
+    .await;
+    post_turn::finalize_channel_turn(&finalizer_context, &result).await;
+
+    result.map(|_| ())
+}
+
 /// Loads the durable provider context needed to continue one session turn.
 async fn load_turn_continuation(
     context: &SessionWorkerContext,
@@ -289,11 +351,40 @@ async fn load_turn_continuation(
 }
 
 /// Returns the provider permission mode enforced for one persisted session.
+///
+/// # Errors
+/// Returns an error when the session cannot be loaded or its persisted role
+/// or permission mode is invalid.
 pub(super) async fn load_session_permission_mode(
     db: &AppRepositories,
     session_id: &str,
-) -> PermissionMode {
-    permission_mode_for_role(load_session_role(db, session_id).await)
+) -> Result<PermissionMode, SessionError> {
+    let row = db
+        .sessions()
+        .load_session(session_id)
+        .await?
+        .ok_or(SessionError::NotFound)?;
+    let role = row
+        .role
+        .as_deref()
+        .map(str::parse::<SessionRole>)
+        .transpose()
+        .map_err(|reason| crate::infra::db::DbError::InvalidData {
+            entity: "session role",
+            reason,
+        })?
+        .unwrap_or_default();
+    if role == SessionRole::OrchestrationResearcher {
+        return Ok(PermissionMode::ReadOnly);
+    }
+
+    row.permission_mode
+        .parse()
+        .map_err(|reason| crate::infra::db::DbError::InvalidData {
+            entity: "session permission mode",
+            reason,
+        })
+        .map_err(SessionError::from)
 }
 
 /// Returns the persisted role controlling one session's execution policy.
@@ -306,15 +397,6 @@ pub(super) async fn load_session_role(db: &AppRepositories, session_id: &str) ->
         .and_then(|row| row.role)
         .and_then(|role| role.parse::<SessionRole>().ok())
         .unwrap_or_default()
-}
-
-/// Maps temporary researchers to enforced read-only provider execution.
-fn permission_mode_for_role(role: SessionRole) -> PermissionMode {
-    if role == SessionRole::OrchestrationResearcher {
-        return PermissionMode::ReadOnly;
-    }
-
-    PermissionMode::AutoEdit
 }
 
 /// Personality prompt plus the state persisted after a successful turn.
@@ -785,7 +867,17 @@ fn normalize_thinking_stream_text(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::db::PersistedSessionCreation;
+    use crate::infra::db::{DbError, PersistedSessionCreation};
+
+    #[test]
+    fn read_only_chat_prompt_redirects_write_access_requests_to_mode_picker() {
+        // Arrange, Act
+        let prompt = READ_ONLY_CHAT_PROMPT;
+
+        // Assert
+        assert!(prompt.contains("Do not ask a clarification question requesting write access"));
+        assert!(prompt.contains("switching the session to `Auto Edit` with `/mode`"));
+    }
 
     #[tokio::test]
     async fn persisted_research_role_selects_read_only_permission_mode() {
@@ -803,6 +895,22 @@ mod tests {
             .expect("failed to insert worker session");
         repositories
             .sessions()
+            .insert_session(
+                "read-only-worker",
+                "gpt-5.6-sol",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert read-only worker session");
+        repositories
+            .sessions()
+            .update_session_permission_mode("read-only-worker", PermissionMode::ReadOnly)
+            .await
+            .expect("failed to set read-only permission mode");
+        repositories
+            .sessions()
             .insert_session_with_agent(PersistedSessionCreation {
                 agent: "codex",
                 base_branch: "main",
@@ -811,6 +919,7 @@ mod tests {
                 model: "gpt-5.6-sol",
                 orchestration_task_id: None,
                 parent_session_id: None,
+                permission_mode: PermissionMode::AutoEdit,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
@@ -822,12 +931,91 @@ mod tests {
             .expect("failed to insert research session");
 
         // Act
-        let worker_mode = load_session_permission_mode(&repositories, "worker").await;
-        let research_mode = load_session_permission_mode(&repositories, "researcher").await;
+        let worker_mode = load_session_permission_mode(&repositories, "worker")
+            .await
+            .expect("worker mode should load");
+        let read_only_worker_mode = load_session_permission_mode(&repositories, "read-only-worker")
+            .await
+            .expect("read-only worker mode should load");
+        let research_mode = load_session_permission_mode(&repositories, "researcher")
+            .await
+            .expect("research mode should load");
+        let missing_error = load_session_permission_mode(&repositories, "missing")
+            .await
+            .expect_err("missing session should fail");
 
         // Assert
         assert_eq!(worker_mode, PermissionMode::AutoEdit);
+        assert_eq!(read_only_worker_mode, PermissionMode::ReadOnly);
         assert_eq!(research_mode, PermissionMode::ReadOnly);
+        assert!(matches!(missing_error, SessionError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn permission_mode_load_propagates_query_errors() {
+        // Arrange
+        let (repositories, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        pool.close().await;
+
+        // Act
+        let result = load_session_permission_mode(&repositories, "worker").await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(SessionError::Db(DbError::Query(sqlx::Error::PoolClosed)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn permission_mode_load_rejects_invalid_persisted_values() {
+        // Arrange
+        let (repositories, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        let project_id = repositories
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        repositories
+            .sessions()
+            .insert_session("worker", "gpt-5.6-sol", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert worker session");
+        sqlx::query("UPDATE session SET permission_mode = 'invalid' WHERE id = 'worker'")
+            .execute(&pool)
+            .await
+            .expect("failed to corrupt permission mode");
+
+        // Act
+        let permission_result = load_session_permission_mode(&repositories, "worker").await;
+        sqlx::query(
+            "UPDATE session SET permission_mode = 'auto_edit', role = 'invalid' WHERE id = \
+             'worker'",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to corrupt session role");
+        let role_result = load_session_permission_mode(&repositories, "worker").await;
+
+        // Assert
+        assert!(matches!(
+            permission_result,
+            Err(SessionError::Db(DbError::InvalidData {
+                entity: "session permission mode",
+                ..
+            }))
+        ));
+        assert!(matches!(
+            role_result,
+            Err(SessionError::Db(DbError::InvalidData {
+                entity: "session role",
+                ..
+            }))
+        ));
     }
 
     #[tokio::test]

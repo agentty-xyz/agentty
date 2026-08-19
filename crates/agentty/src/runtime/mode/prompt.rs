@@ -14,7 +14,9 @@ use crate::app::prompt_intent::{
 use crate::domain::agent::{AgentKind, ReasoningLevel, SpeedMode};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::input::{InputCommand, InputEffect, InputState};
+use crate::domain::permission::PermissionMode;
 use crate::domain::session::SessionId;
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, DiffRestoreTarget, DiffSidebarFocus, PromptModeSnapshot,
@@ -834,21 +836,10 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             apply_prompt_apply_outcome(app, outcome).await;
         }
         Some(PromptSuggestionSelection::Command("/reasoning")) => {
-            let selected_reasoning_level = app
-                .session_at(prompt_context.session_index)
-                .map_or(app.settings.default_smart_reasoning_level, |session| {
-                    session.effective_reasoning_level()
-                });
-            let selected_index = ReasoningLevel::ALL
-                .iter()
-                .position(|level| *level == selected_reasoning_level)
-                .unwrap_or(0);
-
-            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-                slash_state.stage = PromptSlashStage::Reasoning;
-                slash_state.selected_agent = None;
-                slash_state.selected_index = selected_index;
-            }
+            open_prompt_reasoning_stage(app, prompt_context.session_index);
+        }
+        Some(PromptSuggestionSelection::Command("/mode")) => {
+            open_prompt_permission_mode_stage(app, prompt_context.session_index);
         }
         Some(PromptSuggestionSelection::Command("/speed")) => {
             open_prompt_speed_stage(app, prompt_context.session_index);
@@ -904,12 +895,74 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             app.update_prompt_session_reasoning_level(&prompt_context.session_id, reasoning_level)
                 .await;
         }
+        Some(PromptSuggestionSelection::PermissionMode(permission_mode)) => {
+            apply_prompt_permission_mode(app, &prompt_context.session_id, permission_mode).await;
+        }
         Some(PromptSuggestionSelection::Speed(speed_mode)) => {
             clear_prompt_slash_input(app).await;
             app.update_prompt_session_speed_mode(&prompt_context.session_id, speed_mode)
                 .await;
         }
         None => {}
+    }
+}
+
+/// Persists a selected permission before closing its picker.
+async fn apply_prompt_permission_mode(
+    app: &mut App,
+    session_id: &SessionId,
+    permission_mode: PermissionMode,
+) {
+    if let Err(error) = app
+        .update_prompt_session_permission_mode(session_id, permission_mode)
+        .await
+    {
+        app.append_prompt_status_line(
+            session_id,
+            TranscriptNotice::Error,
+            &format!("Failed to change mode; the session remains unchanged: {error}"),
+        )
+        .await;
+
+        return;
+    }
+
+    clear_prompt_slash_input(app).await;
+}
+
+/// Opens `/reasoning` with the effective session level preselected.
+fn open_prompt_reasoning_stage(app: &mut App, session_index: usize) {
+    let selected_reasoning_level = app
+        .session_at(session_index)
+        .map_or(app.settings.default_smart_reasoning_level, |session| {
+            session.effective_reasoning_level()
+        });
+    let selected_index = ReasoningLevel::ALL
+        .iter()
+        .position(|level| *level == selected_reasoning_level)
+        .unwrap_or(0);
+
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+        slash_state.stage = PromptSlashStage::Reasoning;
+        slash_state.selected_agent = None;
+        slash_state.selected_index = selected_index;
+    }
+}
+
+/// Opens `/mode` with the current session permission preselected.
+fn open_prompt_permission_mode_stage(app: &mut App, session_index: usize) {
+    let selected_permission_mode = app
+        .session_at(session_index)
+        .map_or_else(PermissionMode::default, |session| session.permission_mode);
+    let selected_index = PermissionMode::ALL
+        .iter()
+        .position(|permission_mode| *permission_mode == selected_permission_mode)
+        .unwrap_or(0);
+
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+        slash_state.stage = PromptSlashStage::PermissionMode;
+        slash_state.selected_agent = None;
+        slash_state.selected_index = selected_index;
     }
 }
 
@@ -1425,7 +1478,10 @@ mod tests {
         input_text: &str,
         at_mention_state: Option<PromptAtMentionState>,
     ) -> (App, tempfile::TempDir) {
-        new_test_prompt_app_with_session_mode(input_text, at_mention_state, false).await
+        let (app, base_dir, _) =
+            new_test_prompt_app_with_session_mode(input_text, at_mention_state, false).await;
+
+        (app, base_dir)
     }
 
     /// Builds one prompt-mode test app backed by either an immediate-start or
@@ -1434,13 +1490,14 @@ mod tests {
         input_text: &str,
         at_mention_state: Option<PromptAtMentionState>,
         is_draft_session: bool,
-    ) -> (App, tempfile::TempDir) {
+    ) -> (App, tempfile::TempDir, sqlx::SqlitePool) {
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
         setup_test_git_repo(base_dir.path());
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
+        let pool = database.pool().clone();
         let mut app = App::new_with_clients(
             base_path.clone(),
             base_path,
@@ -1471,7 +1528,7 @@ mod tests {
             scroll_offset: None,
         };
 
-        (app, base_dir)
+        (app, base_dir, pool)
     }
 
     /// Builds one prompt-mode test app whose active session uses the explicit
@@ -1480,7 +1537,10 @@ mod tests {
         input_text: &str,
         at_mention_state: Option<PromptAtMentionState>,
     ) -> (App, tempfile::TempDir) {
-        new_test_prompt_app_with_session_mode(input_text, at_mention_state, true).await
+        let (app, base_dir, _) =
+            new_test_prompt_app_with_session_mode(input_text, at_mention_state, true).await;
+
+        (app, base_dir)
     }
 
     /// Waits until the app emits an `AtMentionEntriesLoaded` event and skips
@@ -2341,7 +2401,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(commands, vec!["/model"]);
+        assert_eq!(commands, vec!["/model", "/mode"]);
     }
 
     /// Verifies the root slash-command menu exposes every command in display
@@ -2365,7 +2425,14 @@ mod tests {
         // Assert
         assert_eq!(
             commands,
-            vec!["/apply", "/model", "/personality", "/reasoning", "/speed"]
+            vec![
+                "/apply",
+                "/model",
+                "/mode",
+                "/personality",
+                "/reasoning",
+                "/speed"
+            ]
         );
     }
 
@@ -2787,6 +2854,99 @@ mod tests {
             prompt.attachments,
             [] as [ag_protocol::TurnPromptAttachment; 0]
         );
+    }
+
+    #[tokio::test]
+    async fn test_mode_slash_submit_sets_read_only_and_resets_input() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/mode", None).await;
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.stage = PromptSlashStage::PermissionMode;
+            slash_state.selected_index = 1;
+        }
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.process_pending_app_events().await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, slash_state, .. }
+                if input.is_empty() && *slash_state == PromptSlashState::default()
+        ));
+        assert_eq!(
+            app.sessions.sessions()[0].permission_mode,
+            PermissionMode::ReadOnly
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mode_slash_submit_keeps_picker_open_and_reports_persistence_failure() {
+        // Arrange
+        let (mut app, _base_dir, pool) =
+            new_test_prompt_app_with_session_mode("/mode", None, false).await;
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.stage = PromptSlashStage::PermissionMode;
+            slash_state.selected_index = 1;
+        }
+        sqlx::query(
+            "CREATE TRIGGER fail_permission_mode_update BEFORE UPDATE OF permission_mode ON \
+             session BEGIN SELECT RAISE(FAIL, 'forced permission mode failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("failure trigger should be installed");
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.sessions.sync_from_handles();
+        let persisted_permission_mode = app
+            .services
+            .db()
+            .sessions()
+            .load_session_permission_mode(&prompt_context.session_id)
+            .await
+            .expect("permission mode should load");
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, slash_state, .. }
+                if input.text() == "/mode"
+                    && slash_state.stage == PromptSlashStage::PermissionMode
+                    && slash_state.selected_index == 1
+        ));
+        assert_eq!(
+            app.sessions.sessions()[0].permission_mode,
+            PermissionMode::AutoEdit
+        );
+        assert_eq!(persisted_permission_mode, PermissionMode::AutoEdit);
+        assert!(
+            session_replay_text(&app.sessions.sessions()[0])
+                .contains("[Error] Failed to change mode; the session remains unchanged:")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mode_slash_command_preselects_current_permission() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/mode", None).await;
+        app.sessions.sessions_mut()[0].permission_mode = PermissionMode::ReadOnly;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { slash_state, .. }
+                if slash_state.stage == PromptSlashStage::PermissionMode
+                    && slash_state.selected_index == 1
+        ));
     }
 
     #[tokio::test]

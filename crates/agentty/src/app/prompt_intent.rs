@@ -7,9 +7,10 @@ use tracing::warn;
 
 #[cfg(test)]
 use crate::app::diff_content_hash;
-use crate::app::{App, ReviewCacheEntry};
+use crate::app::{App, AppError, ReviewCacheEntry};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::composer::PromptAttachment;
+use crate::domain::permission::PermissionMode;
 use crate::domain::personality::PersonalitySummary;
 use crate::domain::review;
 use crate::domain::session::{SessionId, Status};
@@ -376,6 +377,30 @@ impl App {
                 "failed to update session reasoning level from prompt slash command"
             );
         }
+    }
+
+    /// Persists one slash-selected provider permission mode.
+    ///
+    /// # Errors
+    /// Returns an error when the session is missing or persistence fails.
+    pub(crate) async fn update_prompt_session_permission_mode(
+        &mut self,
+        session_id: &SessionId,
+        permission_mode: PermissionMode,
+    ) -> Result<(), AppError> {
+        let result = self
+            .set_session_permission_mode(session_id, permission_mode)
+            .await;
+        if let Err(error) = &result {
+            warn!(
+                session_id = %session_id,
+                permission_mode = ?permission_mode,
+                error = %error,
+                "failed to update session permission mode from prompt slash command"
+            );
+        }
+
+        result
     }
 
     /// Persists one slash-selected response-speed preference and logs any

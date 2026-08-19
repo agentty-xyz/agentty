@@ -251,6 +251,7 @@ impl SessionFixtureBuilder {
                 orchestration_progress: None,
                 role: SessionRole::default(),
                 parent_session_id: None,
+                permission_mode: crate::domain::permission::PermissionMode::default(),
                 personality_id: None,
                 project_name: "project".to_string(),
                 prompt: String::new(),

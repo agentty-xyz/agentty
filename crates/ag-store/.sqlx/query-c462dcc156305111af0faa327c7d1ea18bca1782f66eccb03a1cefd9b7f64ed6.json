@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET permission_mode = ?,\n    updated_at = ?\nWHERE id = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "c462dcc156305111af0faa327c7d1ea18bca1782f66eccb03a1cefd9b7f64ed6"
+}

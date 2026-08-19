@@ -23,6 +23,7 @@ use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, agentty_
 use crate::domain::agent::{
     AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
 };
+use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
     QueuedMessage, ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
     can_merge_session_branch_in_stack as stack_can_merge_session_branch,
@@ -557,6 +558,7 @@ impl SessionManager {
                 model: session_model.as_str(),
                 orchestration_task_id: None,
                 parent_session_id,
+                permission_mode: creation_settings.permission_mode,
                 personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
@@ -764,6 +766,7 @@ impl SessionManager {
                 model: session_model.as_str(),
                 orchestration_task_id,
                 parent_session_id: None,
+                permission_mode: creation_settings.permission_mode,
                 personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
@@ -1714,6 +1717,33 @@ impl SessionManager {
 
         services.emit_app_event(AppEvent::SessionReasoningLevelUpdated {
             reasoning_level,
+            session_id: SessionId::from(session_id),
+        });
+
+        Ok(())
+    }
+
+    /// Updates and persists the provider permission mode for a single
+    /// session.
+    ///
+    /// # Errors
+    /// Returns an error if the session is missing or persistence fails.
+    pub async fn set_session_permission_mode(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        permission_mode: PermissionMode,
+    ) -> Result<(), SessionError> {
+        self.session_index_or_err(session_id)?;
+
+        services
+            .db()
+            .sessions()
+            .update_session_permission_mode(session_id, permission_mode)
+            .await?;
+
+        services.emit_app_event(AppEvent::SessionPermissionModeUpdated {
+            permission_mode,
             session_id: SessionId::from(session_id),
         });
 
@@ -3080,6 +3110,7 @@ impl SessionManager {
 
         Ok(SessionCreationSettings {
             agent,
+            permission_mode: PermissionMode::AutoEdit,
             personality_id: None,
             reasoning_level,
             role: crate::domain::session::SessionRole::Worker,
@@ -4086,6 +4117,46 @@ mod tests {
             emitted_event,
             AppEvent::SessionReasoningLevelUpdated {
                 reasoning_level: ReasoningLevel::High,
+                session_id: "session-id".into(),
+            }
+        );
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    /// Ensures `set_session_permission_mode()` persists the mode and emits
+    /// the matching reducer event.
+    async fn test_set_session_permission_mode_persists_mode_and_emits_event() {
+        // Arrange
+        let session = test_session("Prompt", Status::Review, Some("Title"), "");
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let (services, mut event_rx) = test_services_with_event_receiver(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        session_manager
+            .set_session_permission_mode(&services, "session-id", PermissionMode::ReadOnly)
+            .await
+            .expect("permission mode update should succeed");
+        let persisted_permission_mode = database
+            .sessions()
+            .load_session_permission_mode("session-id")
+            .await
+            .expect("permission mode should load");
+        let emitted_event = event_rx
+            .try_recv()
+            .expect("expected permission update event");
+
+        // Assert
+        assert_eq!(persisted_permission_mode, PermissionMode::ReadOnly);
+        assert_eq!(
+            emitted_event,
+            AppEvent::SessionPermissionModeUpdated {
+                permission_mode: PermissionMode::ReadOnly,
                 session_id: "session-id".into(),
             }
         );

@@ -8437,6 +8437,71 @@ fn model_slash_command_contains_match_is_visible() -> E2eResult {
     Ok(())
 }
 
+/// Verify the prompt title displays both permission modes selected through
+/// `/mode`.
+#[test]
+fn session_permission_mode_selection() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_permission_mode_selection")
+        .with_git()
+        .with_terminal_size(180, 24)
+        .setup(seed_review_ready_session)
+        .zola(
+            "Read-only session mode",
+            "Switch session chat between auto-edit and read-only permissions.",
+            43,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("/")
+                    .wait_for_text("· Normal · Auto Edit", 5000)
+                    .capture_labeled(
+                        "auto_edit_default",
+                        "Prompt title shows the default auto-edit session mode",
+                    )
+                    .write_text("mode")
+                    .wait_for_text("/mode", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Auto Edit", 3000)
+                    .capture_labeled(
+                        "permission_mode_picker",
+                        "Mode picker offers auto-edit and read-only chat turns",
+                    )
+                    .press_key("Down")
+                    .press_key("Enter")
+                    .wait_for_text("· Normal · Read Only", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "read_only_selected",
+                        "Prompt title shows the read-only session mode",
+                    )
+            },
+            |frame, report| {
+                let auto_edit_frame = common::frame_from_capture(&report.captures[0]);
+                let auto_edit_full = Region::full(auto_edit_frame.cols(), auto_edit_frame.rows());
+                assertion::assert_text_in_region(
+                    &auto_edit_frame,
+                    "· Normal · Auto Edit",
+                    &auto_edit_full,
+                );
+
+                let picker_frame = common::frame_from_capture(&report.captures[1]);
+                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+                assertion::assert_text_in_region(&picker_frame, "Auto Edit", &picker_full);
+                assertion::assert_text_in_region(&picker_frame, "Read Only", &picker_full);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "· Normal · Read Only", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that moving up from the first slash-command option wraps selection
 /// to the final visible option.
 #[test]
