@@ -808,12 +808,6 @@ impl SessionWorkerService {
         self.workers.remove(session_id);
     }
 
-    /// Drops worker queues for sessions no longer present in the active list.
-    pub(super) fn retain_active_workers(&mut self, active_session_ids: &HashSet<SessionId>) {
-        self.workers
-            .retain(|session_id, _| active_session_ids.contains(session_id));
-    }
-
     /// Returns an existing session worker sender or creates one lazily.
     fn ensure_session_worker(
         &mut self,
@@ -1491,15 +1485,13 @@ impl SessionManager {
     ) {
         let terminal_session_ids = updated_session_ids
             .iter()
-            .filter_map(|session_id| {
-                self.sessions()
-                    .iter()
-                    .find(|session| session.id == *session_id)
-                    .and_then(|session| {
-                        matches!(session.status, Status::Done | Status::Canceled)
-                            .then(|| session.id.clone())
-                    })
+            .filter(|session_id| {
+                self.state
+                    .handle(session_id)
+                    .and_then(|handles| handles.status.lock().ok().map(|status| *status))
+                    .is_some_and(|status| matches!(status, Status::Done | Status::Canceled))
             })
+            .cloned()
             .collect::<Vec<_>>();
 
         for session_id in terminal_session_ids {

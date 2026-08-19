@@ -19,7 +19,7 @@ use crate::domain::session::{
     SessionStats, Status, activity_day_key_with_offset,
 };
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
-use crate::domain::transient_message::TransientMessageStore;
+use crate::domain::transient_message::{TransientMessage, TransientMessageStore};
 use crate::infra::clock::Clock;
 use crate::infra::db::{
     AppRepositories, DbError, SessionDetailRow, SessionListRow, SessionMessageRow,
@@ -77,7 +77,7 @@ struct LoadedSessionInput {
     session_agent: AgentSelection,
     session_id: SessionId,
     session_prompt: String,
-    session_queued_actions: Vec<crate::domain::transient_message::TransientMessage>,
+    session_queued_actions: Vec<TransientMessage>,
     session_queued_messages: Vec<QueuedMessage>,
     session_questions: Vec<QuestionItem>,
     session_summary: Option<String>,
@@ -329,13 +329,8 @@ impl SessionManager {
             .as_deref()
             .and_then(|value| value.parse::<ReasoningLevel>().ok());
         let speed_mode = row.speed_mode.parse::<SpeedMode>().unwrap_or_default();
-        let existing_handles = handles.get(&session_id);
-        let session_queued_messages = existing_handles
-            .map(SessionHandles::queued_message_snapshot)
-            .unwrap_or_default();
-        let session_queued_actions = existing_handles
-            .map(SessionHandles::queued_action_snapshot)
-            .unwrap_or_default();
+        let (session_queued_messages, session_queued_actions) =
+            Self::loaded_queue_snapshots(handles.get(&session_id));
         let (role, orchestration_metadata) =
             Self::loaded_orchestration_metadata(&row, orchestration_metadata);
         sessions.push(Self::build_loaded_session(LoadedSessionInput {
@@ -403,6 +398,19 @@ impl SessionManager {
         session_detail
             .and_then(|detail| detail.questions.as_deref())
             .and_then(parse_questions_json)
+            .unwrap_or_default()
+    }
+
+    fn loaded_queue_snapshots(
+        handles: Option<&SessionHandles>,
+    ) -> (Vec<QueuedMessage>, Vec<TransientMessage>) {
+        handles
+            .map(|handles| {
+                (
+                    handles.queued_message_snapshot(),
+                    handles.queued_action_snapshot(),
+                )
+            })
             .unwrap_or_default()
     }
 

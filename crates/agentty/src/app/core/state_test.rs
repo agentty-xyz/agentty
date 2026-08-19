@@ -1900,6 +1900,95 @@ async fn apply_app_events_branch_publish_action_sets_inline_success() {
 }
 
 #[tokio::test]
+async fn apply_branch_publish_action_persists_result_for_unloaded_project() {
+    // Arrange
+    let session_folder = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_selected_session(
+        session_folder.path().to_path_buf(),
+        "",
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    persist_selected_session(&app).await;
+    app.sessions
+        .session_handles_mut()
+        .insert("session-1".into(), SessionHandles::new(Status::Review));
+    app.sessions.state_mut().replace_sessions(Vec::new());
+
+    // Act
+    app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+        result: Ok(BranchPublishTaskSuccess::Pushed {
+            branch_name: "wt/session-1".to_string(),
+            review_request_creation: None,
+            upstream_reference: "origin/wt/session-1".to_string(),
+        }),
+        session_id: "session-1".into(),
+    })
+    .await;
+
+    // Assert
+    let persisted_messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages("session-1")
+        .await
+        .expect("failed to load persisted session messages");
+    assert_eq!(persisted_messages.len(), 1);
+    assert_eq!(
+        persisted_messages[0].kind,
+        SessionMessageKind::WorkflowNotice.as_str()
+    );
+    assert!(persisted_messages[0].content.contains("Branch pushed"));
+    assert!(
+        persisted_messages[0]
+            .content
+            .contains("Pushed session branch `wt/session-1`.")
+    );
+    {
+        let live_transcript = app
+            .sessions
+            .session_handles()
+            .get("session-1")
+            .expect("session handles should remain loaded")
+            .transcript
+            .lock()
+            .expect("session transcript lock should succeed");
+        assert_eq!(
+            live_transcript
+                .messages()
+                .last()
+                .map(|message| message.content.as_str()),
+            Some(persisted_messages[0].content.as_str())
+        );
+    }
+
+    // Act
+    app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+        result: Err(BranchPublishTaskFailure::failed(
+            PublishBranchAction::PublishPullRequest,
+            "remote rejected".to_string(),
+        )),
+        session_id: "session-1".into(),
+    })
+    .await;
+
+    // Assert
+    let persisted_messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages("session-1")
+        .await
+        .expect("failed to load persisted session messages");
+    assert_eq!(persisted_messages.len(), 2);
+    assert_eq!(
+        persisted_messages[1].content,
+        "**Review request publish failed**\n\nremote rejected"
+    );
+}
+
+#[tokio::test]
 async fn apply_branch_publish_action_update_persists_pull_request_notice() {
     // Arrange
     let session_folder = tempdir().expect("failed to create temp dir");
@@ -1999,6 +2088,55 @@ async fn apply_branch_publish_action_update_persists_pull_request_notice() {
             .first()
             .and_then(|session| session.review_request.clone()),
         Some(review_request)
+    );
+}
+
+#[tokio::test]
+async fn apply_branch_publish_action_persists_review_request_for_unloaded_project() {
+    // Arrange
+    let session_folder = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_selected_session(
+        session_folder.path().to_path_buf(),
+        "",
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    persist_selected_session(&app).await;
+    app.sessions
+        .session_handles_mut()
+        .insert("session-1".into(), SessionHandles::new(Status::Review));
+    app.sessions.state_mut().replace_sessions(Vec::new());
+    let review_request = crate::domain::session::ReviewRequest {
+        last_refreshed_at: 55,
+        summary: crate::domain::session::ReviewRequestSummary {
+            web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            ..test_review_request_summary("#42", ReviewRequestState::Open)
+        },
+    };
+
+    // Act
+    app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+        result: Ok(BranchPublishTaskSuccess::PullRequestPublished {
+            branch_name: "wt/session-1".to_string(),
+            review_request,
+            upstream_reference: "origin/wt/session-1".to_string(),
+        }),
+        session_id: "session-1".into(),
+    })
+    .await;
+
+    // Assert
+    let persisted_messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages("session-1")
+        .await
+        .expect("failed to load persisted session messages");
+    assert_eq!(persisted_messages.len(), 1);
+    assert_eq!(
+        persisted_messages[0].content,
+        "\n[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42\n"
     );
 }
 
@@ -4159,6 +4297,83 @@ async fn apply_app_events_preserves_completed_published_branch_sync_updates() {
             })
             .count(),
         1
+    );
+}
+
+#[tokio::test]
+/// Verifies terminal auto-push notices are persisted while their project
+/// snapshot is unloaded, so both outcomes survive a later reload.
+async fn apply_published_branch_sync_persists_notices_for_unloaded_project() {
+    // Arrange
+    let session_folder = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_selected_session(
+        session_folder.path().to_path_buf(),
+        "",
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    persist_selected_session(&app).await;
+    app.sessions
+        .session_handles_mut()
+        .insert("session-1".into(), SessionHandles::new(Status::Review));
+    app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
+        persistent_notice: None,
+        session_id: "session-1".into(),
+        sync_operation_id: "sync-success".to_string(),
+        sync_status: PublishedBranchSyncStatus::InProgress,
+    })
+    .await;
+    app.sessions.state_mut().replace_sessions(Vec::new());
+
+    // Act
+    app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
+        persistent_notice: Some(
+            "[Branch Push] Auto-pushed published branch after completed turn.".to_string(),
+        ),
+        session_id: "session-1".into(),
+        sync_operation_id: "sync-success".to_string(),
+        sync_status: PublishedBranchSyncStatus::Succeeded,
+    })
+    .await;
+    app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
+        persistent_notice: None,
+        session_id: "session-1".into(),
+        sync_operation_id: "sync-failure".to_string(),
+        sync_status: PublishedBranchSyncStatus::InProgress,
+    })
+    .await;
+    app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
+        persistent_notice: Some("[Branch Push Error] Remote rejected the push.".to_string()),
+        session_id: "session-1".into(),
+        sync_operation_id: "sync-failure".to_string(),
+        sync_status: PublishedBranchSyncStatus::Failed,
+    })
+    .await;
+
+    // Assert
+    let persisted_messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages("session-1")
+        .await
+        .expect("failed to load persisted session messages");
+    assert_eq!(persisted_messages.len(), 2);
+    assert_eq!(
+        persisted_messages
+            .iter()
+            .map(|message| (message.kind.as_str(), message.content.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                SessionMessageKind::WorkflowNotice.as_str(),
+                "[Branch Push] Auto-pushed published branch after completed turn.",
+            ),
+            (
+                SessionMessageKind::WorkflowNotice.as_str(),
+                "[Branch Push Error] Remote rejected the push.",
+            ),
+        ]
     );
 }
 

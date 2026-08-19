@@ -642,9 +642,17 @@ impl SessionManager {
     }
 
     /// Replaces manual branch-publish progress with its inline final result.
-    pub(crate) fn finish_branch_publish(&mut self, session_id: &str, body: TransientMessageBody) {
+    ///
+    /// When the owning project is not loaded, appends the result to the live
+    /// transcript instead and returns it for durable persistence.
+    pub(crate) fn finish_branch_publish(
+        &mut self,
+        session_id: &str,
+        body: TransientMessageBody,
+    ) -> Option<String> {
         self.state
             .resolve_queued_action(session_id, TransientMessageSlot::BranchPublish);
+        let persistent_notice = body.text().to_string();
         if let Some(session) = self
             .state
             .sessions
@@ -658,7 +666,12 @@ impl SessionManager {
                 slot: TransientMessageSlot::BranchPublish,
                 turn_position: session.latest_user_prompt_position(),
             });
+
+            return None;
         }
+
+        self.append_workflow_notice_to_handle(session_id, &persistent_notice)
+            .then_some(persistent_notice)
     }
 
     /// Promotes completed review-request creation into durable transcript
@@ -681,7 +694,7 @@ impl SessionManager {
             .iter_mut()
             .find(|session| session.id == session_id)
         else {
-            return false;
+            return appended_to_handle;
         };
         if !appended_to_handle {
             session
@@ -782,7 +795,7 @@ impl SessionManager {
             .iter_mut()
             .find(|session| session.id == session_id)
         else {
-            return false;
+            return appended_to_handle;
         };
         if !appended_to_handle && let Some(persistent_notice) = persistent_notice {
             session
