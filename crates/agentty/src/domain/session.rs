@@ -896,6 +896,8 @@ pub struct SessionHandles {
     pub status: Arc<Mutex<Status>>,
     /// Shared typed transcript snapshot mirrored to the render layer.
     pub transcript: Arc<Mutex<SessionTranscript>>,
+    /// Queued workflow rows that must survive active-project snapshot reloads.
+    queued_actions: Arc<Mutex<TransientMessageStore>>,
     /// Whether [`Self::transcript`] contains the complete persisted history.
     ///
     /// Lazy session-list handles start unhydrated so background workflow
@@ -910,6 +912,7 @@ impl SessionHandles {
             branch_operation_lock: Arc::new(AsyncMutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
+            queued_actions: Arc::new(Mutex::new(TransientMessageStore::default())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             queued_work_sequence: Arc::new(AtomicU64::new(0)),
             status: Arc::new(Mutex::new(status)),
@@ -924,6 +927,7 @@ impl SessionHandles {
             branch_operation_lock: Arc::new(AsyncMutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
+            queued_actions: Arc::new(Mutex::new(TransientMessageStore::default())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             queued_work_sequence: Arc::new(AtomicU64::new(0)),
             status: Arc::new(Mutex::new(status)),
@@ -938,6 +942,7 @@ impl SessionHandles {
             branch_operation_lock: Arc::new(AsyncMutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
+            queued_actions: Arc::new(Mutex::new(TransientMessageStore::default())),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             queued_work_sequence: Arc::new(AtomicU64::new(0)),
             status: Arc::new(Mutex::new(status)),
@@ -982,6 +987,36 @@ impl SessionHandles {
         self.queued_messages
             .lock()
             .map(|guard| guard.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default()
+    }
+
+    /// Stores one queued workflow row beside the worker-owned queue state.
+    pub(crate) fn upsert_queued_action(&self, message: TransientMessage) {
+        debug_assert!(matches!(&message.body, TransientMessageBody::Queued(_)));
+        if let Ok(mut queued_actions) = self.queued_actions.lock() {
+            queued_actions.upsert(message);
+        }
+    }
+
+    /// Removes one queued workflow row after its command starts or resolves.
+    pub(crate) fn resolve_queued_action(&self, slot: TransientMessageSlot) {
+        if let Ok(mut queued_actions) = self.queued_actions.lock() {
+            queued_actions.retract(slot);
+        }
+    }
+
+    /// Removes all queued workflow rows during terminal cancellation.
+    pub(crate) fn clear_queued_actions(&self) {
+        if let Ok(mut queued_actions) = self.queued_actions.lock() {
+            *queued_actions = TransientMessageStore::default();
+        }
+    }
+
+    /// Returns queued workflow rows in their stable display order.
+    pub(crate) fn queued_action_snapshot(&self) -> Vec<TransientMessage> {
+        self.queued_actions
+            .lock()
+            .map(|queued_actions| queued_actions.messages().to_vec())
             .unwrap_or_default()
     }
 
@@ -1061,6 +1096,42 @@ pub(crate) mod tests {
 
         // Assert
         assert_eq!(snapshot, None);
+    }
+
+    #[test]
+    fn queued_action_snapshot_tracks_updates_and_clear() {
+        // Arrange
+        let handles = SessionHandles::new(Status::InProgress);
+        let branch_publish = TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Queued(QueuedAction::new(
+                1,
+                "publish after turn".to_string(),
+            )),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::BranchPublish,
+            turn_position: Some(0),
+        };
+        let sync = TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Queued(QueuedAction::new(2, "sync after turn".to_string())),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::SyncQueue,
+            turn_position: Some(0),
+        };
+
+        // Act
+        handles.upsert_queued_action(branch_publish.clone());
+        handles.upsert_queued_action(sync.clone());
+        let queued_actions = handles.queued_action_snapshot();
+        handles.resolve_queued_action(TransientMessageSlot::BranchPublish);
+        let after_resolve = handles.queued_action_snapshot();
+        handles.clear_queued_actions();
+
+        // Assert
+        assert_eq!(queued_actions, vec![branch_publish, sync.clone()]);
+        assert_eq!(after_resolve, vec![sync]);
+        assert!(handles.queued_action_snapshot().is_empty());
     }
 
     #[test]

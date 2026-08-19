@@ -77,6 +77,7 @@ struct LoadedSessionInput {
     session_agent: AgentSelection,
     session_id: SessionId,
     session_prompt: String,
+    session_queued_actions: Vec<crate::domain::transient_message::TransientMessage>,
     session_queued_messages: Vec<QueuedMessage>,
     session_questions: Vec<QuestionItem>,
     session_summary: Option<String>,
@@ -341,9 +342,12 @@ impl SessionManager {
             .as_deref()
             .and_then(|value| value.parse::<ReasoningLevel>().ok());
         let speed_mode = row.speed_mode.parse::<SpeedMode>().unwrap_or_default();
-        let session_queued_messages = handles
-            .get(&session_id)
+        let existing_handles = handles.get(&session_id);
+        let session_queued_messages = existing_handles
             .map(SessionHandles::queued_message_snapshot)
+            .unwrap_or_default();
+        let session_queued_actions = existing_handles
+            .map(SessionHandles::queued_action_snapshot)
             .unwrap_or_default();
         let (role, orchestration_metadata) =
             Self::loaded_orchestration_metadata(&row, orchestration_metadata);
@@ -366,6 +370,7 @@ impl SessionManager {
                 .as_ref()
                 .map(|detail| detail.prompt.clone())
                 .unwrap_or_default(),
+            session_queued_actions,
             session_queued_messages,
             session_questions: questions,
             session_summary: session_detail.and_then(|detail| detail.summary),
@@ -485,6 +490,9 @@ impl SessionManager {
             updated_at: input.row.updated_at,
             transient_messages: TransientMessageStore::default(),
         };
+        for queued_action in input.session_queued_actions {
+            session.transient_messages.upsert(queued_action);
+        }
         session.hydrate_summary_transient();
 
         session
@@ -733,6 +741,10 @@ mod tests {
 
     use super::*;
     use crate::domain::session::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
+    use crate::domain::transient_message::{
+        QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
+        TransientMessageLifecycle, TransientMessageSlot,
+    };
     use crate::infra::clock::RealClock;
     use crate::infra::db::SessionReviewRequestRow;
     use crate::infra::fs;
@@ -1021,6 +1033,71 @@ mod tests {
         let handle_status = *handle.status.lock().expect("failed to lock handle status");
         assert_eq!(handle_output, assistant_replay_text(&live_output));
         assert_eq!(handle_status, live_status);
+    }
+
+    /// Ensures project-scoped reloads reconstruct queued workflow rows from
+    /// the live session handles that still own their worker commands.
+    #[tokio::test]
+    async fn test_load_sessions_restores_queued_actions_from_live_handles() {
+        // Arrange
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        let session_id = SessionId::from("queued-session");
+        db.sessions()
+            .insert_session(
+                &session_id,
+                "gemini-3.7-flash",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        let base_path = Path::new("/virtual/session-base");
+        let mock_fs_client =
+            create_folder_lookup_mock(vec![session_folder(base_path, &session_id)]);
+        let handles = SessionHandles::new(Status::InProgress);
+        handles.upsert_queued_action(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body: TransientMessageBody::Queued(QueuedAction::new(
+                3,
+                "sync after this turn".to_string(),
+            )),
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot: TransientMessageSlot::SyncQueue,
+            turn_position: Some(0),
+        });
+        let mut handles_by_session = HashMap::from([(session_id.clone(), handles)]);
+
+        // Act
+        let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+            SessionLoadInput {
+                active_project_id: project_id,
+                active_session_id: Some(&session_id),
+                base: base_path,
+                clock: &RealClock,
+                db: &db,
+                fs_client: &mock_fs_client,
+                working_dir: Path::new("/tmp/test"),
+            },
+            &mut handles_by_session,
+        )
+        .await;
+
+        // Assert
+        let queued_action = sessions[0]
+            .transient_messages
+            .get(TransientMessageSlot::SyncQueue)
+            .expect("queued sync should be restored");
+        assert!(matches!(
+            &queued_action.body,
+            TransientMessageBody::Queued(action)
+                if action.order == 3 && action.text == "sync after this turn"
+        ));
     }
 
     /// Ensures reload caches worktree availability alongside loaded session

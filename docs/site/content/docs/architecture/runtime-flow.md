@@ -132,9 +132,10 @@ channels:
   loader-thought and PID updates to the session turn consumer while the final transcript
   waits for the completed turn result.
 - **Session handles** (`SessionHandles`): shared `Arc<Mutex<...>>` transcript, status,
-  PID, and queued-message state. Handles are the single source of truth for live session
-  data; the reducer re-projects them into render snapshots on `SessionUpdated` without a
-  full DB reload.
+  PID, queued-message state, and queued workflow-action rows. Handles are the single
+  source of truth for live session data; the reducer re-projects them into render
+  snapshots on `SessionUpdated` and project-scoped reloads without losing queue
+  visualization.
 
 ## App Event Reducer
 

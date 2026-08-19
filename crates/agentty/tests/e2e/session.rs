@@ -1940,6 +1940,7 @@ const QUEUED_FIFO_UTILITY_ANSWER: &str = "Queued FIFO helper response";
 fn install_delayed_sync_claude_stub(
     env: &BuilderEnv,
     fail_sync_validation: bool,
+    delay_seconds: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
     let validation_failure_marker = env.stub_bin.join("queued-sync-validation-failure");
@@ -1953,7 +1954,7 @@ fn install_delayed_sync_claude_stub(
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
-sleep 10
+sleep {delay_seconds}
 {mark_validation_failure}printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_SYNC_TURN_ANSWER}"}}]}}}}'
 printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_SYNC_TURN_ANSWER}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
@@ -4093,7 +4094,7 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_running_sync_shortcut")
         .with_git()
-        .setup(|env| install_delayed_sync_claude_stub(env, false))
+        .setup(|env| install_delayed_sync_claude_stub(env, false, 10))
         .run(
             |scenario| {
                 scenario
@@ -4171,6 +4172,64 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
     Ok(())
 }
 
+/// Verify a queued session action remains visible after switching away from
+/// its owning project and back while the active turn is still running.
+#[test]
+fn session_queued_action_survives_project_switching() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_queued_action_survives_project_switching")
+        .with_git()
+        .setup(|env| {
+            install_delayed_sync_claude_stub(env, false, 30)?;
+            common::seed_second_project(env)
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Keep queued sync visible")
+                    .wait_for_text("Keep queued sync visible", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("r: sync", 5000)
+                    .press_key("r")
+                    .wait_for_text("rebase onto the base branch after this turn", 5000)
+                    .press_key("q")
+                    .wait_for_text("new session", 5000)
+                    .press_key("p")
+                    .wait_for_text("Switch project", 5000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Project: zeta-project", 5000)
+                    .press_key("p")
+                    .wait_for_text("Switch project", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Project: test-project", 5000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Keep queued sync visible", 5000)
+                    .capture_labeled(
+                        "restored_queued_action",
+                        "Queued sync restored after project switching",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Keep queued sync visible", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "≡ sync — rebase onto the base branch after this turn",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "Ctrl+c: stop", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify stopping an active turn also removes its canceled queued-sync row
 /// without promoting the skipped command to active rebase work.
 #[test]
@@ -4178,7 +4237,7 @@ fn session_queued_sync_clears_when_turn_is_cancelled() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queued_sync_cancelled_with_turn")
         .with_git()
-        .setup(|env| install_delayed_sync_claude_stub(env, false))
+        .setup(|env| install_delayed_sync_claude_stub(env, false, 10))
         .run(
             |scenario| {
                 scenario
@@ -4241,7 +4300,7 @@ fn session_queued_sync_validation_failure_is_visible() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queued_sync_validation_failure")
         .with_git()
-        .setup(|env| install_delayed_sync_claude_stub(env, true))
+        .setup(|env| install_delayed_sync_claude_stub(env, true, 10))
         .run(
             |scenario| {
                 scenario
