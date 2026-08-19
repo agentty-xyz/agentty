@@ -809,16 +809,19 @@ accepted candidate, draft, or commit-derived title.
 
 ## Settings Scope
 
-<a id="usage-settings-scope"></a> Settings for models, reasoning, commit trailers, and
-launch configurations are stored per active project. `Theme` and
+<a id="usage-settings-scope"></a> Settings for models, reasoning, response speed, commit
+trailers, and launch configurations are stored per active project. `Theme` and
 `Orchestrator Parallelism` are global. Parallelism defaults to three workers and accepts
 values from one through eight. The Settings tab renders these scopes as
 `Global settings` and `'<project>' settings`. Rows with fixed choices open dropdowns;
-use `j` / `k` to move through options. Smart, Fast, and Review use two dropdowns: choose
-the model and press `Enter` to continue, then choose the reasoning level and press
-`Enter` to save. Each role persists its independent `agent/model [reasoning]` pair.
-Smart supplies defaults for new sessions, Fast supplies title and commit-message utility
-prompts, and Review supplies focused review assists.
+use `j` / `k` to move through options. Smart, Fast, and Review first ask for a model and
+reasoning level. Claude and Codex then offer a response-speed dropdown with `Normal` and
+`Fast`; Gemini and Antigravity save after reasoning because they do not support speed
+control. Each role persists its independent model, reasoning, and speed defaults. Smart
+supplies defaults for new sessions, Fast supplies title and commit-message utility
+prompts, and Review supplies focused review assists. Selecting `Fast` also applies the
+same compatible-model adjustment used by `/speed`: Claude uses `claude-opus-5`, and
+Codex Spark uses `gpt-5.6-sol`.
 
 The `Launch Configurations` row opens a command-list editor instead of a multiline text
 field. Use `a` to add an entry, `e` or `Enter` to edit the selected entry, `d` to delete

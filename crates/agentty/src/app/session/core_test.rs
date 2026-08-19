@@ -2145,7 +2145,7 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
 }
 
 #[tokio::test]
-async fn test_create_session_reads_default_smart_model_from_db_setting() {
+async fn test_create_session_reads_default_smart_model_and_speed_from_db_settings() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_git(dir.path()).await;
@@ -2160,6 +2160,16 @@ async fn test_create_session_reads_default_smart_model_from_db_setting() {
         )
         .await
         .expect("failed to upsert default smart model setting");
+    app.services
+        .db()
+        .settings()
+        .upsert_project_setting(
+            active_project_id,
+            SettingName::DefaultSmartSpeedMode,
+            SpeedMode::Fast.as_str(),
+        )
+        .await
+        .expect("failed to upsert default smart speed setting");
 
     // Act
     let session_id = app
@@ -2174,11 +2184,9 @@ async fn test_create_session_reads_default_smart_model_from_db_setting() {
         .iter()
         .find(|session| session.id == session_id)
         .expect("missing created session");
-    assert_eq!(
-        created_session.agent.model(),
-        AgentModel::ClaudeHaiku4520251001
-    );
+    assert_eq!(created_session.agent.model(), AgentModel::ClaudeOpus5);
     assert_eq!(created_session.agent.kind(), AgentKind::Claude);
+    assert_eq!(created_session.speed_mode, SpeedMode::Fast);
 }
 
 #[tokio::test]
@@ -4916,6 +4924,7 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
         (
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             ReasoningLevel::Low,
+            SpeedMode::Normal,
         ),
         &one_shot_client,
         false,

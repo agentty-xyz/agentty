@@ -8,7 +8,9 @@ use tracing::warn;
 #[cfg(test)]
 use crate::app::diff_content_hash;
 use crate::app::{App, AppError, ReviewCacheEntry};
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
+#[cfg(test)]
+use crate::domain::agent::{AgentKind, AgentModel};
+use crate::domain::agent::{AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::permission::PermissionMode;
 use crate::domain::personality::PersonalitySummary;
@@ -276,8 +278,7 @@ impl App {
             .iter()
             .find(|session| session.id == *session_id)
             .is_some_and(|session| {
-                session.speed_mode == SpeedMode::Fast
-                    && !Self::agent_supports_fast_mode(selected_agent)
+                session.speed_mode == SpeedMode::Fast && !selected_agent.supports_fast_mode()
             });
         if should_disable_fast_mode
             && let Err(error) = self
@@ -416,7 +417,11 @@ impl App {
                 .sessions()
                 .iter()
                 .find(|session| session.id == *session_id)
-                .and_then(|session| Self::fast_compatible_agent(session.agent));
+                .and_then(|session| {
+                    let fast_agent = session.agent.compatible_with_speed_mode(SpeedMode::Fast);
+
+                    (fast_agent != session.agent).then_some(fast_agent)
+                });
 
             if let Some(fast_agent) = fast_agent {
                 if let Err(error) = self
@@ -453,37 +458,6 @@ impl App {
                 "failed to update session speed mode from prompt slash command"
             );
         }
-    }
-
-    /// Returns the model change required before enabling provider fast mode.
-    fn fast_compatible_agent(agent: AgentSelection) -> Option<AgentSelection> {
-        if Self::agent_supports_fast_mode(agent) {
-            return None;
-        }
-
-        match agent.kind() {
-            AgentKind::Claude => Some(AgentSelection::new(
-                AgentKind::Claude,
-                AgentModel::ClaudeOpus5,
-            )),
-            AgentKind::Codex if agent.model() == AgentModel::Gpt53CodexSpark => {
-                Some(AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol))
-            }
-            AgentKind::Antigravity | AgentKind::Gemini | AgentKind::Codex => None,
-        }
-    }
-
-    /// Returns whether a provider/model selection can use Fast without an
-    /// automatic compatibility switch.
-    fn agent_supports_fast_mode(agent: AgentSelection) -> bool {
-        matches!(
-            (agent.kind(), agent.model()),
-            (AgentKind::Claude, AgentModel::ClaudeOpus5)
-                | (
-                    AgentKind::Codex,
-                    AgentModel::Gpt56Sol | AgentModel::Gpt56Terra | AgentModel::Gpt56Luna
-                )
-        )
     }
 
     /// Handles `/apply` by extracting suggestions from the focused review and
@@ -728,51 +702,6 @@ mod tests {
     use crate::domain::session::SessionRole;
     use crate::domain::setting::SettingName;
     use crate::infra::personality::MockPersonalityCatalogClient;
-
-    #[test]
-    fn fast_compatible_agent_switches_only_unsupported_fast_models() {
-        // Arrange
-        let cases = [
-            (
-                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
-                Some(AgentSelection::new(
-                    AgentKind::Claude,
-                    AgentModel::ClaudeOpus5,
-                )),
-                false,
-            ),
-            (
-                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
-                None,
-                true,
-            ),
-            (
-                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
-                Some(AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)),
-                false,
-            ),
-            (
-                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Terra),
-                None,
-                true,
-            ),
-            (
-                AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
-                None,
-                false,
-            ),
-        ];
-
-        // Act, Assert
-        for (agent, expected_switch, expected_support) in cases {
-            assert_eq!(App::fast_compatible_agent(agent), expected_switch);
-            assert_eq!(
-                App::agent_supports_fast_mode(agent),
-                expected_support,
-                "unexpected Fast support for {agent:?}"
-            );
-        }
-    }
 
     #[tokio::test]
     async fn speed_mode_stays_normal_when_compatibility_model_switch_fails() {

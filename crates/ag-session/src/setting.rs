@@ -24,18 +24,24 @@ pub enum SettingName {
     DefaultFastModel,
     /// Persists the reasoning level paired with the fast-model default.
     DefaultFastReasoningLevel,
+    /// Persists the response speed paired with the fast-model default.
+    DefaultFastSpeedMode,
     /// Persists the provider that owns the review-model default.
     DefaultReviewAgent,
     /// Persists the project or global review-model selection.
     DefaultReviewModel,
     /// Persists the reasoning level paired with the review-model default.
     DefaultReviewReasoningLevel,
+    /// Persists the response speed paired with the review-model default.
+    DefaultReviewSpeedMode,
     /// Persists the provider that owns the smart-model default.
     DefaultSmartAgent,
     /// Persists the project or global smart-model selection.
     DefaultSmartModel,
     /// Persists the reasoning level paired with the smart-model default.
     DefaultSmartReasoningLevel,
+    /// Persists the response speed paired with the smart-model default.
+    DefaultSmartSpeedMode,
     /// Persists whether generated session commits append the Agentty coauthor
     /// trailer.
     IncludeCoauthoredByAgentty,
@@ -59,12 +65,15 @@ impl SettingName {
             Self::DefaultFastAgent => "DefaultFastAgent",
             Self::DefaultFastModel => "DefaultFastModel",
             Self::DefaultFastReasoningLevel => "DefaultFastReasoningLevel",
+            Self::DefaultFastSpeedMode => "DefaultFastSpeedMode",
             Self::DefaultReviewAgent => "DefaultReviewAgent",
             Self::DefaultReviewModel => "DefaultReviewModel",
             Self::DefaultReviewReasoningLevel => "DefaultReviewReasoningLevel",
+            Self::DefaultReviewSpeedMode => "DefaultReviewSpeedMode",
             Self::DefaultSmartAgent => "DefaultSmartAgent",
             Self::DefaultSmartModel => "DefaultSmartModel",
             Self::DefaultSmartReasoningLevel => "DefaultSmartReasoningLevel",
+            Self::DefaultSmartSpeedMode => "DefaultSmartSpeedMode",
             Self::IncludeCoauthoredByAgentty => "IncludeCoauthoredByAgentty",
             Self::LaunchConfiguration => "LaunchConfiguration",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
@@ -101,11 +110,16 @@ mod tests {
                 SettingName::DefaultFastReasoningLevel,
                 "DefaultFastReasoningLevel",
             ),
+            (SettingName::DefaultFastSpeedMode, "DefaultFastSpeedMode"),
             (SettingName::DefaultReviewAgent, "DefaultReviewAgent"),
             (SettingName::DefaultReviewModel, "DefaultReviewModel"),
             (
                 SettingName::DefaultReviewReasoningLevel,
                 "DefaultReviewReasoningLevel",
+            ),
+            (
+                SettingName::DefaultReviewSpeedMode,
+                "DefaultReviewSpeedMode",
             ),
             (SettingName::DefaultSmartAgent, "DefaultSmartAgent"),
             (SettingName::DefaultSmartModel, "DefaultSmartModel"),
@@ -113,6 +127,7 @@ mod tests {
                 SettingName::DefaultSmartReasoningLevel,
                 "DefaultSmartReasoningLevel",
             ),
+            (SettingName::DefaultSmartSpeedMode, "DefaultSmartSpeedMode"),
             (
                 SettingName::IncludeCoauthoredByAgentty,
                 "IncludeCoauthoredByAgentty",
@@ -146,12 +161,15 @@ mod tests {
             SettingName::DefaultFastAgent,
             SettingName::DefaultFastModel,
             SettingName::DefaultFastReasoningLevel,
+            SettingName::DefaultFastSpeedMode,
             SettingName::DefaultReviewAgent,
             SettingName::DefaultReviewModel,
             SettingName::DefaultReviewReasoningLevel,
+            SettingName::DefaultReviewSpeedMode,
             SettingName::DefaultSmartAgent,
             SettingName::DefaultSmartModel,
             SettingName::DefaultSmartReasoningLevel,
+            SettingName::DefaultSmartSpeedMode,
             SettingName::IncludeCoauthoredByAgentty,
             SettingName::LaunchConfiguration,
             SettingName::LastUsedModelAsDefault,

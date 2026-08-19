@@ -86,6 +86,7 @@ pub(super) struct ReviewAssistTaskInput {
     pub(super) session_chat_history: Option<String>,
     pub(super) session_folder: PathBuf,
     pub(super) session_id: SessionId,
+    pub(super) speed_mode: crate::domain::agent::SpeedMode,
 }
 
 /// Askama view model for rendering review assist prompts.
@@ -421,6 +422,7 @@ impl TaskService {
             session_chat_history,
             session_folder,
             session_id,
+            speed_mode,
         } = input;
 
         tokio::spawn(async move {
@@ -428,6 +430,7 @@ impl TaskService {
                 &session_folder,
                 review_selection,
                 reasoning_level,
+                speed_mode,
                 &review_diff,
                 session_chat_history.as_deref(),
                 one_shot_client.as_ref(),
@@ -458,6 +461,7 @@ impl TaskService {
         session_folder: &Path,
         review_selection: AgentSelection,
         reasoning_level: ReasoningLevel,
+        speed_mode: crate::domain::agent::SpeedMode,
         review_diff: &str,
         session_chat_history: Option<&str>,
         one_shot_client: &dyn OneShotClient,
@@ -473,6 +477,7 @@ impl TaskService {
                 prompt: review_prompt,
                 request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                 reasoning_level,
+                speed_mode,
             })
             .await
             .map_err(AppError::from)?;
@@ -848,6 +853,7 @@ mod tests {
                 assert_eq!(request.agent_kind, AgentKind::Claude);
                 assert_eq!(request.permission_mode, ag_agent::PermissionMode::ReadOnly);
                 assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
+                assert_eq!(request.speed_mode, crate::domain::agent::SpeedMode::Fast);
                 assert!(
                     request
                         .prompt
@@ -868,6 +874,7 @@ mod tests {
             session_chat_history: None,
             session_folder: PathBuf::from("/tmp/review-assist"),
             session_id: "session-42".into(),
+            speed_mode: crate::domain::agent::SpeedMode::Fast,
         };
 
         // Act
@@ -923,6 +930,7 @@ mod tests {
             session_folder,
             review_selection,
             ReasoningLevel::XHigh,
+            crate::domain::agent::SpeedMode::Normal,
             review_diff,
             None,
             &one_shot_client,
@@ -965,6 +973,7 @@ mod tests {
             session_folder,
             review_selection,
             ReasoningLevel::Low,
+            crate::domain::agent::SpeedMode::Fast,
             review_diff,
             None,
             &one_shot_client,

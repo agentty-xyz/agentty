@@ -1,4 +1,4 @@
-use ag_agent::{AgentModel, ReasoningLevel, SessionDiffState, SessionStats};
+use ag_agent::{AgentModel, ReasoningLevel, SessionDiffState, SessionStats, SpeedMode};
 use ag_session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionMessageKind,
     SettingName,
@@ -2094,6 +2094,55 @@ async fn test_load_project_reasoning_level_defaults_when_setting_is_missing_or_i
     // Assert
     assert_eq!(missing_setting_level, ReasoningLevel::High);
     assert_eq!(invalid_setting_level, ReasoningLevel::High);
+}
+
+#[tokio::test]
+async fn test_load_project_speed_mode_round_trips_and_defaults_invalid_values() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+
+    // Act
+    let missing_speed_mode = database
+        .settings()
+        .load_project_speed_mode(project_id, SettingName::DefaultSmartSpeedMode)
+        .await
+        .expect("failed to load missing speed mode");
+    database
+        .settings()
+        .upsert_project_setting(project_id, SettingName::DefaultSmartSpeedMode, "fast")
+        .await
+        .expect("failed to persist speed mode");
+    let fast_speed_mode = database
+        .settings()
+        .load_project_speed_mode(project_id, SettingName::DefaultSmartSpeedMode)
+        .await
+        .expect("failed to load speed mode");
+    database
+        .settings()
+        .upsert_project_setting(
+            project_id,
+            SettingName::DefaultSmartSpeedMode,
+            "unsupported",
+        )
+        .await
+        .expect("failed to persist invalid speed mode");
+    let invalid_speed_mode = database
+        .settings()
+        .load_project_speed_mode(project_id, SettingName::DefaultSmartSpeedMode)
+        .await
+        .expect("failed to load invalid speed mode");
+
+    // Assert
+    assert_eq!(missing_speed_mode, SpeedMode::Normal);
+    assert_eq!(fast_speed_mode, SpeedMode::Fast);
+    assert_eq!(invalid_speed_mode, SpeedMode::Normal);
 }
 
 #[tokio::test]

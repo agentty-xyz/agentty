@@ -1,6 +1,6 @@
 //! Setting-scoped persistence adapters and query helpers.
 
-use ag_agent::ReasoningLevel;
+use ag_agent::{ReasoningLevel, SpeedMode};
 use ag_session::SettingName;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
@@ -30,6 +30,13 @@ pub trait SettingRepository: Send + Sync {
         project_id: i64,
         name: SettingName,
     ) -> Result<ReasoningLevel, DbError>;
+
+    /// Loads one project-scoped response-speed setting.
+    async fn load_project_speed_mode(
+        &self,
+        project_id: i64,
+        name: SettingName,
+    ) -> Result<SpeedMode, DbError>;
 
     /// Persists the active project identifier in application settings.
     async fn set_active_project_id(&self, project_id: i64) -> Result<(), DbError>;
@@ -130,6 +137,21 @@ WHERE name = ?
             .unwrap_or_default();
 
         Ok(reasoning_level)
+    }
+
+    async fn load_project_speed_mode(
+        &self,
+        project_id: i64,
+        name: SettingName,
+    ) -> Result<SpeedMode, DbError> {
+        let setting_value = self.get_project_setting(project_id, name).await?;
+
+        let speed_mode = setting_value
+            .as_deref()
+            .and_then(|value| value.parse::<SpeedMode>().ok())
+            .unwrap_or_default();
+
+        Ok(speed_mode)
     }
 
     async fn set_active_project_id(&self, project_id: i64) -> Result<(), DbError> {

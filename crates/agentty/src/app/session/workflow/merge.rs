@@ -529,6 +529,7 @@ impl RealSyncAssistClient {
                 prompt,
                 request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: crate::domain::agent::SpeedMode::Normal,
             })
             .await?;
 
@@ -2017,11 +2018,17 @@ impl SessionManager {
         .await;
         let auto_commit_reasoning_level =
             SessionTaskService::load_auto_commit_reasoning_level(&input.db, &input.id).await;
+        let auto_commit_speed_mode =
+            SessionTaskService::load_auto_commit_speed_mode(&input.db, &input.id).await;
         match SessionTaskService::commit_session_changes(
             input.git_client.as_ref(),
             &input.folder,
             input.rebase_plan.target_label(),
-            (auto_commit_agent, auto_commit_reasoning_level),
+            (
+                auto_commit_agent,
+                auto_commit_reasoning_level,
+                auto_commit_speed_mode,
+            ),
             input.one_shot_client.as_ref(),
             false,
             include_coauthored_by_agentty,

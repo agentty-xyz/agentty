@@ -150,10 +150,12 @@ for discovery or restart Agentty before retrying.
 <a id="backends-persistent-defaults"></a> For persistent defaults, configure each Smart,
 Fast, and Review role in the **Settings** tab (`Tab` to navigate, `Enter` to open the
 selector). Choose the `agent/model` first and press `Enter`, then choose its reasoning
-level and press `Enter` again to save. Each `agent/model [reasoning]` pair is stored per
-project. Keeping the backend in the selection ensures shared Gemini model ids remain
-tied to the selected Gemini or Antigravity provider. Stored defaults that point at an
-unavailable backend fall back to the first available backend default.
+level. Claude and Codex selections continue to a response-speed picker with `Normal` and
+`Fast`; Gemini and Antigravity save after reasoning. Each role's model, reasoning, and
+speed defaults are stored per project. Keeping the backend in the selection ensures
+shared Gemini model ids remain tied to the selected Gemini or Antigravity provider.
+Stored defaults that point at an unavailable backend fall back to the first available
+backend default.
 
 <a id="backends-reasoning-level"></a> Smart reasoning becomes the default for new
 sessions, Fast reasoning is used for title and commit-message utility prompts, and
@@ -163,6 +165,11 @@ override still takes precedence for that session's turns. Antigravity receives
 highest supported value, `--effort high`. Codex receives `max` as a distinct reasoning
 effort. For Claude, both `xhigh` and `max` map to `--effort max`, which is currently
 only supported by `claude-opus-5`.
+
+Smart speed becomes the default for new sessions, Fast speed is used for title and
+commit-message utility prompts, and Review speed is used for focused review assists.
+Fast is available only for Claude and Codex. It applies the same compatible-model
+adjustment as `/speed`: Claude uses `claude-opus-5`, and Codex Spark uses `gpt-5.6-sol`.
 
 ## Available Models
 

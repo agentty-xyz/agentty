@@ -4,9 +4,12 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use agentty::app::Tab;
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
-use agentty::test_support::persist_project_reasoning_levels_for_test;
+use agentty::test_support::{
+    persist_active_tab_for_test, persist_project_reasoning_levels_for_test,
+};
 use testty::assertion;
 use testty::journey::Journey;
 use testty::region::Region;
@@ -42,12 +45,25 @@ fn seed_gemini_settings_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-/// Seeds deterministic selector values for the settings navigation test.
+/// Seeds deterministic Claude selector values for settings feature tests.
 ///
 /// Persists the three model selectors to `claude-opus-4-6` so the test can
 /// verify Agentty upgrades retired stored model ids to `claude-opus-5`
 /// before row navigation changes the visible selector values.
 fn seed_settings_navigation_models(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_settings_models(env, false)
+}
+
+/// Seeds deterministic selector values and starts the feature demo on Settings.
+fn seed_settings_dropdown_models(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_settings_models(env, true)
+}
+
+/// Seeds deterministic Claude selectors with optional dropdown-demo state.
+fn seed_settings_models(
+    env: &BuilderEnv,
+    configure_dropdown_demo: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_workdir = env.workdir.canonicalize()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -60,11 +76,25 @@ fn seed_settings_navigation_models(env: &BuilderEnv) -> Result<(), Box<dyn std::
             .projects()
             .upsert_project(&canonical_workdir.to_string_lossy(), None)
             .await?;
+        if configure_dropdown_demo {
+            persist_active_tab_for_test(&database, Tab::Settings).await?;
+            persist_project_reasoning_levels_for_test(
+                &database,
+                project_id,
+                ReasoningLevel::Low,
+                ReasoningLevel::High,
+                ReasoningLevel::XHigh,
+            )
+            .await?;
+        }
 
-        for setting_name in [
-            "DefaultSmartModel",
-            "DefaultFastModel",
-            "DefaultReviewModel",
+        for (setting_name, value) in [
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultReviewAgent", "claude"),
+            ("DefaultSmartModel", "claude-opus-4-6"),
+            ("DefaultFastModel", "claude-opus-4-6"),
+            ("DefaultReviewModel", "claude-opus-4-6"),
         ] {
             sqlx::query!(
                 r"
@@ -75,7 +105,7 @@ SET value = excluded.value
 ",
                 project_id,
                 setting_name,
-                "claude-opus-4-6"
+                value
             )
             .execute(database.pool())
             .await?;
@@ -215,6 +245,9 @@ fn settings_jk_navigation() {
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
                     .capture_labeled("moved_down", "Selection moved down five rows")
                     .press_key("k")
                     .wait_for_stable_frame(200, 3000)
@@ -224,6 +257,9 @@ fn settings_jk_navigation() {
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
+                    .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
                     .press_key("Enter")
@@ -248,14 +284,14 @@ fn settings_jk_navigation() {
                 let moved_down_frame = common::frame_from_capture(&report.captures[1]);
                 assertion::assert_match_count(&moved_down_frame, "claude-opus-4-6", 0);
                 assertion::assert_match_count(&moved_down_frame, "claude/claude-opus-5", 3);
-                assertion::assert_match_count(&moved_down_frame, "[high]", 2);
-                assertion::assert_match_count(&moved_down_frame, "[xhigh]", 1);
+                assertion::assert_match_count(&moved_down_frame, "[high, Normal]", 2);
+                assertion::assert_match_count(&moved_down_frame, "[xhigh, Normal]", 1);
 
                 let moved_up_frame = common::frame_from_capture(&report.captures[2]);
                 assertion::assert_match_count(&moved_up_frame, "claude-opus-4-6", 0);
                 assertion::assert_match_count(&moved_up_frame, "claude/claude-opus-5", 3);
-                assertion::assert_match_count(&moved_up_frame, "[high]", 1);
-                assertion::assert_match_count(&moved_up_frame, "[xhigh]", 2);
+                assertion::assert_match_count(&moved_up_frame, "[high, Normal]", 1);
+                assertion::assert_match_count(&moved_up_frame, "[xhigh, Normal]", 2);
             },
         )
         .expect("feature test failed");
@@ -264,30 +300,35 @@ fn settings_jk_navigation() {
 /// Verify that selector settings are edited through dropdowns.
 ///
 /// Opens the Settings tab, moves to the Smart role selector, opens the
-/// model dropdown, advances to the reasoning dropdown, and saves maximum
-/// reasoning for the current model. Captures each stage for the GIF.
+/// model dropdown, advances through the reasoning and speed dropdowns, and
+/// selects Fast without saving so semantic and VHS runs begin from identical
+/// state. Captures each stage for the GIF.
 #[test]
 fn settings_dropdown_selects_value() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_edit")
+        .with_git()
+        .setup(seed_settings_dropdown_models)
         .zola(
             "Settings editing",
-            "Open dropdowns to select setting values.",
+            "Choose model, reasoning, and response-speed defaults.",
             154,
         )
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
-                    .compose(&move_to_settings_row(
-                        "default_smart_model",
-                        DEFAULT_SMART_MODEL_ROW_OFFSET,
-                    ))
+                    .press_key("j")
                     .wait_for_stable_frame(200, 3000)
-                    .capture_labeled("before_edit", "Smart model and reasoning before selection")
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled(
+                        "before_edit",
+                        "Smart model, reasoning, and speed before selection",
+                    )
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
@@ -296,13 +337,14 @@ fn settings_dropdown_selects_value() {
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("reasoning_dropdown", "Choose Smart model reasoning")
-                    .press_key("j")
-                    .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("speed_dropdown", "Choose Smart model response speed")
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)
-                    .capture_labeled("after_edit", "Smart model with maximum reasoning")
+                    .capture_labeled("speed_selected", "Fast response speed selected")
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
@@ -310,13 +352,13 @@ fn settings_dropdown_selects_value() {
 
                 assert_eq!(
                     report.captures.len(),
-                    4,
-                    "Expected captures before, at both selector stages, and after selection"
+                    5,
+                    "Expected captures before, at all selector stages, and after selection"
                 );
 
                 let before_frame = common::frame_from_capture(&report.captures[0]);
                 let before_full = Region::full(before_frame.cols(), before_frame.rows());
-                assertion::assert_text_in_region(&before_frame, "[high]", &before_full);
+                assertion::assert_text_in_region(&before_frame, "[low, Normal]", &before_full);
 
                 let model_frame = common::frame_from_capture(&report.captures[1]);
                 let model_full = Region::full(model_frame.cols(), model_frame.rows());
@@ -330,12 +372,28 @@ fn settings_dropdown_selects_value() {
                     "Select reasoning level",
                     &reasoning_full,
                 );
+                assertion::assert_text_in_region(&reasoning_frame, "> low", &reasoning_full);
                 assertion::assert_text_in_region(&reasoning_frame, "xhigh", &reasoning_full);
                 assertion::assert_text_in_region(&reasoning_frame, "max", &reasoning_full);
 
-                let after_frame = common::frame_from_capture(&report.captures[3]);
-                let after_full = Region::full(after_frame.cols(), after_frame.rows());
-                assertion::assert_text_in_region(&after_frame, "[max]", &after_full);
+                let speed_frame = common::frame_from_capture(&report.captures[3]);
+                let speed_full = Region::full(speed_frame.cols(), speed_frame.rows());
+                assertion::assert_text_in_region(
+                    &speed_frame,
+                    "Select response speed",
+                    &speed_full,
+                );
+                assertion::assert_text_in_region(&speed_frame, "Normal", &speed_full);
+                assertion::assert_text_in_region(&speed_frame, "Fast", &speed_full);
+
+                let selected_frame = common::frame_from_capture(&report.captures[4]);
+                let selected_full = Region::full(selected_frame.cols(), selected_frame.rows());
+                assertion::assert_text_in_region(
+                    &selected_frame,
+                    "Select response speed",
+                    &selected_full,
+                );
+                assertion::assert_text_in_region(&selected_frame, "> Fast", &selected_full);
             },
         )
         .expect("feature test failed");
@@ -346,7 +404,7 @@ fn settings_dropdown_selects_value() {
 /// Opens the smart-model selector, confirms models appear once without a
 /// model-reasoning cross product, then advances to the reasoning selector.
 #[test]
-fn settings_model_selector_uses_two_steps() {
+fn settings_model_selector_separates_model_and_reasoning() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_model_reasoning")
         .setup(seed_settings_model_reasoning_levels)
