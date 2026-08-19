@@ -264,20 +264,21 @@ merge, or publish through the same lifecycle workflows. Review-request commands 
 the session's existing branch-publish context, persist it on the per-session worker, and
 resolve the API response from that command's terminal result; the foreground mailbox
 remains available while publishing is queued or in flight. Lookup joins persisted
-settings and ordered messages into one frontend-neutral aggregate. Creation is
-restricted to the active project while `SessionRuntime` owns a single active-project
-`SessionManager`, and can copy the agent, model, reasoning, personality, and base-branch
-snapshot from another session in that project without changing defaults for later
-ordinary sessions. The adapter deliberately contains no orchestrator policy.
-`app/orchestration.rs` owns that sequencing: it persists typed implementation or
-research task rows before approval, reads child status, report or summary, and token
-totals in one SQLite task snapshot during reconciliation, and uses the session API
-mailbox only for child creation, mutation, cleanup, and a durable roll-up submission.
-The terminal runtime injects the reconciliation schedule, keeping direct timer APIs out
-of the coordinator. The database link from task to child makes restart re-linking
-independent of branch-name parsing. Session-list refreshes load controller progress and
-child adjacency in one project-wide orchestration query instead of issuing queries for
-each saved session.
+settings and ordered messages into one frontend-neutral aggregate; malformed persisted
+permission modes fail lookup and inheritance instead of becoming writable defaults.
+Creation is restricted to the active project while `SessionRuntime` owns a single
+active-project `SessionManager`, and can copy the agent, model, permission mode,
+reasoning, personality, and base-branch snapshot from another session in that project
+without changing defaults for later ordinary sessions. The adapter deliberately contains
+no orchestrator policy. `app/orchestration.rs` owns that sequencing: it persists typed
+implementation or research task rows before approval, reads child status, report or
+summary, and token totals in one SQLite task snapshot during reconciliation, and uses
+the session API mailbox only for child creation, mutation, cleanup, and a durable
+roll-up submission. The terminal runtime injects the reconciliation schedule, keeping
+direct timer APIs out of the coordinator. The database link from task to child makes
+restart re-linking independent of branch-name parsing. Session-list refreshes load
+controller progress and child adjacency in one project-wide orchestration query instead
+of issuing queries for each saved session.
 
 ```mermaid
 flowchart LR
@@ -320,10 +321,12 @@ flowchart LR
    `.agents/agents` directory. The worker compares the resolved prompt fingerprint with
    the last successfully applied personality and prepares an active, updated, cleared,
    or unchanged personality payload.
-1. `workflow/turn.rs` loads the session's reasoning and speed preferences, then builds a
-   `TurnRequest`, including those settings and the personality payload. It calls
-   `AgentChannel::run_turn()`, which streams `TurnEvent` values (loader updates) and
-   returns a `TurnResult`.
+1. `workflow/turn.rs` loads the session's permission, reasoning, and speed preferences,
+   then builds a `TurnRequest`, including those settings and the personality payload. A
+   pre-provider setup failure cleans prompt attachments, appends the error to the
+   transcript, and runs the ordinary turn finalizer so resumed sessions do not remain
+   `InProgress`. Otherwise it calls `AgentChannel::run_turn()`, which streams
+   `TurnEvent` values (loader updates) and returns a `TurnResult`.
 1. `workflow/post_turn.rs` appends the final assistant transcript output, then
    `TurnPersistence::apply(...)` transactionally stores the summary payload, question
    payload, token-usage deltas, and provider conversation markers.

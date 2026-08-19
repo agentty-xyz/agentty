@@ -7,8 +7,8 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-pub use ag_agent::SpeedMode;
 use ag_agent::{AgentSelection, ReasoningLevel};
+pub use ag_agent::{PermissionMode, SpeedMode};
 pub use ag_forge::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
 use ag_protocol::QuestionItem;
 use serde::de::{self, Deserializer};
@@ -415,6 +415,8 @@ pub struct SessionSettings {
     pub is_draft: bool,
     /// Parent session for a one-level stacked session.
     pub parent_session_id: Option<SessionId>,
+    /// Provider permission mode used for future turns.
+    pub permission_mode: PermissionMode,
     /// Workspace personality selected for future turns, when present.
     pub personality_id: Option<String>,
     /// Owning project identifier.

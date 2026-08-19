@@ -4,12 +4,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use ag_git::GitClient;
+use tracing::warn;
 
 use super::{draft, session_folder};
 use crate::app::{SessionManager, orchestration};
 use crate::domain::agent::{
     AgentModel, AgentSelection, ReasoningLevel, SpeedMode, parse_persisted_session_agent_model,
 };
+use crate::domain::permission::PermissionMode;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     DailyActivity, QueuedMessage, ReviewRequest, ReviewRequestSummary, Session, SessionDiffState,
@@ -66,6 +68,7 @@ struct LoadedSessionInput {
     folder: std::path::PathBuf,
     parent_session_id: Option<SessionId>,
     orchestration_progress: Option<String>,
+    permission_mode: PermissionMode,
     project_name: String,
     reasoning_level_override: Option<ReasoningLevel>,
     review_request: Option<ReviewRequest>,
@@ -160,6 +163,9 @@ impl SessionManager {
     /// Transcript-scale fields are loaded only for `active_session_id`; other
     /// rows receive empty detail fields until the session is opened.
     ///
+    /// Rows with unsupported permission modes are logged and skipped so one
+    /// corrupt session cannot hide valid siblings or appear write-capable.
+    ///
     /// Returns loaded sessions, local-day activity counts aggregated from
     /// persisted session-creation activity history, and cached worktree
     /// availability keyed by session id.
@@ -225,7 +231,16 @@ impl SessionManager {
             session_worktree_availability: &mut session_worktree_availability,
         };
         for row in db_rows {
-            Self::push_loaded_session_row(&mut load_context, row).await;
+            let Ok(permission_mode) = row.permission_mode.parse() else {
+                warn!(
+                    session_id = %row.id,
+                    permission_mode = %row.permission_mode,
+                    "skipping session with unsupported permission mode"
+                );
+
+                continue;
+            };
+            Self::push_loaded_session_row(&mut load_context, row, permission_mode).await;
         }
 
         Ok((sessions, stats_activity, session_worktree_availability))
@@ -259,6 +274,7 @@ impl SessionManager {
     async fn push_loaded_session_row(
         load_context: &mut LoadSessionContext<'_>,
         row: SessionListRow,
+        permission_mode: PermissionMode,
     ) {
         let LoadSessionContext {
             base,
@@ -338,6 +354,7 @@ impl SessionManager {
             folder,
             parent_session_id: row.parent_session_id.clone().map(SessionId::from),
             orchestration_progress: orchestration_metadata.progress,
+            permission_mode,
             project_name: (*project_name).to_string(),
             reasoning_level_override,
             review_request,
@@ -438,6 +455,7 @@ impl SessionManager {
             is_draft: input.row.is_draft,
             orchestration_progress: input.orchestration_progress,
             parent_session_id: input.parent_session_id,
+            permission_mode: input.permission_mode,
             personality_id: input.row.personality_id,
             project_name: input.project_name,
             prompt: input.session_prompt,
@@ -760,6 +778,59 @@ mod tests {
         assistant_transcript(content)
             .replay_text()
             .expect("assistant transcript should have replay text")
+    }
+
+    #[tokio::test]
+    async fn load_sessions_skips_invalid_permission_mode_without_hiding_valid_siblings() {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("project should be created");
+        for session_id in ["valid-mode", "invalid-mode"] {
+            db.sessions()
+                .insert_draft_session(session_id, "gpt-5.6-sol", "main", "Draft", project_id)
+                .await
+                .expect("session should be created");
+        }
+        sqlx::query("UPDATE session SET permission_mode = 'invalid' WHERE id = 'invalid-mode'")
+            .execute(&pool)
+            .await
+            .expect("permission mode should be corrupted");
+        let mock_fs_client = create_folder_lookup_mock(Vec::new());
+        let mut handles = HashMap::new();
+
+        // Act
+        let (sessions, _, session_worktree_availability) =
+            SessionManager::load_sessions_with_fs_client(
+                SessionLoadInput {
+                    active_project_id: project_id,
+                    active_session_id: None,
+                    base: Path::new("/virtual/session-base"),
+                    clock: &RealClock,
+                    db: &db,
+                    fs_client: &mock_fs_client,
+                    working_dir: Path::new("/tmp/test"),
+                },
+                &mut handles,
+            )
+            .await;
+
+        // Assert
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "valid-mode");
+        assert_eq!(sessions[0].permission_mode, PermissionMode::AutoEdit);
+        assert!(handles.contains_key("valid-mode"));
+        assert!(!handles.contains_key("invalid-mode"));
+        assert_eq!(
+            session_worktree_availability.get("valid-mode"),
+            Some(&false)
+        );
+        assert!(!session_worktree_availability.contains_key("invalid-mode"));
     }
 
     #[test]
@@ -1948,6 +2019,7 @@ WHERE id = ?
             model: "gpt-5.6-sol".to_string(),
             output_tokens: 0,
             parent_session_id: None,
+            permission_mode: "auto_edit".to_string(),
             personality_id: None,
             project_id: Some(1),
             reasoning_level_override: None,

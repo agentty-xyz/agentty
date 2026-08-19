@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT permission_mode FROM session WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "permission_mode",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "permission_mode"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9061a7057d74a946c759b3d633c57b219e36186b524d3b8c887bab8d289828f5"
+}

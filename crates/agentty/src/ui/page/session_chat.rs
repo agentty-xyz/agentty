@@ -42,6 +42,7 @@ struct PreparedPromptPanel {
     /// Whether the transcript above the composer currently holds focus, which
     /// dims the composer border and hides its cursor.
     is_chat_focused: bool,
+    status: Option<String>,
     suggestion_list: Option<SuggestionList>,
     title: String,
     total_height: u16,
@@ -296,8 +297,8 @@ impl<'a> SessionChatPage<'a> {
                     .placeholder("Type your message")
                     .active(!prepared_prompt_panel.is_chat_focused);
 
-            if let Some(speed_mode) = session_format::session_speed_display(session) {
-                chat_input = chat_input.status(speed_mode);
+            if let Some(status) = prepared_prompt_panel.status.as_deref() {
+                chat_input = chat_input.status(status);
             }
 
             if let Some(suggestion_list) = &prepared_prompt_panel.suggestion_list {
@@ -470,6 +471,7 @@ fn prepare_prompt_panel(
             *focus,
         ),
         is_chat_focused: *focus == ChatFocus::Chat,
+        status: Some(session_format::prompt_session_status(session)),
         suggestion_list,
         title: format!(" [{}] ", session.agent.model().as_str()),
         total_height: desired_bottom_height.min(max_bottom_height),
@@ -1110,7 +1112,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_prompt_composer_shows_speed_status_for_supported_provider() {
+    fn test_render_prompt_composer_shows_speed_and_auto_edit_for_supported_provider() {
         // Arrange
         let mut session = session_fixture();
         session.agent = crate::domain::agent::AgentSelection::new(
@@ -1122,11 +1124,28 @@ mod tests {
         let text = rendered_prompt_mode_text(&session);
 
         // Assert
-        assert!(text.contains("· Normal"));
+        assert!(text.contains("· Normal · Auto Edit"));
     }
 
     #[test]
-    fn test_render_prompt_composer_omits_speed_status_for_unsupported_provider() {
+    fn test_render_prompt_composer_shows_read_only_after_speed_status() {
+        // Arrange
+        let mut session = session_fixture();
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            crate::domain::agent::AgentModel::Gpt56Sol,
+        );
+        session.permission_mode = crate::domain::permission::PermissionMode::ReadOnly;
+
+        // Act
+        let text = rendered_prompt_mode_text(&session);
+
+        // Assert
+        assert!(text.contains("· Normal · Read Only"));
+    }
+
+    #[test]
+    fn test_render_prompt_composer_shows_auto_edit_without_unsupported_speed_status() {
         // Arrange
         let mut session = session_fixture();
         session.agent = crate::domain::agent::AgentSelection::new(
@@ -1138,6 +1157,25 @@ mod tests {
         let text = rendered_prompt_mode_text(&session);
 
         // Assert
+        assert!(text.contains("· Auto Edit"));
+        assert!(!text.contains("· Normal"));
+    }
+
+    #[test]
+    fn test_render_prompt_composer_shows_read_only_without_speed_status() {
+        // Arrange
+        let mut session = session_fixture();
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Gemini,
+            crate::domain::agent::AgentModel::Gemini31Pro,
+        );
+        session.permission_mode = crate::domain::permission::PermissionMode::ReadOnly;
+
+        // Act
+        let text = rendered_prompt_mode_text(&session);
+
+        // Assert
+        assert!(text.contains("· Read Only"));
         assert!(!text.contains("· Normal"));
     }
 

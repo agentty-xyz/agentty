@@ -29,6 +29,7 @@ use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
 };
+use crate::domain::permission::PermissionMode;
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{
     DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionRole, SessionSize,
@@ -722,6 +723,7 @@ fn add_manual_session_with_status(
             crate::domain::agent::AgentModel::Gemini37Flash,
         ),
         parent_session_id: None,
+        permission_mode: PermissionMode::AutoEdit,
         personality_id: None,
         project_name: String::new(),
         prompt: prompt.to_string(),
@@ -786,6 +788,7 @@ fn test_session_manager_with_clock(
                 AgentModel::Gpt56Sol,
             ),
             parent_session_id: None,
+            permission_mode: PermissionMode::AutoEdit,
             personality_id: None,
             project_name: "project".to_string(),
             prompt: String::new(),
@@ -1113,6 +1116,27 @@ fn test_apply_session_speed_mode_updated_updates_only_matching_session() {
     assert_eq!(
         session_manager.state.sessions[0].speed_mode,
         SpeedMode::Fast
+    );
+}
+
+#[test]
+/// Ensures permission reducer updates only the matching in-memory session
+/// snapshot and leaves unrelated sessions untouched.
+fn test_apply_session_permission_mode_updated_updates_only_matching_session() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+
+    // Act
+    session_manager
+        .apply_session_permission_mode_updated("other-session", PermissionMode::ReadOnly);
+    let mode_after_non_matching_update = session_manager.state.sessions[0].permission_mode;
+    session_manager.apply_session_permission_mode_updated("session-id", PermissionMode::ReadOnly);
+
+    // Assert
+    assert_eq!(mode_after_non_matching_update, PermissionMode::AutoEdit);
+    assert_eq!(
+        session_manager.state.sessions[0].permission_mode,
+        PermissionMode::ReadOnly
     );
 }
 

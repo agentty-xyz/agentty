@@ -373,7 +373,6 @@ impl SessionWorkerRebaseAssistClient {
     async fn run_assist_turn(&self, prompt: String) -> Result<(), SessionError> {
         let turn_cancel_token = self.fresh_turn_cancel_token()?;
         let reasoning_level = turn::load_session_reasoning_level(&self.db, &self.session_id).await;
-        let permission_mode = turn::load_session_permission_mode(&self.db, &self.session_id).await;
         let speed_mode = turn::load_session_speed_mode(&self.db, &self.session_id).await;
         let provider_conversation_id = self
             .db
@@ -399,7 +398,7 @@ impl SessionWorkerRebaseAssistClient {
             folder: self.folder.clone(),
             main_checkout_root: self.main_checkout_root.clone(),
             model: self.session_agent.model().provider_model_str().to_string(),
-            permission_mode,
+            permission_mode: agent::PermissionMode::AutoEdit,
             personality: ag_agent::PersonalityPrompt::default(),
             prompt: TurnPrompt::from_agent_data(prompt),
             reasoning_level,
@@ -1563,7 +1562,7 @@ mod tests {
 
     use ag_agent::{MockAgentChannel, MockOneShotClient, PermissionMode};
     use ag_git::{MockGitClient, RebaseStepResult};
-    use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
+    use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution, TurnPromptAttachment};
     use mockall::Sequence;
     use serde_json;
     use tempfile::tempdir;
@@ -1658,6 +1657,7 @@ mod tests {
                 model: "gemini-3.7-flash",
                 orchestration_task_id: None,
                 parent_session_id: None,
+                permission_mode: ag_agent::PermissionMode::AutoEdit,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
@@ -1699,6 +1699,18 @@ mod tests {
 
     fn empty_transcript() -> Arc<Mutex<SessionTranscript>> {
         Arc::new(Mutex::new(SessionTranscript::default()))
+    }
+
+    /// Builds one user prompt referencing a single managed image attachment.
+    fn turn_prompt_with_attachment(attachment_path: PathBuf) -> TurnPrompt {
+        TurnPrompt {
+            attachments: vec![TurnPromptAttachment {
+                local_image_path: attachment_path,
+                placeholder: "[Image #1]".to_string(),
+            }],
+            text: "Continue [Image #1]".to_string(),
+            text_source: ag_protocol::TurnPromptTextSource::UserPrompt,
+        }
     }
 
     fn resume_command(operation_id: &str) -> SessionCommand {
@@ -2320,6 +2332,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_run_channel_turn_finalizes_invalid_permission_setup_failure() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        let project_id = db
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        db.sessions()
+            .insert_session("sess1", "gemini-3.7-flash", "main", "Question", project_id)
+            .await
+            .expect("failed to insert question session");
+        db.sessions()
+            .update_session_questions("sess1", r#"[{"text":"Continue?"}]"#)
+            .await
+            .expect("failed to persist questions");
+        sqlx::query("UPDATE session SET permission_mode = 'invalid' WHERE id = 'sess1'")
+            .execute(&pool)
+            .await
+            .expect("failed to corrupt permission mode");
+
+        let attachment_path = crate::app::agentty_home()
+            .join("tmp")
+            .join("sess1")
+            .join("images")
+            .join("image-1.png");
+        let image_directory = attachment_path
+            .parent()
+            .expect("attachment should have a parent")
+            .to_path_buf();
+        let mut fs_client = mock_fs_client_with_existing_directories();
+        let expected_attachment_path = attachment_path.clone();
+        fs_client
+            .expect_remove_file()
+            .once()
+            .withf(move |path| path == &expected_attachment_path)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        fs_client
+            .expect_remove_dir()
+            .once()
+            .withf(move |path| path == &image_directory)
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut mock_git_client = MockGitClient::new();
+        expect_clean_main_checkout_snapshot(&mut mock_git_client, base_dir.path().join("main"));
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel.expect_run_turn().times(0);
+        let transcript = empty_transcript();
+        let status = Arc::new(Mutex::new(Status::Question));
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(mock_channel),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().to_path_buf(),
+            fs_client: Arc::new(fs_client),
+            git_client: Arc::new(mock_git_client),
+            transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash),
+            status: Arc::clone(&status),
+        };
+        let prompt = turn_prompt_with_attachment(attachment_path);
+
+        // Act
+        let result = run_channel_turn(
+            &context,
+            auto_commit_one_shot_client(),
+            default_turn_metadata(),
+            AgentRequestKind::SessionResume,
+            None,
+            prompt,
+        )
+        .await;
+        let persisted_session = db
+            .sessions()
+            .load_session("sess1")
+            .await
+            .expect("session should load")
+            .expect("session should exist");
+
+        // Assert
+        let error = result.expect_err("invalid permission mode should fail the turn");
+        assert!(
+            error
+                .to_string()
+                .contains("Unknown permission mode: invalid")
+        );
+        assert!(transcript_text(&transcript).contains("Unknown permission mode: invalid"));
+        assert_eq!(
+            *status.lock().expect("status lock poisoned"),
+            Status::Review
+        );
+        assert_eq!(persisted_session.status, "Review");
+    }
+
+    #[tokio::test]
     /// Verifies process-only events do not append transcript content.
     async fn test_consume_turn_events_ignores_pid_only_events_for_transcript_messages() {
         // Arrange
@@ -2365,6 +2484,7 @@ mod tests {
             .expect_run_turn()
             .withf(|_session_id, request, _events| {
                 request.permission_mode == PermissionMode::ReadOnly
+                    && !request.prompt.text.contains("# Read Only Mode")
             })
             .returning(|_session_id, _req, _events| {
                 Box::pin(async {
@@ -2452,10 +2572,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies that a previous turn's cancelled token does not affect the
-    /// next turn. Each turn swaps in a fresh `CancellationToken`, so stale
-    /// cancellations are structurally impossible.
-    async fn test_run_channel_turn_proceeds_after_previous_cancellation() {
+    /// Verifies a read-only chat turn carries its persisted permission after a
+    /// previous turn's cancelled token is replaced.
+    async fn test_run_channel_turn_proceeds_read_only_after_previous_cancellation() {
         // Arrange — pre-cancel the token to simulate a previous turn's
         // cancellation. `run_channel_turn` swaps in a fresh token so the
         // stale cancellation is discarded.
@@ -2476,10 +2595,19 @@ mod tests {
             )
             .await
             .expect("failed to insert session");
+        db.sessions()
+            .update_session_permission_mode("sess1", PermissionMode::ReadOnly)
+            .await
+            .expect("failed to set read-only permission mode");
 
         let mut mock_channel = MockAgentChannel::new();
         mock_channel
             .expect_run_turn()
+            .once()
+            .withf(|_session_id, request, _events| {
+                request.permission_mode == PermissionMode::ReadOnly
+                    && request.prompt.text.contains("# Read Only Mode")
+            })
             .returning(|_session_id, _req, _events| {
                 Box::pin(async {
                     Ok(TurnResult {
@@ -3536,6 +3664,7 @@ mod tests {
                 model: "gemini-3.7-flash",
                 orchestration_task_id: None,
                 parent_session_id: None,
+                permission_mode: ag_agent::PermissionMode::AutoEdit,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
@@ -4981,6 +5110,7 @@ mod tests {
             .withf(move |session_id, request, _| {
                 session_id == "sess1"
                     && request.request_kind == AgentRequestKind::UtilityPrompt
+                    && request.permission_mode == PermissionMode::AutoEdit
                     && request.main_checkout_root.as_ref() == Some(&main_checkout_root)
                     && request.continuation.provider_conversation_id() == Some("thread-before")
                     && request.continuation.persisted_instruction_conversation_id()
@@ -5152,6 +5282,10 @@ mod tests {
         write_rebase_conflict_file(base_dir.path());
         let db = AppRepositories::in_memory().await.expect("db should open");
         seed_existing_session_rebase_metadata(&db).await;
+        db.sessions()
+            .update_session_permission_mode("sess1", PermissionMode::ReadOnly)
+            .await
+            .expect("failed to set chat permission mode");
         let harness = rebase_assist_worker_harness(base_dir.path().to_path_buf(), db);
 
         // Act

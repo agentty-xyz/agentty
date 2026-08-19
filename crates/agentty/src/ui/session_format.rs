@@ -197,6 +197,18 @@ pub(crate) fn session_speed_display(session: &Session) -> Option<&'static str> {
     Some(session.speed_mode.name())
 }
 
+/// Formats the response-speed and permission indicators shown in the prompt
+/// input title.
+pub(crate) fn prompt_session_status(session: &Session) -> String {
+    let speed_mode = session_speed_display(session);
+    let permission_mode = session.permission_mode.display_label();
+
+    speed_mode.map_or_else(
+        || permission_mode.to_string(),
+        |speed_mode| format!("{speed_mode} · {permission_mode}"),
+    )
+}
+
 /// Builds the compact session-view footer.
 pub(crate) fn session_view_footer_line(view_help_state: ViewHelpState) -> Line<'static> {
     crate::ui::help_format::footer_line(&help_action::view_footer_actions(view_help_state))
