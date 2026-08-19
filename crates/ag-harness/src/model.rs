@@ -174,29 +174,43 @@ impl ModelClient {
         &self,
         request: ModelRequest,
     ) -> Result<ModelCompletion, ModelError> {
-        let _duration = telemetry::RequestDuration::start(self.metadata());
+        let metrics = telemetry::RequestMetrics::start(self.metadata());
         let lifecycle = if request.lifecycle_observed() {
             None
         } else {
             self.lifecycle
                 .start_model_request(Some(self.metadata.clone()), 0, None)
         };
-        let result = async {
-            let response = self.backend.generate(&request).await?;
-
-            match response {
-                chat_completion::GeneratedResponse::Output { metadata, output } => request
-                    .schema()
-                    .parse_and_validate(&output)
-                    .map(ModelResponse::from_output)
-                    .map(|response| ModelCompletion::new(metadata, response))
-                    .map_err(ModelError::from),
-                chat_completion::GeneratedResponse::ToolCall { call, metadata } => Ok(
-                    ModelCompletion::new(metadata, ModelResponse::tool_call(call)),
-                ),
+        let (result, failure_metadata) = match self.backend.generate(&request).await {
+            Ok(chat_completion::GeneratedResponse::Failed { error, metadata }) => {
+                (Err(error), Some(metadata))
             }
+            Ok(chat_completion::GeneratedResponse::Output { metadata, output }) => {
+                match request.schema().parse_and_validate(&output) {
+                    Ok(response) => (
+                        Ok(ModelCompletion::new(
+                            metadata,
+                            ModelResponse::from_output(response),
+                        )),
+                        None,
+                    ),
+                    Err(error) => (Err(ModelError::from(error)), Some(metadata)),
+                }
+            }
+            Ok(chat_completion::GeneratedResponse::ToolCall { call, metadata }) => (
+                Ok(ModelCompletion::new(
+                    metadata,
+                    ModelResponse::tool_call(call),
+                )),
+                None,
+            ),
+            Err(error) => (Err(error), None),
+        };
+
+        match &result {
+            Ok(completion) => metrics.completed(completion.metadata()),
+            Err(error) => metrics.failed(error, failure_metadata.as_ref()),
         }
-        .await;
 
         if let Some(lifecycle) = lifecycle {
             match &result {

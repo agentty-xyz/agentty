@@ -321,7 +321,6 @@ impl SessionManager {
         let session_agent =
             migrate_session_off_retired_model(db, &row.id, &row.agent, &row.model, session_status)
                 .await;
-        let review_request = parse_review_request(&row);
         let draft_attachments =
             draft::load_staged_draft_attachments(*fs_client, base, &session_id).await;
         let questions = Self::loaded_session_questions(session_detail.as_ref());
@@ -344,7 +343,7 @@ impl SessionManager {
             permission_mode,
             project_name: (*project_name).to_string(),
             reasoning_level_override,
-            review_request,
+            review_request: parse_review_request(&row),
             role,
             row,
             session_agent,

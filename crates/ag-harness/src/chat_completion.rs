@@ -66,6 +66,10 @@ pub(crate) struct ChatCompletionProviderPolicy {
 
 /// Provider-neutral result of decoding one Chat Completions choice.
 pub(crate) enum GeneratedResponse {
+    Failed {
+        error: model::ModelError,
+        metadata: model::CompletionMetadata,
+    },
     Output {
         metadata: model::CompletionMetadata,
         output: String,
@@ -74,6 +78,12 @@ pub(crate) enum GeneratedResponse {
         call: tool::ToolCall,
         metadata: model::CompletionMetadata,
     },
+}
+
+impl GeneratedResponse {
+    fn failed(error: model::ModelError, metadata: model::CompletionMetadata) -> Self {
+        Self::Failed { error, metadata }
+    }
 }
 
 /// Shared structured-output backend for OpenAI-compatible Chat Completions
@@ -135,13 +145,15 @@ impl ChatCompletionBackend {
             .ok_or(model::ModelError::InvalidResponse)?;
         let (metadata, content, reasoning_content, tool_calls) = completion.into_parts();
         match metadata.finish_reason() {
-            "stop" if !tool_calls.is_empty() => {
-                Err(model::ModelError::TerminalResponseWithToolCalls)
-            }
-            "stop" => content
-                .map(|output| GeneratedResponse::Output { metadata, output })
-                .ok_or(model::ModelError::InvalidResponse),
-            "tool_calls" => Self::decode_tool_call(
+            "stop" if !tool_calls.is_empty() => Ok(GeneratedResponse::failed(
+                model::ModelError::TerminalResponseWithToolCalls,
+                metadata,
+            )),
+            "stop" => Ok(match content {
+                Some(output) => GeneratedResponse::Output { metadata, output },
+                None => GeneratedResponse::failed(model::ModelError::InvalidResponse, metadata),
+            }),
+            "tool_calls" => Ok(Self::decode_tool_call(
                 request,
                 content.as_deref(),
                 self.policy
@@ -151,10 +163,15 @@ impl ChatCompletionBackend {
                     .flatten(),
                 tool_calls,
                 metadata,
-            ),
-            _ => Err(model::ModelError::IncompleteResponse {
-                reason: schema_contract::bounded_diagnostic(metadata.finish_reason()),
-            }),
+            )),
+            _ => {
+                let reason = schema_contract::bounded_diagnostic(metadata.finish_reason());
+
+                Ok(GeneratedResponse::failed(
+                    model::ModelError::IncompleteResponse { reason },
+                    metadata,
+                ))
+            }
         }
     }
 
@@ -287,9 +304,24 @@ impl ChatCompletionBackend {
         request: &model::ModelRequest,
         content: Option<&str>,
         reasoning_content: Option<String>,
-        mut calls: Vec<ChatCompletionToolCall>,
+        calls: Vec<ChatCompletionToolCall>,
         metadata: model::CompletionMetadata,
-    ) -> Result<GeneratedResponse, model::ModelError> {
+    ) -> GeneratedResponse {
+        match Self::decode_tool_call_parts(request, content, reasoning_content.as_deref(), calls) {
+            Ok((id, arguments)) => GeneratedResponse::ToolCall {
+                call: tool::ToolCall::read(id, arguments, reasoning_content),
+                metadata,
+            },
+            Err(error) => GeneratedResponse::failed(error, metadata),
+        }
+    }
+
+    fn decode_tool_call_parts(
+        request: &model::ModelRequest,
+        content: Option<&str>,
+        reasoning_content: Option<&str>,
+        mut calls: Vec<ChatCompletionToolCall>,
+    ) -> Result<(String, tool::ReadArguments), model::ModelError> {
         if content.is_some_and(|content| !content.is_empty()) {
             return Err(model::ModelError::ToolCallWithContent);
         }
@@ -314,7 +346,7 @@ impl ChatCompletionBackend {
         }
         schema_contract::ensure_content_size(&function.arguments)
             .map_err(model::ModelError::from)?;
-        if let Some(reasoning_content) = reasoning_content.as_deref() {
+        if let Some(reasoning_content) = reasoning_content {
             schema_contract::ensure_content_size(reasoning_content)
                 .map_err(model::ModelError::from)?;
         }
@@ -325,10 +357,7 @@ impl ChatCompletionBackend {
                 }
             })?;
 
-        Ok(GeneratedResponse::ToolCall {
-            call: tool::ToolCall::read(call.id, arguments, reasoning_content),
-            metadata,
-        })
+        Ok((call.id, arguments))
     }
 }
 

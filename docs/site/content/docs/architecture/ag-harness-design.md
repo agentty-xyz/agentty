@@ -184,24 +184,18 @@ unstructured text.
 ## Telemetry
 
 The shared `ModelClient` lifecycle records `gen_ai.client.operation.duration` for every
-backend request, including failures and cancellations. Application binaries own
-OpenTelemetry SDK setup, export, and shutdown. The Qwen, Kimi, and Muse examples
-configure OTLP/HTTP metrics through the standard `OTEL_EXPORTER_OTLP_ENDPOINT` and
-`OTEL_EXPORTER_OTLP_HEADERS` environment variables. Each histogram observation is one
-model call; aggregate its count by `gen_ai.provider.name` to separate providers. Their
-default service names are `ag-harness-qwen`, `ag-harness-kimi`, and `ag-harness-muse`,
-while `OTEL_SERVICE_NAME` remains an application-level override.
+backend request, including failures, invalid output, and cancellations. It also records
+provider-reported input and output counts in `gen_ai.client.token.usage`; absent usage
+produces no estimate. Metrics remain metadata-only, and applications own OpenTelemetry
+setup, export, and shutdown.
 
 Lifecycle telemetry emits typed, ordered, metadata-only turn, model, and tool events.
-Applications will own OpenTelemetry projection and export.
+Applications may observe and persist them independently from OpenTelemetry export; with
+neither configured, no lifecycle data is retained or sent externally. Applications own
+storage, retention, OpenTelemetry setup, export, and shutdown.
 
-```mermaid
-flowchart LR
-    C["ModelClient lifecycle"] --> M["Duration histogram"]
-    M --> O["OTLP collector"]
-    O --> P["Prometheus"]
-    P --> G["Grafana"]
-```
+Sensitive content is excluded. Any future content capture remains separate, explicit,
+bounded, redacted, and disabled by default.
 
 ## Permissions
 
@@ -248,8 +242,21 @@ best cost and performance:
 
 - [x] **Read tool round trip.** Complete a model-requested repository read.
 - [ ] **Write tool round trip.** Complete a model-requested repository write.
-- [ ] **Lifecycle telemetry.** Stream typed turn, model, and tool events with
-  application-owned OpenTelemetry export.
+- [x] **Completion metadata foundation.** Normalize provider response identity, finish
+  outcome, optional token usage, and stable model failure classifications.
+- [x] **Lifecycle event foundation.** Emit ordered, correlated, metadata-only turn,
+  model, and tool events through an optional application observer.
+- [x] **Model-client metrics.** Record request duration, reported input and output token
+  usage, operation and model identity, and bounded failures without sensitive or
+  high-cardinality content.
+- [ ] **Turn and tool metric projection.** Derive aggregate turn and tool measurements
+  from lifecycle facts without double-counting model-client metrics.
+- [ ] **Lifecycle trace projection.** Represent a turn as a parent span with correlated
+  model and tool children, including correct completion, failure, and cancellation.
+- [ ] **OTLP contract coverage.** Decode exported test payloads and verify signal names,
+  relationships, attributes, batching and shutdown, and the absence of fixture secrets.
+- [ ] **Durable host journal.** Define a versioned host-owned event envelope, delivery
+  and checkpoint policy, retention, corruption recovery, and compatibility behavior.
 - [ ] **Persisted session round trip.** Run sequential turns in one resumable session,
   and persist model and tool history.
 - [x] **Second provider.** Integrate Kimi through the structured-output contract.
