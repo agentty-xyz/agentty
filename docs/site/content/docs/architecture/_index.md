@@ -7,7 +7,7 @@ sort_by = "weight"
 
 <a id="architecture-overview"></a> <a id="architecture-introduction"></a> Design and
 architecture references for Agentty runtime flow, module ownership, testability
-boundaries, and change paths.
+boundaries, orchestration, and change paths.
 
 ## Architecture Topics
 
@@ -21,3 +21,5 @@ boundaries, and change paths.
   trait boundaries and deterministic testing guidance for external integrations.
 - [`ag-harness` Design](@/docs/architecture/ag-harness-design.md) documents the model
   contract, request-duration metric, and local observability workflow.
+- [Orchestrator Design](@/docs/architecture/orchestrator.md) documents the current
+  campaign model and the target wave, dependency-graph, and board design.
