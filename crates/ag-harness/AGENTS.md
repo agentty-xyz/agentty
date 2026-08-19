@@ -1,35 +1,22 @@
-# `ag-harness`
+# ag-harness
 
-Provider-neutral LLM harness for application-facing model calls. Keep the crate small,
-typed, and independent of Agentty UI or orchestration concerns.
+Provider-neutral LLM model calls, independent of Agentty UI and orchestration.
 
 ## Boundaries
 
-- `Model` is the object-safe application boundary; `ModelClient` implements it and owns
-  the shared request lifecycle, telemetry, and structured-output validation.
-- Private provider modules own public configuration and provider-specific capability
-  policy.
-- API-family modules own shared authentication, payload translation, wire handling, and
-  raw generation, but their runtime types remain private.
-- Network access stays behind an injectable client boundary.
+- `Model` is the object-safe application boundary; `ModelClient` owns the common request
+  lifecycle, telemetry, and structured-output validation.
+- Provider modules own configuration and capability policy. API-family modules own
+  shared authentication, translation, and wire handling; keep their runtime types
+  private.
+- Keep network access behind the injectable client boundary.
 
 ## Invariants
 
-- Every request requires an output schema and every response is validated locally.
-- Unsupported provider capabilities return explicit errors; backends must not silently
-  weaken the shared contract.
-- Provider metadata is validated and retained when a `ModelClient` is constructed.
-- Response bodies and diagnostics remain bounded.
-- Request-duration telemetry applies uniformly to every `ModelClient` request.
-
-## Change Routing
-
-- Put neutral lifecycle and contract changes in the model and schema modules.
-- Put reusable API-protocol behavior in its API-family module.
-- Keep provider-specific configuration and policy under the provider module.
-- Add focused tests for lifecycle, transport, schema, and provider behavior.
-
-## Documentation
+- Require an output schema for every request and validate every response locally.
+- Return explicit errors for unsupported capabilities; never weaken the shared contract.
+- Validate and retain provider metadata at construction.
+- Keep response bodies and diagnostics bounded, and apply duration telemetry uniformly.
 
 Update `docs/site/content/docs/architecture/ag-harness-design.md` when these boundaries
-or the planned runtime direction change.
+or the runtime role changes.

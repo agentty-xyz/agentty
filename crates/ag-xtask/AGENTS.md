@@ -1,21 +1,11 @@
-# AG-XTASK
+# ag-xtask
 
-Workspace maintenance tasks. This crate serves as the central hub for project
-automation, replacing fragile shell scripts with robust Rust code.
-
-## Key Commands
-
-- `check-migrations` validates SQL migration numbering across workspace crates.
-
-## How to Extend
-
-1. **Create a Module:** Add a new module in `src/` for your task (e.g.,
-   `src/version_bump.rs`).
-1. **Implement Logic:** Put external command or filesystem interactions behind a
-   mockable trait boundary when the task involves multiple external calls.
-1. **Register Command:** Add a new variant to the `Command` enum in `main.rs` and
-   dispatch to your module.
+Deterministic Rust-based workspace maintenance tasks.
 
 ## Change Guidance
 
-- Keep maintenance tasks deterministic and suitable for local developer tooling.
+- Put each task's logic in a focused module and register its CLI dispatch in
+  `src/main.rs`.
+- Keep commands suitable for local and CI use.
+- For workflows with multiple filesystem or process calls, inject a mockable boundary
+  and test the orchestration without live side effects.

@@ -1,16 +1,12 @@
-# AG-Forge
+# ag-forge
 
-Workspace library crate for forge review-request orchestration and remote parsing.
+Provider-neutral forge review-request orchestration and remote parsing.
 
-## Entry Points
+## Boundaries
 
-- `src/lib.rs` is the public crate root.
-- `src/client.rs` owns the review-request client boundary and provider dispatch.
-- `src/github.rs` implements the GitHub-specific adapter.
-- `src/model.rs` owns the shared forge domain types and errors.
-
-## Change Guidance
-
-- Keep subprocess execution behind the existing command boundary.
-- Keep provider-specific behavior inside the forge-specific modules rather than in
-  callers.
+- Keep shared contracts and dispatch provider-neutral; isolate CLI arguments, payloads,
+  and parsing in provider adapters.
+- Route every subprocess through the existing command-runner boundary.
+- Expose normalized forge types to callers, never provider wire formats.
+- When provider support changes, keep documentation aligned for every supported forge
+  family and CLI.

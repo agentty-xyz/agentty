@@ -1,17 +1,11 @@
 # Skills
 
-Reusable skills available to agents in this repository.
+Select the smallest matching workflow and read its `SKILL.md` before acting.
 
-## Available Skills
-
-- `git-commit` covers commit-message, commit-preparation, and pull-request description
-  workflow.
-- `bump-version` covers version bump selection, package metadata updates, and baseline
-  release-preparation validation.
-- `review` covers structured code-review workflow.
-- `security-audit` covers threat-model-driven project auditing.
-- `feature-test` covers E2E feature test creation with VHS GIF generation and Zola page
-  auto-discovery.
-- `grilling` stress-tests plans, decisions, and ideas through a one-question-at-a-time
-  interview.
-- `tech-debt` covers maintenance and cleanup sweeps.
+- `bump-version`: version selection and release-preparation validation.
+- `feature-test`: E2E feature tests, VHS GIFs, and Zola feature pages.
+- `git-commit`: commit preparation, messages, and pull-request descriptions.
+- `grilling`: user-requested stress testing of a plan or decision.
+- `review`: structured code review.
+- `security-audit`: threat-model-driven security review.
+- `tech-debt`: maintenance and cleanup sweeps.

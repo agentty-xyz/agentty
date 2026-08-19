@@ -1,22 +1,11 @@
-# AG-TUI-Text
+# ag-tui-text
 
-Shared Ratatui text rendering crate for markdown, mermaid diagrams, and terminal-width
-text helpers.
+Shared Ratatui rendering for Markdown, HTML, Mermaid diagrams, and terminal-width text.
 
-## Entry Points
+## Boundaries
 
-- `src/lib.rs` is the public crate root.
-- `src/markdown.rs` owns markdown parsing, terminal styling, and rendered-line caching.
-- `src/mermaid.rs` owns bounded mermaid source parsing and terminal diagram drawing.
-- `src/text_util.rs` owns terminal-width wrapping, truncation, and compact formatting
-  helpers.
-- `src/style.rs` owns `TextPalette` and `TextRenderSettings` injection for host
-  applications.
-
-## Change Guidance
-
-- Keep this crate independent from `agentty` app, domain, infra, and runtime modules.
-- Host applications must inject semantic palette and cache-version settings at render
-  boundaries instead of this crate reading application theme globals directly.
-- Keep parser and layout limits bounded so untrusted transcript content cannot make
-  rendering unbounded.
+- Keep the crate independent of Agentty application layers.
+- Require hosts to inject semantic palette and cache-version settings; do not read
+  application theme globals.
+- Keep parsing, caches, and layout limits bounded for untrusted transcript content.
+- Put reusable terminal text behavior here rather than duplicating it in host UIs.
