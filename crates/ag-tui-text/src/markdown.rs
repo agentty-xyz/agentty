@@ -1491,12 +1491,13 @@ fn character_display_width(character: char) -> usize {
     UnicodeWidthChar::width(character).unwrap_or(0)
 }
 
-/// Parses inline markdown markers (`**bold**`, `*italic*`, `` `code` ``) into
-/// styled spans.
+/// Parses inline markdown markers (`**bold**`, `*italic*`, `` `code` ``) and
+/// supported dollar-delimited math symbols into styled spans.
 ///
 /// Text outside markers inherits `base_style`. Bold adds `Modifier::BOLD`,
 /// italic adds `Modifier::ITALIC`, and backtick-delimited code uses the
-/// dedicated inline-code style.
+/// dedicated inline-code style. Supported math commands render as terminal-
+/// friendly Unicode symbols, while unsupported expressions remain literal.
 pub fn parse_inline_spans(content: &str, base_style: Style) -> Vec<Span<'static>> {
     let characters: Vec<char> = content.chars().collect();
     let mut spans = Vec::new();
@@ -1504,6 +1505,19 @@ pub fn parse_inline_spans(content: &str, base_style: Style) -> Vec<Span<'static>
     let mut index = 0;
 
     while index < characters.len() {
+        if characters[index] == '$' && characters.get(index + 1) == Some(&'$') {
+            let Some(end_index) = find_matching_double_dollar(&characters, index + 2) else {
+                literal.extend(characters[index..].iter());
+
+                break;
+            };
+
+            literal.extend(characters[index..end_index + 2].iter());
+            index = end_index + 2;
+
+            continue;
+        }
+
         if characters[index] == '`'
             && let Some(end_index) = find_matching_backtick(&characters, index + 1)
             && end_index > index + 1
@@ -1525,7 +1539,7 @@ pub fn parse_inline_spans(content: &str, base_style: Style) -> Vec<Span<'static>
             flush_literal_span(&mut spans, &mut literal, base_style);
             let bold_content: String = characters[index + 2..end_index].iter().collect();
             spans.push(Span::styled(
-                bold_content,
+                render_inline_math_symbols(&bold_content),
                 base_style.add_modifier(Modifier::BOLD),
             ));
             index = end_index + 2;
@@ -1540,7 +1554,7 @@ pub fn parse_inline_spans(content: &str, base_style: Style) -> Vec<Span<'static>
             flush_literal_span(&mut spans, &mut literal, base_style);
             let italic_content: String = characters[index + 1..end_index].iter().collect();
             spans.push(Span::styled(
-                italic_content,
+                render_inline_math_symbols(&italic_content),
                 base_style.add_modifier(Modifier::ITALIC),
             ));
             index = end_index + 1;
@@ -1557,12 +1571,70 @@ pub fn parse_inline_spans(content: &str, base_style: Style) -> Vec<Span<'static>
     spans
 }
 
+/// Finds the opening index of a closing `$$` delimiter.
+fn find_matching_double_dollar(characters: &[char], start_index: usize) -> Option<usize> {
+    characters[start_index..]
+        .windows(2)
+        .position(|window| window == ['$', '$'])
+        .map(|relative_index| relative_index + start_index)
+}
+
+/// Converts supported inline math while preserving display-math delimiters.
+fn render_inline_math_symbols(content: &str) -> String {
+    let mut rendered = String::with_capacity(content.len());
+    let mut remaining = content;
+
+    while let Some(character) = remaining.chars().next() {
+        if let Some((inline_code, suffix)) = split_delimited_prefix(remaining, "`") {
+            rendered.push_str(inline_code);
+            remaining = suffix;
+
+            continue;
+        }
+
+        if let Some((display_math, suffix)) = split_delimited_prefix(remaining, "$$") {
+            rendered.push_str(display_math);
+            remaining = suffix;
+
+            continue;
+        }
+
+        if remaining.starts_with("$$") {
+            rendered.push_str(remaining);
+
+            break;
+        }
+
+        if let Some(suffix) = remaining.strip_prefix(r"$\rightarrow$") {
+            rendered.push('→');
+            remaining = suffix;
+
+            continue;
+        }
+
+        rendered.push(character);
+        remaining = &remaining[character.len_utf8()..];
+    }
+
+    rendered
+}
+
+/// Splits one complete delimited prefix from its trailing content.
+fn split_delimited_prefix<'a>(content: &'a str, delimiter: &str) -> Option<(&'a str, &'a str)> {
+    let delimited_content = content.strip_prefix(delimiter)?;
+    let closing_index = delimited_content.find(delimiter)?;
+    let expression_end = delimiter.len() + closing_index + delimiter.len();
+
+    Some(content.split_at(expression_end))
+}
+
 fn flush_literal_span(spans: &mut Vec<Span<'static>>, literal: &mut String, style: Style) {
     if literal.is_empty() {
         return;
     }
 
-    spans.push(Span::styled(std::mem::take(literal), style));
+    let content = render_inline_math_symbols(&std::mem::take(literal));
+    spans.push(Span::styled(content, style));
 }
 
 fn parse_heading(raw_line: &str) -> Option<(usize, &str)> {
@@ -2169,6 +2241,188 @@ mod tests {
                 .iter()
                 .any(|span| span.content.as_ref() == "code" && span.style == inline_code_style())
         );
+    }
+
+    #[test]
+    fn test_render_markdown_renders_inline_right_arrow_math_symbol() {
+        // Arrange
+        let input = r"Move $\rightarrow$ forward.";
+
+        // Act
+        let lines = render_markdown(input, 80);
+
+        // Assert
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].to_string(), "Move → forward.");
+    }
+
+    #[test]
+    fn test_render_markdown_renders_inline_right_arrow_math_inside_bold() {
+        // Arrange
+        let input = r"Move **$\rightarrow$** forward.";
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let arrow_span = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "→")
+            .expect("right arrow should render");
+
+        // Assert
+        assert!(arrow_span.style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(lines[0].to_string(), "Move → forward.");
+    }
+
+    #[test]
+    fn test_render_markdown_renders_inline_right_arrow_math_inside_italic() {
+        // Arrange
+        let input = r"Move *$\rightarrow$* forward.";
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let arrow_span = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "→")
+            .expect("right arrow should render");
+
+        // Assert
+        assert!(arrow_span.style.add_modifier.contains(Modifier::ITALIC));
+        assert_eq!(lines[0].to_string(), "Move → forward.");
+    }
+
+    #[test]
+    fn test_render_markdown_preserves_unsupported_inline_math() {
+        // Arrange
+        let input =
+            r"Keep $x + y$, unmatched $\rightarrow literal, and $$text $\rightarrow$ literal.";
+
+        // Act
+        let lines = render_markdown(input, 120);
+
+        // Assert
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].to_string(), input);
+    }
+
+    #[test]
+    fn test_render_markdown_preserves_display_math() {
+        // Arrange
+        let input = r"Keep $$text $\rightarrow$ text$$ literal.";
+
+        // Act
+        let lines = render_markdown(input, 80);
+
+        // Assert
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].to_string(), input);
+    }
+
+    #[test]
+    fn test_render_markdown_preserves_bold_syntax_inside_display_math() {
+        // Arrange
+        let input = r"Keep $$text **$\rightarrow$** text$$ literal.";
+
+        // Act
+        let lines = render_markdown(input, 80);
+
+        // Assert
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].to_string(), input);
+    }
+
+    #[test]
+    fn test_render_markdown_preserves_italic_syntax_inside_display_math() {
+        // Arrange
+        let input = r"Keep $$text *$\rightarrow$* text$$ literal.";
+
+        // Act
+        let lines = render_markdown(input, 80);
+
+        // Assert
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].to_string(), input);
+    }
+
+    #[test]
+    fn test_render_markdown_preserves_display_math_inside_bold() {
+        // Arrange
+        let input = r"Keep **$$text $\rightarrow$ text$$** literal.";
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let math_text = lines[0]
+            .spans
+            .iter()
+            .filter(|span| span.style.add_modifier.contains(Modifier::BOLD))
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        // Assert
+        assert_eq!(math_text, r"$$text $\rightarrow$ text$$");
+        assert_eq!(
+            lines[0].to_string(),
+            r"Keep $$text $\rightarrow$ text$$ literal."
+        );
+    }
+
+    #[test]
+    fn test_render_markdown_preserves_display_math_inside_italic() {
+        // Arrange
+        let input = r"Keep *$$text $\rightarrow$ text$$* literal.";
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let math_text = lines[0]
+            .spans
+            .iter()
+            .filter(|span| span.style.add_modifier.contains(Modifier::ITALIC))
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        // Assert
+        assert_eq!(math_text, r"$$text $\rightarrow$ text$$");
+        assert_eq!(
+            lines[0].to_string(),
+            r"Keep $$text $\rightarrow$ text$$ literal."
+        );
+    }
+
+    #[test]
+    fn test_render_markdown_preserves_inline_code_inside_bold() {
+        // Arrange
+        let input = r"Keep **`$\rightarrow$`** literal.";
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let code_span = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == r"`$\rightarrow$`")
+            .expect("inline code should remain literal");
+
+        // Assert
+        assert!(code_span.style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(lines[0].to_string(), r"Keep `$\rightarrow$` literal.");
+    }
+
+    #[test]
+    fn test_render_markdown_preserves_inline_code_inside_italic() {
+        // Arrange
+        let input = r"Keep *`$\rightarrow$`* literal.";
+
+        // Act
+        let lines = render_markdown(input, 80);
+        let code_span = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == r"`$\rightarrow$`")
+            .expect("inline code should remain literal");
+
+        // Assert
+        assert!(code_span.style.add_modifier.contains(Modifier::ITALIC));
+        assert_eq!(lines[0].to_string(), r"Keep `$\rightarrow$` literal.");
     }
 
     #[test]
