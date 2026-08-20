@@ -271,10 +271,10 @@ comments are read-only.
 
 Pressing `d` from session view opens Diff mode focused on Files with the right panel
 showing the git diff. While Files remains focused, use `Shift+j` / `Shift+k` or `Up` /
-`Down` to scroll the selected file without moving focus. Press `Enter` on a file to
-focus its changes, then press `Enter` again to edit the selected changed line inline.
-After finishing with `Enter` or `Esc`, use `j` / `k` or the arrow keys to move the line
-cursor and press `Enter` to edit the selected line. Press `Shift+V` to start a visual
+`Down` to scroll the selected file without moving focus. Press `Enter` or `l` on a file
+to focus its changes, then press `Enter` to edit the selected changed line inline. After
+finishing with `Enter` or `Esc`, use `j` / `k` or the arrow keys to move the line cursor
+and press `Enter` to edit the selected line. Press `Shift+V` to start a visual
 changed-row selection, extend it with the same navigation keys, then press `Enter` to
 comment on the range or `Esc` to cancel the selection. The range stays highlighted while
 its inline editor is open and after the comment is finished, so the comment's source
@@ -292,6 +292,7 @@ Press `s` to submit every inline diff comment together in the next turn.
 | `Shift+j` / `Shift+k` | Scroll selected file, or select a changed line         |
 | `Shift+V`             | Start visual changed-row selection                     |
 | `Enter`               | Focus a file, or edit/finish a comment                 |
+| `l`                   | Focus the selected file's changes                      |
 | `Up` / `Down`         | Scroll selected file, select a line, or scroll preview |
 | `Left` / `h` / `f`    | Return to Files                                        |
 | `p`                   | Toggle markdown preview                                |

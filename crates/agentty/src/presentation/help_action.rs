@@ -762,9 +762,9 @@ pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
         HelpAction::new("select item", "j/k", "Select file or comment"),
         HelpAction::new(
             if can_comment { "open/comment" } else { "open" },
-            "Enter",
+            "Enter/l",
             if can_comment {
-                "Open selected file or edit selected changed line"
+                "Open selected file with Enter/l or edit selected changed line with Enter"
             } else {
                 "Open selected file"
             },
@@ -867,7 +867,7 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
             actions.push(HelpAction::new("select file", "j/k", "Select file"));
             actions.push(HelpAction::new(
                 "open",
-                "Enter",
+                "Enter/l",
                 "Focus the selected file's changed lines",
             ));
             actions.push(HelpAction::new("preview", "p", "Toggle markdown preview"));
@@ -2174,7 +2174,7 @@ mod tests {
             [
                 "q",
                 "j/k",
-                "Enter",
+                "Enter/l",
                 "f/Esc/Left",
                 "c",
                 "p",
@@ -2187,7 +2187,7 @@ mod tests {
                 "?"
             ]
         );
-        assert_eq!(file_footer_keys, ["q/Esc", "j/k", "Enter", "p", "c", "?"]);
+        assert_eq!(file_footer_keys, ["q/Esc", "j/k", "Enter/l", "p", "c", "?"]);
     }
 
     #[test]
