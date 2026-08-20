@@ -27,7 +27,10 @@ updates:
           - "patch"
           - "minor"
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # "/" scans workflows and root action manifests, not action subdirectories.
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "daily"
     cooldown:
