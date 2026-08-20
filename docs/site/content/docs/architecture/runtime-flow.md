@@ -755,7 +755,8 @@ their triggers:
   before its first reply. Stacked child sessions do not expose this action.
 
 - **Focused review assist** (entering review): runs the review prompt with the diff and
-  saved user/agent chat history, then stores the result or error.
+  saved user/agent chat history through the provider-enforced read-only permission mode,
+  then stores the result or error.
 
 - **Sync-main workflow** (list-mode `s`): pull/rebase/push of the project branch through
   the sync orchestrator, with assisted conflict resolution.
