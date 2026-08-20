@@ -2199,11 +2199,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_show_diff_for_view_session_uses_error_message_outside_git_repo() {
+    async fn test_show_diff_for_view_session_restores_view_after_git_error() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let non_git_dir = tempdir().expect("failed to create non-git dir");
         app.sessions.sessions_mut()[0].folder = non_git_dir.path().to_path_buf();
+        app.mode = AppMode::View {
+            session_id: session_id.clone().into(),
+            scroll_offset: Some(0),
+        };
         let context = ViewContext {
             scroll_offset: Some(0),
             session_id: session_id.clone().into(),
@@ -2218,13 +2222,23 @@ mod tests {
         assert!(opened);
         assert!(matches!(
             app.mode,
-            AppMode::Diff {
+            AppMode::View {
                 ref session_id,
-                ref diff,
-                scroll_offset: 0,
+                scroll_offset: Some(0),
                 ..
-            } if session_id == &context.session_id && diff.contains("Failed to run git diff:")
+            } if session_id == &context.session_id
         ));
+        let workflow_notice = app.sessions.sessions()[0]
+            .transient_messages
+            .get(crate::domain::transient_message::TransientMessageSlot::WorkflowNotice)
+            .expect("diff load failure should be visible in the restored session view");
+        assert!(workflow_notice.body.text().contains("Unable to load diff:"));
+        assert!(
+            workflow_notice
+                .body
+                .text()
+                .contains("Failed to run git diff:")
+        );
     }
 
     /// Verifies a stale view index cannot start a background diff load.
@@ -2324,7 +2338,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn managed_done_session_surfaces_archived_diff_load_failure() {
+    async fn managed_done_session_restores_view_after_archived_diff_load_failure() {
         // Arrange
         let (mut app, _base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
         let session_id = app
@@ -2334,6 +2348,10 @@ mod tests {
         let session = &mut app.sessions.sessions_mut()[0];
         session.role = SessionRole::OrchestrationWorker;
         session.status = Status::Done;
+        app.mode = AppMode::View {
+            session_id: session_id.clone().into(),
+            scroll_offset: Some(0),
+        };
         let context = ViewContext {
             scroll_offset: Some(0),
             session_id: session_id.into(),
@@ -2351,8 +2369,22 @@ mod tests {
         assert!(opened);
         assert!(matches!(
             app.mode,
-            AppMode::Diff { ref diff, .. } if diff.starts_with("Failed to load archived diff:")
+            AppMode::View {
+                ref session_id,
+                scroll_offset: Some(0),
+                ..
+            } if session_id == &context.session_id
         ));
+        let workflow_notice = app.sessions.sessions()[0]
+            .transient_messages
+            .get(crate::domain::transient_message::TransientMessageSlot::WorkflowNotice)
+            .expect("archived diff load failure should be visible in the restored view");
+        assert!(
+            workflow_notice
+                .body
+                .text()
+                .contains("Failed to load archived diff:")
+        );
     }
 
     #[tokio::test]

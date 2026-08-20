@@ -15,6 +15,7 @@ const DIFF_GIT_FILE_HEADER_PREFIX: &str = "diff --git";
 const DIFF_GIT_FALLBACK_PREFIX: &str = "diff --git ";
 const FILE_EXPLORER_HORIZONTAL_BORDER_WIDTH: u16 = 2;
 const FILE_EXPLORER_TITLE: &str = " Files ";
+const LOADING_LABEL: &str = "Loading...";
 const NO_FILES_LABEL: &str = "No files";
 const PATH_SEGMENT_SEPARATOR: char = '/';
 const FOLDER_SUFFIX: &str = "/";
@@ -95,6 +96,19 @@ impl FileExplorer {
         Self {
             file_list_lines: Arc::from(file_list_lines),
             is_focused: true,
+            preserved_suffix_span_count: 0,
+            selected_index: 0,
+        }
+    }
+
+    /// Creates a non-selectable loading placeholder for the diff sidebar.
+    pub(crate) fn loading() -> Self {
+        Self {
+            file_list_lines: Arc::from([Line::from(Span::styled(
+                LOADING_LABEL,
+                Style::default().fg(style::palette::text_subtle()),
+            ))]),
+            is_focused: false,
             preserved_suffix_span_count: 0,
             selected_index: 0,
         }
@@ -459,6 +473,29 @@ mod tests {
         let border_cell = &buffer.content()[0];
         assert_eq!(border_cell.symbol(), "┌");
         assert_eq!(border_cell.fg, style::palette::border());
+    }
+
+    #[test]
+    fn loading_renders_explicit_placeholder_without_empty_state() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(40, 10);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| FileExplorer::loading().render(frame, frame.area()))
+            .expect("failed to draw loading file explorer");
+
+        // Assert
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(text.contains(LOADING_LABEL));
+        assert!(!text.contains(NO_FILES_LABEL));
     }
 
     #[test]

@@ -327,37 +327,47 @@ async fn diff_output(
     name_only: bool,
 ) -> Result<String, GitError> {
     spawn_blocking(move || -> Result<String, GitError> {
-        let index_path = run_git_command_sync(
-            &repo_path,
-            &["rev-parse", "--git-path", "index"],
-            "Git index path resolution failed",
-        )?;
+        let index_path = resolve_diff_index_path(&repo_path)?;
         let index_path = PathBuf::from(index_path.trim());
         let index_path = if index_path.is_absolute() {
             index_path
         } else {
             repo_path.join(index_path)
         };
-        let temporary_index = copy_git_index_to_temp(&index_path)?;
+
+        diff_output_after_index_resolution(&repo_path, &base_branch, name_only, &index_path)
+    })
+    .await?
+}
+
+/// Generates diff output after the real index path has been resolved.
+fn diff_output_after_index_resolution(
+    repo_path: &Path,
+    base_branch: &str,
+    name_only: bool,
+    index_path: &Path,
+) -> Result<String, GitError> {
+    let result = (|| -> Result<String, GitError> {
+        let temporary_index = copy_git_index_to_temp(index_path)?;
 
         run_git_command_with_index_sync(
-            &repo_path,
+            repo_path,
             &["add", "-A", "--intent-to-add"],
             &temporary_index,
             "Git add --intent-to-add failed",
         )?;
 
         let merge_base_output =
-            run_git_command_output_sync(&repo_path, &["merge-base", "HEAD", &base_branch])?;
+            run_git_command_output_sync(repo_path, &["merge-base", "HEAD", base_branch])?;
 
         let diff_target = if merge_base_output.status.success() {
             resolve_diff_target(
-                &repo_path,
-                &base_branch,
+                repo_path,
+                base_branch,
                 String::from_utf8_lossy(&merge_base_output.stdout).trim(),
             )?
         } else {
-            base_branch
+            base_branch.to_string()
         };
 
         let args = if name_only {
@@ -366,9 +376,51 @@ async fn diff_output(
             vec!["diff", diff_target.as_str()]
         };
 
-        run_git_command_with_index_sync(&repo_path, &args, &temporary_index, "Git diff failed")
-    })
-    .await?
+        run_git_command_with_index_sync(repo_path, &args, &temporary_index, "Git diff failed")
+    })();
+
+    result.map_err(|error| classify_diff_repository_error(repo_path, error))
+}
+
+/// Resolves the real index path and classifies a reclaimed repository.
+fn resolve_diff_index_path(repo_path: &Path) -> Result<String, GitError> {
+    run_git_command_sync(
+        repo_path,
+        &["rev-parse", "--git-path", "index"],
+        "Git index path resolution failed",
+    )
+    .map_err(|error| classify_diff_repository_error(repo_path, error))
+}
+
+/// Preserves ordinary Git failures while typing unavailable repository paths.
+fn classify_diff_repository_error(repo_path: &Path, error: GitError) -> GitError {
+    if !diff_repository_is_unavailable(repo_path) {
+        return error;
+    }
+
+    GitError::RepositoryUnavailable {
+        detail: error.to_string(),
+    }
+}
+
+/// Probes repository discovery without interpreting localized Git output.
+fn diff_repository_is_unavailable(repo_path: &Path) -> bool {
+    if !repo_path.is_dir() {
+        return true;
+    }
+
+    diff_repository_probe_is_unavailable(run_git_command_output_sync(
+        repo_path,
+        &["rev-parse", "--git-dir"],
+    ))
+}
+
+/// Treats only a completed, unsuccessful discovery probe as unavailable.
+fn diff_repository_probe_is_unavailable(probe: Result<Output, GitError>) -> bool {
+    match probe {
+        Ok(output) => !output.status.success(),
+        Err(_) => false,
+    }
 }
 
 /// Reads one repository-relative worktree file with a fixed memory bound.
@@ -1713,6 +1765,151 @@ mod tests {
         );
         assert_eq!(cached_diff_after, cached_diff_before);
         assert_eq!(status_after, status_before);
+    }
+
+    #[tokio::test]
+    async fn diff_reports_repository_unavailable_outside_git_repository() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+
+        // Act
+        let result = diff(temp_dir.path().to_path_buf(), "main".to_string()).await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(GitError::RepositoryUnavailable { detail })
+                if detail.to_ascii_lowercase().contains("not a git repository")
+        ));
+    }
+
+    #[test]
+    fn diff_reports_repository_unavailable_when_removed_after_index_resolution() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let preserved_index_dir = tempdir().expect("failed to create preserved index dir");
+        setup_test_git_repo(temp_dir.path());
+        let index_path =
+            resolve_diff_index_path(temp_dir.path()).expect("index path should resolve");
+        let index_path = PathBuf::from(index_path.trim());
+        let index_path = temp_dir.path().join(index_path);
+        let preserved_index_path = preserved_index_dir.path().join("index");
+        fs::copy(index_path, &preserved_index_path).expect("index copy should succeed");
+        fs::remove_dir_all(temp_dir.path()).expect("worktree removal should succeed");
+
+        // Act
+        let result = diff_output_after_index_resolution(
+            temp_dir.path(),
+            "main",
+            false,
+            &preserved_index_path,
+        );
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(GitError::RepositoryUnavailable { detail })
+                if detail.contains("git add -A --intent-to-add")
+        ));
+    }
+
+    #[tokio::test]
+    async fn diff_preserves_invalid_base_reference_error() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+
+        // Act
+        let result = diff(
+            temp_dir.path().to_path_buf(),
+            "missing-base-reference".to_string(),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(GitError::CommandFailed { command, stderr })
+                if command == "git diff missing-base-reference"
+                    && stderr.contains("Git diff failed")
+        ));
+    }
+
+    #[test]
+    fn diff_repository_error_classification_preserves_unrelated_failures() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        let error = GitError::CommandFailed {
+            command: "git rev-parse --git-path index".to_string(),
+            stderr: "fatal: ambiguous argument".to_string(),
+        };
+
+        // Act
+        let classified = classify_diff_repository_error(temp_dir.path(), error);
+
+        // Assert
+        assert!(matches!(
+            classified,
+            GitError::CommandFailed { command, stderr }
+                if command == "git rev-parse --git-path index"
+                    && stderr == "fatal: ambiguous argument"
+        ));
+    }
+
+    #[test]
+    fn diff_repository_error_classification_ignores_localized_diagnostic() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let error = GitError::CommandFailed {
+            command: "git rev-parse --git-path index".to_string(),
+            stderr: "fatal: kein Git-Repository".to_string(),
+        };
+
+        // Act
+        let classified = classify_diff_repository_error(temp_dir.path(), error);
+
+        // Assert
+        assert!(matches!(
+            classified,
+            GitError::RepositoryUnavailable { detail }
+                if detail == "git rev-parse --git-path index: fatal: kein Git-Repository"
+        ));
+    }
+
+    #[test]
+    fn diff_repository_probe_preserves_spawn_failure() {
+        // Arrange
+        let probe = Err(GitError::CommandFailed {
+            command: "git rev-parse --git-dir".to_string(),
+            stderr: "git executable unavailable".to_string(),
+        });
+
+        // Act
+        let unavailable = diff_repository_probe_is_unavailable(probe);
+
+        // Assert
+        assert!(!unavailable);
+    }
+
+    #[test]
+    fn diff_repository_error_classification_types_missing_directory() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let missing_path = temp_dir.path().join("removed-worktree");
+        let error = GitError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "worktree removed",
+        ));
+
+        // Act
+        let classified = classify_diff_repository_error(&missing_path, error);
+
+        // Assert
+        assert!(matches!(
+            classified,
+            GitError::RepositoryUnavailable { detail } if detail == "worktree removed"
+        ));
     }
 
     #[tokio::test]

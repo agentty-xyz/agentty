@@ -414,6 +414,7 @@ fn render_surface(
                     diff: "Loading diff...",
                     file_explorer_selected_index: 0,
                     focus: DiffFocus::Files,
+                    is_loading: true,
                     line_comments: &DiffLineComments::default(),
                     preview: &preview,
                     review_comments: None,
@@ -446,6 +447,7 @@ fn render_surface(
                 diff,
                 file_explorer_selected_index,
                 focus,
+                is_loading: false,
                 line_comments,
                 preview,
                 review_comments,
@@ -625,6 +627,7 @@ struct DiffSurfaceInput<'a> {
     diff: &'a str,
     file_explorer_selected_index: usize,
     focus: DiffFocus,
+    is_loading: bool,
     line_comments: &'a DiffLineComments,
     preview: &'a DiffPreview,
     review_comments: Option<&'a DiffReviewComments>,
@@ -650,7 +653,7 @@ fn render_diff_surface(
         return;
     };
 
-    page::diff::DiffPage::new(page::diff::DiffPageInput {
+    let mut page = page::diff::DiffPage::new(page::diff::DiffPageInput {
         can_comment: allows_diff_line_comment_reply(session, sessions, input.restore),
         diff: input.diff,
         diff_layout_cache: resources.diff_layout_cache,
@@ -664,8 +667,12 @@ fn render_diff_surface(
         selected_diff_line_index: input.selected_diff_line_index,
         session,
         sidebar_focus: input.sidebar_focus,
-    })
-    .render(f, area);
+    });
+    if input.is_loading {
+        page.loading().render(f, area);
+    } else {
+        page.render(f, area);
+    }
 }
 
 /// Renders the session chat page for all session-chat modes.
@@ -1215,6 +1222,7 @@ mod tests {
         assert!(diff_loading_is_diff);
         assert!(comments_text.contains("Comment — Router Session"));
         assert!(loading_text.contains("Loading diff..."));
+        assert!(!loading_text.contains("No files"));
     }
 
     #[test]
@@ -1693,6 +1701,7 @@ mod tests {
                         diff: "",
                         file_explorer_selected_index: 0,
                         focus: DiffFocus::Files,
+                        is_loading: false,
                         line_comments: &DiffLineComments::default(),
                         selected_diff_line_index: 0,
                         preview: &DiffPreview::default(),
@@ -1747,6 +1756,7 @@ mod tests {
                         diff: "",
                         file_explorer_selected_index: 0,
                         focus: DiffFocus::Files,
+                        is_loading: false,
                         line_comments: &DiffLineComments::default(),
                         selected_diff_line_index: 0,
                         preview: &DiffPreview::default(),
@@ -1806,6 +1816,7 @@ mod tests {
                         diff: "",
                         file_explorer_selected_index: 0,
                         focus: DiffFocus::Files,
+                        is_loading: false,
                         line_comments: &DiffLineComments::default(),
                         selected_diff_line_index: 0,
                         preview: &DiffPreview::default(),
