@@ -452,8 +452,8 @@ impl TaskService {
         }
     }
 
-    /// Generates review assist text using an injected one-shot boundary so
-    /// failure paths can be tested without subprocess execution.
+    /// Generates review assist text through a provider-enforced read-only
+    /// one-shot boundary so review generation cannot modify the worktree.
     async fn review_assist_text_with_client(
         session_folder: &Path,
         review_selection: AgentSelection,
@@ -469,7 +469,7 @@ impl TaskService {
                 child_pid: None,
                 folder: session_folder.to_path_buf(),
                 model: review_selection.model(),
-                permission_mode: ag_agent::PermissionMode::AutoEdit,
+                permission_mode: ag_agent::PermissionMode::ReadOnly,
                 prompt: review_prompt,
                 request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
                 reasoning_level,
@@ -846,6 +846,7 @@ mod tests {
             .times(1)
             .returning(|request| {
                 assert_eq!(request.agent_kind, AgentKind::Claude);
+                assert_eq!(request.permission_mode, ag_agent::PermissionMode::ReadOnly);
                 assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
                 assert!(
                     request
