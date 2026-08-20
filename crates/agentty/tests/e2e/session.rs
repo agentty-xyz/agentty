@@ -6960,7 +6960,7 @@ fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
                     .press_key("d")
                     .wait_for_text("main.rs", 5000)
                     .press_key("j")
-                    .wait_for_text("Enter: open", 5000)
+                    .wait_for_text("Enter/l: open", 5000)
                     .press_key("Enter")
                     .wait_for_text("Esc/Left: files", 5000)
                     .press_key("Enter")
@@ -7317,7 +7317,7 @@ fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
 }
 
 /// Verify that the right-hand patch scrolls while Files remains focused, then
-/// `Enter` moves focus into changed-line navigation.
+/// `l` moves focus into changed-line navigation like `Enter`.
 #[test]
 fn test_diff_changed_line_navigation() -> E2eResult {
     // Arrange, Act, Assert
@@ -7342,7 +7342,7 @@ fn test_diff_changed_line_navigation() -> E2eResult {
                         "diff_file_scroll",
                         "Selected file scrolled without leaving Files focus",
                     )
-                    .press_key("Enter")
+                    .press_key("l")
                     .wait_for_text("Esc/Left: files", 5000);
                 let scenario = (0..70).fold(scenario, |scenario, _| scenario.press_key("Down"));
 
@@ -7411,7 +7411,7 @@ fn test_diff_line_comments() -> E2eResult {
                     .wait_for_text("main.rs", 5000)
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
-                    .wait_for_text("Enter: open", 5000)
+                    .wait_for_text("Enter/l: open", 5000)
                     .press_key(ENTER_KEY)
                     .wait_for_text("Enter: comment", 5000)
                     .press_key(ENTER_KEY)

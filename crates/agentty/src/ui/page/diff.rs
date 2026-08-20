@@ -2659,6 +2659,7 @@ mod tests {
         assert!(text.contains("(+1 -0) Diff — Diff Session"));
         assert_eq!(text.matches("+1/-0").count(), 2);
         assert!(text.contains("j/k: select file"));
+        assert!(text.contains("Enter/l: open"));
         assert!(text.contains("?: help"));
         assert!(foreground_symbol_cell_count(buffer, "┌") >= 2);
     }

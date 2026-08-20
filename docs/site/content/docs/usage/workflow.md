@@ -220,8 +220,8 @@ background; press `q` or `Esc` on **Loading diff...** to return immediately whil
 large repository is still being inspected.
 
 Inside diff view, `Shift+j` / `Shift+k` and `Up` / `Down` scroll the selected file while
-Files remains focused. Press `Enter` on a file to move focus from the file tree to its
-patch, then press `Enter` again to open an inline editor beneath the selected added or
+Files remains focused. Press `Enter` or `l` on a file to move focus from the file tree
+to its patch, then press `Enter` to open an inline editor beneath the selected added or
 removed line. Type the feedback, then press `Enter` or `Esc` to finish without leaving
 Diff mode. Use `j` / `k` or the arrow keys to move through changed lines while Agentty
 keeps the cursor visible, and press `Enter` on any selected line to add or edit its
