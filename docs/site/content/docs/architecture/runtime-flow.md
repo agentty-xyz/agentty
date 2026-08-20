@@ -592,21 +592,21 @@ descendants it spawned.
 - Merge and `sync main` workflows require a clean target checkout before changing
   base-branch state.
 - Provider permission policies are scoped per `TurnRequest`. Ordinary Codex turns run
-  with a non-interactive approval policy and workspace-write sandbox. The Codex turn
-  policy explicitly reopens the worktree-local `.agents/` directory that Codex otherwise
-  protects while leaving `.git` and `.codex/` read-only. Agentty immediately declines
-  MCP elicitations and grants no additional permission requests so an app-server request
-  cannot leave the turn waiting for interactive input. Codex tool input requests receive
-  an empty answer set for the same reason. Claude turns receive session-scoped settings
-  that deny writes to the known main checkout, Gemini ACP requests prefer one-shot allow
-  options, and CLI-backed providers run from the session worktree process directory.
-  Researcher requests instead carry `PermissionMode::ReadOnly` through CLI and
-  app-server launch boundaries. Codex selects `readOnly` sandbox payloads and rejects
-  command or file-change approvals; Claude exposes only inspection tools in plan mode;
-  Gemini starts with sandboxed plan approval and cancels ACP permission requests; and
-  Antigravity starts in sandboxed plan mode without its permission-bypass flag. The
-  persistent runtime identity includes the permission mode, preventing an auto-edit
-  process from being reused for research.
+  with a non-interactive approval policy and `dangerFullAccess` sandbox policy so their
+  effective command permissions match Claude auto-edit, including tools that cannot run
+  inside an OS sandbox. Agentty immediately declines MCP elicitations and grants no
+  additional permission requests so an app-server request cannot leave the turn waiting
+  for interactive input. Codex tool input requests receive an empty answer set for the
+  same reason. Claude turns receive session-scoped settings that deny writes to the
+  known main checkout while retaining Claude Code's unsandboxed command fallback, Gemini
+  ACP requests prefer one-shot allow options, and CLI-backed providers run from the
+  session worktree process directory. Researcher requests instead carry
+  `PermissionMode::ReadOnly` through CLI and app-server launch boundaries. Codex selects
+  `readOnly` sandbox payloads and rejects command or file-change approvals; Claude
+  exposes only inspection tools in plan mode; Gemini starts with sandboxed plan approval
+  and cancels ACP permission requests; and Antigravity starts in sandboxed plan mode
+  without its permission-bypass flag. The persistent runtime identity includes the
+  permission mode, preventing an auto-edit process from being reused for research.
 
 ## Agent Interaction Protocol Flow
 

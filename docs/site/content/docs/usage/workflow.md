@@ -764,20 +764,23 @@ with `j` / `k` or `Up` / `Down`.
 
 `/apply` requires a completed focused review (`f` key). `/mode` stores a session-scoped
 permission mode for following chat turns. `Auto Edit` uses the agent's standard editing
-permissions. During those chat turns, `Read Only` prevents repository and filesystem
-writes. The composer title always shows the current permission as `Auto Edit` or
-`Read Only`, after the response speed when that provider supports speed control. In
-`Read Only`, agents do not ask for write access; when a requested change requires edits,
-they suggest switching to `Auto Edit` with `/mode`. `/model` offers only locally
-available backends; see [Agents & Models](@/docs/agents/backends.md). `/speed` is
-available for Claude and Codex sessions. The selected speed is stored with the session,
-shown after the reasoning level in the session header and beside the composer title, and
-applied to following turns. Gemini and Antigravity sessions have no speed control, so
-their header and composer omit the speed display entirely. Fast responses use the
-provider's higher-cost low-latency mode. Enabling Fast moves Claude sessions to
-`claude-opus-5` and Codex Spark sessions to `gpt-5.6-sol` without changing the project
-default model. Returning to Normal does not change the selected model. Selecting a model
-that does not support Fast resets the session to Normal before the model changes.
+permissions. Codex `Auto Edit` has full command access, including for browser tests and
+local services that cannot run inside its sandbox. Claude `Auto Edit` can likewise retry
+incompatible commands outside its sandbox. During those chat turns, `Read Only` prevents
+repository and filesystem writes. The composer title always shows the current permission
+as `Auto Edit` or `Read Only`, after the response speed when that provider supports
+speed control. In `Read Only`, agents do not ask for write access; when a requested
+change requires edits, they suggest switching to `Auto Edit` with `/mode`. `/model`
+offers only locally available backends; see
+[Agents & Models](@/docs/agents/backends.md). `/speed` is available for Claude and Codex
+sessions. The selected speed is stored with the session, shown after the reasoning level
+in the session header and beside the composer title, and applied to following turns.
+Gemini and Antigravity sessions have no speed control, so their header and composer omit
+the speed display entirely. Fast responses use the provider's higher-cost low-latency
+mode. Enabling Fast moves Claude sessions to `claude-opus-5` and Codex Spark sessions to
+`gpt-5.6-sol` without changing the project default model. Returning to Normal does not
+change the selected model. Selecting a model that does not support Fast resets the
+session to Normal before the model changes.
 
 `/personality` scans `.agents/agents/*/agent.md` in the session worktree when the picker
 opens. Agentty does not scan the global `~/.agents` directory. Each enabled definition

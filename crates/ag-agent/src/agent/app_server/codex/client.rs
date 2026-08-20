@@ -1195,9 +1195,9 @@ mod tests {
     }
 
     #[test]
-    /// Verifies Codex thread startup asks the app-server to avoid interactive
-    /// approval prompts during Agentty-managed turns.
-    fn build_thread_start_payload_uses_never_approval_policy() {
+    /// Verifies Codex auto-edit starts with the same effective unrestricted
+    /// command access as Claude auto-edit and avoids interactive approvals.
+    fn build_thread_start_payload_uses_unrestricted_auto_edit_policy() {
         // Arrange
         let folder = tempdir().expect("temporary folder should be created");
 
@@ -1218,6 +1218,13 @@ mod tests {
                 .and_then(|params| params.get("approvalPolicy"))
                 .and_then(Value::as_str),
             Some("never")
+        );
+        assert_eq!(
+            payload
+                .get("params")
+                .and_then(|params| params.get("sandbox"))
+                .and_then(Value::as_str),
+            Some("danger-full-access")
         );
     }
 

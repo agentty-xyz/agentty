@@ -33,13 +33,15 @@ All backends accept pasted local prompt images from the Agentty composer (`Ctrl+
 `Ctrl+Shift+V`, or `Alt+V` in prompt mode) and run their turns non-interactively inside
 the session worktree.
 
-Codex can edit repository-local `.agents/` content inside that worktree, including
-project skills and instructions. Its `.git` and `.codex/` paths remain read-only during
-normal turns.
+Codex `Auto Edit` turns run with full command access so browser tests, local services,
+and other tools that cannot run inside the provider sandbox remain available. This also
+means Codex commands are not confined to the session worktree; review the session diff
+and use `Read Only` for inspection-only work.
 
 Claude turns also allow Claude Code's `WebSearch` and `WebFetch` tools, so prompts that
 need current external information can use the web without an interactive permission
-grant. File edits remain scoped to the session worktree.
+grant. Claude `Auto Edit` retains Claude Code's unsandboxed command fallback for tools
+that cannot run inside its sandbox.
 
 Treat fetched web content as untrusted context. Claude still has edit-capable tools
 during the turn, so keep web-backed prompts specific and review the session diff before
