@@ -380,7 +380,7 @@ impl App {
         }
     }
 
-    /// Persists one slash-selected provider permission mode.
+    /// Persists one prompt-selected provider permission mode.
     ///
     /// # Errors
     /// Returns an error when the session is missing or persistence fails.
@@ -397,7 +397,7 @@ impl App {
                 session_id = %session_id,
                 permission_mode = ?permission_mode,
                 error = %error,
-                "failed to update session permission mode from prompt slash command"
+                "failed to update session permission mode from prompt shortcut"
             );
         }
 

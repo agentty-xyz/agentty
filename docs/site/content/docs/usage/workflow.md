@@ -209,15 +209,16 @@ available in the session transcript.
 
 While the composer is open, `Tab` moves focus to the chat transcript above it so the
 conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without
-losing the typed draft. While that chat transcript is focused, the `d` diff-preview hint
-appears unless the latest successful refresh found an empty diff against the session's
-base branch; `d` opens text, binary, metadata-only, or diagnostic diff output. Leaving
-the preview returns to the composer with the draft intact. Before opening the writable
-session worktree, Agentty clears a known-empty result in memory and durable storage
-because external edits may follow. If durable invalidation fails, the worktree stays
-closed; otherwise `d` becomes available and reloads the diff. Full diffs load in the
-background; press `q` or `Esc` on **Loading diff...** to return immediately while a
-large repository is still being inspected.
+losing the typed draft. `Shift+Tab` toggles the session between `Auto Edit` and
+`Read Only` without changing the draft. While that chat transcript is focused, the `d`
+diff-preview hint appears unless the latest successful refresh found an empty diff
+against the session's base branch; `d` opens text, binary, metadata-only, or diagnostic
+diff output. Leaving the preview returns to the composer with the draft intact. Before
+opening the writable session worktree, Agentty clears a known-empty result in memory and
+durable storage because external edits may follow. If durable invalidation fails, the
+worktree stays closed; otherwise `d` becomes available and reloads the diff. Full diffs
+load in the background; press `q` or `Esc` on **Loading diff...** to return immediately
+while a large repository is still being inspected.
 
 Inside diff view, `Shift+j` / `Shift+k` and `Up` / `Down` scroll the selected file while
 Files remains focused. Press `Enter` or `l` on a file to move focus from the file tree
@@ -757,21 +758,20 @@ with `j` / `k` or `Up` / `Down`.
 | -------------- | ------------------------------------------------------------- |
 | `/apply`       | Verify focused-review suggestions, then apply the valid ones. |
 | `/model`       | Switch the model for the current session.                     |
-| `/mode`        | Choose auto-edit or read-only permissions for chat turns.     |
 | `/personality` | Choose an agent personality for the current session.          |
 | `/reasoning`   | Override the reasoning level for the current session.         |
 | `/speed`       | Choose normal or fast responses for this session.             |
 
-`/apply` requires a completed focused review (`f` key). `/mode` stores a session-scoped
-permission mode for following chat turns. `Auto Edit` uses the agent's standard editing
-permissions. Codex `Auto Edit` has full command access, including for browser tests and
-local services that cannot run inside its sandbox. Claude `Auto Edit` can likewise retry
-incompatible commands outside its sandbox. During those chat turns, `Read Only` prevents
-repository and filesystem writes. The composer title always shows the current permission
-as `Auto Edit` or `Read Only`, after the response speed when that provider supports
-speed control. In `Read Only`, agents do not ask for write access; when a requested
-change requires edits, they suggest switching to `Auto Edit` with `/mode`. `/model`
-offers only locally available backends; see
+`/apply` requires a completed focused review (`f` key). `Shift+Tab` stores a
+session-scoped permission mode for following chat turns. `Auto Edit` uses the agent's
+standard editing permissions. Codex `Auto Edit` has full command access, including for
+browser tests and local services that cannot run inside its sandbox. Claude `Auto Edit`
+can likewise retry incompatible commands outside its sandbox. During those chat turns,
+`Read Only` prevents repository and filesystem writes. The composer title always shows
+the current permission as `Auto Edit` or `Read Only`, after the response speed when that
+provider supports speed control. In `Read Only`, agents do not ask for write access;
+when a requested change requires edits, they suggest switching to `Auto Edit` with
+`Shift+Tab`. `/model` offers only locally available backends; see
 [Agents & Models](@/docs/agents/backends.md). `/speed` is available for Claude and Codex
 sessions. The selected speed is stored with the session, shown after the reasoning level
 in the session header and beside the composer title, and applied to following turns.

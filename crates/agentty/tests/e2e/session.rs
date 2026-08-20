@@ -811,6 +811,21 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Seeds a review-ready session and opens the Sessions tab on startup.
+fn seed_review_ready_session_on_sessions_tab(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        test_support::persist_active_tab_for_test(&database, agentty::app::Tab::Sessions).await
+    })?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session whose latest diff refresh found no changes.
 fn seed_clean_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
@@ -8708,47 +8723,38 @@ fn model_slash_command_contains_match_is_visible() -> E2eResult {
     Ok(())
 }
 
-/// Verify the prompt title displays both permission modes selected through
-/// `/mode`.
+/// Verify `Shift+Tab` toggles the permission mode without changing the draft.
 #[test]
 fn session_permission_mode_selection() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_permission_mode_selection")
         .with_git()
         .with_terminal_size(180, 24)
-        .setup(seed_review_ready_session)
+        .setup(seed_review_ready_session_on_sessions_tab)
         .zola(
-            "Read-only session mode",
-            "Switch session chat between auto-edit and read-only permissions.",
+            "Switch session mode",
+            "Toggle chat between auto-edit and read-only with Shift+Tab.",
             43,
         )
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
-                    .press_key("/")
-                    .wait_for_text("· Normal · Auto Edit", 5000)
-                    .capture_labeled(
-                        "auto_edit_default",
-                        "Prompt title shows the default auto-edit session mode",
-                    )
-                    .write_text("mode")
-                    .wait_for_text("/mode", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Auto Edit", 3000)
+                    .wait_for_text("] · Normal ·", 5000)
+                    .wait_for_text("Shift+Tab: switch mode", 5000)
                     .capture_labeled(
-                        "permission_mode_picker",
-                        "Mode picker offers auto-edit and read-only chat turns",
+                        "initial_permission_mode",
+                        "Prompt title shows the current session permission mode",
                     )
-                    .press_key("Down")
-                    .press_key("Enter")
-                    .wait_for_text("· Normal · Read Only", 5000)
+                    .write_text("Keep this draft")
+                    .press_key("BackTab")
+                    .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
-                        "read_only_selected",
-                        "Prompt title shows the read-only session mode",
+                        "permission_mode_toggled",
+                        "Shift+Tab toggles the mode and preserves the draft",
                     )
             },
             |frame, report| {
@@ -8756,17 +8762,18 @@ fn session_permission_mode_selection() -> E2eResult {
                 let auto_edit_full = Region::full(auto_edit_frame.cols(), auto_edit_frame.rows());
                 assertion::assert_text_in_region(
                     &auto_edit_frame,
-                    "· Normal · Auto Edit",
+                    "] · Normal · Auto Edit",
+                    &auto_edit_full,
+                );
+                assertion::assert_text_in_region(
+                    &auto_edit_frame,
+                    "Shift+Tab: switch mode",
                     &auto_edit_full,
                 );
 
-                let picker_frame = common::frame_from_capture(&report.captures[1]);
-                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
-                assertion::assert_text_in_region(&picker_frame, "Auto Edit", &picker_full);
-                assertion::assert_text_in_region(&picker_frame, "Read Only", &picker_full);
-
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "· Normal · Read Only", &full);
+                assertion::assert_text_in_region(frame, "] · Normal · Read Only", &full);
+                assertion::assert_text_in_region(frame, "Keep this draft", &full);
             },
         )?;
 

@@ -268,7 +268,7 @@ pub struct Session {
     /// Parent session this stacked session is based on while its parent branch
     /// remains active.
     pub parent_session_id: Option<SessionId>,
-    /// Provider permission mode selected through `/mode`.
+    /// Provider permission mode selected through the prompt shortcut.
     pub permission_mode: crate::domain::permission::PermissionMode,
     /// Workspace personality selected for future turns, when present.
     pub personality_id: Option<String>,

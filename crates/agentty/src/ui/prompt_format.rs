@@ -60,6 +60,11 @@ pub fn prompt_footer_line(
         help_actions.push(help_action::HelpAction::new("sessions", "q", "Sessions"));
     } else {
         help_actions.extend_from_slice(prompt_footer_actions(session));
+        help_actions.push(help_action::HelpAction::new(
+            "switch mode",
+            "Shift+Tab",
+            "Switch permission mode",
+        ));
     }
 
     let mut footer_line = crate::ui::help_format::footer_line(&help_actions);
