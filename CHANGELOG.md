@@ -7,6 +7,38 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.3] - 2026-08-19
+
+### Added
+
+- agentty: persist per-project response-speed defaults and expose provider-compatible
+  Normal and Fast session controls.
+
+### Changed
+
+- agentty: give Codex `Auto Edit` sessions unrestricted command access while keeping
+  read-only turns restricted.
+- agentty: run review assist with provider-enforced read-only permissions.
+- agentty: focus selected Diff changes with `l` while keeping `Enter` for editing
+  changed lines.
+- agentty: render inline right-arrow math as Unicode outside code and unsupported math
+  expressions.
+- deps: update `taiki-e/install-action` from `2.85.11` to `2.85.13`.
+- docs: document the current orchestrator architecture and phased target workflow.
+- repo: remove Git Town configuration.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.3`.
+
+### Fixed
+
+- agentty: preserve running session work, queued actions, and workflow results across
+  project switches.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.15.2] - 2026-08-18
 
 ### Added
