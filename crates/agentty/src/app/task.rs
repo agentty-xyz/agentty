@@ -19,6 +19,7 @@ use tracing::warn;
 
 use crate::app::error::AppError;
 use crate::app::review::FocusedReviewPersistenceRetry;
+use crate::app::session_diff::DeferredAutoReviewPersistenceRetry;
 use crate::app::{AppEvent, UpdateStatus, at_mention_task};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::file_entry::FileEntry;
@@ -416,6 +417,20 @@ impl TaskService {
 
             // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = app_event_tx.send(AppEvent::FocusedReviewPersistenceRetry { retry });
+        });
+    }
+
+    /// Requeues one failed automatic-review deferral write after a bounded
+    /// delay so transient database errors cannot drop the trigger.
+    pub(crate) fn spawn_deferred_auto_review_persistence_retry(
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        retry: DeferredAutoReviewPersistenceRetry,
+    ) {
+        tokio::spawn(async move {
+            tokio::time::sleep(Self::focused_review_persistence_retry_delay(retry.attempt)).await;
+
+            // Fire-and-forget: receiver may be dropped during shutdown.
+            let _ = app_event_tx.send(AppEvent::DeferredAutoReviewPersistenceRetry { retry });
         });
     }
 

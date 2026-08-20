@@ -290,6 +290,10 @@ pub trait SessionRepository: Send + Sync {
     /// Sets `project_id` for sessions that do not yet reference a project.
     async fn backfill_session_project(&self, project_id: i64) -> Result<(), DbError>;
 
+    /// Persists an automatic focused-review trigger when the session still
+    /// exists and is eligible for a worker review.
+    async fn defer_session_focused_review(&self, id: &str) -> Result<bool, DbError>;
+
     /// Deletes a session row by identifier.
     async fn delete_session(&self, id: &str) -> Result<(), DbError>;
 
@@ -411,6 +415,13 @@ pub trait SessionRepository: Send + Sync {
     /// Loads parentless review-ready sessions that still need their recorded
     /// stack-base commit replayed onto their current base branch.
     async fn load_pending_stack_restack_session_ids(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<String>, DbError>;
+
+    /// Loads eligible worker sessions with a durable automatic focused-review
+    /// trigger for one project.
+    async fn load_pending_focused_review_session_ids(
         &self,
         project_id: i64,
     ) -> Result<Vec<String>, DbError>;
@@ -1081,6 +1092,28 @@ WHERE project_id IS NULL
         Ok(())
     }
 
+    async fn defer_session_focused_review(&self, id: &str) -> Result<bool, DbError> {
+        let now = self.now();
+        let result = sqlx::query!(
+            r#"
+UPDATE session
+SET focused_review_status = 'Pending',
+    focused_review_diff_hash = NULL,
+    focused_review_text = NULL,
+    updated_at = ?
+WHERE id = ?
+  AND status IN ('InProgress', 'Review', 'AgentReview')
+  AND (role IS NULL OR role <> 'Orchestrator')
+"#,
+            now,
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn delete_session(&self, id: &str) -> Result<(), DbError> {
         let now = self.now();
         let mut transaction = self.0.begin().await?;
@@ -1699,6 +1732,28 @@ WHERE project_id = ?
   AND status IN ('Review', 'AgentReview')
 ORDER BY updated_at ASC, id ASC
 ",
+            project_id
+        )
+        .fetch_all(&self.0)
+        .await?;
+
+        Ok(session_ids)
+    }
+
+    async fn load_pending_focused_review_session_ids(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<String>, DbError> {
+        let session_ids = sqlx::query_scalar!(
+            r#"
+SELECT id
+FROM session
+WHERE project_id = ?
+  AND focused_review_status = 'Pending'
+  AND status IN ('Review', 'AgentReview')
+  AND (role IS NULL OR role <> 'Orchestrator')
+ORDER BY updated_at DESC, id
+"#,
             project_id
         )
         .fetch_all(&self.0)

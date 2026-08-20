@@ -3,6 +3,8 @@
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 
+use tracing::warn;
+
 use crate::app::App;
 use crate::app::review::{self, FocusedReviewPersistence, ReviewCacheEntry};
 use crate::app::task::{SessionDiffTaskInput, SessionDiffTaskSource, TaskService};
@@ -12,9 +14,41 @@ use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
     TransientMessageSlot,
 };
+use crate::infra::db::DbError;
 use crate::presentation::app_mode::{
     AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffRestoreTarget, DiffSidebarFocus,
 };
+
+/// Maximum number of delayed persistence attempts after an automatic-review
+/// deferral write fails.
+const MAX_DEFERRED_AUTO_REVIEW_PERSISTENCE_RETRIES: u8 = 3;
+
+/// One delayed automatic-review deferral persistence attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DeferredAutoReviewPersistenceRetry {
+    /// One-based delayed retry number.
+    pub(crate) attempt: u8,
+    /// Session whose automatic focused review remains deferred.
+    pub(crate) session_id: SessionId,
+}
+
+impl DeferredAutoReviewPersistenceRetry {
+    /// Wraps one initial write before any delayed retries have run.
+    fn initial(session_id: SessionId) -> Self {
+        Self {
+            attempt: 0,
+            session_id,
+        }
+    }
+
+    /// Returns the next bounded retry, or `None` after the retry limit.
+    fn next(self) -> Option<Self> {
+        (self.attempt < MAX_DEFERRED_AUTO_REVIEW_PERSISTENCE_RETRIES).then(|| Self {
+            attempt: self.attempt.saturating_add(1),
+            session_id: self.session_id,
+        })
+    }
+}
 
 /// Completed session-diff task ready for stale-safe reducer application.
 pub(crate) struct SessionDiffUpdate {
@@ -122,6 +156,100 @@ impl App {
             },
             |restore| restore.into_mode(),
         );
+    }
+
+    /// Discards every diff continuation and deferred automatic-review trigger
+    /// owned by a deleted session so detached task completions remain stale.
+    pub(crate) fn discard_deleted_session_diff_state(&mut self, session_id: &SessionId) {
+        self.pending_session_diff_requests
+            .retain(|_, request| request.session_id != *session_id);
+        self.deferred_auto_review_session_ids.remove(session_id);
+    }
+
+    /// Persists and retains an automatic-review trigger for an eligible
+    /// session that cannot start its review yet.
+    pub(super) async fn defer_auto_review_session(&mut self, session_id: &SessionId) {
+        self.persist_deferred_auto_review(DeferredAutoReviewPersistenceRetry::initial(
+            session_id.clone(),
+        ))
+        .await;
+    }
+
+    /// Retries current automatic-review deferral writes after their bounded
+    /// backoff delay.
+    pub(super) async fn persist_deferred_auto_review_retries(
+        &mut self,
+        retries: Vec<DeferredAutoReviewPersistenceRetry>,
+    ) {
+        for retry in retries {
+            if self
+                .deferred_auto_review_session_ids
+                .contains(&retry.session_id)
+            {
+                self.persist_deferred_auto_review(retry).await;
+            }
+        }
+    }
+
+    /// Applies one automatic-review deferral persistence attempt.
+    async fn persist_deferred_auto_review(&mut self, retry: DeferredAutoReviewPersistenceRetry) {
+        let result = self
+            .services
+            .db()
+            .sessions()
+            .defer_session_focused_review(retry.session_id.as_str())
+            .await;
+        Self::handle_deferred_auto_review_persistence_result(
+            &mut self.deferred_auto_review_session_ids,
+            self.services.event_sender(),
+            retry,
+            result,
+        );
+    }
+
+    /// Retains failed triggers and schedules their next bounded persistence
+    /// attempt through the foreground event reducer.
+    fn handle_deferred_auto_review_persistence_result(
+        deferred_session_ids: &mut HashSet<SessionId>,
+        app_event_tx: tokio::sync::mpsc::UnboundedSender<crate::app::AppEvent>,
+        retry: DeferredAutoReviewPersistenceRetry,
+        result: Result<bool, DbError>,
+    ) -> bool {
+        let session_id = retry.session_id.clone();
+        match result {
+            Ok(true) => {
+                deferred_session_ids.insert(session_id);
+
+                false
+            }
+            Ok(false) => {
+                deferred_session_ids.remove(&session_id);
+
+                false
+            }
+            Err(error) => {
+                deferred_session_ids.insert(session_id.clone());
+                let Some(retry) = retry.next() else {
+                    warn!(
+                        session_id = %session_id,
+                        error = %error,
+                        "deferred automatic focused-review persistence retries exhausted; \
+                         retaining the in-memory trigger"
+                    );
+
+                    return false;
+                };
+                warn!(
+                    session_id = %session_id,
+                    retry_attempt = retry.attempt,
+                    %error,
+                    "failed to persist deferred automatic focused review; scheduling retry"
+                );
+                TaskService::spawn_deferred_auto_review_persistence_retry(app_event_tx, retry);
+
+                true
+            }
+        }
     }
 
     /// Starts one manual focused-review diff load unless that session already
@@ -486,6 +614,9 @@ impl App {
     ) {
         let session_id = update.session_id;
         let Some(session) = self.sessions.session_for_id(&session_id) else {
+            if !is_manual {
+                self.defer_auto_review_session(&session_id).await;
+            }
             if cached_diff_hash.is_none() {
                 self.review_cache.remove(&session_id);
             }
@@ -531,6 +662,12 @@ impl App {
                     review::REVIEW_NO_DIFF_MESSAGE.to_string(),
                 );
             } else if cached_diff_hash.is_none() {
+                let _ = self
+                    .services
+                    .db()
+                    .sessions()
+                    .update_session_focused_review(&session_id, None, None, None)
+                    .await;
                 self.clear_review_output(&session_id);
             }
             review::restore_session_review_status(self.sessions.state_mut(), &session_id);
@@ -844,6 +981,236 @@ mod tests {
         // Assert
         assert!(app.pending_session_diff_requests.is_empty());
         assert!(!app.review_cache.contains_key(&session_id));
+    }
+
+    #[tokio::test]
+    async fn automatic_review_diff_completion_after_project_switch_survives_restart() {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_test_app().await;
+        let repositories = app.services.db().clone();
+        let session_id = SessionId::from("inactive-review-diff");
+        let inactive_project_path = base_dir.path().join("inactive-project");
+        let inactive_project_id = repositories
+            .projects()
+            .upsert_project(&inactive_project_path.to_string_lossy(), None)
+            .await
+            .expect("failed to insert inactive project");
+        repositories
+            .sessions()
+            .insert_session(
+                session_id.as_str(),
+                "gpt-5.6-sol",
+                "main",
+                "Review",
+                inactive_project_id,
+            )
+            .await
+            .expect("failed to insert inactive review session");
+        let update = SessionDiffUpdate {
+            request_id: 1,
+            result: Ok("diff --git a/file b/file".to_string()),
+            session_id: session_id.clone(),
+        };
+
+        // Act
+        app.apply_review_diff_update(update, None, false).await;
+        let deferred_in_memory = app.deferred_auto_review_session_ids.clone();
+        drop(app);
+        let recoverable_session_ids = repositories
+            .sessions()
+            .load_pending_focused_review_session_ids(inactive_project_id)
+            .await
+            .expect("failed to recover deferred review after restart");
+
+        // Assert
+        assert_eq!(deferred_in_memory, HashSet::from([session_id.clone()]));
+        assert_eq!(recoverable_session_ids, [session_id.as_str()]);
+    }
+
+    #[tokio::test]
+    async fn transient_deferred_auto_review_persistence_failure_retains_and_retries_trigger() {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_test_app().await;
+        let session_id = SessionId::from("retry-deferred-review");
+        let inactive_project_path = base_dir.path().join("inactive-project");
+        let inactive_project_id = app
+            .services
+            .db()
+            .projects()
+            .upsert_project(&inactive_project_path.to_string_lossy(), None)
+            .await
+            .expect("failed to insert inactive project");
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                session_id.as_str(),
+                "gpt-5.6-sol",
+                "main",
+                "Review",
+                inactive_project_id,
+            )
+            .await
+            .expect("failed to insert inactive review session");
+        let (retry_tx, mut retry_rx) = tokio::sync::mpsc::unbounded_channel();
+        let retry_scheduled = App::handle_deferred_auto_review_persistence_result(
+            &mut app.deferred_auto_review_session_ids,
+            retry_tx,
+            DeferredAutoReviewPersistenceRetry::initial(session_id.clone()),
+            Err(DbError::Query(sqlx::Error::PoolClosed)),
+        );
+
+        // Act
+        let retry_event = tokio::time::timeout(std::time::Duration::from_secs(1), retry_rx.recv())
+            .await
+            .expect("timed out waiting for deferred review persistence retry")
+            .expect("deferred review persistence failure should requeue an event");
+        app.apply_app_events(retry_event).await;
+        let recoverable_session_ids = app
+            .services
+            .db()
+            .sessions()
+            .load_pending_focused_review_session_ids(inactive_project_id)
+            .await
+            .expect("failed to load retried deferred review");
+        app.services
+            .db()
+            .sessions()
+            .update_session_focused_review(session_id.as_str(), None, None, None)
+            .await
+            .expect("failed to clear retried deferred review");
+        app.deferred_auto_review_session_ids.remove(&session_id);
+        app.apply_app_events(crate::app::AppEvent::DeferredAutoReviewPersistenceRetry {
+            retry: DeferredAutoReviewPersistenceRetry {
+                attempt: 2,
+                session_id: session_id.clone(),
+            },
+        })
+        .await;
+        let stale_retry_session_ids = app
+            .services
+            .db()
+            .sessions()
+            .load_pending_focused_review_session_ids(inactive_project_id)
+            .await
+            .expect("failed to check stale deferred review retry");
+        let (exhausted_tx, mut exhausted_rx) = tokio::sync::mpsc::unbounded_channel();
+        let exhausted_retry_scheduled = App::handle_deferred_auto_review_persistence_result(
+            &mut app.deferred_auto_review_session_ids,
+            exhausted_tx,
+            DeferredAutoReviewPersistenceRetry {
+                attempt: MAX_DEFERRED_AUTO_REVIEW_PERSISTENCE_RETRIES,
+                session_id: session_id.clone(),
+            },
+            Err(DbError::Query(sqlx::Error::PoolClosed)),
+        );
+        let exhausted_event = exhausted_rx.recv().await;
+
+        // Assert
+        assert!(retry_scheduled);
+        assert!(!exhausted_retry_scheduled);
+        assert_eq!(exhausted_event, None);
+        assert!(app.deferred_auto_review_session_ids.contains(&session_id));
+        assert_eq!(recoverable_session_ids, [session_id.as_str()]);
+        assert!(stale_retry_session_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn automatic_empty_review_diff_clears_durable_trigger() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = review_app().await;
+        app.services
+            .db()
+            .sessions()
+            .update_session_status_with_timing_at(session_id.as_str(), "Review", 1)
+            .await
+            .expect("failed to persist review status");
+        assert!(
+            app.services
+                .db()
+                .sessions()
+                .defer_session_focused_review(session_id.as_str())
+                .await
+                .expect("failed to persist deferred review")
+        );
+        let project_id = app.projects.active_project_id();
+        let update = SessionDiffUpdate {
+            request_id: 1,
+            result: Ok(String::new()),
+            session_id: session_id.clone(),
+        };
+
+        // Act
+        app.apply_review_diff_update(update, None, false).await;
+
+        // Assert
+        assert!(
+            app.services
+                .db()
+                .sessions()
+                .load_pending_focused_review_session_ids(project_id)
+                .await
+                .expect("failed to load pending reviews")
+                .is_empty()
+        );
+        assert!(!app.review_cache.contains_key(&session_id));
+    }
+
+    #[tokio::test]
+    async fn deleting_session_discards_pending_review_diff_and_late_completion() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = review_app().await;
+        let request_id = 42;
+        app.pending_session_diff_requests.insert(
+            request_id,
+            PendingSessionDiffRequest {
+                purpose: SessionDiffPurpose::Review {
+                    cached_diff_hash: None,
+                    is_manual: false,
+                },
+                session_id: session_id.clone(),
+            },
+        );
+        app.deferred_auto_review_session_ids
+            .insert(session_id.clone());
+
+        // Act
+        app.delete_selected_session().await;
+        app.apply_session_diff_update(SessionDiffUpdate {
+            request_id,
+            result: Ok("late diff".to_string()),
+            session_id: session_id.clone(),
+        })
+        .await;
+
+        // Assert
+        assert!(app.pending_session_diff_requests.is_empty());
+        assert!(!app.deferred_auto_review_session_ids.contains(&session_id));
+    }
+
+    #[tokio::test]
+    async fn deferred_cleanup_deletion_discards_pending_review_diff_state() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = review_app().await;
+        app.pending_session_diff_requests.insert(
+            42,
+            PendingSessionDiffRequest {
+                purpose: SessionDiffPurpose::Review {
+                    cached_diff_hash: None,
+                    is_manual: false,
+                },
+                session_id: session_id.clone(),
+            },
+        );
+        app.deferred_auto_review_session_ids
+            .insert(session_id.clone());
+
+        // Act
+        app.delete_selected_session_deferred_cleanup().await;
+
+        // Assert
+        assert!(app.pending_session_diff_requests.is_empty());
+        assert!(!app.deferred_auto_review_session_ids.contains(&session_id));
     }
 
     #[tokio::test]

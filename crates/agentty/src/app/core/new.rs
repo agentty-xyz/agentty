@@ -168,6 +168,7 @@ impl App {
                 crate::presentation::settings::SettingsPresentationState::default(),
             tabs: crate::app::tab::TabManager::new(initial_tab),
             prompt_progress: std::collections::HashMap::new(),
+            deferred_auto_review_session_ids: std::collections::HashSet::new(),
             pending_focused_review_persistence: std::collections::HashMap::new(),
             pending_session_diff_requests: std::collections::HashMap::new(),
             projects,
@@ -192,8 +193,8 @@ impl App {
         Ok(app)
     }
 
-    /// Loads focused-review cache state and the managed reviews that must be
-    /// regenerated during startup recovery.
+    /// Loads focused-review cache state and reviews that must be regenerated
+    /// during startup recovery.
     async fn load_startup_focused_reviews(
         repositories: &AppRepositories,
         active_project_id: i64,
@@ -207,16 +208,15 @@ impl App {
         AppError,
     > {
         let review_cache = Self::load_focused_review_cache(repositories, active_project_id).await;
-        let recoverable_session_ids = repositories
-            .orchestrations()
-            .load_recoverable_focused_review_session_ids(active_project_id)
-            .await?;
+        let recoverable_session_ids =
+            Self::load_recoverable_focused_review_session_ids(repositories, active_project_id)
+                .await?;
         review::hydrate_review_transients(&review_cache, sessions.state_mut(), review_model);
 
         Ok((review_cache, recoverable_session_ids))
     }
 
-    /// Restarts focused review for durable managed tasks whose persistence was
+    /// Restarts focused review for durable triggers whose persistence was
     /// interrupted before a terminal review result was stored.
     pub(super) fn recover_startup_focused_reviews(&mut self, session_ids: Vec<String>) {
         let session_ids = session_ids
@@ -225,6 +225,28 @@ impl App {
             .collect();
 
         self.auto_start_reviews(&session_ids);
+    }
+
+    /// Loads durable automatic-review triggers for eligible worker and
+    /// managed sessions in one project.
+    pub(super) async fn load_recoverable_focused_review_session_ids(
+        repositories: &AppRepositories,
+        project_id: i64,
+    ) -> Result<Vec<String>, AppError> {
+        let mut session_ids = repositories
+            .sessions()
+            .load_pending_focused_review_session_ids(project_id)
+            .await?;
+        session_ids.extend(
+            repositories
+                .orchestrations()
+                .load_recoverable_focused_review_session_ids(project_id)
+                .await?,
+        );
+        session_ids.sort_unstable();
+        session_ids.dedup();
+
+        Ok(session_ids)
     }
 
     /// Loads active-project settings from the feature-scoped dependencies.

@@ -7,7 +7,10 @@ use sqlx::migrate::Migrator;
 use tempfile::tempdir;
 
 use super::*;
-use crate::{SessionFocusedReviewRow, SessionOperationRow, SessionRow, SessionTurnMetadata};
+use crate::{
+    PersistedSessionCreation, SessionFocusedReviewRow, SessionOperationRow, SessionRow,
+    SessionTurnMetadata,
+};
 
 /// Builds one deterministic persisted review-request fixture for DB tests.
 fn review_request_fixture() -> ReviewRequest {
@@ -2957,6 +2960,88 @@ async fn test_update_session_focused_review_clears_persisted_review() {
         .expect("failed to load focused reviews");
 
     // Assert
+    assert_eq!(focused_reviews, [] as [crate::SessionFocusedReviewRow; 0]);
+}
+
+#[tokio::test]
+async fn test_defer_session_focused_review_requires_eligible_existing_session() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    database
+        .sessions()
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
+        .await
+        .expect("failed to insert session");
+    database
+        .sessions()
+        .update_session_focused_review(
+            "session-a",
+            Some(ag_session::FocusedReviewStatus::Ready),
+            Some("42".to_string()),
+            Some("## Review\nOutdated".to_string()),
+        )
+        .await
+        .expect("failed to seed focused review");
+    database
+        .sessions()
+        .insert_session_with_agent(PersistedSessionCreation {
+            agent: "codex",
+            base_branch: "main",
+            id: "orchestrator",
+            is_draft: false,
+            model: "gpt-5.6-sol",
+            orchestration_task_id: None,
+            parent_session_id: None,
+            permission_mode: ag_session::PermissionMode::AutoEdit,
+            personality_id: None,
+            project_id,
+            reasoning_level: ReasoningLevel::default(),
+            role: Some("Orchestrator"),
+            speed_mode: SpeedMode::Normal,
+            status: "Review",
+        })
+        .await
+        .expect("failed to insert orchestrator session");
+
+    // Act
+    let deferred = database
+        .sessions()
+        .defer_session_focused_review("session-a")
+        .await
+        .expect("failed to defer focused review");
+    let missing_deferred = database
+        .sessions()
+        .defer_session_focused_review("missing-session")
+        .await
+        .expect("failed to check missing session");
+    let orchestrator_deferred = database
+        .sessions()
+        .defer_session_focused_review("orchestrator")
+        .await
+        .expect("failed to check orchestrator session");
+    let pending_session_ids = database
+        .sessions()
+        .load_pending_focused_review_session_ids(project_id)
+        .await
+        .expect("failed to load pending focused reviews");
+    let focused_reviews = database
+        .sessions()
+        .load_session_focused_reviews_for_project(project_id)
+        .await
+        .expect("failed to load focused reviews");
+
+    // Assert
+    assert!(deferred);
+    assert!(!missing_deferred);
+    assert!(!orchestrator_deferred);
+    assert_eq!(pending_session_ids, ["session-a"]);
     assert_eq!(focused_reviews, [] as [crate::SessionFocusedReviewRow; 0]);
 }
 

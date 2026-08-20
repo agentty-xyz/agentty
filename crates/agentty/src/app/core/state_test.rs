@@ -104,6 +104,29 @@ async fn test_app_viewing_reconcile_session(
     app
 }
 
+/// Seeds one materialized session row for project-switching tests.
+async fn seed_materialized_session(
+    database: &AppRepositories,
+    base_path: &Path,
+    project_id: i64,
+    session_id: &str,
+    status: Status,
+) {
+    database
+        .sessions()
+        .insert_session(
+            session_id,
+            AgentModel::Gpt56Sol.as_str(),
+            "main",
+            &status.to_string(),
+            project_id,
+        )
+        .await
+        .expect("failed to insert materialized session");
+    fs::create_dir_all(session::session_folder(base_path, session_id).join(SESSION_DATA_DIR))
+        .expect("failed to create materialized session data dir");
+}
+
 /// Seeds one review-ready session and its persisted focused review.
 async fn seed_persisted_review_session(
     database: &AppRepositories,
@@ -113,19 +136,7 @@ async fn seed_persisted_review_session(
     diff_hash: &str,
     review_text: &str,
 ) {
-    database
-        .sessions()
-        .insert_session(
-            session_id,
-            AgentModel::Gpt56Sol.as_str(),
-            "main",
-            &Status::Review.to_string(),
-            project_id,
-        )
-        .await
-        .expect("failed to insert review session");
-    fs::create_dir_all(session::session_folder(base_path, session_id).join(SESSION_DATA_DIR))
-        .expect("failed to create review session data dir");
+    seed_materialized_session(database, base_path, project_id, session_id, Status::Review).await;
     database
         .sessions()
         .update_session_focused_review(
@@ -529,6 +540,8 @@ async fn test_switch_project_restores_project_scoped_focused_reviews() {
         loading_session_id.into(),
         ReviewCacheEntry::Loading { diff_hash: 21 },
     );
+    app.deferred_auto_review_session_ids
+        .insert(loading_session_id.into());
     insert_test_ready_review(&mut app, "inactive-review");
 
     // Act
@@ -545,6 +558,7 @@ async fn test_switch_project_restores_project_scoped_focused_reviews() {
         app.review_cache.get(loading_session_id),
         Some(ReviewCacheEntry::Loading { diff_hash: 21 })
     ));
+    assert!(app.deferred_auto_review_session_ids.is_empty());
     assert!(!app.review_cache.contains_key("inactive-review"));
     assert_eq!(
         app.sessions
@@ -564,6 +578,182 @@ async fn test_switch_project_restores_project_scoped_focused_reviews() {
             .map(|message| &message.body),
         Some(TransientMessageBody::Loading(_))
     ));
+}
+
+#[tokio::test]
+async fn test_switch_project_recovers_persisted_deferred_review_after_restart() {
+    // Arrange
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let second_project_dir = tempdir().expect("failed to create second temp dir");
+    let base_path = base_dir.path().to_path_buf();
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    let first_project_id = database
+        .projects()
+        .upsert_project(&base_path.to_string_lossy(), None)
+        .await
+        .expect("failed to insert first project");
+    let second_project_id = database
+        .projects()
+        .upsert_project(&second_project_dir.path().to_string_lossy(), None)
+        .await
+        .expect("failed to insert second project");
+    let session_id = "pending-review";
+    database
+        .sessions()
+        .insert_session(
+            session_id,
+            "gpt-5.6-sol",
+            "main",
+            "Review",
+            second_project_id,
+        )
+        .await
+        .expect("failed to insert pending review session");
+    fs::create_dir_all(session::session_folder(&base_path, session_id).join(SESSION_DATA_DIR))
+        .expect("failed to create pending review session data dir");
+    assert!(
+        database
+            .sessions()
+            .defer_session_focused_review(session_id)
+            .await
+            .expect("failed to persist deferred review")
+    );
+    database
+        .settings()
+        .set_active_project_id(first_project_id)
+        .await
+        .expect("failed to persist initial active project");
+    let mut app = App::new_with_clients(
+        base_path.clone(),
+        base_path,
+        None,
+        database,
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("failed to build app");
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_detect_git_info()
+        .times(3)
+        .returning(|_| Box::pin(async { None }));
+    mock_git_client
+        .expect_diff()
+        .once()
+        .returning(|_, _| Box::pin(std::future::pending()));
+    install_mock_git_client(&mut app, mock_git_client);
+
+    // Act
+    app.switch_project(second_project_id)
+        .await
+        .expect("failed to switch project");
+
+    // Assert
+    assert!(app.deferred_auto_review_session_ids.is_empty());
+    assert_eq!(app.pending_session_diff_requests.len(), 1);
+}
+
+#[tokio::test]
+async fn test_switch_immediately_after_response_recovers_in_progress_review() {
+    // Arrange
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let second_project_dir = tempdir().expect("failed to create second temp dir");
+    let base_path = base_dir.path().to_path_buf();
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    let first_project_id = database
+        .projects()
+        .upsert_project(&base_path.to_string_lossy(), None)
+        .await
+        .expect("failed to insert first project");
+    let second_project_id = database
+        .projects()
+        .upsert_project(&second_project_dir.path().to_string_lossy(), None)
+        .await
+        .expect("failed to insert second project");
+    let session_id = "in-progress-completed-review";
+    seed_materialized_session(
+        &database,
+        &base_path,
+        first_project_id,
+        session_id,
+        Status::Review,
+    )
+    .await;
+    database
+        .settings()
+        .set_active_project_id(first_project_id)
+        .await
+        .expect("failed to persist initial active project");
+    let repositories = database.clone();
+    let mut app = App::new_with_clients(
+        base_path.clone(),
+        base_path,
+        None,
+        database,
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("failed to build app");
+    crate::test_support::set_session_status_for_test(&mut app, session_id, Status::InProgress);
+    repositories
+        .sessions()
+        .update_session_status_with_timing_at(session_id, "InProgress", 0)
+        .await
+        .expect("failed to persist in-progress status");
+    let mut mock_git_client = ag_git::MockGitClient::new();
+    mock_git_client
+        .expect_detect_git_info()
+        .times(6)
+        .returning(|_| Box::pin(async { None }));
+    mock_git_client
+        .expect_diff()
+        .once()
+        .returning(|_, _| Box::pin(std::future::pending()));
+    install_mock_git_client(&mut app, mock_git_client);
+
+    // Act
+    app.apply_app_events(AppEvent::AgentResponseReceived {
+        session_id: session_id.into(),
+        turn_applied_state: test_turn_applied_state(
+            Vec::new(),
+            Vec::new(),
+            None,
+            SessionStats::default(),
+        ),
+    })
+    .await;
+    let deferred_before_switch = app.deferred_auto_review_session_ids.clone();
+    app.switch_project(second_project_id)
+        .await
+        .expect("failed to switch away from completed session");
+    repositories
+        .sessions()
+        .update_session_status_with_timing_at(session_id, "Review", 1)
+        .await
+        .expect("failed to persist final review status");
+    crate::test_support::set_session_status_for_test(&mut app, session_id, Status::Review);
+    app.apply_app_events(AppEvent::SessionUpdated {
+        session_id: session_id.into(),
+        version: 1,
+    })
+    .await;
+    let pending_after_status_transition = repositories
+        .sessions()
+        .load_pending_focused_review_session_ids(first_project_id)
+        .await
+        .expect("failed to load deferred review after status transition");
+    app.switch_project(first_project_id)
+        .await
+        .expect("failed to restore completed session project");
+
+    // Assert
+    assert_eq!(
+        deferred_before_switch,
+        HashSet::from([SessionId::from(session_id)])
+    );
+    assert_eq!(pending_after_status_transition, [session_id]);
+    assert!(app.deferred_auto_review_session_ids.is_empty());
+    assert_eq!(app.pending_session_diff_requests.len(), 1);
 }
 
 #[tokio::test]
