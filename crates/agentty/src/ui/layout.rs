@@ -693,7 +693,7 @@ mod tests {
         assert_eq!(
             footer_line.to_string(),
             "Tab: focus | Enter: send | Alt+Enter: newline | Ctrl+V/Alt+V: paste image | Esc: \
-             cancel | 2 images ready"
+             cancel | Shift+Tab: switch mode | 2 images ready"
         );
         assert_eq!(
             footer_line.spans[0].style,
@@ -872,7 +872,7 @@ mod tests {
         // Assert
         assert_eq!(
             labels,
-            vec!["/model", "/mode", "/personality", "/reasoning", "/speed"]
+            vec!["/model", "/personality", "/reasoning", "/speed"]
         );
         assert_eq!(menu.selected_index, 0);
     }

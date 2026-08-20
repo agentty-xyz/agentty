@@ -883,13 +883,13 @@ mod tests {
     use crate::infra::db::{DbError, PersistedSessionCreation};
 
     #[test]
-    fn read_only_chat_prompt_redirects_write_access_requests_to_mode_picker() {
+    fn read_only_chat_prompt_redirects_write_access_requests_to_mode_shortcut() {
         // Arrange, Act
         let prompt = READ_ONLY_CHAT_PROMPT;
 
         // Assert
         assert!(prompt.contains("Do not ask a clarification question requesting write access"));
-        assert!(prompt.contains("switching the session to `Auto Edit` with `/mode`"));
+        assert!(prompt.contains("switching the session to `Auto Edit` with `Shift+Tab`"));
     }
 
     #[tokio::test]

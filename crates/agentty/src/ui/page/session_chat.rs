@@ -473,7 +473,7 @@ fn prepare_prompt_panel(
         is_chat_focused: *focus == ChatFocus::Chat,
         status: Some(session_format::prompt_session_status(session)),
         suggestion_list,
-        title: format!(" [{}] ", session.agent.model().as_str()),
+        title: format!("[{}]", session.agent.model().as_str()),
         total_height: desired_bottom_height.min(max_bottom_height),
     })
 }
@@ -1124,7 +1124,20 @@ mod tests {
         let text = rendered_prompt_mode_text(&session);
 
         // Assert
-        assert!(text.contains("· Normal · Auto Edit"));
+        assert!(text.contains("[gpt-5.6-sol] · Normal · Auto Edit"));
+        assert!(!text.contains("[gpt-5.6-sol]  · Normal · Auto Edit"));
+    }
+
+    #[test]
+    fn test_prompt_footer_shows_permission_mode_shortcut() {
+        // Arrange
+        let session = session_fixture();
+
+        // Act
+        let footer = prompt_format::prompt_footer_line(&session, 0, ChatFocus::Input);
+
+        // Assert
+        assert!(footer.to_string().contains("Shift+Tab: switch mode"));
     }
 
     #[test]

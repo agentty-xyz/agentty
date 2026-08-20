@@ -393,6 +393,7 @@ fn key_to_vhs_command(key: &str) -> String {
     match key.to_lowercase().as_str() {
         "enter" | "return" => "Enter".to_string(),
         "tab" => "Tab".to_string(),
+        "backtab" | "shift+tab" => "Shift+Tab".to_string(),
         "escape" | "esc" => "Escape".to_string(),
         "backspace" => "Backspace".to_string(),
         "up" => "Up".to_string(),
@@ -556,6 +557,8 @@ mod tests {
         // Arrange / Act / Assert
         assert_eq!(key_to_vhs_command("Enter"), "Enter");
         assert_eq!(key_to_vhs_command("tab"), "Tab");
+        assert_eq!(key_to_vhs_command("BackTab"), "Shift+Tab");
+        assert_eq!(key_to_vhs_command("shift+tab"), "Shift+Tab");
         assert_eq!(key_to_vhs_command("escape"), "Escape");
         assert_eq!(key_to_vhs_command("up"), "Up");
         assert_eq!(key_to_vhs_command("ctrl+c"), "Ctrl+C");

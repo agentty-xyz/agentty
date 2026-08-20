@@ -343,6 +343,7 @@ inline comment and batch-submission shortcuts.
 | `Ctrl+Y` / `Ctrl+Shift+Z`           | Redo                                |
 | `Esc`                               | Cancel                              |
 | `Tab`                               | Focus chat output for scrolling     |
+| `Shift+Tab`                         | Toggle Auto Edit / Read Only        |
 | `@`                                 | Open file picker                    |
 | `/`                                 | Open slash commands                 |
 | `j` / `k` / `Up` / `Down`           | Navigate and wrap slash menu        |
