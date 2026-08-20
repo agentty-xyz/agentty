@@ -1911,8 +1911,17 @@ impl App {
                         review_request_creation.as_ref(),
                     )
                 ));
-                self.sessions
-                    .finish_branch_publish(&session_id, result_message);
+                if let Some(persistent_notice) = self
+                    .sessions
+                    .finish_branch_publish(&session_id, result_message)
+                {
+                    SessionTaskService::persist_workflow_notice(
+                        self.services.db(),
+                        &session_id,
+                        &persistent_notice,
+                    )
+                    .await;
+                }
             }
             Ok(BranchPublishTaskSuccess::PullRequestPublished {
                 review_request,
@@ -1942,8 +1951,17 @@ impl App {
                     "**{}**\n\n{}",
                     failure.title, failure.message
                 ));
-                self.sessions
-                    .finish_branch_publish(&session_id, result_message);
+                if let Some(persistent_notice) = self
+                    .sessions
+                    .finish_branch_publish(&session_id, result_message)
+                {
+                    SessionTaskService::persist_workflow_notice(
+                        self.services.db(),
+                        &session_id,
+                        &persistent_notice,
+                    )
+                    .await;
+                }
             }
         }
     }

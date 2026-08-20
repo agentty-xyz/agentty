@@ -4246,15 +4246,15 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
     Ok(())
 }
 
-/// Verify a queued session action remains visible after switching away from
-/// its owning project and back while the active turn is still running.
+/// Verify a running session remains controllable and completes work queued
+/// after switching away from its owning project and back.
 #[test]
 fn session_queued_action_survives_project_switching() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queued_action_survives_project_switching")
         .with_git()
         .setup(|env| {
-            install_delayed_sync_claude_stub(env, false, 30)?;
+            install_delayed_sync_claude_stub(env, false, 10)?;
             common::seed_second_project(env)
         })
         .run(
@@ -4267,9 +4267,7 @@ fn session_queued_action_survives_project_switching() -> E2eResult {
                     .write_text("Keep queued sync visible")
                     .wait_for_text("Keep queued sync visible", 3000)
                     .press_key("Enter")
-                    .wait_for_text("r: sync", 5000)
-                    .press_key("r")
-                    .wait_for_text("rebase onto the base branch after this turn", 5000)
+                    .wait_for_text("Ctrl+c: stop", 5000)
                     .press_key("q")
                     .wait_for_text("new session", 5000)
                     .press_key("p")
@@ -4284,20 +4282,37 @@ fn session_queued_action_survives_project_switching() -> E2eResult {
                     .press_key("j")
                     .press_key("Enter")
                     .wait_for_text("Keep queued sync visible", 5000)
+                    .wait_for_text("r: sync", 5000)
+                    .press_key("r")
+                    .wait_for_text("rebase onto the base branch after this turn", 5000)
                     .capture_labeled(
                         "restored_queued_action",
-                        "Queued sync restored after project switching",
+                        "Running session accepts work after project switching",
                     )
+                    .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 30000)
+                    .wait_for_text("[Sync] Successfully synced", 10000)
+                    .wait_for_text("Enter: reply", 5000)
             },
-            |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Keep queued sync visible", &full);
+            |frame, report| {
+                let queued_frame = common::frame_from_capture(&report.captures[0]);
+                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
                 assertion::assert_text_in_region(
-                    frame,
+                    &queued_frame,
                     "≡ sync — rebase onto the base branch after this turn",
-                    &full,
+                    &queued_full,
                 );
-                assertion::assert_text_in_region(frame, "Ctrl+c: stop", &full);
+                assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
+                assertion::assert_text_in_region(
+                    &queued_frame,
+                    "Keep queued sync visible",
+                    &queued_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);
+                assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
+                assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                assertion::assert_not_visible(frame, "≡ sync —");
             },
         )?;
 
@@ -4810,6 +4825,60 @@ fn test_session_output_chronology() -> E2eResult {
 
                 assert!(sync_row < commit_row);
                 assert!(commit_row < auto_push_row);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify a completed automatic branch push remains visible after its owning
+/// project is switched out while the push is running and then restored.
+#[test]
+fn published_branch_push_survives_project_switching() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("published_branch_push_survives_project_switching")
+        .with_git()
+        .setup(|env| {
+            seed_published_session_output_chronology(env)?;
+            common::seed_second_project(env)
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .press_key("Enter")
+                    .wait_for_text("Enter: reply", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("Continue after the sync")
+                    .press_key("Enter")
+                    .wait_for_text("Got it. What would you like me to do?", 30000)
+                    .wait_for_text("Auto-pushing", 10000)
+                    .wait_for_text("Enter: reply", 5000)
+                    .compose(&common::return_to_session_list())
+                    .press_key("p")
+                    .wait_for_text("Switch project", 5000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Project: zeta-project", 5000)
+                    .sleep_ms(9000)
+                    .press_key("p")
+                    .wait_for_text("Switch project", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Project: test-project", 5000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("[Branch Push]", 5000)
+                    .wait_for_text("Auto-pushed published branch after completed turn.", 5000)
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "[Branch Push]", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Auto-pushed published branch after completed turn.",
+                    &full,
+                );
             },
         )?;
 

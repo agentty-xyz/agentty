@@ -131,11 +131,11 @@ channels:
 - **Turn event stream** (`TurnEvent`): `AgentChannel` implementations stream transient
   loader-thought and PID updates to the session turn consumer while the final transcript
   waits for the completed turn result.
-- **Session handles** (`SessionHandles`): shared `Arc<Mutex<...>>` transcript, status,
-  PID, queued-message state, and queued workflow-action rows. Handles are the single
-  source of truth for live session data; the reducer re-projects them into render
-  snapshots on `SessionUpdated` and project-scoped reloads without losing queue
-  visualization.
+- **Session runtime** (`SessionWorkerService` and `SessionHandles`): process-wide worker
+  senders plus shared `Arc<Mutex<...>>` transcript, status, PID, queued-message state,
+  and queued workflow-action rows. Project-scoped reloads replace only render snapshots;
+  workers and handles remain available until their sessions terminate. The reducer
+  re-projects live handles on `SessionUpdated` and project switches.
 
 ## App Event Reducer
 

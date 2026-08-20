@@ -277,12 +277,14 @@ impl App {
             )
             .await;
         match enqueue_result {
-            Err(error) => self.sessions.finish_branch_publish(
-                &session_id,
-                crate::domain::transient_message::TransientMessageBody::Markdown(format!(
-                    "**Review request publish failed**\n\n{error}"
-                )),
-            ),
+            Err(error) => {
+                let _ = self.sessions.finish_branch_publish(
+                    &session_id,
+                    crate::domain::transient_message::TransientMessageBody::Markdown(format!(
+                        "**Review request publish failed**\n\n{error}"
+                    )),
+                );
+            }
             Ok(Some(queued_order)) => self.sessions.queue_branch_publish(
                 &session_id,
                 queued_order,

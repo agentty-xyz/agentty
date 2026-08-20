@@ -966,6 +966,106 @@ fn test_finish_review_request_publish_keeps_loading_review_at_tail() {
 }
 
 #[test]
+fn test_finish_branch_publish_promotes_result_when_project_snapshot_is_unloaded() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+    session_manager.state_mut().replace_sessions(Vec::new());
+
+    // Act
+    let persistent_notice = session_manager.finish_branch_publish(
+        "session-id",
+        TransientMessageBody::Markdown("**Branch push failed**\n\nRemote rejected".to_string()),
+    );
+
+    // Assert
+    assert_eq!(
+        persistent_notice.as_deref(),
+        Some("**Branch push failed**\n\nRemote rejected")
+    );
+    let transcript = session_manager
+        .state()
+        .handle("session-id")
+        .expect("session handles should remain loaded")
+        .transcript
+        .lock()
+        .expect("session transcript lock should succeed");
+    let notice = transcript
+        .messages()
+        .last()
+        .expect("branch publish result should be promoted to the transcript");
+    assert_eq!(notice.kind, SessionMessageKind::WorkflowNotice);
+    assert_eq!(notice.content, "**Branch push failed**\n\nRemote rejected");
+}
+
+#[test]
+fn test_finish_review_request_publish_reports_unloaded_handle_update() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+    session_manager.state_mut().replace_sessions(Vec::new());
+
+    // Act
+    let finished = session_manager.finish_review_request_publish(
+        "session-id",
+        "[Review Request] Created PR https://example.test/pull/42",
+    );
+
+    // Assert
+    assert!(finished);
+    let transcript = session_manager
+        .state()
+        .handle("session-id")
+        .expect("session handles should remain loaded")
+        .transcript
+        .lock()
+        .expect("session transcript lock should succeed");
+    assert_eq!(
+        transcript
+            .messages()
+            .last()
+            .map(|message| (message.kind, message.content.as_str())),
+        Some((
+            SessionMessageKind::WorkflowNotice,
+            "[Review Request] Created PR https://example.test/pull/42",
+        ))
+    );
+}
+
+#[test]
+fn test_finish_published_branch_sync_reports_unloaded_handle_update() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+    session_manager.start_published_branch_sync("session-id", "sync-id".to_string());
+    session_manager.state_mut().replace_sessions(Vec::new());
+
+    // Act
+    let finished = session_manager.finish_published_branch_sync(
+        "session-id",
+        "sync-id",
+        Some("[Branch Push] Auto-pushed published branch after completed turn."),
+    );
+
+    // Assert
+    assert!(finished);
+    let transcript = session_manager
+        .state()
+        .handle("session-id")
+        .expect("session handles should remain loaded")
+        .transcript
+        .lock()
+        .expect("session transcript lock should succeed");
+    assert_eq!(
+        transcript
+            .messages()
+            .last()
+            .map(|message| (message.kind, message.content.as_str())),
+        Some((
+            SessionMessageKind::WorkflowNotice,
+            "[Branch Push] Auto-pushed published branch after completed turn.",
+        ))
+    );
+}
+
+#[test]
 fn test_update_orchestration_progress_replaces_and_clears_board_snapshot() {
     // Arrange
     let mut session_manager = test_session_manager("controller", None);

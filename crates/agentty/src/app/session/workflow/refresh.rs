@@ -170,8 +170,6 @@ impl SessionManager {
             .retain_follow_up_task_positions(&active_session_ids);
         self.state.retain_session_branch_names(&active_session_ids);
         self.state.retain_session_git_statuses(&active_session_ids);
-        self.worker_service_mut()
-            .retain_active_workers(&active_session_ids);
 
         if let Some((sessions_row_count, sessions_updated_at_max)) = sessions_metadata {
             self.state.row_count = sessions_row_count;

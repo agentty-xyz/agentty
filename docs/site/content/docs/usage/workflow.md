@@ -202,8 +202,10 @@ and removes its queued row without entering **Rebasing**. A queued review-reques
 is canceled the same way: its waiting row disappears and `p` becomes available again
 without starting publish work. **Rebasing** keeps cancellation unavailable while still
 accepting queued messages. The chat queue is in-memory only and is discarded if
-`agentty` restarts. Switching projects within the same Agentty process preserves queued
-messages and workflow-action rows until their session worker starts or resolves them.
+`agentty` restarts. Switching projects within the same Agentty process preserves running
+workers, queued messages, and workflow-action rows. Returning to the project can queue
+more work on the same worker, and workflow results completed in the background remain
+available in the session transcript.
 
 While the composer is open, `Tab` moves focus to the chat transcript above it so the
 conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without
