@@ -2,7 +2,7 @@ use tracing::warn;
 
 use crate::app::AppServices;
 use crate::domain::agent::{
-    self, AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
+    self, AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
 };
 use crate::domain::setting::{
     DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH, DEFAULT_ORCHESTRATION_PARALLELISM,
@@ -137,6 +137,66 @@ pub(crate) async fn load_default_smart_agent_selection_from_repositories(
     fallback_selection
 }
 
+/// Loads one project-scoped role response-speed default.
+pub(crate) async fn load_project_speed_mode_setting(
+    repositories: &AppRepositories,
+    project_id: Option<i64>,
+    setting_name: SettingName,
+) -> SpeedMode {
+    let Some(project_id) = project_id else {
+        return SpeedMode::Normal;
+    };
+
+    repositories
+        .settings()
+        .load_project_speed_mode(project_id, setting_name)
+        .await
+        .unwrap_or_default()
+}
+
+/// Loads and normalizes one project-scoped role speed default.
+async fn load_normalized_speed_default(
+    repositories: &AppRepositories,
+    project_id: i64,
+    setting_name: SettingName,
+    selection: AgentSelection,
+) -> (AgentSelection, SpeedMode) {
+    let speed_mode =
+        load_project_speed_mode_setting(repositories, Some(project_id), setting_name).await;
+
+    normalized_speed_default(selection, speed_mode)
+}
+
+/// Model, reasoning, and speed defaults for one settings role.
+struct ModelRoleDefaults {
+    reasoning_level: ReasoningLevel,
+    selection: AgentSelection,
+    speed_mode: SpeedMode,
+}
+
+async fn load_model_role_defaults(
+    repositories: &AppRepositories,
+    project_id: i64,
+    reasoning_setting_name: SettingName,
+    speed_setting_name: SettingName,
+    selection: AgentSelection,
+) -> ModelRoleDefaults {
+    let reasoning_level = repositories
+        .settings()
+        .load_project_reasoning_level(project_id, reasoning_setting_name)
+        .await
+        .unwrap_or_default();
+    let (selection, speed_mode) =
+        load_normalized_speed_default(repositories, project_id, speed_setting_name, selection)
+            .await;
+
+    ModelRoleDefaults {
+        reasoning_level,
+        selection,
+        speed_mode,
+    }
+}
+
 /// Manages user-configurable application settings.
 pub struct SettingsManager {
     /// Whether temporary research-only orchestration waves start immediately.
@@ -145,14 +205,20 @@ pub struct SettingsManager {
     pub default_fast_reasoning_level: ReasoningLevel,
     /// Default agent/model selection used by fast-path workflows.
     pub default_fast_selection: AgentSelection,
+    /// Default response speed used by fast-path workflows.
+    pub default_fast_speed_mode: SpeedMode,
     /// Default reasoning level used by review workflows.
     pub default_review_reasoning_level: ReasoningLevel,
     /// Default agent/model selection used by review workflows.
     pub default_review_selection: AgentSelection,
+    /// Default response speed used by review workflows.
+    pub default_review_speed_mode: SpeedMode,
     /// Default reasoning level used when creating new sessions.
     pub default_smart_reasoning_level: ReasoningLevel,
     /// Default agent/model selection used when creating new sessions.
     pub default_smart_selection: AgentSelection,
+    /// Default response speed used when creating new sessions.
+    pub default_smart_speed_mode: SpeedMode,
     /// Optional command run in tmux when opening a session worktree.
     pub launch_configuration: String,
     /// Maximum number of orchestration child sessions run concurrently.
@@ -210,21 +276,30 @@ impl SettingsManager {
         )
         .await
         .unwrap_or(default_smart_agent);
-        let default_smart_reasoning_level = repositories
-            .settings()
-            .load_project_reasoning_level(project_id, SettingName::DefaultSmartReasoningLevel)
-            .await
-            .unwrap_or_default();
-        let default_fast_reasoning_level = repositories
-            .settings()
-            .load_project_reasoning_level(project_id, SettingName::DefaultFastReasoningLevel)
-            .await
-            .unwrap_or_default();
-        let default_review_reasoning_level = repositories
-            .settings()
-            .load_project_reasoning_level(project_id, SettingName::DefaultReviewReasoningLevel)
-            .await
-            .unwrap_or_default();
+        let default_smart = load_model_role_defaults(
+            &repositories,
+            project_id,
+            SettingName::DefaultSmartReasoningLevel,
+            SettingName::DefaultSmartSpeedMode,
+            default_smart_agent,
+        )
+        .await;
+        let default_fast = load_model_role_defaults(
+            &repositories,
+            project_id,
+            SettingName::DefaultFastReasoningLevel,
+            SettingName::DefaultFastSpeedMode,
+            default_fast_agent,
+        )
+        .await;
+        let default_review = load_model_role_defaults(
+            &repositories,
+            project_id,
+            SettingName::DefaultReviewReasoningLevel,
+            SettingName::DefaultReviewSpeedMode,
+            default_review_agent,
+        )
+        .await;
 
         let launch_configuration = repositories
             .settings()
@@ -255,12 +330,15 @@ impl SettingsManager {
 
         Self {
             auto_approve_orchestration_research,
-            default_fast_reasoning_level,
-            default_fast_selection: default_fast_agent,
-            default_review_reasoning_level,
-            default_review_selection: default_review_agent,
-            default_smart_reasoning_level,
-            default_smart_selection: default_smart_agent,
+            default_fast_reasoning_level: default_fast.reasoning_level,
+            default_fast_selection: default_fast.selection,
+            default_fast_speed_mode: default_fast.speed_mode,
+            default_review_reasoning_level: default_review.reasoning_level,
+            default_review_selection: default_review.selection,
+            default_review_speed_mode: default_review.speed_mode,
+            default_smart_reasoning_level: default_smart.reasoning_level,
+            default_smart_selection: default_smart.selection,
+            default_smart_speed_mode: default_smart.speed_mode,
             launch_configuration,
             theme,
             available_agent_kinds,
@@ -290,10 +368,13 @@ impl SettingsManager {
             auto_approve_orchestration_research: self.auto_approve_orchestration_research,
             default_fast_reasoning_level: self.default_fast_reasoning_level,
             default_fast_selection: self.default_fast_selection,
+            default_fast_speed_mode: self.default_fast_speed_mode,
             default_review_reasoning_level: self.default_review_reasoning_level,
             default_review_selection: self.default_review_selection,
+            default_review_speed_mode: self.default_review_speed_mode,
             default_smart_reasoning_level: self.default_smart_reasoning_level,
             default_smart_selection: self.default_smart_selection,
+            default_smart_speed_mode: self.default_smart_speed_mode,
             include_coauthored_by_agentty: self.include_coauthored_by_agentty,
             launch_configuration: self.launch_configuration.clone(),
             orchestration_parallelism: self.orchestration_parallelism,
@@ -313,26 +394,35 @@ impl SettingsManager {
             SettingsOperation::DefaultFastSelection {
                 reasoning_level,
                 selection,
+                speed_mode,
             } => {
+                let (selection, speed_mode) = normalized_speed_default(selection, speed_mode);
                 self.default_fast_reasoning_level = reasoning_level;
                 self.default_fast_selection = selection;
+                self.default_fast_speed_mode = speed_mode;
                 self.persist_default_fast_model_setting().await;
             }
             SettingsOperation::DefaultReviewSelection {
                 reasoning_level,
                 selection,
+                speed_mode,
             } => {
+                let (selection, speed_mode) = normalized_speed_default(selection, speed_mode);
                 self.default_review_reasoning_level = reasoning_level;
                 self.default_review_selection = selection;
+                self.default_review_speed_mode = speed_mode;
                 self.persist_default_review_model_setting().await;
             }
             SettingsOperation::DefaultSmartSelection {
                 reasoning_level,
                 selection,
+                speed_mode,
                 use_last_used_model_as_default,
             } => {
+                let (selection, speed_mode) = normalized_speed_default(selection, speed_mode);
                 self.default_smart_reasoning_level = reasoning_level;
                 self.default_smart_selection = selection;
+                self.default_smart_speed_mode = speed_mode;
                 self.use_last_used_model_as_default = use_last_used_model_as_default;
                 self.persist_default_smart_model_settings().await;
             }
@@ -392,7 +482,8 @@ impl SettingsManager {
     }
 
     /// Atomically persists smart-model selector values (`DefaultSmartAgent`,
-    /// `DefaultSmartModel`, `DefaultSmartReasoningLevel`, and
+    /// `DefaultSmartModel`, `DefaultSmartReasoningLevel`,
+    /// `DefaultSmartSpeedMode`, and
     /// `LastUsedModelAsDefault`).
     async fn persist_default_smart_model_settings(&self) {
         let last_used_model_as_default_value = self.use_last_used_model_as_default.to_string();
@@ -416,6 +507,10 @@ impl SettingsManager {
                         self.default_smart_reasoning_level.as_str().to_string(),
                     ),
                     (
+                        SettingName::DefaultSmartSpeedMode,
+                        self.default_smart_speed_mode.as_str().to_string(),
+                    ),
+                    (
                         SettingName::LastUsedModelAsDefault,
                         last_used_model_as_default_value,
                     ),
@@ -432,7 +527,8 @@ impl SettingsManager {
     }
 
     /// Atomically persists the fast-model selector values (`DefaultFastAgent`,
-    /// `DefaultFastModel`, and `DefaultFastReasoningLevel`).
+    /// `DefaultFastModel`, `DefaultFastReasoningLevel`, and
+    /// `DefaultFastSpeedMode`).
     async fn persist_default_fast_model_setting(&self) {
         if let Err(error) = self
             .repositories
@@ -452,6 +548,10 @@ impl SettingsManager {
                         SettingName::DefaultFastReasoningLevel,
                         self.default_fast_reasoning_level.as_str().to_string(),
                     ),
+                    (
+                        SettingName::DefaultFastSpeedMode,
+                        self.default_fast_speed_mode.as_str().to_string(),
+                    ),
                 ],
             )
             .await
@@ -466,7 +566,7 @@ impl SettingsManager {
 
     /// Atomically persists the review-model selector values
     /// (`DefaultReviewAgent`, `DefaultReviewModel`, and
-    /// `DefaultReviewReasoningLevel`).
+    /// `DefaultReviewReasoningLevel`, and `DefaultReviewSpeedMode`).
     async fn persist_default_review_model_setting(&self) {
         if let Err(error) = self
             .repositories
@@ -485,6 +585,10 @@ impl SettingsManager {
                     (
                         SettingName::DefaultReviewReasoningLevel,
                         self.default_review_reasoning_level.as_str().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultReviewSpeedMode,
+                        self.default_review_speed_mode.as_str().to_string(),
                     ),
                 ],
             )
@@ -539,6 +643,19 @@ impl ModelSelectorOption {
     fn selection(self) -> AgentSelection {
         AgentSelection::new(self.agent_kind, self.model)
     }
+}
+
+/// Normalizes one role default so unsupported providers cannot retain Fast
+/// and supported providers use a model accepted by their Fast transport.
+fn normalized_speed_default(
+    selection: AgentSelection,
+    speed_mode: SpeedMode,
+) -> (AgentSelection, SpeedMode) {
+    if !selection.kind().supports_speed_mode() {
+        return (selection, SpeedMode::Normal);
+    }
+
+    (selection.compatible_with_speed_mode(speed_mode), speed_mode)
 }
 
 /// Parses the persisted settings value into executable launch-configuration
@@ -845,10 +962,13 @@ mod tests {
                         DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH,
                     default_fast_reasoning_level: ReasoningLevel::Low,
                     default_fast_selection: default_selection,
+                    default_fast_speed_mode: SpeedMode::Normal,
                     default_review_reasoning_level: ReasoningLevel::XHigh,
                     default_review_selection: default_selection,
+                    default_review_speed_mode: SpeedMode::Normal,
                     default_smart_reasoning_level: ReasoningLevel::High,
                     default_smart_selection: default_selection,
+                    default_smart_speed_mode: SpeedMode::Normal,
                     include_coauthored_by_agentty: false,
                     launch_configuration: String::new(),
                     orchestration_parallelism: DEFAULT_ORCHESTRATION_PARALLELISM,
@@ -1008,6 +1128,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn speed_defaults_normalize_provider_support_and_fast_model_compatibility() {
+        // Arrange
+        let codex_spark = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark);
+        let gemini = AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro);
+
+        // Act
+        let fast_codex = normalized_speed_default(codex_spark, SpeedMode::Fast);
+        let fast_gemini = normalized_speed_default(gemini, SpeedMode::Fast);
+        let normal_codex = normalized_speed_default(codex_spark, SpeedMode::Normal);
+
+        // Assert
+        assert_eq!(
+            fast_codex,
+            (
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+                SpeedMode::Fast,
+            )
+        );
+        assert_eq!(fast_gemini, (gemini, SpeedMode::Normal));
+        assert_eq!(normal_codex, (codex_spark, SpeedMode::Normal));
+    }
+
+    #[tokio::test]
+    async fn project_speed_default_without_project_uses_normal() {
+        // Arrange
+        let repositories = AppRepositories::in_memory()
+            .await
+            .expect("database should open");
+
+        // Act
+        let speed_mode = load_project_speed_mode_setting(
+            &repositories,
+            None,
+            SettingName::DefaultSmartSpeedMode,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(speed_mode, SpeedMode::Normal);
+    }
+
     /// Selects one settings row through the screen navigation action.
     fn select_row(manager: &mut SettingsTestHarness, row_index: usize) {
         for _ in 0..row_index {
@@ -1030,6 +1192,46 @@ mod tests {
         .await;
 
         SettingsTestHarness::from_manager(manager)
+    }
+
+    async fn assert_role_defaults_persisted(
+        services: &AppServices,
+        project_id: i64,
+        setting_names: (SettingName, SettingName, SettingName, SettingName),
+        expected: (AgentSelection, ReasoningLevel, SpeedMode),
+    ) {
+        let (agent_name, model_name, reasoning_name, speed_name) = setting_names;
+        let (selection, reasoning_level, speed_mode) = expected;
+        let settings = services.db().settings();
+
+        assert_eq!(
+            settings
+                .get_project_setting(project_id, agent_name)
+                .await
+                .expect("failed to load role agent"),
+            Some(selection.kind().name().to_string())
+        );
+        assert_eq!(
+            settings
+                .get_project_setting(project_id, model_name)
+                .await
+                .expect("failed to load role model"),
+            Some(selection.model().as_str().to_string())
+        );
+        assert_eq!(
+            settings
+                .load_project_reasoning_level(project_id, reasoning_name)
+                .await
+                .expect("failed to load role reasoning level"),
+            reasoning_level
+        );
+        assert_eq!(
+            settings
+                .load_project_speed_mode(project_id, speed_name)
+                .await
+                .expect("failed to load role speed mode"),
+            speed_mode
+        );
     }
 
     /// Persists a launch-configuration fixture before loading the production
@@ -1365,6 +1567,18 @@ mod tests {
                         SettingName::DefaultReviewReasoningLevel,
                         ReasoningLevel::XHigh.as_str().to_string(),
                     ),
+                    (
+                        SettingName::DefaultSmartSpeedMode,
+                        SpeedMode::Fast.as_str().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultFastSpeedMode,
+                        SpeedMode::Fast.as_str().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultReviewSpeedMode,
+                        SpeedMode::Fast.as_str().to_string(),
+                    ),
                     (SettingName::IncludeCoauthoredByAgentty, "false".to_string()),
                     (SettingName::LaunchConfiguration, "nvim .".to_string()),
                     (SettingName::LastUsedModelAsDefault, "true".to_string()),
@@ -1402,7 +1616,7 @@ mod tests {
         );
         assert_eq!(
             settings.default_fast_selection,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark)
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
         );
         assert_eq!(
             settings.default_review_selection,
@@ -1415,6 +1629,9 @@ mod tests {
             settings.default_review_reasoning_level,
             ReasoningLevel::XHigh
         );
+        assert_eq!(settings.default_smart_speed_mode, SpeedMode::Fast);
+        assert_eq!(settings.default_fast_speed_mode, SpeedMode::Fast);
+        assert_eq!(settings.default_review_speed_mode, SpeedMode::Fast);
         assert_eq!(settings.orchestration_parallelism, 5);
         assert!(!settings.auto_approve_orchestration_research);
         assert_eq!(settings.theme, ColorTheme::Green);
@@ -1641,7 +1858,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_operation_persists_role_model_and_reasoning_settings() {
+    async fn apply_operation_persists_role_model_reasoning_and_speed_settings() {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = settings_manager(&services, project_id).await;
@@ -1653,12 +1870,14 @@ mod tests {
             .persist_operation(SettingsOperation::DefaultFastSelection {
                 reasoning_level: ReasoningLevel::Low,
                 selection: fast_selection,
+                speed_mode: SpeedMode::Fast,
             })
             .await;
         manager
             .persist_operation(SettingsOperation::DefaultReviewSelection {
                 reasoning_level: ReasoningLevel::XHigh,
                 selection: review_selection,
+                speed_mode: SpeedMode::Fast,
             })
             .await;
 
@@ -1676,60 +1895,35 @@ mod tests {
             manager.settings().default_review_reasoning_level,
             ReasoningLevel::XHigh
         );
+        assert_eq!(manager.settings().default_fast_speed_mode, SpeedMode::Fast);
         assert_eq!(
-            services
-                .db()
-                .settings()
-                .get_project_setting(project_id, SettingName::DefaultFastAgent)
-                .await
-                .expect("failed to load fast agent"),
-            Some(AgentKind::Codex.name().to_string())
+            manager.settings().default_review_speed_mode,
+            SpeedMode::Fast
         );
-        assert_eq!(
-            services
-                .db()
-                .settings()
-                .get_project_setting(project_id, SettingName::DefaultFastModel)
-                .await
-                .expect("failed to load fast model"),
-            Some(AgentModel::Gpt56Sol.as_str().to_string())
-        );
-        assert_eq!(
-            services
-                .db()
-                .settings()
-                .get_project_setting(project_id, SettingName::DefaultReviewAgent)
-                .await
-                .expect("failed to load review agent"),
-            Some(AgentKind::Claude.name().to_string())
-        );
-        assert_eq!(
-            services
-                .db()
-                .settings()
-                .get_project_setting(project_id, SettingName::DefaultReviewModel)
-                .await
-                .expect("failed to load review model"),
-            Some(AgentModel::ClaudeOpus5.as_str().to_string())
-        );
-        assert_eq!(
-            services
-                .db()
-                .settings()
-                .load_project_reasoning_level(project_id, SettingName::DefaultFastReasoningLevel,)
-                .await
-                .expect("failed to load fast reasoning level"),
-            ReasoningLevel::Low
-        );
-        assert_eq!(
-            services
-                .db()
-                .settings()
-                .load_project_reasoning_level(project_id, SettingName::DefaultReviewReasoningLevel,)
-                .await
-                .expect("failed to load review reasoning level"),
-            ReasoningLevel::XHigh
-        );
+        assert_role_defaults_persisted(
+            &services,
+            project_id,
+            (
+                SettingName::DefaultFastAgent,
+                SettingName::DefaultFastModel,
+                SettingName::DefaultFastReasoningLevel,
+                SettingName::DefaultFastSpeedMode,
+            ),
+            (fast_selection, ReasoningLevel::Low, SpeedMode::Fast),
+        )
+        .await;
+        assert_role_defaults_persisted(
+            &services,
+            project_id,
+            (
+                SettingName::DefaultReviewAgent,
+                SettingName::DefaultReviewModel,
+                SettingName::DefaultReviewReasoningLevel,
+                SettingName::DefaultReviewSpeedMode,
+            ),
+            (review_selection, ReasoningLevel::XHigh, SpeedMode::Fast),
+        )
+        .await;
     }
 
     #[test]
@@ -1999,7 +2193,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[4].1, "codex/gpt-5.6-sol [low]");
+        assert_eq!(rows[4].1, "codex/gpt-5.6-sol [low, Normal]");
     }
 
     #[test]
@@ -2013,7 +2207,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[5].1, "claude/claude-opus-5 [xhigh]");
+        assert_eq!(rows[5].1, "claude/claude-opus-5 [xhigh, Normal]");
     }
 
     #[test]
@@ -2510,6 +2704,7 @@ mod tests {
         manager.select_selector_dropdown_option().await;
         manager.next_selector_dropdown_option();
         manager.select_selector_dropdown_option().await;
+        manager.select_selector_dropdown_option().await;
 
         // Assert
         assert!(manager.settings().use_last_used_model_as_default);
@@ -2535,6 +2730,7 @@ mod tests {
         // Act
         manager.handle_enter();
         manager.next_selector_dropdown_option();
+        manager.select_selector_dropdown_option().await;
         manager.select_selector_dropdown_option().await;
         manager.select_selector_dropdown_option().await;
 

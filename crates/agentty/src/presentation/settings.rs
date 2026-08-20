@@ -1,6 +1,6 @@
 //! Presentation-owned settings screen state and input translation.
 
-use crate::domain::agent::{AgentSelection, ReasoningLevel};
+use crate::domain::agent::{AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::input::{InputCommand, InputState};
 use crate::domain::selection::SelectionState;
 use crate::domain::setting::MAX_ORCHESTRATION_PARALLELISM;
@@ -14,10 +14,13 @@ pub(crate) struct SettingsView {
     pub(crate) auto_approve_orchestration_research: bool,
     pub(crate) default_fast_reasoning_level: ReasoningLevel,
     pub(crate) default_fast_selection: AgentSelection,
+    pub(crate) default_fast_speed_mode: SpeedMode,
     pub(crate) default_review_reasoning_level: ReasoningLevel,
     pub(crate) default_review_selection: AgentSelection,
+    pub(crate) default_review_speed_mode: SpeedMode,
     pub(crate) default_smart_reasoning_level: ReasoningLevel,
     pub(crate) default_smart_selection: AgentSelection,
+    pub(crate) default_smart_speed_mode: SpeedMode,
     pub(crate) include_coauthored_by_agentty: bool,
     pub(crate) launch_configuration: String,
     pub(crate) orchestration_parallelism: u8,
@@ -32,14 +35,17 @@ pub(crate) enum SettingsOperation {
     DefaultFastSelection {
         reasoning_level: ReasoningLevel,
         selection: AgentSelection,
+        speed_mode: SpeedMode,
     },
     DefaultReviewSelection {
         reasoning_level: ReasoningLevel,
         selection: AgentSelection,
+        speed_mode: SpeedMode,
     },
     DefaultSmartSelection {
         reasoning_level: ReasoningLevel,
         selection: AgentSelection,
+        speed_mode: SpeedMode,
         use_last_used_model_as_default: bool,
     },
     IncludeCoauthoredByAgentty(bool),
@@ -551,12 +557,47 @@ impl SettingsPresentationState {
                             .min(ReasoningLevel::ALL.len().saturating_sub(1)),
                     )
                     .copied()?;
+                if selection.kind().supports_speed_mode() {
+                    self.open_speed_selector(
+                        selector_dropdown.row,
+                        selection,
+                        reasoning_level,
+                        use_last_used_model_as_default,
+                        view,
+                    );
+
+                    None
+                } else {
+                    self.selector_dropdown = None;
+
+                    settings_operation_for_model_selector(
+                        selector_dropdown.row,
+                        selection,
+                        reasoning_level,
+                        SpeedMode::Normal,
+                        use_last_used_model_as_default,
+                    )
+                }
+            }
+            SelectorDropdownStage::Speed {
+                reasoning_level,
+                selection,
+                use_last_used_model_as_default,
+            } => {
+                let speed_mode = SpeedMode::ALL
+                    .get(
+                        selector_dropdown
+                            .selected_index
+                            .min(SpeedMode::ALL.len().saturating_sub(1)),
+                    )
+                    .copied()?;
                 self.selector_dropdown = None;
 
                 settings_operation_for_model_selector(
                     selector_dropdown.row,
-                    selection,
+                    selection.compatible_with_speed_mode(speed_mode),
                     reasoning_level,
+                    speed_mode,
                     use_last_used_model_as_default,
                 )
             }
@@ -580,6 +621,31 @@ impl SettingsPresentationState {
             row,
             selected_index,
             stage: SelectorDropdownStage::Reasoning {
+                selection,
+                use_last_used_model_as_default,
+            },
+        });
+    }
+
+    fn open_speed_selector(
+        &mut self,
+        row: SettingRow,
+        selection: AgentSelection,
+        reasoning_level: ReasoningLevel,
+        use_last_used_model_as_default: bool,
+        view: &SettingsView,
+    ) {
+        let speed_mode = row.speed_mode(view).unwrap_or_default();
+        let selected_index = SpeedMode::ALL
+            .iter()
+            .position(|mode| *mode == speed_mode)
+            .unwrap_or_default();
+
+        self.selector_dropdown = Some(SelectorDropdownState {
+            row,
+            selected_index,
+            stage: SelectorDropdownStage::Speed {
+                reasoning_level,
                 selection,
                 use_last_used_model_as_default,
             },
@@ -642,21 +708,25 @@ fn settings_operation_for_model_selector(
     row: SettingRow,
     selection: AgentSelection,
     reasoning_level: ReasoningLevel,
+    speed_mode: SpeedMode,
     use_last_used_model_as_default: bool,
 ) -> Option<SettingsOperation> {
     match row {
         SettingRow::DefaultSmartModel => Some(SettingsOperation::DefaultSmartSelection {
             reasoning_level,
             selection,
+            speed_mode,
             use_last_used_model_as_default,
         }),
         SettingRow::DefaultFastModel => Some(SettingsOperation::DefaultFastSelection {
             reasoning_level,
             selection,
+            speed_mode,
         }),
         SettingRow::DefaultReviewModel => Some(SettingsOperation::DefaultReviewSelection {
             reasoning_level,
             selection,
+            speed_mode,
         }),
         _ => None,
     }
@@ -769,6 +839,15 @@ impl SettingRow {
         }
     }
 
+    fn speed_mode(self, view: &SettingsView) -> Option<SpeedMode> {
+        match self {
+            Self::DefaultSmartModel => Some(view.default_smart_speed_mode),
+            Self::DefaultFastModel => Some(view.default_fast_speed_mode),
+            Self::DefaultReviewModel => Some(view.default_review_speed_mode),
+            _ => None,
+        }
+    }
+
     fn table_index(self) -> usize {
         Self::ALL
             .iter()
@@ -789,6 +868,7 @@ impl SelectorDropdownState {
         match self.stage {
             SelectorDropdownStage::Primary => selector_options_for_row(view, self.row).len(),
             SelectorDropdownStage::Reasoning { .. } => ReasoningLevel::ALL.len(),
+            SelectorDropdownStage::Speed { .. } => SpeedMode::ALL.len(),
         }
     }
 
@@ -799,6 +879,7 @@ impl SelectorDropdownState {
                 .map(|option| option.label)
                 .collect(),
             SelectorDropdownStage::Reasoning { .. } => reasoning_selector_option_labels(),
+            SelectorDropdownStage::Speed { .. } => speed_selector_option_labels(),
         }
     }
 
@@ -807,6 +888,7 @@ impl SelectorDropdownState {
             SelectorDropdownStage::Primary if self.row.is_model_selector() => "Select model",
             SelectorDropdownStage::Primary => "Select setting value",
             SelectorDropdownStage::Reasoning { .. } => "Select reasoning level",
+            SelectorDropdownStage::Speed { .. } => "Select response speed",
         }
     }
 
@@ -818,8 +900,16 @@ impl SelectorDropdownState {
             SelectorDropdownStage::Primary => {
                 "Selecting setting value: j/k move, Enter select, Esc/q close"
             }
+            SelectorDropdownStage::Reasoning { selection, .. }
+                if selection.kind().supports_speed_mode() =>
+            {
+                "Selecting reasoning: j/k move, Enter continue, Esc/q close"
+            }
             SelectorDropdownStage::Reasoning { .. } => {
                 "Selecting reasoning: j/k move, Enter save, Esc/q close"
+            }
+            SelectorDropdownStage::Speed { .. } => {
+                "Selecting speed: j/k move, Enter save, Esc/q close"
             }
         }
     }
@@ -829,6 +919,11 @@ impl SelectorDropdownState {
 enum SelectorDropdownStage {
     Primary,
     Reasoning {
+        selection: AgentSelection,
+        use_last_used_model_as_default: bool,
+    },
+    Speed {
+        reasoning_level: ReasoningLevel,
         selection: AgentSelection,
         use_last_used_model_as_default: bool,
     },
@@ -1033,28 +1128,39 @@ fn reasoning_selector_option_labels() -> Vec<String> {
         .collect()
 }
 
+fn speed_selector_option_labels() -> Vec<String> {
+    SpeedMode::ALL
+        .iter()
+        .map(|speed_mode| speed_mode.name().to_string())
+        .collect()
+}
+
 fn display_value_for_row(view: &SettingsView, row: SettingRow) -> String {
     match row {
         SettingRow::AutoApproveOrchestrationResearch => {
             bool_setting_display(view.auto_approve_orchestration_research)
         }
         SettingRow::DefaultSmartModel if view.use_last_used_model_as_default => {
-            format!(
-                "Last used model as default [{}]",
-                view.default_smart_reasoning_level.as_str()
+            display_last_used_model_value(
+                view.default_smart_selection,
+                view.default_smart_reasoning_level,
+                view.default_smart_speed_mode,
             )
         }
         SettingRow::DefaultSmartModel => display_model_selector_value_with_reasoning(
             view.default_smart_selection,
             view.default_smart_reasoning_level,
+            view.default_smart_speed_mode,
         ),
         SettingRow::DefaultFastModel => display_model_selector_value_with_reasoning(
             view.default_fast_selection,
             view.default_fast_reasoning_level,
+            view.default_fast_speed_mode,
         ),
         SettingRow::DefaultReviewModel => display_model_selector_value_with_reasoning(
             view.default_review_selection,
             view.default_review_reasoning_level,
+            view.default_review_speed_mode,
         ),
         SettingRow::IncludeCoauthoredByAgentty => {
             bool_setting_display(view.include_coauthored_by_agentty)
@@ -1094,12 +1200,34 @@ fn display_model_selector_value(selection: AgentSelection) -> String {
 fn display_model_selector_value_with_reasoning(
     selection: AgentSelection,
     reasoning_level: ReasoningLevel,
+    speed_mode: SpeedMode,
 ) -> String {
+    let display_value = display_model_selector_value(selection);
+    if !selection.kind().supports_speed_mode() {
+        return format!("{display_value} [{}]", reasoning_level.as_str());
+    }
+
     format!(
-        "{} [{}]",
-        display_model_selector_value(selection),
-        reasoning_level.as_str()
+        "{display_value} [{}, {}]",
+        reasoning_level.as_str(),
+        speed_mode.name()
     )
+}
+
+fn display_last_used_model_value(
+    selection: AgentSelection,
+    reasoning_level: ReasoningLevel,
+    speed_mode: SpeedMode,
+) -> String {
+    if selection.kind().supports_speed_mode() {
+        return format!(
+            "Last used model as default [{}, {}]",
+            reasoning_level.as_str(),
+            speed_mode.name()
+        );
+    }
+
+    format!("Last used model as default [{}]", reasoning_level.as_str())
 }
 
 fn join_launch_configurations(commands: &[String]) -> String {
@@ -1140,13 +1268,16 @@ mod tests {
             auto_approve_orchestration_research: true,
             default_fast_reasoning_level: ReasoningLevel::Low,
             default_fast_selection: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            default_fast_speed_mode: SpeedMode::Fast,
             default_review_reasoning_level: ReasoningLevel::XHigh,
             default_review_selection: AgentSelection::new(
                 AgentKind::Claude,
                 AgentModel::ClaudeOpus5,
             ),
+            default_review_speed_mode: SpeedMode::Normal,
             default_smart_reasoning_level: ReasoningLevel::High,
             default_smart_selection: smart_selection,
+            default_smart_speed_mode: SpeedMode::Normal,
             include_coauthored_by_agentty: false,
             launch_configuration: launch_configuration.to_string(),
             orchestration_parallelism: 3,
@@ -1435,7 +1566,7 @@ mod tests {
     }
 
     #[test]
-    fn selectors_cover_role_reasoning_and_invalid_pairs() {
+    fn selectors_cover_role_reasoning_speed_and_invalid_pairs() {
         // Arrange
         let view = test_settings_view("");
 
@@ -1446,6 +1577,7 @@ mod tests {
                 SettingsOperation::DefaultSmartSelection {
                     reasoning_level: view.default_smart_reasoning_level,
                     selection: view.default_smart_selection,
+                    speed_mode: view.default_smart_speed_mode,
                     use_last_used_model_as_default: false,
                 },
             ),
@@ -1454,6 +1586,7 @@ mod tests {
                 SettingsOperation::DefaultFastSelection {
                     reasoning_level: view.default_fast_reasoning_level,
                     selection: view.default_fast_selection,
+                    speed_mode: view.default_fast_speed_mode,
                 },
             ),
             (
@@ -1461,6 +1594,7 @@ mod tests {
                 SettingsOperation::DefaultReviewSelection {
                     reasoning_level: view.default_review_reasoning_level,
                     selection: view.default_review_selection,
+                    speed_mode: view.default_review_speed_mode,
                 },
             ),
         ]
@@ -1471,8 +1605,17 @@ mod tests {
 
             let model_operation = state.apply(&view, SettingsAction::Confirm);
             let reasoning_operation = state.apply(&view, SettingsAction::Confirm);
+            let speed_operation = if reasoning_operation.is_none() {
+                state.apply(&view, SettingsAction::Confirm)
+            } else {
+                None
+            };
 
-            (model_operation, reasoning_operation, expected_operation)
+            (
+                model_operation,
+                reasoning_operation.or(speed_operation),
+                expected_operation,
+            )
         });
         let mismatched_option = SettingSelectorOption {
             label: "Enabled".to_string(),
@@ -1483,6 +1626,7 @@ mod tests {
             SettingRow::Theme,
             view.default_smart_selection,
             ReasoningLevel::High,
+            SpeedMode::Normal,
             false,
         );
         let invalid_operation = settings_operation_for_primary_selector(
@@ -1490,6 +1634,7 @@ mod tests {
             SettingSelectorValue::Bool(true),
         );
         let nonmodel_reasoning_level = SettingRow::Theme.reasoning_level(&view);
+        let nonmodel_speed_mode = SettingRow::Theme.speed_mode(&view);
 
         // Assert
         for (model_operation, reasoning_operation, expected_operation) in operations {
@@ -1500,6 +1645,7 @@ mod tests {
         assert_eq!(invalid_model_operation, None);
         assert_eq!(invalid_operation, None);
         assert_eq!(nonmodel_reasoning_level, None);
+        assert_eq!(nonmodel_speed_mode, None);
     }
 
     #[test]
@@ -1560,6 +1706,7 @@ mod tests {
             reasoning_selector_option_labels().len(),
             ReasoningLevel::ALL.len()
         );
+        assert_eq!(speed_selector_option_labels().len(), SpeedMode::ALL.len());
         assert_eq!(
             launch_options,
             [] as [crate::presentation::settings::SettingSelectorOption; 0]
@@ -1596,7 +1743,20 @@ mod tests {
     }
 
     #[test]
-    fn selector_snapshot_separates_models_and_reasoning() {
+    fn last_used_speed_capable_model_value_includes_speed() {
+        // Arrange
+        let selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol);
+
+        // Act
+        let display_value =
+            display_last_used_model_value(selection, ReasoningLevel::High, SpeedMode::Fast);
+
+        // Assert
+        assert_eq!(display_value, "Last used model as default [high, Fast]");
+    }
+
+    #[test]
+    fn selector_snapshot_separates_model_reasoning_and_speed() {
         // Arrange
         let view = test_settings_view("");
         let mut model_state = SettingsPresentationState::default();
@@ -1617,6 +1777,19 @@ mod tests {
             .selector_dropdown
             .expect("reasoning selector should be open");
         let reasoning_footer_hint = model_state.footer_hint();
+        let mut speed_state = SettingsPresentationState::default();
+        select_row(&mut speed_state, &view, 4);
+        let _ = speed_state.apply(&view, SettingsAction::Activate);
+        let _ = speed_state.apply(&view, SettingsAction::Confirm);
+        let speed_capable_reasoning_footer_hint = speed_state.footer_hint();
+        let _ = speed_state.apply(&view, SettingsAction::Confirm);
+        let speed_next_operation = speed_state.apply(&view, SettingsAction::Next);
+        let speed_previous_operation = speed_state.apply(&view, SettingsAction::Previous);
+        let speed_dropdown = speed_state
+            .snapshot(&view)
+            .selector_dropdown
+            .expect("speed selector should be open");
+        let speed_footer_hint = speed_state.footer_hint();
         let theme_snapshot = theme_state.snapshot(&view);
         let theme_dropdown = theme_snapshot
             .selector_dropdown
@@ -1656,6 +1829,32 @@ mod tests {
                 .iter()
                 .map(|reasoning_level| reasoning_level.as_str())
                 .collect::<Vec<_>>()
+        );
+        assert_eq!(speed_dropdown.title, "Select response speed");
+        assert_eq!(speed_next_operation, None);
+        assert_eq!(speed_previous_operation, None);
+        assert_eq!(
+            speed_capable_reasoning_footer_hint,
+            "Selecting reasoning: j/k move, Enter continue, Esc/q close"
+        );
+        assert_eq!(
+            speed_dropdown.options[speed_dropdown.selected_index].label,
+            SpeedMode::Fast.name()
+        );
+        assert_eq!(
+            speed_dropdown
+                .options
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>(),
+            SpeedMode::ALL
+                .iter()
+                .map(|speed_mode| speed_mode.name())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            speed_footer_hint,
+            "Selecting speed: j/k move, Enter save, Esc/q close"
         );
         assert_eq!(theme_dropdown.title, "Select setting value");
     }

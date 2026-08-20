@@ -24,7 +24,7 @@ use crate::app_server::{AppServerClient, AppServerTurnRequest};
 use crate::channel::AgentRequestKind;
 use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::model::permission::PermissionMode;
-use crate::model::session::{SessionDiffState, SessionStats};
+use crate::model::session::{SessionDiffState, SessionStats, SpeedMode};
 
 /// Input payload for one isolated prompt that prefers structured protocol
 /// output.
@@ -48,6 +48,8 @@ pub struct OneShotRequest {
     pub request_kind: AgentRequestKind,
     /// Reasoning effort preference for the one-shot prompt.
     pub reasoning_level: ReasoningLevel,
+    /// Response-speed preference for the one-shot prompt.
+    pub speed_mode: SpeedMode,
 }
 
 /// Parsed result returned by one isolated prompt execution.
@@ -180,7 +182,7 @@ async fn submit_one_shot_with_app_server_client(
         persisted_instruction_conversation_id: None,
         reasoning_level: request.reasoning_level,
         session_id: session_id.clone(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: request.speed_mode,
     };
 
     let turn_result = app_server_client.run_turn(turn_request, stream_tx).await;
@@ -332,7 +334,7 @@ async fn attempt_one_shot_app_server_repair(
         persisted_instruction_conversation_id: None,
         reasoning_level: request.reasoning_level,
         session_id: session_id.to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: request.speed_mode,
     };
     let repair_result = app_server_client
         .run_turn(repair_turn_request, repair_stream_tx)
@@ -379,7 +381,7 @@ async fn execute_one_shot_command(
         prompt,
         reasoning_level: request.reasoning_level,
         request_kind: &request.request_kind,
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: request.speed_mode,
     };
     let observer = OneShotCliObserver {
         child_pid: request.child_pid,
@@ -585,6 +587,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
             },
         )
         .await
@@ -627,6 +630,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
             },
         )
         .await
@@ -670,6 +674,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
             },
         )
         .await
@@ -717,6 +722,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
             },
         )
         .await
@@ -768,6 +774,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
             },
         )
         .await
@@ -791,7 +798,8 @@ mod tests {
         backend.expect_build_command().times(2).returning({
             let counter = std::sync::Arc::clone(&call_counter);
 
-            move |_| {
+            move |request| {
+                assert_eq!(request.speed_mode, SpeedMode::Fast);
                 let call_number = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
                 if call_number == 0 {
@@ -818,6 +826,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Fast,
             },
         )
         .await
@@ -858,6 +867,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
             },
         )
         .await
@@ -903,6 +913,7 @@ mod tests {
                     prompt: large_prompt.clone(),
                     request_kind: AgentRequestKind::UtilityPrompt,
                     reasoning_level: ReasoningLevel::default(),
+                    speed_mode: SpeedMode::Normal,
                 },
             ),
         )
@@ -940,6 +951,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
             },
         )
         .await
@@ -982,6 +994,7 @@ mod tests {
                 prompt: large_prompt,
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
             },
         )
         .await
@@ -1023,6 +1036,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
             },
         )
         .await
@@ -1054,6 +1068,7 @@ mod tests {
                 ));
                 assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
                 assert_eq!(request.prompt.text, "Generate title");
+                assert_eq!(request.speed_mode, SpeedMode::Fast);
 
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
@@ -1085,6 +1100,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Fast,
             },
         )
         .await
@@ -1134,6 +1150,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
             },
         )
         .await
@@ -1161,6 +1178,7 @@ mod tests {
             .returning(|request, _| {
                 assert_eq!(request.model, AgentModel::Gpt56Sol.as_str());
                 assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
+                assert_eq!(request.speed_mode, SpeedMode::Fast);
 
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
@@ -1190,6 +1208,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Fast,
             },
         )
         .await
@@ -1246,6 +1265,7 @@ mod tests {
                 prompt: "Generate title".to_string(),
                 request_kind: AgentRequestKind::SessionStart,
                 reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
             },
         )
         .await

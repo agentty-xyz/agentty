@@ -305,6 +305,7 @@ impl SessionManager {
         ) {
             return;
         }
+
         session_worktree_availability.insert(session_id.clone(), has_session_folder);
 
         let (session_detail, session_status, session_transcript) =

@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use super::core::AppEvent;
 use super::task;
 use crate::app::session_state::SessionState;
-use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel};
+use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::review::FocusedReviewStatus;
 use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transient_message::{
@@ -322,14 +322,15 @@ pub(crate) fn review_cache_from_rows(
 /// Spawns one focused review-assist task for the provided session diff.
 pub(crate) fn start_review_assist(
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    review_agent: (AgentSelection, ReasoningLevel),
+    review_agent: (AgentSelection, ReasoningLevel, SpeedMode),
     session_id: &str,
     session_folder: &Path,
     diff_hash: u64,
     review_diff: &str,
     session_chat_history: Option<&str>,
 ) {
-    let (review_selection, reasoning_level) = review_agent;
+    let (review_selection, reasoning_level, speed_mode) = review_agent;
+    let (review_selection, speed_mode) = normalize_review_agent(review_selection, speed_mode);
 
     task::TaskService::spawn_review_assist_task(task::ReviewAssistTaskInput {
         app_event_tx,
@@ -340,7 +341,22 @@ pub(crate) fn start_review_assist(
         session_chat_history: session_chat_history.map(str::to_string),
         session_folder: session_folder.to_path_buf(),
         session_id: SessionId::from(session_id),
+        speed_mode,
     });
+}
+
+fn normalize_review_agent(
+    review_selection: AgentSelection,
+    speed_mode: SpeedMode,
+) -> (AgentSelection, SpeedMode) {
+    let speed_mode = if review_selection.kind().supports_speed_mode() {
+        speed_mode
+    } else {
+        SpeedMode::Normal
+    };
+    let review_selection = review_selection.compatible_with_speed_mode(speed_mode);
+
+    (review_selection, speed_mode)
 }
 
 /// Marks one review-ready session as transient `AgentReview` while focused
@@ -479,6 +495,7 @@ mod tests {
 
     use super::*;
     use crate::app::session_state::SessionState;
+    use crate::domain::agent::AgentKind;
     use crate::domain::selection::SelectionState;
     use crate::infra::clock::RealClock;
     use crate::test_support::SessionFixtureBuilder;
@@ -553,6 +570,31 @@ mod tests {
 
         // Assert
         assert_eq!(message, "Reviewing changes with gpt-5.6-sol");
+    }
+
+    #[test]
+    fn review_agent_speed_normalization_preserves_only_supported_speed() {
+        // Arrange
+        let supported_selection =
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark);
+        let unsupported_selection = AgentSelection::new(
+            AgentKind::Antigravity,
+            AgentKind::Antigravity.default_model(),
+        );
+
+        // Act
+        let supported = normalize_review_agent(supported_selection, SpeedMode::Fast);
+        let unsupported = normalize_review_agent(unsupported_selection, SpeedMode::Fast);
+
+        // Assert
+        assert_eq!(
+            supported,
+            (
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+                SpeedMode::Fast,
+            )
+        );
+        assert_eq!(unsupported, (unsupported_selection, SpeedMode::Normal));
     }
 
     #[test]

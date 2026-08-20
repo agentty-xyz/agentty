@@ -1,6 +1,6 @@
 +++
 title = "Settings editing"
-description = "Open dropdowns to select setting values."
+description = "Choose model, reasoning, and response-speed defaults."
 weight = 154
 [extra]
 gif = "settings_edit.gif"

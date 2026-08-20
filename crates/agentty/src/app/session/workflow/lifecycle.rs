@@ -276,8 +276,17 @@ struct ClaimedSessionTitleGenerationTaskInput {
     reasoning_level: ReasoningLevel,
     session_agent: AgentSelection,
     session_id: SessionId,
+    speed_mode: SpeedMode,
     title_generation: i64,
     tracked_completion: Option<TitleGenerationTaskCompletion>,
+}
+
+/// Fast-role defaults and workspace used by draft title generation.
+struct DraftTitleGenerationContext {
+    agent: AgentSelection,
+    folder: PathBuf,
+    reasoning_level: ReasoningLevel,
+    speed_mode: SpeedMode,
 }
 
 /// Inputs for one detached session-title generation task.
@@ -301,6 +310,8 @@ pub(super) struct SessionTitleGenerationTaskInput {
     pub(super) session_agent: AgentSelection,
     /// Session receiving the generated title.
     pub(super) session_id: SessionId,
+    /// Response speed paired with the title-generation model.
+    pub(super) speed_mode: SpeedMode,
     /// Optional generation used to ignore superseded draft-title tasks.
     pub(super) tracked_generation: Option<u64>,
 }
@@ -1191,9 +1202,9 @@ impl SessionManager {
                     "Session project is required to stage draft prompts".to_string(),
                 )
             })?;
-        let (title_generation_folder, title_generation_agent, title_generation_reasoning_level) =
-            self.draft_title_generation_context(services, project_id, session_agent, folder)
-                .await?;
+        let title_generation_context = self
+            .draft_title_generation_context(services, project_id, session_agent, folder)
+            .await?;
 
         Self::persist_staged_draft(
             services,
@@ -1220,13 +1231,14 @@ impl SessionManager {
             Self::spawn_session_title_generation_task(SessionTitleGenerationTaskInput {
                 app_event_tx: services.event_sender(),
                 db: services.db().clone(),
-                folder: title_generation_folder,
+                folder: title_generation_context.folder,
                 latest_request: title_generation_prompt,
                 one_shot_client: services.one_shot_client(),
                 requires_provisional_title: false,
-                reasoning_level: title_generation_reasoning_level,
-                session_agent: title_generation_agent,
+                reasoning_level: title_generation_context.reasoning_level,
+                session_agent: title_generation_context.agent,
                 session_id: persisted_session_id.clone(),
+                speed_mode: title_generation_context.speed_mode,
                 tracked_generation: Some(title_generation_task_generation),
             })
             .await;
@@ -1268,7 +1280,7 @@ impl SessionManager {
         project_id: i64,
         session_agent: AgentSelection,
         session_folder: PathBuf,
-    ) -> Result<(PathBuf, AgentSelection, ReasoningLevel), SessionError> {
+    ) -> Result<DraftTitleGenerationContext, SessionError> {
         let project_working_dir = self.load_project_path(services, project_id).await?;
         let title_generation_agent =
             setting::load_default_fast_agent_setting(services, Some(project_id), session_agent)
@@ -1278,17 +1290,30 @@ impl SessionManager {
             .settings()
             .load_project_reasoning_level(project_id, SettingName::DefaultFastReasoningLevel)
             .await?;
+        let title_generation_speed_mode = services
+            .db()
+            .settings()
+            .load_project_speed_mode(project_id, SettingName::DefaultFastSpeedMode)
+            .await?;
+        let title_generation_speed_mode = if title_generation_agent.kind().supports_speed_mode() {
+            title_generation_speed_mode
+        } else {
+            SpeedMode::Normal
+        };
+        let title_generation_agent =
+            title_generation_agent.compatible_with_speed_mode(title_generation_speed_mode);
         let title_generation_folder = if services.fs_client().is_dir(session_folder.clone()) {
             session_folder
         } else {
             project_working_dir
         };
 
-        Ok((
-            title_generation_folder,
-            title_generation_agent,
-            title_generation_reasoning_level,
-        ))
+        Ok(DraftTitleGenerationContext {
+            agent: title_generation_agent,
+            folder: title_generation_folder,
+            reasoning_level: title_generation_reasoning_level,
+            speed_mode: title_generation_speed_mode,
+        })
     }
 
     /// Returns whether a staged draft can start under the current one-level
@@ -2644,6 +2669,7 @@ impl SessionManager {
             reasoning_level,
             session_agent,
             session_id: persisted_session_id,
+            speed_mode,
             tracked_generation,
         } = input;
         let tracked_completion =
@@ -2692,6 +2718,7 @@ impl SessionManager {
                     reasoning_level,
                     session_agent,
                     session_id: persisted_session_id,
+                    speed_mode,
                     title_generation,
                     tracked_completion,
                 },
@@ -2713,6 +2740,7 @@ impl SessionManager {
             reasoning_level,
             session_agent,
             session_id: persisted_session_id,
+            speed_mode,
             title_generation,
             tracked_completion,
         } = input;
@@ -2732,6 +2760,7 @@ impl SessionManager {
             session_agent,
             reasoning_level,
             &persisted_session_id,
+            speed_mode,
             one_shot_client.as_ref(),
         )
         .await
@@ -2848,6 +2877,7 @@ impl SessionManager {
         session_agent: AgentSelection,
         reasoning_level: ReasoningLevel,
         session_id: &str,
+        speed_mode: SpeedMode,
         one_shot_client: &dyn OneShotClient,
     ) -> Option<String> {
         for attempt in 1..=SESSION_TITLE_GENERATION_MAX_ATTEMPTS {
@@ -2861,6 +2891,7 @@ impl SessionManager {
                     prompt: prompt.to_string(),
                     request_kind: AgentRequestKind::UtilityPrompt,
                     reasoning_level,
+                    speed_mode,
                 })
                 .await;
 
@@ -3106,6 +3137,17 @@ impl SessionManager {
             .settings()
             .load_project_reasoning_level(project_id, SettingName::DefaultSmartReasoningLevel)
             .await?;
+        let speed_mode = services
+            .db()
+            .settings()
+            .load_project_speed_mode(project_id, SettingName::DefaultSmartSpeedMode)
+            .await?;
+        let speed_mode = if agent.kind().supports_speed_mode() {
+            speed_mode
+        } else {
+            SpeedMode::Normal
+        };
+        let agent = agent.compatible_with_speed_mode(speed_mode);
         self.default_session_model = agent.model();
 
         Ok(SessionCreationSettings {
@@ -3114,7 +3156,7 @@ impl SessionManager {
             personality_id: None,
             reasoning_level,
             role: crate::domain::session::SessionRole::Worker,
-            speed_mode: SpeedMode::Normal,
+            speed_mode,
         })
     }
 
@@ -3791,6 +3833,7 @@ mod tests {
             reasoning_level: ReasoningLevel::Low,
             session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             session_id: SessionId::from("session-id"),
+            speed_mode: SpeedMode::Normal,
             tracked_generation: None,
         }
     }
@@ -5199,6 +5242,7 @@ mod tests {
                 assert_eq!(request.prompt, "Generate a title");
                 assert_eq!(request.reasoning_level, ReasoningLevel::Low);
                 assert_eq!(request.request_kind, AgentRequestKind::UtilityPrompt);
+                assert_eq!(request.speed_mode, SpeedMode::Fast);
 
                 Ok(agent::OneShotSubmission {
                     response: AgentResponse::plain("Refine session titles"),
@@ -5219,6 +5263,7 @@ mod tests {
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             ReasoningLevel::Low,
             "session-id",
+            SpeedMode::Fast,
             &one_shot_client,
         )
         .await;
@@ -5262,6 +5307,7 @@ mod tests {
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             ReasoningLevel::Low,
             "session-id",
+            SpeedMode::Normal,
             &one_shot_client,
         )
         .await;
@@ -5288,6 +5334,7 @@ mod tests {
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             ReasoningLevel::Low,
             "session-id",
+            SpeedMode::Normal,
             &one_shot_client,
         )
         .await;
@@ -5388,6 +5435,7 @@ mod tests {
             reasoning_level: ReasoningLevel::Low,
             session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
             session_id: SessionId::from("missing-session"),
+            speed_mode: SpeedMode::Normal,
             title_generation: 1,
             tracked_completion: Some(TitleGenerationTaskCompletion {
                 generation: 7,

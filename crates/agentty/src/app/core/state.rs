@@ -1522,6 +1522,7 @@ impl App {
             (
                 self.settings.default_review_selection,
                 self.settings.default_review_reasoning_level,
+                self.settings.default_review_speed_mode,
             ),
             session_id,
             session_folder,

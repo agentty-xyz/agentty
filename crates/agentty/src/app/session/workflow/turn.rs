@@ -822,6 +822,18 @@ async fn spawn_turn_title_generation(
     )
     .await;
     let title_reasoning_level = load_title_reasoning_level(&context.db, session_project_id).await;
+    let title_speed_mode = setting::load_project_speed_mode_setting(
+        &context.db,
+        session_project_id,
+        SettingName::DefaultFastSpeedMode,
+    )
+    .await;
+    let title_speed_mode = if title_agent.kind().supports_speed_mode() {
+        title_speed_mode
+    } else {
+        crate::domain::agent::SpeedMode::Normal
+    };
+    let title_agent = title_agent.compatible_with_speed_mode(title_speed_mode);
 
     let _title_generation_task =
         SessionManager::spawn_session_title_generation_task(SessionTitleGenerationTaskInput {
@@ -834,6 +846,7 @@ async fn spawn_turn_title_generation(
             reasoning_level: title_reasoning_level,
             session_agent: title_agent,
             session_id: context.session_id.clone(),
+            speed_mode: title_speed_mode,
             tracked_generation: None,
         })
         .await;

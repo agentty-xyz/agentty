@@ -204,6 +204,23 @@ impl BuilderEnv {
         self.as_vhs_env_pairs_with_path(self.path_with_stub_bin())
     }
 
+    /// Creates a launcher that gives VHS the same working directory as the
+    /// semantic PTY proof before executing the requested binary.
+    fn create_vhs_launcher(&self, binary_path: &Path) -> std::io::Result<PathBuf> {
+        let launcher_path = self.stub_bin.join("agentty-vhs-launcher");
+        let quote_path =
+            |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
+        let launcher = format!(
+            "#!/bin/sh\ncd -- {}\nexec {} \"$@\"\n",
+            quote_path(&self.workdir),
+            quote_path(binary_path),
+        );
+        std::fs::write(&launcher_path, launcher)?;
+        std::fs::set_permissions(&launcher_path, std::fs::Permissions::from_mode(0o755))?;
+
+        Ok(launcher_path)
+    }
+
     /// Return VHS environment variable pairs with an explicit `PATH`.
     ///
     /// This mirrors [`BuilderEnv::builder_with_path_and_size`] so PTY proof
@@ -998,6 +1015,7 @@ impl FeatureTest {
         }
 
         let scenario = build_scenario(Scenario::new(&self.name));
+        let vhs_binary_path = env.create_vhs_launcher(&cargo_bin("agentty"))?;
         let terminal_cols = self.terminal_cols;
         let terminal_rows = self.terminal_rows;
         let uses_default_terminal_size =
@@ -1049,7 +1067,7 @@ impl FeatureTest {
         }
 
         let result = demo
-            .run(&scenario, builder, &cargo_bin("agentty"), &env_pairs)
+            .run(&scenario, builder, &vhs_binary_path, &env_pairs)
             .map_err(|error| std::io::Error::other(format!("feature demo failed: {error}")))?;
 
         self.validate_gif_status(&result.gif_status)?;
@@ -1547,6 +1565,28 @@ mod tests {
                 .iter()
                 .any(|(key, value)| { key == NO_COLOR_ENV_VAR && value == NO_COLOR_ENV_VALUE }),
             "feature recording must disable color"
+        );
+    }
+
+    #[test]
+    fn builder_env_vhs_launcher_uses_semantic_proof_workdir() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temporary directory");
+        let env = BuilderEnv::new(temp.path()).expect("failed to create builder environment");
+        let launcher = env
+            .create_vhs_launcher(Path::new("/bin/pwd"))
+            .expect("failed to create VHS launcher");
+
+        // Act
+        let output = std::process::Command::new(launcher)
+            .output()
+            .expect("failed to execute VHS launcher");
+
+        // Assert
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            env.workdir.to_string_lossy(),
         );
     }
 

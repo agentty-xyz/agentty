@@ -1,6 +1,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use super::session::SpeedMode;
+
 /// Supported agent provider families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentKind {
@@ -157,6 +159,39 @@ impl AgentSelection {
     #[must_use]
     pub fn model(self) -> AgentModel {
         self.model
+    }
+
+    /// Returns whether this exact provider/model pair supports Fast mode.
+    #[must_use]
+    pub fn supports_fast_mode(self) -> bool {
+        matches!(
+            (self.kind, self.model),
+            (AgentKind::Claude, AgentModel::ClaudeOpus5)
+                | (
+                    AgentKind::Codex,
+                    AgentModel::Gpt56Sol | AgentModel::Gpt56Terra | AgentModel::Gpt56Luna
+                )
+        )
+    }
+
+    /// Returns the compatible provider/model pair for one speed preference.
+    ///
+    /// Fast Claude requests require Opus, while Codex Spark requests move to
+    /// the provider's default model. Providers without a speed control and
+    /// already compatible selections remain unchanged.
+    #[must_use]
+    pub fn compatible_with_speed_mode(self, speed_mode: SpeedMode) -> Self {
+        if speed_mode == SpeedMode::Normal || self.supports_fast_mode() {
+            return self;
+        }
+
+        match self.kind {
+            AgentKind::Claude => Self::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
+            AgentKind::Codex if self.model == AgentModel::Gpt53CodexSpark => {
+                Self::new(AgentKind::Codex, AgentModel::Gpt56Sol)
+            }
+            AgentKind::Antigravity | AgentKind::Gemini | AgentKind::Codex => self,
+        }
     }
 }
 
@@ -1180,6 +1215,54 @@ mod tests {
 
         // Assert
         assert_eq!(supported, [true, true, false, false]);
+    }
+
+    #[test]
+    /// Ensures Fast compatibility is exact and selects required fallback
+    /// models without changing Normal selections.
+    fn test_agent_selection_speed_compatibility() {
+        // Arrange
+        let cases = [
+            (
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
+                SpeedMode::Fast,
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
+                false,
+            ),
+            (
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
+                SpeedMode::Fast,
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+                false,
+            ),
+            (
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Terra),
+                SpeedMode::Fast,
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Terra),
+                true,
+            ),
+            (
+                AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+                SpeedMode::Fast,
+                AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+                false,
+            ),
+            (
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
+                SpeedMode::Normal,
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
+                false,
+            ),
+        ];
+
+        // Act / Assert
+        for (selection, speed_mode, expected_selection, supports_fast_mode) in cases {
+            assert_eq!(
+                selection.compatible_with_speed_mode(speed_mode),
+                expected_selection
+            );
+            assert_eq!(selection.supports_fast_mode(), supports_fast_mode);
+        }
     }
 
     #[test]
