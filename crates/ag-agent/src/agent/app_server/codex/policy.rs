@@ -27,17 +27,17 @@ pub(super) struct PermissionModePolicy {
 /// Codex app-server policy for Agentty's non-interactive auto-edit mode.
 ///
 /// The `never` approval policy keeps normal turns from blocking on user
-/// approvals, while the workspace-write sandbox still constrains filesystem
-/// writes to the session worktree and its explicit `.agents` root.
+/// approvals. Full access matches the effective Claude auto-edit policy, which
+/// permits Bash commands to retry outside Claude's sandbox when required.
 const AUTO_EDIT_POLICY: PermissionModePolicy = PermissionModePolicy {
     approval_policy: "never",
     legacy_pre_action_decision: "approved",
     legacy_pre_action_rejection_decision: "denied",
     pre_action_decision: "accept",
     pre_action_rejection_decision: "reject",
-    thread_sandbox_mode: "workspace-write",
+    thread_sandbox_mode: "danger-full-access",
     turn_network_access: true,
-    turn_sandbox_type: "workspaceWrite",
+    turn_sandbox_type: "dangerFullAccess",
     web_search_mode: "live",
 };
 
@@ -57,14 +57,6 @@ const READ_ONLY_POLICY: PermissionModePolicy = PermissionModePolicy {
     turn_sandbox_type: "readOnly",
     web_search_mode: "live",
 };
-
-/// Repository metadata directory that remains editable during Codex turns.
-///
-/// Codex protects this path by default even when it lives under the writable
-/// worktree. Listing it as an exact writable root reopens only this
-/// worktree-local directory while preserving the read-only `.git` and
-/// `.codex` boundaries.
-const EDITABLE_WORKTREE_METADATA_PATH: &str = ".agents";
 
 /// Pre-action approval request categories understood by Agentty.
 enum PreActionApprovalKind {
@@ -139,25 +131,18 @@ pub(super) fn thread_sandbox_mode(permission_mode: PermissionMode) -> &'static s
     permission_mode_policy(permission_mode).thread_sandbox_mode
 }
 
-/// Returns the turn-level sandbox policy object for one session worktree.
-pub(super) fn turn_sandbox_policy(permission_mode: PermissionMode, session_folder: &Path) -> Value {
+/// Returns the turn-level sandbox policy object for one permission mode.
+pub(super) fn turn_sandbox_policy(permission_mode: PermissionMode) -> Value {
     let policy = permission_mode_policy(permission_mode);
-    if permission_mode.is_read_only() {
+    if !permission_mode.is_read_only() {
         return serde_json::json!({
             "type": policy.turn_sandbox_type,
-            "networkAccess": policy.turn_network_access,
         });
     }
-
-    let writable_root = session_folder
-        .join(EDITABLE_WORKTREE_METADATA_PATH)
-        .to_string_lossy()
-        .into_owned();
 
     serde_json::json!({
         "type": policy.turn_sandbox_type,
         "networkAccess": policy.turn_network_access,
-        "writableRoots": [writable_root],
     })
 }
 
@@ -241,10 +226,10 @@ pub(super) fn build_server_request_response(
 
 /// Returns the scoped decision for one Codex pre-action request.
 ///
-/// Agentty runs Codex in auto-edit mode with a workspace-write sandbox policy,
-/// so command approvals are accepted when Codex still emits a pre-action
-/// request. File-change approvals remain path-scoped and only pass when every
-/// declared path stays inside the session worktree.
+/// Agentty runs Codex in auto-edit mode with full access, so command approvals
+/// are accepted when Codex still emits a pre-action request. File-change
+/// approvals remain path-scoped and only pass when every declared path stays
+/// inside the session worktree.
 fn scoped_pre_action_decision(
     response_value: &Value,
     permission_mode: PermissionMode,

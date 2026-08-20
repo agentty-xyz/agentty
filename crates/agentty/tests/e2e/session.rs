@@ -72,6 +72,10 @@ const SECOND_QUESTION_TEXT: &str = "Which tests should be added?";
 /// Clarification question emitted by the delayed stub while help is open.
 const RECONCILE_QUESTION_TEXT: &str = "Should I add a regression test?";
 
+/// Visible confirmation emitted only when Codex receives unrestricted Auto
+/// Edit policies at both app-server request boundaries.
+const CODEX_AUTO_EDIT_POLICY_CONFIRMED_TEXT: &str = "Codex Auto Edit unrestricted policy applied.";
+
 /// Draft text typed into the composer by the chat-focus toggle test.
 const PROMPT_FOCUS_DRAFT_TEXT: &str = "Draft kept while reading chat";
 
@@ -713,6 +717,71 @@ done
         &[
             ("DefaultReviewAgent", "codex"),
             ("DefaultReviewModel", "gpt-5.6-sol"),
+        ],
+    )
+}
+
+/// Installs a Codex app-server stub that verifies Auto Edit policy payloads.
+fn seed_codex_auto_edit_policy_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let codex_path = env.stub_bin.join("codex");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'codex-cli 0.146.0\n'; exit 0; fi
+
+extract_id() {
+    printf '%s\n' "$1" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
+}
+
+thread_policy_matches=false
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{}}\n' "$request_id"
+            ;;
+        *'"method":"thread/start"'*)
+            case "$request" in
+                *'"approvalPolicy":"never"'*'"sandbox":"danger-full-access"'*)
+                    thread_policy_matches=true
+                    ;;
+            esac
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{"thread":{"id":"policy-thread"}}}\n' "$request_id"
+            ;;
+        *'"method":"turn/start"'*)
+            answer='Codex policy test title.'
+            case "$request" in
+                *'Generate a concise, commit-style title'*)
+                    ;;
+                *'Verify Codex Auto Edit permissions'*)
+                    answer='Codex Auto Edit policy mismatch.'
+                    case "$request" in
+                        *'"approvalPolicy":"never"'*'"sandboxPolicy":{"type":"dangerFullAccess"}'*)
+                            if [ "$thread_policy_matches" = true ]; then
+                                answer='Codex Auto Edit unrestricted policy applied.'
+                            fi
+                            ;;
+                    esac
+                    ;;
+            esac
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{"turn":{"id":"policy-turn"}}}\n' "$request_id"
+            printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"policy-turn"}}}'
+            printf '{"method":"item/completed","params":{"threadId":"policy-thread","turnId":"policy-turn","item":{"type":"agentMessage","id":"policy-answer","text":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[],\\"subtasks\\":[],\\"summary\\":null,\\"verification_verdicts\\":[]}","phase":"final_answer"}}}\n' "$answer"
+            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"policy-thread","turn":{"id":"policy-turn","status":"completed","items":[]}}}'
+            ;;
+    esac
+done
+"#;
+    std::fs::write(&codex_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "codex"),
+            ("DefaultSmartModel", "gpt-5.6-sol"),
         ],
     )
 }
@@ -8698,6 +8767,45 @@ fn session_permission_mode_selection() -> E2eResult {
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "· Normal · Read Only", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify a submitted Codex Auto Edit turn receives unrestricted app-server
+/// policies and completes visibly through the real session runtime boundary.
+#[test]
+fn codex_auto_edit_uses_unrestricted_app_server_policy() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("codex_auto_edit_unrestricted_policy")
+        .with_git()
+        .setup(seed_codex_auto_edit_policy_project)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("· Normal · Auto Edit", 5000)
+                    .write_text("Verify Codex Auto Edit permissions")
+                    .press_key("Enter")
+                    .wait_for_text(CODEX_AUTO_EDIT_POLICY_CONFIRMED_TEXT, 30000)
+                    .capture_labeled(
+                        "codex_auto_edit_unrestricted_policy",
+                        "Codex completes with unrestricted Auto Edit permissions",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    CODEX_AUTO_EDIT_POLICY_CONFIRMED_TEXT,
+                    &full,
+                );
+                assertion::assert_not_visible(frame, "Codex Auto Edit policy mismatch.");
             },
         )?;
 

@@ -769,7 +769,7 @@ pub(super) fn build_turn_start_payload(input: &CodexTurnStartPayloadInput<'_>) -
             "input": build_turn_input_items(&input.prompt),
             "cwd": input.folder.to_string_lossy(),
             "approvalPolicy": policy::approval_policy(input.permission_mode),
-            "sandboxPolicy": policy::turn_sandbox_policy(input.permission_mode, input.folder),
+            "sandboxPolicy": policy::turn_sandbox_policy(input.permission_mode),
             "model": input.model,
             "serviceTier": input.speed_mode.codex_service_tier(),
             "effort": input.reasoning_level.codex(),
@@ -1164,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn build_turn_start_payload_allows_worktree_agents_edits() {
+    fn build_turn_start_payload_uses_full_access_for_auto_edit() {
         // Arrange
         let folder = PathBuf::from("/tmp/agentty-codex-turn-start");
 
@@ -1187,11 +1187,7 @@ mod tests {
         assert_eq!(
             sandbox_policy,
             &serde_json::json!({
-                "type": "workspaceWrite",
-                "networkAccess": true,
-                "writableRoots": [
-                    folder.join(".agents").to_string_lossy(),
-                ],
+                "type": "dangerFullAccess",
             })
         );
         assert_eq!(
