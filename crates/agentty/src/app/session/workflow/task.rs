@@ -175,6 +175,20 @@ pub(crate) struct SessionCommitOutcome {
     pub(crate) commit_message: String,
 }
 
+/// Terminal result of the automatic session-commit phase.
+///
+/// Callers must distinguish a clean worktree from a failed commit so a push of
+/// the previous `HEAD` cannot be mistaken for delivery of the agent's latest
+/// changes.
+pub(crate) enum AutoCommitOutcome {
+    /// Pending worktree changes were committed successfully.
+    Committed(SessionCommitOutcome),
+    /// The worktree contained no changes to commit.
+    NoChanges,
+    /// Agentty could not commit the pending worktree changes.
+    Failed,
+}
+
 /// Inputs needed to execute an agent-assisted edit task.
 pub(crate) struct RunAgentAssistTaskInput {
     /// App event sender used for progress and status updates.
@@ -338,9 +352,7 @@ impl SessionTaskService {
     /// also request an immediate git-status refresh so footer ahead/behind
     /// counts do not wait for the background poller. The active loader shows a
     /// dedicated committing label for the full auto-commit phase.
-    pub(in crate::app) async fn handle_auto_commit(
-        context: AssistContext,
-    ) -> Option<SessionCommitOutcome> {
+    pub(in crate::app) async fn handle_auto_commit(context: AssistContext) -> AutoCommitOutcome {
         Self::set_session_progress(
             &context.app_event_tx,
             &context.id,
@@ -363,13 +375,13 @@ impl SessionTaskService {
                 Self::emit_session_workflow_notice(&context.app_event_tx, &context.id, message);
                 Self::request_git_status_refresh(&context.app_event_tx);
 
-                Some(outcome)
+                AutoCommitOutcome::Committed(outcome)
             }
             Ok(None) => {
                 let message = TranscriptNotice::Commit.format_line("No changes to commit.");
                 Self::emit_session_workflow_notice(&context.app_event_tx, &context.id, message);
 
-                None
+                AutoCommitOutcome::NoChanges
             }
             Err(commit_error) => {
                 let message = TranscriptNotice::CommitError.format(&commit_error);
@@ -383,7 +395,7 @@ impl SessionTaskService {
                 )
                 .await;
 
-                None
+                AutoCommitOutcome::Failed
             }
         };
 
@@ -2682,7 +2694,7 @@ mod tests {
         };
 
         // Act
-        SessionTaskService::handle_auto_commit(context).await;
+        let outcome = SessionTaskService::handle_auto_commit(context).await;
 
         // Assert
         let output_text = transcript
@@ -2691,6 +2703,7 @@ mod tests {
             .and_then(|buffer| buffer.replay_text())
             .unwrap_or_default();
         assert!(output_text.contains("[Commit Error] commit failed"));
+        assert!(matches!(outcome, AutoCommitOutcome::Failed));
     }
 
     #[tokio::test]
@@ -2803,7 +2816,7 @@ mod tests {
         let outcome = SessionTaskService::handle_auto_commit(context).await;
 
         // Assert
-        assert!(outcome.is_some());
+        assert!(matches!(outcome, AutoCommitOutcome::Committed(_)));
         let output_text = transcript
             .lock()
             .ok()
@@ -2903,7 +2916,7 @@ mod tests {
         };
 
         // Act
-        SessionTaskService::handle_auto_commit(context).await;
+        let outcome = SessionTaskService::handle_auto_commit(context).await;
 
         // Assert
         let output_text = transcript
@@ -2929,6 +2942,7 @@ mod tests {
             progress_message: None,
             session_id: "session-id".into(),
         }));
+        assert!(matches!(outcome, AutoCommitOutcome::NoChanges));
     }
 
     #[tokio::test]

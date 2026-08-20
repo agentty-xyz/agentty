@@ -23,6 +23,8 @@ use uuid::Uuid;
 use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
+#[cfg(test)]
+use super::published_branch;
 use super::task::SessionTranscriptMessageAppend;
 use super::{SessionTaskService, isolation, session_folder, turn};
 use crate::app::branch_publish::{
@@ -3304,6 +3306,7 @@ mod tests {
                     model: AgentModel::Gemini37Flash.as_str().to_string(),
                     provider_conversation_id: None,
                     questions_json: "[]".to_string(),
+                    review_comment_resolutions: Vec::new(),
                     summary: String::new(),
                     token_usage_delta: SessionStats::default(),
                 },
@@ -3982,9 +3985,82 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(()) }));
     }
 
-    /// Returns one git client mock that produces a successful auto-commit
-    /// outcome.
-    fn auto_commit_git_client(commit_message: &str, sequence: &mut Sequence) -> MockGitClient {
+    /// Proves a later successful push performs no review-thread effects.
+    async fn assert_later_push_skips_review_operations(context: &SessionWorkerContext) {
+        let mut git_client = MockGitClient::new();
+        expect_safe_auto_push_state(&mut git_client);
+        git_client
+            .expect_push_current_branch_to_remote_branch()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        git_client.expect_repo_url().never();
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+
+        published_branch::run_published_branch_auto_push(
+            published_branch::PublishedBranchAutoPushInput {
+                app_event_tx,
+                db: context.db.clone(),
+                folder: context.folder.clone(),
+                git_client: Arc::new(git_client),
+                published_upstream_ref: "origin/wt/session-id".to_string(),
+                review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+                review_request_metadata_sync: None,
+                session_id: context.session_id.clone(),
+                session_update_versions: context.session_update_versions.clone(),
+                sync_operation_id: "later-push".to_string(),
+                transcript: Arc::clone(&context.transcript),
+            },
+        )
+        .await;
+        let event = app_event_rx
+            .recv()
+            .await
+            .expect("later push should report completion");
+
+        assert!(matches!(
+            event,
+            AppEvent::PublishedBranchSyncUpdated {
+                sync_status: PublishedBranchSyncStatus::Succeeded,
+                ..
+            }
+        ));
+    }
+
+    /// Pushes a descendant commit that has reverted the reported fix.
+    async fn push_descendant_that_reverted_fix(context: &SessionWorkerContext) {
+        let mut git_client = MockGitClient::new();
+        expect_safe_auto_push_state(&mut git_client);
+        git_client
+            .expect_push_current_branch_to_remote_branch()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        git_client
+            .expect_get_ref_ahead_behind()
+            .once()
+            .withf(|_, left_ref, right_ref| left_ref == "HEAD" && right_ref == "fix-commit")
+            .returning(|_, _, _| Box::pin(async { Ok((1, 0)) }));
+        git_client.expect_repo_url().never();
+
+        published_branch::run_published_branch_auto_push(
+            published_branch::PublishedBranchAutoPushInput {
+                app_event_tx: context.app_event_tx.clone(),
+                db: context.db.clone(),
+                folder: context.folder.clone(),
+                git_client: Arc::new(git_client),
+                published_upstream_ref: "origin/wt/session-id".to_string(),
+                review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+                review_request_metadata_sync: None,
+                session_id: context.session_id.clone(),
+                session_update_versions: context.session_update_versions.clone(),
+                sync_operation_id: "push-after-revert".to_string(),
+                transcript: Arc::clone(&context.transcript),
+            },
+        )
+        .await;
+    }
+
+    /// Returns one git client mock through a successful dirty-worktree commit.
+    fn dirty_auto_commit_git_client(commit_message: &str) -> MockGitClient {
         let mut mock_git_client = MockGitClient::new();
         expect_pre_commit_hook_ready(&mut mock_git_client);
         mock_git_client
@@ -4019,6 +4095,14 @@ mod tests {
             .expect_head_short_hash()
             .once()
             .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+
+        mock_git_client
+    }
+
+    /// Returns one git client mock that produces a successful auto-commit
+    /// outcome.
+    fn auto_commit_git_client(commit_message: &str, sequence: &mut Sequence) -> MockGitClient {
+        let mut mock_git_client = dirty_auto_commit_git_client(commit_message);
         expect_safe_auto_push_state(&mut mock_git_client);
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
@@ -4047,12 +4131,22 @@ mod tests {
             .expect_is_worktree_clean()
             .once()
             .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_head_hash()
+            .once()
+            .in_sequence(sequence)
+            .returning(|_| Box::pin(async { Ok("commit-1".to_string()) }));
         expect_safe_auto_push_state(&mut mock_git_client);
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .once()
             .in_sequence(sequence)
             .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        mock_git_client
+            .expect_get_ref_ahead_behind()
+            .once()
+            .in_sequence(sequence)
+            .returning(|_, _, _| Box::pin(async { Ok((0, 0)) }));
         mock_git_client
             .expect_repo_url()
             .once()
@@ -4077,6 +4171,27 @@ mod tests {
             .in_sequence(sequence)
             .returning(|_| Ok(github_forge_remote()));
         review_request_client
+            .expect_fetch_review_comment_snapshot()
+            .once()
+            .in_sequence(sequence)
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(forge::ReviewCommentSnapshot {
+                        pr_level_comments: Vec::new(),
+                        threads: vec![forge::ReviewCommentThread {
+                            anchor_side: forge::ReviewCommentAnchorSide::New,
+                            comments: Vec::new(),
+                            id: "thread-42".to_string(),
+                            is_outdated: Some(false),
+                            is_resolved: false,
+                            line: Some(1),
+                            path: "src/lib.rs".to_string(),
+                            start_line: None,
+                        }],
+                    })
+                })
+            });
+        review_request_client
             .expect_reply_to_thread()
             .once()
             .in_sequence(sequence)
@@ -4084,7 +4199,10 @@ mod tests {
                 remote.command_working_directory.as_deref() == Some(folder.as_path())
                     && display_id == "#42"
                     && thread_id == "thread-42"
-                    && body == "Added the missing validation."
+                    && body.starts_with(
+                        "Added the missing validation.\n\n<!-- agentty review resolution:",
+                    )
+                    && body.ends_with(" -->")
             })
             .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
         review_request_client
@@ -4100,40 +4218,7 @@ mod tests {
     /// Returns one git client mock that commits successfully but fails the
     /// follow-up auto-push.
     fn auto_commit_git_client_with_push_failure(commit_message: &str) -> MockGitClient {
-        let mut mock_git_client = MockGitClient::new();
-        expect_pre_commit_hook_ready(&mut mock_git_client);
-        mock_git_client
-            .expect_is_worktree_clean()
-            .once()
-            .returning(|_| Box::pin(async { Ok(false) }));
-        mock_git_client
-            .expect_diff()
-            .once()
-            .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".to_string()) }));
-        mock_git_client
-            .expect_has_commits_since()
-            .once()
-            .returning(|_, _| Box::pin(async { Ok(true) }));
-        mock_git_client
-            .expect_head_commit_message()
-            .once()
-            .returning({
-                let commit_message = commit_message.to_string();
-
-                move |_| {
-                    let commit_message = commit_message.clone();
-
-                    Box::pin(async move { Ok(Some(commit_message)) })
-                }
-            });
-        mock_git_client
-            .expect_commit_all_preserving_single_commit()
-            .once()
-            .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
-        mock_git_client
-            .expect_head_short_hash()
-            .once()
-            .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+        let mut mock_git_client = dirty_auto_commit_git_client(commit_message);
         expect_safe_auto_push_state(&mut mock_git_client);
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
@@ -4232,6 +4317,28 @@ mod tests {
                 answer: answer.to_string(),
                 questions: Vec::new(),
                 review_comment_outcomes: Vec::new(),
+                subtasks: Vec::new(),
+                verification_verdicts: Vec::new(),
+                summary: None,
+            },
+            context_reset: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider_conversation_id: None,
+        }
+    }
+
+    /// Returns one completed turn that reports a fixed review thread.
+    fn fixed_review_turn_result() -> TurnResult {
+        TurnResult {
+            assistant_message: AgentResponse {
+                answer: "Implemented the change.".to_string(),
+                questions: Vec::new(),
+                review_comment_outcomes: vec![ReviewCommentOutcome {
+                    reply: "Added the missing validation.".to_string(),
+                    resolution: ReviewCommentResolution::Fixed,
+                    thread_id: "thread-42".to_string(),
+                }],
                 subtasks: Vec::new(),
                 verification_verdicts: Vec::new(),
                 summary: None,
@@ -4379,24 +4486,7 @@ mod tests {
             session_agent,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
-        let turn_result = TurnResult {
-            assistant_message: AgentResponse {
-                answer: "Implemented the change.".to_string(),
-                questions: Vec::new(),
-                review_comment_outcomes: vec![ReviewCommentOutcome {
-                    reply: "Added the missing validation.".to_string(),
-                    resolution: ReviewCommentResolution::Fixed,
-                    thread_id: "thread-42".to_string(),
-                }],
-                subtasks: Vec::new(),
-                verification_verdicts: Vec::new(),
-                summary: None,
-            },
-            context_reset: false,
-            input_tokens: 0,
-            output_tokens: 0,
-            provider_conversation_id: None,
-        };
+        let turn_result = fixed_review_turn_result();
 
         // Act
         let status = apply_worker_turn_result(
@@ -4433,13 +4523,373 @@ mod tests {
             .expect("resolution notice should be appended")
             .content
             .clone();
+        let unfinished_operations = context
+            .db
+            .reviews()
+            .load_session_review_comment_resolutions("sess1")
+            .await
+            .expect("failed to load completed review-comment operations");
 
         // Assert
         assert_eq!(status, Status::Review);
+        assert_eq!(unfinished_operations, Vec::new());
         assert_eq!(
             notice.trim(),
             "[Review Comments] Replied to 1 review thread(s) and resolved 1 fixed thread(s)."
         );
+    }
+
+    #[tokio::test]
+    async fn test_failed_push_discards_review_fix_undone_by_descendant() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        insert_in_progress_session_with_review_request(&db).await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
+        let mut git_client = auto_commit_git_client_with_push_failure("Fix the review comment");
+        git_client
+            .expect_head_hash()
+            .once()
+            .returning(|_| Box::pin(async { Ok("fix-commit".to_string()) }));
+        let transcript = empty_transcript();
+        let context = SessionWorkerContext {
+            app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().join("sess1"),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(git_client),
+            transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent,
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+        let turn_result = fixed_review_turn_result();
+
+        // Act
+        apply_worker_turn_result(
+            &context,
+            TurnMetadata {
+                published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                review_comment_thread_ids: vec!["thread-42".to_string()],
+                session_agent,
+            },
+            Ok(turn_result),
+        )
+        .await
+        .expect("turn result should succeed");
+        let first_push_events = tokio::time::timeout(Duration::from_secs(1), async {
+            let mut sync_events = Vec::new();
+            while sync_events.len() < 2 {
+                let event = app_event_rx.recv().await.expect("missing app event");
+                if let AppEvent::PublishedBranchSyncUpdated { sync_status, .. } = event {
+                    sync_events.push(sync_status);
+                }
+            }
+
+            sync_events
+        })
+        .await
+        .expect("timed out waiting for failed push");
+        let pending_operations = db
+            .reviews()
+            .load_session_review_comment_resolutions("sess1")
+            .await
+            .expect("failed to load pending review operation");
+        push_descendant_that_reverted_fix(&context).await;
+        let remaining_operations = db
+            .reviews()
+            .load_session_review_comment_resolutions("sess1")
+            .await
+            .expect("failed to load discarded review operation");
+        let notice = transcript
+            .lock()
+            .expect("transcript lock should be available")
+            .messages()
+            .last()
+            .expect("stale-operation notice should be appended")
+            .content
+            .clone();
+
+        // Assert
+        assert_eq!(
+            first_push_events,
+            vec![
+                PublishedBranchSyncStatus::InProgress,
+                PublishedBranchSyncStatus::Failed,
+            ]
+        );
+        assert_eq!(pending_operations.len(), 1);
+        assert_eq!(
+            pending_operations[0].commit_hash.as_deref(),
+            Some("fix-commit")
+        );
+        assert_eq!(remaining_operations, Vec::new());
+        assert_eq!(
+            notice.trim(),
+            "[Review Comments Warning] Discarded 1 saved review thread update(s) because the \
+             pushed branch tip no longer exactly matches the reported fix commit. Reopen review \
+             comments to retry."
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_binding_failure_retains_review_operation_for_fresh_retry() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        insert_in_progress_session_with_review_request(&db).await;
+        let (app_event_tx, _) = mpsc::unbounded_channel();
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
+        let mut git_client = dirty_auto_commit_git_client("Fix the review comment");
+        git_client.expect_head_hash().once().returning(|_| {
+            Box::pin(async {
+                Err(ag_git::GitError::OutputParse(
+                    "commit binding interrupted".to_string(),
+                ))
+            })
+        });
+        git_client
+            .expect_push_current_branch_to_remote_branch()
+            .never();
+        let context = SessionWorkerContext {
+            app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().join("sess1"),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(git_client),
+            transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent,
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+
+        // Act
+        let error = apply_worker_turn_result(
+            &context,
+            TurnMetadata {
+                published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                review_comment_thread_ids: vec!["thread-42".to_string()],
+                session_agent,
+            },
+            Ok(fixed_review_turn_result()),
+        )
+        .await
+        .expect_err("commit binding should fail");
+        let pending_operations = db
+            .reviews()
+            .load_session_review_comment_resolutions("sess1")
+            .await
+            .expect("failed to load binding-pending review operation");
+
+        // Assert
+        assert!(error.to_string().contains("commit binding interrupted"));
+        assert_eq!(pending_operations.len(), 1);
+        assert!(pending_operations[0].commit_hash.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_commit_failure_discards_review_operations_before_later_push() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        insert_in_progress_session_with_review_request(&db).await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
+        let mut git_client = MockGitClient::new();
+        git_client.expect_is_worktree_clean().once().returning(|_| {
+            Box::pin(async { Err(ag_git::GitError::OutputParse("commit failed".to_string())) })
+        });
+        git_client
+            .expect_push_current_branch_to_remote_branch()
+            .never();
+        let mut review_request_client = forge::MockReviewRequestClient::new();
+        review_request_client.expect_detect_remote().never();
+        review_request_client
+            .expect_fetch_review_comment_snapshot()
+            .never();
+        review_request_client.expect_reply_to_thread().never();
+        review_request_client.expect_resolve_thread().never();
+        let transcript = empty_transcript();
+        let context = SessionWorkerContext {
+            app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db,
+            folder: base_dir.path().join("sess1"),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(git_client),
+            transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(review_request_client),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent,
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+        let turn_result = TurnResult {
+            assistant_message: AgentResponse {
+                answer: "Implemented the change.".to_string(),
+                questions: Vec::new(),
+                review_comment_outcomes: vec![ReviewCommentOutcome {
+                    reply: "Added the missing validation.".to_string(),
+                    resolution: ReviewCommentResolution::Fixed,
+                    thread_id: "thread-42".to_string(),
+                }],
+                subtasks: Vec::new(),
+                verification_verdicts: Vec::new(),
+                summary: None,
+            },
+            context_reset: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider_conversation_id: None,
+        };
+
+        // Act
+        let status = apply_worker_turn_result(
+            &context,
+            TurnMetadata {
+                published_upstream_ref: Some("origin/wt/session-id".to_string()),
+                review_comment_thread_ids: vec!["thread-42".to_string()],
+                session_agent,
+            },
+            Ok(turn_result),
+        )
+        .await
+        .expect("turn result should succeed");
+        let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+        let transcript_text = transcript
+            .lock()
+            .expect("transcript lock should be available")
+            .replay_text()
+            .expect("commit failure notices should be persisted");
+        let unfinished_operations = context
+            .db
+            .reviews()
+            .load_session_review_comment_resolutions("sess1")
+            .await
+            .expect("failed to load discarded review-comment operation");
+
+        // Act
+        assert_later_push_skips_review_operations(&context).await;
+
+        // Assert
+        assert_eq!(status, Status::Review);
+        assert_eq!(unfinished_operations, Vec::new());
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AppEvent::PublishedBranchSyncUpdated { .. }))
+        );
+        assert!(transcript_text.contains("[Commit Error] commit failed"));
+        assert!(transcript_text.contains(
+            "could not commit the review-comment changes, so it did not push the branch"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_apply_turn_result_rejects_incomplete_review_comment_outcome_batch() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        insert_in_progress_session_with_review_request(&db).await;
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
+        let mut git_client = MockGitClient::new();
+        git_client
+            .expect_is_worktree_clean()
+            .once()
+            .returning(|_| Box::pin(async { Ok(true) }));
+        git_client
+            .expect_push_current_branch_to_remote_branch()
+            .never();
+        let transcript = empty_transcript();
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db,
+            folder: base_dir.path().join("sess1"),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(git_client),
+            transcript: Arc::clone(&transcript),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent,
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+        let turn_result = TurnResult {
+            assistant_message: AgentResponse {
+                answer: "Implemented one change.".to_string(),
+                questions: Vec::new(),
+                review_comment_outcomes: vec![ReviewCommentOutcome {
+                    reply: "Added the first validation.".to_string(),
+                    resolution: ReviewCommentResolution::Fixed,
+                    thread_id: "thread-1".to_string(),
+                }],
+                subtasks: Vec::new(),
+                verification_verdicts: Vec::new(),
+                summary: None,
+            },
+            context_reset: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider_conversation_id: None,
+        };
+
+        // Act
+        let status = apply_worker_turn_result(
+            &context,
+            TurnMetadata {
+                published_upstream_ref: None,
+                review_comment_thread_ids: vec!["thread-1".to_string(), "thread-2".to_string()],
+                session_agent,
+            },
+            Ok(turn_result),
+        )
+        .await
+        .expect("turn result should succeed");
+        let transcript_text = transcript
+            .lock()
+            .expect("transcript lock should be available")
+            .replay_text()
+            .expect("validation warning should be persisted");
+
+        // Assert
+        assert_eq!(status, Status::Review);
+        assert!(
+            transcript_text
+                .contains("exactly one valid outcome for 1 of 2 selected review thread(s)")
+        );
+        assert!(transcript_text.contains("No review replies were posted or threads resolved"));
     }
 
     #[tokio::test]

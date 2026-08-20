@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_review_comment_resolution (\n    session_id,\n    commit_hash,\n    review_request_display_id,\n    thread_id,\n    reply,\n    reply_token,\n    resolution\n)\nVALUES (?, ?, ?, ?, ?, ?, ?)\nON CONFLICT(session_id, review_request_display_id, thread_id)\nDO UPDATE SET\n    commit_hash = excluded.commit_hash,\n    reply = excluded.reply,\n    reply_token = excluded.reply_token,\n    resolution = excluded.resolution,\n    is_posting = 0\nWHERE session_review_comment_resolution.commit_hash IS NULL\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "d58ed123f8d3906ed402f35d08c77e6b6bdfdb64845075708c7d5dc8dc8db66d"
+}

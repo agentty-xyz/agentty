@@ -2294,7 +2294,7 @@ impl SessionManager {
             folder,
             git_client,
             published_upstream_ref,
-            review_comment_resolution: None,
+            review_request_client: Arc::clone(review_request_client),
             review_request_metadata_sync,
             session_id,
             session_update_versions: session_update_versions.clone(),

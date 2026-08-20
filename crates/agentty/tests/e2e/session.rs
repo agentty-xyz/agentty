@@ -2936,6 +2936,31 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Proc
     Ok(())
 }
 
+/// Seeds a two-thread review batch whose agent response omits one required
+/// outcome so the UI can prove partial forge updates are rejected visibly.
+fn seed_incomplete_review_comment_outcomes(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_comment_agent_resolution(env)?;
+
+    let claude_path = env.stub_bin.join("claude");
+    std::fs::write(
+        &claude_path,
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Processed only one selected review thread."}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Processed only one selected review thread.\",\"questions\":[],\"review_comment_outcomes\":[{\"reply\":\"Added the explanation.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-inline\"}],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}'
+"#,
+    )?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
 /// Seeds a merged GitHub review response and delays runtime worktree removal
 /// so the feature scenario can prove terminal rendering stays responsive.
 fn seed_slow_merged_review_request_status(
@@ -7674,6 +7699,7 @@ fn test_diff_line_comments() -> E2eResult {
                     .wait_for_text("Enter: reply", 5000)
                     .wait_for_text("[Commit] No changes to commit.", 5000)
                     .wait_for_text("No review findings.", 5000)
+                    .write_text("G")
                     .wait_for_stable_frame(1000, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
@@ -8221,6 +8247,56 @@ fn session_review_comment_agent_resolution() -> E2eResult {
                 );
                 assertion::assert_not_visible(frame, "Thread ID: thread-inline");
                 assertion::assert_not_visible(frame, "Requested action:");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify an incomplete structured outcome batch produces a visible warning
+/// and does not silently apply only the reported thread.
+#[test]
+fn test_review_comment_incomplete_outcomes() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_comment_incomplete_outcomes")
+        .with_git()
+        .with_terminal_size(160, 60)
+        .setup(seed_incomplete_review_comment_outcomes)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("c: comments", 5000)
+                    .press_key("c")
+                    .wait_for_text("Space: select", 5000)
+                    .press_key("Space")
+                    .press_key("j")
+                    .press_key("Space")
+                    .wait_for_text("Selected 2", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Processed only one selected review thread.", 10000)
+                    .wait_for_text("exactly one valid outcome for 1 of 2", 10000)
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "exactly one valid outcome for 1 of 2",
+                    &full,
+                );
+                assertion::assert_text_in_region(
+                    frame,
+                    "No review replies were posted or threads",
+                    &full,
+                );
+                assertion::assert_text_in_region(
+                    frame,
+                    "resolved. Reopen review comments to retry",
+                    &full,
+                );
             },
         )?;
 

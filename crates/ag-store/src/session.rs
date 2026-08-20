@@ -10,7 +10,9 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 use tracing::warn;
 
-use super::review::SessionReviewRequestRow;
+use super::review::{
+    NewSessionReviewCommentResolution, SessionReviewRequestRow, insert_review_comment_resolutions,
+};
 use super::session_message::SessionMessageStore;
 use super::session_snapshot::SessionSnapshotStore;
 use super::status;
@@ -41,6 +43,8 @@ pub struct SessionTurnMetadata {
     pub provider_conversation_id: Option<String>,
     /// Serialized clarification-question payload stored on the session row.
     pub questions_json: String,
+    /// Review-comment operations committed with this completed turn.
+    pub review_comment_resolutions: Vec<NewSessionReviewCommentResolution>,
     /// Serialized structured summary payload stored on the session row.
     pub summary: String,
     /// Token-usage delta attributed to the completed turn.
@@ -2012,6 +2016,13 @@ ON CONFLICT(session_id, model) DO UPDATE SET
             .await?;
         }
 
+        insert_review_comment_resolutions(
+            &mut transaction,
+            session_id,
+            &turn_metadata.review_comment_resolutions,
+        )
+        .await?;
+
         transaction.commit().await?;
 
         Ok(())
@@ -3075,6 +3086,7 @@ WHERE id = ?
                     model: "gpt-5.6-sol".to_string(),
                     provider_conversation_id: None,
                     questions_json: "[]".to_string(),
+                    review_comment_resolutions: Vec::new(),
                     summary: String::new(),
                     token_usage_delta: SessionStats::default(),
                 },
