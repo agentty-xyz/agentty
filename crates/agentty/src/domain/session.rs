@@ -1131,7 +1131,7 @@ pub(crate) mod tests {
         // Assert
         assert_eq!(queued_actions, vec![branch_publish, sync.clone()]);
         assert_eq!(after_resolve, vec![sync]);
-        assert!(handles.queued_action_snapshot().is_empty());
+        assert_eq!(handles.queued_action_snapshot(), []);
     }
 
     #[test]

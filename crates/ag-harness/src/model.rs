@@ -1074,7 +1074,7 @@ mod tests {
         // Assert
         assert_eq!(request.prompt(), "hello");
         assert_eq!(request.schema(), &schema);
-        assert!(request.tools().is_empty());
+        assert_eq!(request.tools(), []);
     }
 
     #[test]

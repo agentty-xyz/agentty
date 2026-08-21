@@ -785,7 +785,10 @@ mod tests {
             run_git_stdout(temp_dir.path(), &["rev-parse", "HEAD"]),
             original_head
         );
-        assert!(run_git_stdout(temp_dir.path(), &["status", "--porcelain"]).is_empty());
+        assert_eq!(
+            run_git_stdout(temp_dir.path(), &["status", "--porcelain"]),
+            ""
+        );
     }
 
     #[test]

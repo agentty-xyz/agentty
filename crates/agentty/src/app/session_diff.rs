@@ -1112,7 +1112,7 @@ mod tests {
         assert_eq!(exhausted_event, None);
         assert!(app.deferred_auto_review_session_ids.contains(&session_id));
         assert_eq!(recoverable_session_ids, [session_id.as_str()]);
-        assert!(stale_retry_session_ids.is_empty());
+        assert_eq!(stale_retry_session_ids, [] as [String; 0]);
     }
 
     #[tokio::test]
@@ -1144,14 +1144,14 @@ mod tests {
         app.apply_review_diff_update(update, None, false).await;
 
         // Assert
-        assert!(
+        assert_eq!(
             app.services
                 .db()
                 .sessions()
                 .load_pending_focused_review_session_ids(project_id)
                 .await
-                .expect("failed to load pending reviews")
-                .is_empty()
+                .expect("failed to load pending reviews"),
+            [] as [String; 0]
         );
         assert!(!app.review_cache.contains_key(&session_id));
     }

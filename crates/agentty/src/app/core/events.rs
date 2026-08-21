@@ -3195,14 +3195,14 @@ mod tests {
 
         // Assert
         assert!(app.deferred_auto_review_session_ids.is_empty());
-        assert!(
+        assert_eq!(
             app.services
                 .db()
                 .sessions()
                 .load_pending_focused_review_session_ids(inactive_project_id)
                 .await
-                .expect("failed to load deferred reviews")
-                .is_empty()
+                .expect("failed to load deferred reviews"),
+            [] as [String; 0]
         );
     }
 

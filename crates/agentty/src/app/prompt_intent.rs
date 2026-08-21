@@ -1175,7 +1175,7 @@ mod tests {
                 session_id: session_id.clone(),
             }
         );
-        assert!(app.sessions.sessions()[0].queued_messages.is_empty());
+        assert_eq!(app.sessions.sessions()[0].queued_messages, []);
     }
 
     #[tokio::test]

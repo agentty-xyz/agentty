@@ -245,7 +245,7 @@ async fn harness_owns_model_events_without_duplicate_model_observation() {
 
     // Assert
     assert_eq!(output, json!({"name": "SECRET_OUTPUT"}));
-    assert!(model_events.events().is_empty());
+    assert_eq!(model_events.events(), [] as [ag_harness::LifecycleEvent; 0]);
     let harness_events = harness_events.events();
     assert_sequence(&harness_events);
     assert_eq!(harness_events.len(), 4);
@@ -321,7 +321,7 @@ async fn cancelling_harness_turn_closes_model_and_turn_lifecycles_once() {
 
     // Assert
     assert!(cancellation.is_cancelled());
-    assert!(model_events.events().is_empty());
+    assert_eq!(model_events.events(), [] as [ag_harness::LifecycleEvent; 0]);
     let harness_events = harness_events.events();
     assert_sequence(&harness_events);
     assert_eq!(harness_events.len(), 4);

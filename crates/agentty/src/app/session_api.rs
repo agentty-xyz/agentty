@@ -3125,7 +3125,7 @@ mod tests {
             ApiSessionError::Operation("Session has no questions to answer".to_string())
         );
         assert_eq!(resumed_turn_kind, AgentRequestKind::SessionResume);
-        assert!(queued_messages_before_transition.is_empty());
+        assert_eq!(queued_messages_before_transition, []);
         assert_eq!(session.questions, [] as [ag_protocol::QuestionItem; 0]);
         assert_eq!(session.queued_messages, [] as [std::string::String; 0]);
         assert_eq!(clarification_answer_count(&session), 1);
