@@ -7632,7 +7632,7 @@ fn test_diff_changed_line_navigation() -> E2eResult {
                 );
                 assertion::assert_text_in_region(frame, "changed line 70", &full);
                 assertion::assert_text_in_region(frame, "Esc/Left: files", &full);
-                assertion::assert_text_in_region(frame, "j/k: select line", &full);
+                assertion::assert_text_in_region(frame, "j/k: select row", &full);
             },
         )?;
 
@@ -7671,12 +7671,23 @@ fn test_diff_line_comments() -> E2eResult {
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .wait_for_text("Enter/l: open", 5000)
-                    .press_key(ENTER_KEY)
+                    .press_key("l")
                     .wait_for_text("Enter: comment", 5000)
                     .press_key(ENTER_KEY)
                     .wait_for_text("comment: |", 5000)
                     .write_text("Explain the entry point.")
                     .wait_for_text("Explain the entry point.|", 3000)
+                    .press_key(ENTER_KEY)
+                    .press_key("k")
+                    .press_key("j")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "selected_inline_comment",
+                        "Completed inline comment selected for editing",
+                    )
+                    .press_key(ENTER_KEY)
+                    .wait_for_text("Explain the entry point.|", 3000)
+                    .write_text(" Updated.")
                     .press_key(ENTER_KEY)
                     .press_key("j")
                     .press_key(ENTER_KEY)
@@ -7692,7 +7703,10 @@ fn test_diff_line_comments() -> E2eResult {
                     .viewing_pause_ms(1500)
                     .press_key("s")
                     .wait_for_text("Line comments:", 5000)
-                    .wait_for_text("src/main.rs:1 [new]: Explain the entry point.", 5000)
+                    .wait_for_text(
+                        "src/main.rs:1 [new]: Explain the entry point. Updated.",
+                        5000,
+                    )
                     .wait_for_text("src/main.rs:2 [new]: Why print review?", 5000)
                     .wait_for_text("Ctrl+c: stop", 5000)
                     .wait_for_text("Line comment received.", 5000)
@@ -7707,26 +7721,34 @@ fn test_diff_line_comments() -> E2eResult {
                         "Line comment submitted in the next session turn",
                     )
             },
-            |frame, report| {
-                let diff_frame = common::frame_from_capture(&report.captures[0]);
-                let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
-                assertion::assert_text_in_region(
-                    &diff_frame,
-                    "comment: Explain the entry point.",
-                    &diff_full,
-                );
-                assertion::assert_text_in_region(
-                    &diff_frame,
-                    "comment: Why print review?",
-                    &diff_full,
-                );
-
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Line comment received.", &full);
-            },
+            assert_diff_line_comments,
         )?;
 
     Ok(())
+}
+
+/// Verifies inline comment selection, editing, and next-turn submission.
+fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
+    let selected_comment_frame = common::frame_from_capture(&report.captures[0]);
+    let selected_comment_full =
+        Region::full(selected_comment_frame.cols(), selected_comment_frame.rows());
+    assertion::assert_text_in_region(
+        &selected_comment_frame,
+        "comment: Explain the entry point.",
+        &selected_comment_full,
+    );
+
+    let diff_frame = common::frame_from_capture(&report.captures[1]);
+    let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
+    assertion::assert_text_in_region(
+        &diff_frame,
+        "comment: Explain the entry point. Updated.",
+        &diff_full,
+    );
+    assertion::assert_text_in_region(&diff_frame, "comment: Why print review?", &diff_full);
+
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(frame, "Line comment received.", &full);
 }
 
 /// Verify that `Shift+V` selects a changed-row range for one inline comment.

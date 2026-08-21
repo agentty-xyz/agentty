@@ -171,6 +171,8 @@ pub struct DiffLineComments {
     pub(crate) editing_index: Option<usize>,
     /// Changed-row index where visual line selection started.
     pub(crate) selection_anchor_index: Option<usize>,
+    /// Inline comment currently selected for navigation, when any.
+    pub(crate) selected_comment_index: Option<usize>,
 }
 
 impl DiffLineComments {
@@ -190,12 +192,37 @@ impl DiffLineComments {
                 self.comments.len().saturating_sub(1)
             });
         self.editing_index = Some(editing_index);
+        self.selected_comment_index = Some(editing_index);
 
         editing_index
     }
 
+    /// Selects an existing inline comment for navigation and editing.
+    pub(crate) fn select_comment(&mut self, comment_index: usize) {
+        self.selected_comment_index = self.comments.get(comment_index).map(|_| comment_index);
+    }
+
+    /// Returns the selected inline comment index, when it is still valid.
+    pub(crate) fn selected_comment_index(&self) -> Option<usize> {
+        self.selected_comment_index
+            .filter(|comment_index| self.comments.get(*comment_index).is_some())
+    }
+
+    /// Returns the target owned by the selected inline comment.
+    pub(crate) fn selected_comment_target(&self) -> Option<&DiffLineCommentTarget> {
+        self.selected_comment_index()
+            .and_then(|comment_index| self.comments.get(comment_index))
+            .map(|comment| &comment.target)
+    }
+
+    /// Returns changed-line navigation to the source-row cursor.
+    pub(crate) fn clear_comment_selection(&mut self) {
+        self.selected_comment_index = None;
+    }
+
     /// Starts visual changed-row selection at `selected_index`.
     pub(crate) fn start_selection(&mut self, selected_index: usize) {
+        self.clear_comment_selection();
         self.selection_anchor_index.get_or_insert(selected_index);
     }
 
@@ -239,6 +266,7 @@ impl DiffLineComments {
             .is_some_and(|comment| comment.input.text().trim().is_empty())
         {
             self.comments.remove(editing_index);
+            self.clear_comment_selection();
         }
     }
 
@@ -1026,10 +1054,18 @@ mod tests {
         // Act — selecting the same line edits the existing comment.
         let editing_index =
             line_comments.start_editing_target(DiffLineCommentTarget::single(anchor));
+        let selected_target = line_comments.selected_comment_target();
 
         // Assert
         assert_eq!(editing_index, 0);
         assert_eq!(line_comments.comments.len(), 1);
+        assert_eq!(selected_target, Some(&line_comments.comments[0].target));
+
+        // Act
+        line_comments.select_comment(usize::MAX);
+
+        // Assert
+        assert_eq!(line_comments.selected_comment_index(), None);
     }
 
     #[test]
@@ -1124,6 +1160,7 @@ mod tests {
         // Assert
         assert!(line_comments.is_selecting());
         assert!(line_comments.is_editing());
+        assert_eq!(line_comments.selected_comment_index(), Some(0));
         assert_eq!(upward_bounds, (1, 3));
         assert_eq!(downward_bounds, (3, 5));
 
@@ -1133,6 +1170,7 @@ mod tests {
         // Assert
         assert!(!line_comments.is_selecting());
         assert_eq!(line_comments.selected_row_bounds(5), (5, 5));
+        assert_eq!(line_comments.selected_comment_index(), None);
 
         // Act
         line_comments.start_selection(5);
@@ -1140,6 +1178,7 @@ mod tests {
 
         // Assert
         assert!(!line_comments.is_selecting());
+        assert_eq!(line_comments.selected_comment_index(), None);
     }
 
     #[test]
@@ -1160,6 +1199,7 @@ mod tests {
         // Assert
         assert_eq!(line_comments.comments, []);
         assert!(line_comments.editing_input_mut().is_none());
+        assert_eq!(line_comments.selected_comment_index(), None);
         assert_eq!(line_comments.prompt_text(), "");
     }
 

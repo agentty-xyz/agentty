@@ -226,34 +226,35 @@ Inside diff view, `Shift+j` / `Shift+k` and `Up` / `Down` scroll the selected fi
 Files remains focused. Press `Enter` or `l` on a file to move focus from the file tree
 to its patch, then press `Enter` to open an inline editor beneath the selected added or
 removed line. Type the feedback, then press `Enter` or `Esc` to finish without leaving
-Diff mode. Use `j` / `k` or the arrow keys to move through changed lines while Agentty
-keeps the cursor visible, and press `Enter` on any selected line to add or edit its
-comment. To comment on a range, press `Shift+V` on the first changed row, extend the
-visual selection with `j` / `k` or the arrow keys, then press `Enter`; `Esc` cancels the
-selection without leaving the patch. The full range stays highlighted while its inline
-editor is open and after the comment is finished, so every inline comment retains its
-visible source context. Finishing empty text removes the comment and its source
-highlight. Completed comments keep a distinct inset background, and the active editor
-uses the stronger selection highlight. The linked review-request Comments section
-retains its separate `Enter` action for submitting marked review threads. Press `s` to
-submit every finished line or range comment together as the next session turn. The
-submitted prompt uses one compact row per comment with its repository-relative path, old
-or new side, and line or range, and keeps draft instructions or image attachments that
-were present before opening the diff. Selected deleted rows also include their captured
-pre-change source text because that context is absent from the current worktree. Inline
-comment editing and submission are available only when the session can accept a reply.
-Read-only diffs such as `Merged` sessions keep line navigation but omit the comment
-actions from the footer and help overlay. With no visual selection active, press `Esc`,
-`Left`, `h`, or `f` to return to the file tree. Select a changed markdown file and press
-`p` to render its complete post-change worktree content, including supported Mermaid
-diagrams. Preview remains active across file navigation; non-markdown selections keep
-showing raw diff lines, and files that are deleted, binary, too large, or unreadable
-show a concise notice. Press `p` again to restore the patch view. Pressing `q` returns
-to the sessions list and saves the complete composer; reopening the session restores the
-typed draft with input focus. Pressing `Tab` again returns focus to the composer. The
-same focus toggle, `d` diff preview, and `q` preservation flow are available while
-answering clarification questions. Long transcripts show a slim scrollbar on the right
-side of the output panel to indicate the current position.
+Diff mode. Use `j` / `k` or the arrow keys to move through changed lines and completed
+inline comments while Agentty keeps the cursor visible. Press `Enter` on a changed line
+to add feedback or on an inline comment to edit its text again. To comment on a range,
+press `Shift+V` on the first changed row, extend the visual selection with `j` / `k` or
+the arrow keys, then press `Enter`; `Esc` cancels the selection without leaving the
+patch. The full range stays highlighted while its inline editor is open and after the
+comment is finished, so every inline comment retains its visible source context.
+Finishing empty text removes the comment and its source highlight. Completed comments
+keep a distinct inset background, and the active editor uses the stronger selection
+highlight. The linked review-request Comments section retains its separate `Enter`
+action for submitting marked review threads. Press `s` to submit every finished line or
+range comment together as the next session turn. The submitted prompt uses one compact
+row per comment with its repository-relative path, old or new side, and line or range,
+and keeps draft instructions or image attachments that were present before opening the
+diff. Selected deleted rows also include their captured pre-change source text because
+that context is absent from the current worktree. Inline comment editing and submission
+are available only when the session can accept a reply. Read-only diffs such as `Merged`
+sessions keep line navigation but omit the comment actions from the footer and help
+overlay. With no visual selection active, press `Esc`, `Left`, `h`, or `f` to return to
+the file tree. Select a changed markdown file and press `p` to render its complete
+post-change worktree content, including supported Mermaid diagrams. Preview remains
+active across file navigation; non-markdown selections keep showing raw diff lines, and
+files that are deleted, binary, too large, or unreadable show a concise notice. Press
+`p` again to restore the patch view. Pressing `q` returns to the sessions list and saves
+the complete composer; reopening the session restores the typed draft with input focus.
+Pressing `Tab` again returns focus to the composer. The same focus toggle, `d` diff
+preview, and `q` preservation flow are available while answering clarification
+questions. Long transcripts show a slim scrollbar on the right side of the output panel
+to indicate the current position.
 
 Pressing `r` during a running turn queues session sync on the same session worker. The
 session stays **InProgress** while the active turn runs, then moves to **Rebasing** when
