@@ -348,6 +348,10 @@ fn selected_line_comment_target(
         return None;
     }
 
+    if let Some(target) = navigation.line_comments.selected_comment_target() {
+        return Some(target.clone());
+    }
+
     let content = render_cache_store
         .diff_layout_cache()
         .content(navigation.diff);
@@ -616,6 +620,7 @@ fn apply_navigation_key(
             );
             if *navigation.file_explorer_selected_index != new_index {
                 *navigation.file_explorer_selected_index = new_index;
+                navigation.line_comments.clear_comment_selection();
                 *navigation.scroll_cache = None;
                 *navigation.scroll_offset = 0;
                 *navigation.selected_diff_line_index = 0;
@@ -754,7 +759,7 @@ struct DiffContentNavigation<'a> {
     diff: &'a str,
     file_explorer_selected_index: usize,
     focus: &'a mut DiffFocus,
-    line_comments: &'a DiffLineComments,
+    line_comments: &'a mut DiffLineComments,
     preview: &'a DiffPreview,
     scroll_cache: &'a mut Option<DiffScrollCache>,
     scroll_offset: &'a mut u16,
@@ -790,6 +795,7 @@ fn focus_selected_file_changes(
     if preview_is_visible {
         *navigation.focus = DiffFocus::Content;
         *navigation.selected_diff_line_index = 0;
+        navigation.line_comments.clear_comment_selection();
 
         return;
     }
@@ -808,6 +814,7 @@ fn focus_selected_file_changes(
 
     *navigation.focus = DiffFocus::Content;
     *navigation.selected_diff_line_index = selected_diff_line_index;
+    navigation.line_comments.clear_comment_selection();
     *navigation.scroll_offset = changed_line_layout
         .changed_line_scroll_offset(
             *navigation.selected_diff_line_index,
@@ -841,16 +848,42 @@ fn move_content_selection(
         content_area,
         render_cache_store.diff_layout_cache(),
     );
-    let line_count = changed_line_layout.changed_line_count();
-    *navigation.selected_diff_line_index = match direction {
-        DiffContentDirection::Next => (*navigation.selected_diff_line_index)
-            .saturating_add(1)
-            .min(line_count.saturating_sub(1)),
-        DiffContentDirection::Previous => (*navigation.selected_diff_line_index).saturating_sub(1),
-    };
+    let selected_comment_index = navigation.line_comments.selected_comment_index();
+    let (selected_diff_line_index, selected_comment_index) =
+        if navigation.line_comments.is_selecting() {
+            let line_count = changed_line_layout.changed_line_count();
+            let selected_diff_line_index = match direction {
+                DiffContentDirection::Next => (*navigation.selected_diff_line_index)
+                    .saturating_add(1)
+                    .min(line_count.saturating_sub(1)),
+                DiffContentDirection::Previous => {
+                    (*navigation.selected_diff_line_index).saturating_sub(1)
+                }
+            };
+
+            (selected_diff_line_index, None)
+        } else {
+            match direction {
+                DiffContentDirection::Next => changed_line_layout.next_content_selection(
+                    *navigation.selected_diff_line_index,
+                    selected_comment_index,
+                ),
+                DiffContentDirection::Previous => changed_line_layout.previous_content_selection(
+                    *navigation.selected_diff_line_index,
+                    selected_comment_index,
+                ),
+            }
+        };
+    *navigation.selected_diff_line_index = selected_diff_line_index;
+    if let Some(comment_index) = selected_comment_index {
+        navigation.line_comments.select_comment(comment_index);
+    } else {
+        navigation.line_comments.clear_comment_selection();
+    }
     *navigation.scroll_offset = changed_line_layout
-        .changed_line_scroll_offset(
+        .content_selection_scroll_offset(
             *navigation.selected_diff_line_index,
+            selected_comment_index,
             *navigation.scroll_offset,
         )
         .unwrap_or(*navigation.scroll_offset);
@@ -2678,6 +2711,82 @@ mod tests {
                     "- src/main.rs:2 [new]: A\n",
                     "- src/main.rs:3 [new]: B",
                 )
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_selects_inline_comment_and_reopens_editor_on_enter() {
+        // Arrange
+        let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
+        let diff = concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -0,0 +1,2 @@\n",
+            "+first();\n",
+            "+second();\n",
+        );
+        app.mode = diff_mode_fixture(diff, 1, DiffFocus::Content, DiffPreview::default());
+        if let AppMode::Diff { line_comments, .. } = &mut app.mode {
+            line_comments.start_editing_target(DiffLineCommentTarget::single(
+                DiffLineCommentAnchor {
+                    content: "first();".to_string(),
+                    line: 1,
+                    path: "src/main.rs".to_string(),
+                    side: crate::presentation::app_mode::DiffLineSide::New,
+                },
+            ));
+            line_comments
+                .editing_input_mut()
+                .expect("seeded inline comment should be editable")
+                .insert_text("Explain this");
+            line_comments.finish_editing();
+            line_comments.clear_comment_selection();
+        }
+
+        // Act — move from the source row to its comment, back, and onto the comment
+        // again.
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        );
+        let selected_comment = matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. }
+                if line_comments.selected_comment_index() == Some(0)
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        );
+        let selected_source = matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. }
+                if line_comments.selected_comment_index().is_none()
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(selected_comment);
+        assert!(selected_source);
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff {
+                line_comments,
+                selected_diff_line_index: 0,
+                ..
+            } if line_comments.is_editing()
+                && line_comments.selected_comment_index() == Some(0)
+                && line_comments.comments[0].input.text() == "Explain this"
         ));
     }
 

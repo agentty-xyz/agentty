@@ -539,6 +539,7 @@ struct DiffVisibleLineRequest<'a> {
     line_comments: &'a DiffLineComments,
     prefix_width: usize,
     scroll_offset: u16,
+    selected_comment_index: Option<usize>,
     selected_range: Option<&'a Range<usize>>,
     viewport_height: u16,
 }
@@ -584,6 +585,24 @@ impl DiffResolvedLayout {
         self.changed_line_ranges.len()
     }
 
+    /// Returns the next selectable source or inline-comment row.
+    pub(crate) fn next_content_selection(
+        &self,
+        selected_changed_line_index: usize,
+        selected_comment_index: Option<usize>,
+    ) -> (usize, Option<usize>) {
+        self.adjacent_content_selection(selected_changed_line_index, selected_comment_index, true)
+    }
+
+    /// Returns the previous selectable source or inline-comment row.
+    pub(crate) fn previous_content_selection(
+        &self,
+        selected_changed_line_index: usize,
+        selected_comment_index: Option<usize>,
+    ) -> (usize, Option<usize>) {
+        self.adjacent_content_selection(selected_changed_line_index, selected_comment_index, false)
+    }
+
     /// Returns the first changed source line intersecting or below the viewport
     /// top.
     pub(crate) fn changed_line_index_at_scroll_offset(&self, scroll_offset: u16) -> Option<usize> {
@@ -602,27 +621,22 @@ impl DiffResolvedLayout {
         current_scroll_offset: u16,
     ) -> Option<u16> {
         let selected_range = self.changed_line_ranges.get(selected_diff_line_index)?;
-        let viewport_height = usize::from(self.render_layout.viewport_height);
-        if viewport_height == 0 {
-            return Some(0);
-        }
 
-        let current_start = usize::from(current_scroll_offset);
-        let current_end = current_start.saturating_add(viewport_height);
-        let next_scroll_offset = if selected_range.start < current_start {
-            selected_range.start
-        } else if selected_range.end > current_end {
-            selected_range.end.saturating_sub(viewport_height)
-        } else {
-            current_start
-        };
-        let next_scroll_offset = u16::try_from(next_scroll_offset).unwrap_or(u16::MAX);
+        Some(self.range_scroll_offset(selected_range, current_scroll_offset))
+    }
 
-        Some(diff_util::clamp_diff_scroll_offset(
-            next_scroll_offset,
-            self.line_count,
-            self.render_layout.viewport_height,
-        ))
+    /// Returns the scroll offset that keeps the selected source or comment row
+    /// visible.
+    pub(crate) fn content_selection_scroll_offset(
+        &self,
+        selected_changed_line_index: usize,
+        selected_comment_index: Option<usize>,
+        current_scroll_offset: u16,
+    ) -> Option<u16> {
+        let selected_range =
+            self.content_selection_range(selected_changed_line_index, selected_comment_index)?;
+
+        Some(self.range_scroll_offset(&selected_range, current_scroll_offset))
     }
 
     /// Returns the rendered rows covered by inclusive changed-line bounds.
@@ -637,6 +651,123 @@ impl DiffResolvedLayout {
         Some(start_range.start..end_range.end)
     }
 
+    /// Returns the rendered range for the selected source or inline-comment
+    /// row.
+    fn content_selection_range(
+        &self,
+        selected_changed_line_index: usize,
+        selected_comment_index: Option<usize>,
+    ) -> Option<Range<usize>> {
+        if let Some(comment_index) = selected_comment_index
+            && let Some(insertion) = self
+                .comment_insertions
+                .iter()
+                .find(|insertion| insertion.comment == comment_index)
+        {
+            return Some(insertion.display_row..insertion.display_row.saturating_add(1));
+        }
+
+        self.changed_line_ranges
+            .get(selected_changed_line_index)
+            .cloned()
+    }
+
+    /// Moves one step through source rows and inserted comment rows.
+    fn adjacent_content_selection(
+        &self,
+        selected_changed_line_index: usize,
+        selected_comment_index: Option<usize>,
+        move_next: bool,
+    ) -> (usize, Option<usize>) {
+        let selections = self.content_selections();
+        let current_index = selections
+            .iter()
+            .position(|selection| {
+                selected_comment_index.map_or_else(
+                    || {
+                        selection.changed_line_index == selected_changed_line_index
+                            && selection.comment_index.is_none()
+                    },
+                    |comment_index| selection.comment_index == Some(comment_index),
+                )
+            })
+            .or_else(|| {
+                selections.iter().position(|selection| {
+                    selection.changed_line_index == selected_changed_line_index
+                        && selection.comment_index.is_none()
+                })
+            })
+            .unwrap_or_default();
+        let next_index = if move_next {
+            current_index
+                .saturating_add(1)
+                .min(selections.len().saturating_sub(1))
+        } else {
+            current_index.saturating_sub(1)
+        };
+
+        selections
+            .get(next_index)
+            .map_or((selected_changed_line_index, None), |selection| {
+                (selection.changed_line_index, selection.comment_index)
+            })
+    }
+
+    /// Builds selectable content rows in their rendered order.
+    fn content_selections(&self) -> Vec<DiffContentSelection> {
+        let mut selections = self
+            .changed_line_ranges
+            .iter()
+            .enumerate()
+            .map(|(changed_line_index, range)| DiffContentSelection {
+                changed_line_index,
+                comment_index: None,
+                display_row: range.start,
+            })
+            .chain(
+                self.comment_insertions
+                    .iter()
+                    .map(|insertion| DiffContentSelection {
+                        changed_line_index: insertion.end_changed_line_index,
+                        comment_index: Some(insertion.comment),
+                        display_row: insertion.display_row,
+                    }),
+            )
+            .collect::<Vec<_>>();
+        selections.sort_unstable_by_key(|selection| selection.display_row);
+
+        selections
+    }
+
+    /// Keeps one rendered range inside the current viewport.
+    fn range_scroll_offset(
+        &self,
+        selected_range: &Range<usize>,
+        current_scroll_offset: u16,
+    ) -> u16 {
+        let viewport_height = usize::from(self.render_layout.viewport_height);
+        if viewport_height == 0 {
+            return 0;
+        }
+
+        let current_start = usize::from(current_scroll_offset);
+        let current_end = current_start.saturating_add(viewport_height);
+        let next_scroll_offset = if selected_range.start < current_start {
+            selected_range.start
+        } else if selected_range.end > current_end {
+            selected_range.end.saturating_sub(viewport_height)
+        } else {
+            current_start
+        };
+        let next_scroll_offset = u16::try_from(next_scroll_offset).unwrap_or(u16::MAX);
+
+        diff_util::clamp_diff_scroll_offset(
+            next_scroll_offset,
+            self.line_count,
+            self.render_layout.viewport_height,
+        )
+    }
+
     /// Returns rendered source ranges owned by visible inline comments.
     fn line_comment_highlight_ranges(&self) -> Vec<Range<usize>> {
         self.comment_insertions
@@ -649,6 +780,13 @@ impl DiffResolvedLayout {
             })
             .collect()
     }
+}
+
+/// One selectable source or inline-comment row in rendered order.
+struct DiffContentSelection {
+    changed_line_index: usize,
+    comment_index: Option<usize>,
+    display_row: usize,
 }
 
 /// Resolves inline comment rows and their display positions for one file.
@@ -1092,12 +1230,21 @@ impl<'a> DiffPage<'a> {
         let comment_highlight_ranges = layout.line_comment_highlight_ranges();
         let selected_range = (self.focus == DiffFocus::Content)
             .then(|| {
-                let (start_changed_line_index, end_changed_line_index) = self
-                    .line_comments
-                    .selected_row_bounds(self.selected_diff_line_index);
+                if self.line_comments.is_selecting() {
+                    let (start_changed_line_index, end_changed_line_index) = self
+                        .line_comments
+                        .selected_row_bounds(self.selected_diff_line_index);
 
-                layout
-                    .changed_line_selection_range(start_changed_line_index, end_changed_line_index)
+                    return layout.changed_line_selection_range(
+                        start_changed_line_index,
+                        end_changed_line_index,
+                    );
+                }
+
+                layout.content_selection_range(
+                    self.selected_diff_line_index,
+                    self.line_comments.selected_comment_index(),
+                )
             })
             .flatten();
         let paint_lines = Self::borrowed_visible_lines_with_comments(
@@ -1109,6 +1256,7 @@ impl<'a> DiffPage<'a> {
                 line_comments: self.line_comments,
                 prefix_width: layout.render_layout.prefix_width,
                 scroll_offset,
+                selected_comment_index: self.line_comments.selected_comment_index(),
                 selected_range: selected_range.as_ref(),
                 viewport_height: layout.render_layout.viewport_height,
             },
@@ -1154,6 +1302,7 @@ impl<'a> DiffPage<'a> {
                     return Some(Self::inline_comment_line(
                         comment,
                         request.line_comments.editing_index == Some(insertion.comment),
+                        request.selected_comment_index == Some(insertion.comment),
                         request.prefix_width,
                         request.content_width,
                     ));
@@ -1195,6 +1344,7 @@ impl<'a> DiffPage<'a> {
     fn inline_comment_line(
         comment: &DiffLineComment,
         is_editing: bool,
+        is_selected: bool,
         prefix_width: usize,
         content_width: usize,
     ) -> Line<'static> {
@@ -1204,7 +1354,15 @@ impl<'a> DiffPage<'a> {
         } else {
             style::palette::surface_prompt()
         };
-        let content_style = Style::default().fg(style::palette::text()).bg(background);
+        let selected_modifier = if is_selected && !is_editing {
+            Modifier::REVERSED
+        } else {
+            Modifier::empty()
+        };
+        let content_style = Style::default()
+            .fg(style::palette::text())
+            .bg(background)
+            .add_modifier(selected_modifier);
         let text = if is_editing {
             input_text_with_cursor(&comment.input)
         } else {
@@ -1217,7 +1375,7 @@ impl<'a> DiffPage<'a> {
                 Style::default()
                     .fg(style::palette::accent())
                     .bg(background)
-                    .add_modifier(Modifier::BOLD),
+                    .add_modifier(Modifier::BOLD | selected_modifier),
             ),
             Span::styled(text, content_style),
         ];
@@ -2076,6 +2234,7 @@ mod tests {
             .expect("range comment should be editable")
             .insert_text("Explain both lines");
         line_comments.finish_editing();
+        line_comments.clear_comment_selection();
         let session = session_fixture();
         let diff_layout_cache = DiffLayoutCache::default();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
@@ -2183,11 +2342,13 @@ mod tests {
         };
 
         // Act
-        let completed_line = DiffPage::inline_comment_line(&comment, false, 4, 40);
-        let active_line = DiffPage::inline_comment_line(&comment, true, 4, 40);
+        let completed_line = DiffPage::inline_comment_line(&comment, false, false, 4, 40);
+        let selected_line = DiffPage::inline_comment_line(&comment, false, true, 4, 40);
+        let active_line = DiffPage::inline_comment_line(&comment, true, true, 4, 40);
 
         // Assert
         assert_eq!(completed_line.width(), 40);
+        assert_eq!(selected_line.width(), 40);
         assert_eq!(active_line.width(), 40);
         assert!(
             completed_line
@@ -2196,11 +2357,15 @@ mod tests {
                 .all(|span| { span.style.bg == Some(style::palette::surface_prompt()) })
         );
         assert!(
-            active_line
+            selected_line
                 .spans
                 .iter()
-                .all(|span| { span.style.bg == Some(style::palette::surface_selection()) })
+                .all(|span| span.style.add_modifier.contains(Modifier::REVERSED))
         );
+        assert!(active_line.spans.iter().all(|span| {
+            span.style.bg == Some(style::palette::surface_selection())
+                && !span.style.add_modifier.contains(Modifier::REVERSED)
+        }));
     }
 
     #[test]
@@ -2502,6 +2667,44 @@ mod tests {
         // Assert
         assert_eq!(line_comments.comments.len(), 2);
         assert_eq!(insertions, []);
+    }
+
+    #[test]
+    fn test_content_selection_moves_from_range_comment_to_following_source_row() {
+        // Arrange
+        let diff = concat!(
+            "diff --git a/main.rs b/main.rs\n",
+            "@@ -0,0 +1,3 @@\n",
+            "+first();\n",
+            "+second();\n",
+            "+third();",
+        );
+        let cache = DiffLayoutCache::default();
+        let content = cache.content(diff);
+        let anchors = content.selected_changed_lines(0, 0, 1);
+        let mut line_comments = DiffLineComments::default();
+        line_comments.start_editing_target(
+            DiffLineCommentTarget::from_anchors(anchors)
+                .expect("fixture should create a range comment"),
+        );
+        line_comments
+            .editing_input_mut()
+            .expect("range comment should be editable")
+            .insert_text("Explain this range");
+        line_comments.finish_editing();
+        let layout =
+            diff_changed_line_layout(diff, &line_comments, 0, Rect::new(0, 0, 80, 12), &cache);
+
+        // Act
+        let next_selection =
+            layout.next_content_selection(0, line_comments.selected_comment_index());
+        let previous_selection = layout.previous_content_selection(2, None);
+        let stale_comment_selection = layout.next_content_selection(1, Some(usize::MAX));
+
+        // Assert
+        assert_eq!(next_selection, (2, None));
+        assert_eq!(previous_selection, (1, Some(0)));
+        assert_eq!(stale_comment_selection, (1, Some(0)));
     }
 
     #[test]

@@ -764,7 +764,7 @@ pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
             if can_comment { "open/comment" } else { "open" },
             "Enter/l",
             if can_comment {
-                "Open selected file with Enter/l or edit selected changed line with Enter"
+                "Open selected file with Enter/l or edit selected line/comment with Enter"
             } else {
                 "Open selected file"
             },
@@ -773,9 +773,9 @@ pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
         HelpAction::new("comments", "c", "Focus review comments"),
         HelpAction::new("preview", "p", "Toggle selected markdown preview"),
         HelpAction::new(
-            "scroll/select line",
+            "scroll/select row",
             "J/K/Up/Down",
-            "Scroll a file or select a changed line",
+            "Scroll a file or select a changed line/comment",
         ),
     ];
     if can_comment {
@@ -878,7 +878,11 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
         DiffSidebarFocus::Files => {
             actions[0] = HelpAction::new("back", "q", "Back to session");
             actions.push(HelpAction::new("files", "Esc/Left", "Focus changed files"));
-            actions.push(HelpAction::new("select line", "j/k", "Select changed line"));
+            actions.push(HelpAction::new(
+                "select row",
+                "j/k",
+                "Select changed line or inline comment",
+            ));
             if matches!(
                 context.line_comment_state,
                 DiffLineCommentFooterState::Ready { .. }
@@ -886,7 +890,7 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
                 actions.push(HelpAction::new(
                     "comment",
                     "Enter",
-                    "Edit a comment below the selected line",
+                    "Edit the selected line's or inline comment's feedback",
                 ));
             }
             if matches!(
