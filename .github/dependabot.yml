@@ -60,7 +60,7 @@ updates:
   - package-ecosystem: "rust-toolchain"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     cooldown:
       default-days: 7
     assignees:
