@@ -43,6 +43,20 @@ updates:
         applies-to: version-updates
         patterns:
           - "*"
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 7
+    assignees:
+      - "minev-dev"
+      - "andagaev"
+    groups:
+      version-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
   - package-ecosystem: "rust-toolchain"
     directory: "/"
     schedule:
@@ -55,6 +69,5 @@ updates:
     groups:
       version-updates:
         applies-to: version-updates
-        update-types:
-          - "patch"
-          - "minor"
+        patterns:
+          - "*"
