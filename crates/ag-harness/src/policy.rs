@@ -4,18 +4,21 @@ use crate::tool::Tool;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Policy {
     read: bool,
+    write: bool,
 }
 
 impl Policy {
     pub(crate) fn allow(&mut self, tool: Tool) {
         match tool {
             Tool::Read => self.read = true,
+            Tool::Write => self.write = true,
         }
     }
 
     pub(crate) fn allows(self, tool: Tool) -> bool {
         match tool {
             Tool::Read => self.read,
+            Tool::Write => self.write,
         }
     }
 }
@@ -30,12 +33,15 @@ mod tests {
         let mut policy = Policy::default();
 
         // Act
-        let denied_by_default = policy.allows(Tool::Read);
+        let read_denied_by_default = policy.allows(Tool::Read);
+        let write_denied_by_default = policy.allows(Tool::Write);
         policy.allow(Tool::Read);
-        let explicitly_allowed = policy.allows(Tool::Read);
+        policy.allow(Tool::Write);
 
         // Assert
-        assert!(!denied_by_default);
-        assert!(explicitly_allowed);
+        assert!(!read_denied_by_default);
+        assert!(!write_denied_by_default);
+        assert!(policy.allows(Tool::Read));
+        assert!(policy.allows(Tool::Write));
     }
 }

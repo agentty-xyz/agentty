@@ -1,19 +1,25 @@
 # `ag-harness`
 
-Run a model with repository-scoped tools and validated structured output.
+Run a model with bounded repository tools and validated structured output.
 
 ```rust
 use ag_harness::{Harness, MUSE_SPARK_1_2, Muse, Tool};
 
 let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_2)?)
     .repository(repository_root)
-    .allow(Tool::Read);
+    .allow(Tool::Read)
+    .allow(Tool::Write);
 
 let output = harness.run(prompt, output_schema).await?;
 ```
 
 Provide `MODEL_API_KEY`, a repository root, explicitly allowed tools, a prompt, and an
 `OutputSchema`. Expect schema-validated JSON or a typed error.
+
+Tools are denied by default and repository tools require an explicit root. `read`
+returns bounded file content; `write` applies one bounded unified diff to one text file.
+Both use the injected `FileSystem` boundary without shell commands, and the model may
+continue calling allowed tools until it returns schema-valid JSON.
 
 Use `ModelWithMetadata::complete_with_metadata()` for normalized completion metadata.
 

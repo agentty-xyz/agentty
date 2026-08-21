@@ -33,8 +33,8 @@ For file-level detail, read the module docstrings directly.
   object-safe `Model` boundary, its `ModelClient` implementation, private Qwen, Kimi,
   and Muse policies, a shared Chat Completions backend with JSON Object and JSON Schema
   modes, backend-neutral request-duration telemetry, and a deny-by-default `Harness`
-  loop that executes bounded repository reads through an injectable `FileSystem`.
-  Application binaries own telemetry setup.
+  loop that executes bounded repository reads and stale-safe patch writes through an
+  injectable `FileSystem`. Application binaries own telemetry setup.
 - `crates/ag-protocol/`: Shared structured response protocol library crate with
   transport-neutral response models, schema generation, parser diagnostics, protocol
   prompt envelopes, repair prompts, review-comment outcomes, and turn prompt payload

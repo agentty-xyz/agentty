@@ -13,7 +13,10 @@ use crate::model::{Model, ModelError, ModelRequest, ModelResponse};
 use crate::policy::Policy;
 use crate::read::{ReadError, ReadTool};
 use crate::schema_contract::OutputSchema;
-use crate::tool::{Tool, ToolDefinition};
+use crate::tool::{
+    ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments,
+};
+use crate::write::{WriteError, WriteTool};
 
 const DEFAULT_MAX_TOOL_CALLS: usize = 8;
 
@@ -91,7 +94,7 @@ impl Harness {
     /// # Errors
     ///
     /// Returns [`TurnError`] when the model fails, requests a denied tool,
-    /// exceeds the call limit, or the requested repository read fails.
+    /// exceeds the call limit, or a requested repository operation fails.
     pub async fn run(
         &self,
         prompt: impl Into<String>,
@@ -121,20 +124,30 @@ impl Harness {
         if self.lifecycle.is_enabled() {
             request.mark_lifecycle_observed();
         }
-        let read_tool = if self.policy.allows(Tool::Read) {
+        let read_allowed = self.policy.allows(Tool::Read);
+        let write_allowed = self.policy.allows(Tool::Write);
+        let mut read_tool = None;
+        let mut write_tool = None;
+        if read_allowed || write_allowed {
             let repository_root = self
                 .repository_root
                 .as_ref()
                 .ok_or(TurnError::RepositoryRequired)?;
-            request = request.with_tool(ToolDefinition::read());
-
-            Some(ReadTool::new(
-                self.file_system.clone(),
-                repository_root.clone(),
-            ))
-        } else {
-            None
-        };
+            if read_allowed {
+                request = request.with_tool(ToolDefinition::read());
+                read_tool = Some(ReadTool::new(
+                    self.file_system.clone(),
+                    repository_root.clone(),
+                ));
+            }
+            if write_allowed {
+                request = request.with_tool(ToolDefinition::write());
+                write_tool = Some(WriteTool::new(
+                    self.file_system.clone(),
+                    repository_root.clone(),
+                ));
+            }
+        }
         let mut completed_tool_calls = 0_usize;
         let mut model_request_index = 0_u64;
 
@@ -164,47 +177,76 @@ impl Harness {
             match response {
                 ModelResponse::Output(output) => return Ok(output),
                 ModelResponse::ToolCall(call) => {
-                    let mut tool_lifecycle = self
-                        .lifecycle
-                        .request_tool(call.name().to_string(), turn_id);
-                    let Some(read_tool) = read_tool.as_ref() else {
-                        if let Some(tool_lifecycle) = tool_lifecycle {
-                            tool_lifecycle.denied();
-                        }
-
-                        return Err(TurnError::ToolDenied {
-                            name: call.name().to_string(),
-                        });
-                    };
-                    if completed_tool_calls >= self.max_tool_calls {
-                        if let Some(tool_lifecycle) = tool_lifecycle {
-                            tool_lifecycle.failed(ToolErrorType::CallLimit);
-                        }
-
-                        return Err(TurnError::ToolCallLimit {
-                            limit: self.max_tool_calls,
-                        });
-                    }
-                    if let Some(tool_lifecycle) = tool_lifecycle.as_mut() {
-                        tool_lifecycle.started();
-                    }
-                    let output = match read_tool.execute(call.arguments()).await {
-                        Ok(output) => output,
-                        Err(error) => {
-                            if let Some(tool_lifecycle) = tool_lifecycle {
-                                tool_lifecycle.failed(ToolErrorType::Execution);
-                            }
-
-                            return Err(error.into());
-                        }
-                    };
-                    let result = output.to_tool_result().map_err(ReadError::from)?;
-                    if let Some(tool_lifecycle) = tool_lifecycle {
-                        tool_lifecycle.completed();
-                    }
+                    let result = self
+                        .execute_tool_call(
+                            &call,
+                            read_tool.as_ref(),
+                            write_tool.as_ref(),
+                            completed_tool_calls,
+                            turn_id,
+                        )
+                        .await?;
                     request.record_tool_result(call, result);
                     completed_tool_calls += 1;
                 }
+            }
+        }
+    }
+
+    async fn execute_tool_call(
+        &self,
+        call: &ToolCall,
+        read_tool: Option<&ReadTool>,
+        write_tool: Option<&WriteTool>,
+        completed_tool_calls: usize,
+        turn_id: Option<LifecycleId>,
+    ) -> Result<String, TurnError> {
+        let mut tool_lifecycle = self
+            .lifecycle
+            .request_tool(call.name().to_string(), turn_id);
+        let execution = match call.arguments() {
+            ToolCallArguments::Read(arguments) => {
+                read_tool.map(|tool| ToolExecution::Read(tool, arguments))
+            }
+            ToolCallArguments::Write(arguments) => {
+                write_tool.map(|tool| ToolExecution::Write(tool, arguments))
+            }
+        };
+        let Some(execution) = execution else {
+            if let Some(tool_lifecycle) = tool_lifecycle {
+                tool_lifecycle.denied();
+            }
+
+            return Err(TurnError::ToolDenied {
+                name: call.name().to_string(),
+            });
+        };
+        if completed_tool_calls >= self.max_tool_calls {
+            if let Some(tool_lifecycle) = tool_lifecycle {
+                tool_lifecycle.failed(ToolErrorType::CallLimit);
+            }
+
+            return Err(TurnError::ToolCallLimit {
+                limit: self.max_tool_calls,
+            });
+        }
+        if let Some(tool_lifecycle) = tool_lifecycle.as_mut() {
+            tool_lifecycle.started();
+        }
+        match execute_tool(execution).await {
+            Ok(result) => {
+                if let Some(tool_lifecycle) = tool_lifecycle {
+                    tool_lifecycle.completed();
+                }
+
+                Ok(result)
+            }
+            Err(error) => {
+                if let Some(tool_lifecycle) = tool_lifecycle {
+                    tool_lifecycle.failed(ToolErrorType::Execution);
+                }
+
+                Err(error)
             }
         }
     }
@@ -226,8 +268,11 @@ pub enum TurnError {
     #[error(transparent)]
     Read(#[from] ReadError),
     /// Repository-scoped tools were enabled without a repository root.
-    #[error("repository root is required when the read tool is allowed")]
+    #[error("repository root is required when a repository tool is allowed")]
     RepositoryRequired,
+    /// A repository write failed.
+    #[error(transparent)]
+    Write(#[from] WriteError),
     /// The model exceeded the bounded number of calls in one turn.
     #[error("model exceeded the per-turn tool call limit of {limit}")]
     ToolCallLimit {
@@ -242,10 +287,37 @@ impl TurnError {
         match self {
             Self::Model(error) => TurnErrorType::Model(error.error_type()),
             Self::ToolDenied { .. } => TurnErrorType::ToolDenied,
-            Self::Read(_) => TurnErrorType::Tool,
+            Self::Read(_) | Self::Write(_) => TurnErrorType::Tool,
             Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
             Self::ToolCallLimit { .. } => TurnErrorType::ToolCallLimit,
         }
+    }
+}
+
+enum ToolExecution<'a> {
+    Read(&'a ReadTool, &'a ReadArguments),
+    Write(&'a WriteTool, &'a WriteArguments),
+}
+
+async fn execute_tool(execution: ToolExecution<'_>) -> Result<String, TurnError> {
+    match execution {
+        ToolExecution::Read(read_tool, arguments) => read_tool
+            .execute(arguments)
+            .await?
+            .to_tool_result()
+            .map_err(ReadError::from)
+            .map_err(TurnError::from),
+        ToolExecution::Write(write_tool, arguments) => match write_tool.execute(arguments).await {
+            Ok(output) => output
+                .to_tool_result()
+                .map_err(WriteError::from)
+                .map_err(TurnError::from),
+            Err(error) if error.is_model_correctable() => error
+                .to_tool_result(arguments.path())
+                .map_err(WriteError::from)
+                .map_err(TurnError::from),
+            Err(error) => Err(error.into()),
+        },
     }
 }
 
@@ -261,7 +333,6 @@ mod tests {
     use super::*;
     use crate::file_system::MockFileSystem;
     use crate::model::{MockModel, ModelMessage};
-    use crate::tool::{ReadArguments, ToolCall};
 
     fn object_schema() -> OutputSchema {
         OutputSchema::new(json!({
@@ -287,6 +358,16 @@ mod tests {
         response: ModelResponse,
     ) -> (ModelResponse, Option<crate::CompletionMetadata>) {
         (response, None)
+    }
+
+    fn write_call(id: &str, patch: &str) -> ToolCall {
+        let arguments = serde_json::from_value::<WriteArguments>(json!({
+            "path": "src/lib.rs",
+            "patch": patch
+        }))
+        .expect("write arguments should be valid");
+
+        ToolCall::write(id.to_string(), arguments, None)
     }
 
     fn readable_file_system() -> MockFileSystem {
@@ -549,6 +630,204 @@ mod tests {
         // Assert
         assert!(matches!(&error, TurnError::RepositoryRequired));
         assert_eq!(error.error_type(), TurnErrorType::RepositoryRequired);
+    }
+
+    #[tokio::test]
+    async fn completes_write_tool_round_trip() {
+        // Arrange
+        let patch = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n";
+        let mut model = MockModel::new();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        model
+            .expect_complete_with_optional_metadata()
+            .times(2)
+            .returning(move |request| {
+                let call_index = call_count.fetch_add(1, Ordering::SeqCst);
+                if call_index == 0 {
+                    assert_eq!(request.tools(), &[ToolDefinition::write()]);
+
+                    return Ok(response_without_metadata(ModelResponse::ToolCall(
+                        write_call("call_write", patch),
+                    )));
+                }
+                assert!(matches!(
+                    &request.messages()[2],
+                    ModelMessage::ToolResult {
+                        call_id,
+                        content,
+                        name,
+                    }
+                        if call_id == "call_write"
+                            && name == "write"
+                            && serde_json::from_str::<Value>(content).is_ok_and(|value| {
+                                value == json!({
+                                    "bytes_written": 4,
+                                    "path": "src/lib.rs",
+                                    "status": "applied"
+                                })
+                            })
+                ));
+
+                Ok(response_without_metadata(ModelResponse::Output(json!({
+                    "summary": "updated"
+                }))))
+            });
+        let mut file_system = MockFileSystem::new();
+        file_system
+            .expect_canonicalize()
+            .times(1)
+            .returning(|_| Ok(PathBuf::from("/repo")));
+        file_system
+            .expect_open_beneath()
+            .times(1)
+            .returning(|_, _| Ok(Box::new(Cursor::new(b"old\n".to_vec()))));
+        file_system
+            .expect_replace_beneath()
+            .times(1)
+            .withf(|_, _, expected, content| {
+                expected.as_deref() == Some(b"old\n".as_slice()) && content == b"new\n"
+            })
+            .returning(|_, _, _, _| Ok(()));
+        let harness = Harness::new(model)
+            .file_system(file_system)
+            .repository("repo")
+            .allow(Tool::Write);
+
+        // Act
+        let output = harness
+            .run("update the file", object_schema())
+            .await
+            .expect("write round trip should succeed");
+
+        // Assert
+        assert_eq!(output, json!({ "summary": "updated" }));
+    }
+
+    #[tokio::test]
+    async fn returns_correctable_write_rejection_to_model() {
+        // Arrange
+        let mut model = MockModel::new();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        model
+            .expect_complete_with_optional_metadata()
+            .times(2)
+            .returning(move |request| {
+                if call_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Ok(response_without_metadata(ModelResponse::ToolCall(
+                        write_call("call_write", "not a unified diff"),
+                    )));
+                }
+                assert!(matches!(
+                    &request.messages()[2],
+                    ModelMessage::ToolResult { content, .. }
+                        if serde_json::from_str::<Value>(content)
+                            .is_ok_and(|value| value["status"] == "rejected")
+                ));
+
+                Ok(response_without_metadata(ModelResponse::Output(json!({
+                    "summary": "recovered"
+                }))))
+            });
+        let mut file_system = MockFileSystem::new();
+        file_system
+            .expect_canonicalize()
+            .times(1)
+            .returning(|_| Ok(PathBuf::from("/repo")));
+        file_system
+            .expect_open_beneath()
+            .times(1)
+            .returning(|_, _| Ok(Box::new(Cursor::new(b"old\n".to_vec()))));
+        file_system.expect_replace_beneath().times(0);
+        let harness = Harness::new(model)
+            .file_system(file_system)
+            .repository("repo")
+            .allow(Tool::Write);
+
+        // Act
+        let output = harness
+            .run("update", object_schema())
+            .await
+            .expect("model should recover from rejected patch");
+
+        // Assert
+        assert_eq!(output, json!({ "summary": "recovered" }));
+    }
+
+    #[tokio::test]
+    async fn returns_terminal_write_boundary_failure() {
+        // Arrange
+        let mut model = MockModel::new();
+        model
+            .expect_complete_with_optional_metadata()
+            .times(1)
+            .returning(|_| {
+                Ok(response_without_metadata(ModelResponse::ToolCall(
+                    write_call(
+                        "call_write",
+                        "--- /dev/null\n+++ b/src/lib.rs\n@@ -0,0 +1 @@\n+new\n",
+                    ),
+                )))
+            });
+        let mut file_system = MockFileSystem::new();
+        file_system
+            .expect_canonicalize()
+            .times(1)
+            .returning(|_| Err(io::Error::new(io::ErrorKind::NotFound, "missing root")));
+        let harness = Harness::new(model)
+            .file_system(file_system)
+            .repository("repo")
+            .allow(Tool::Write);
+
+        // Act
+        let error = harness
+            .run("update", object_schema())
+            .await
+            .expect_err("write boundary failure should end turn");
+
+        // Assert
+        assert!(matches!(
+            &error,
+            TurnError::Write(WriteError::RepositoryRoot { .. })
+        ));
+        assert_eq!(error.error_type(), TurnErrorType::Tool);
+    }
+
+    #[tokio::test]
+    async fn rejects_write_call_when_policy_denies_write() {
+        // Arrange
+        let mut model = MockModel::new();
+        model
+            .expect_complete_with_optional_metadata()
+            .times(1)
+            .returning(|request| {
+                assert_eq!(request.tools(), []);
+
+                Ok(response_without_metadata(ModelResponse::ToolCall(
+                    write_call(
+                        "call_denied",
+                        "--- /dev/null\n+++ b/src/lib.rs\n@@ -0,0 +1 @@\n+new\n",
+                    ),
+                )))
+            });
+        let mut file_system = MockFileSystem::new();
+        file_system.expect_canonicalize().times(0);
+        file_system.expect_open_beneath().times(0);
+        file_system.expect_replace_beneath().times(0);
+        let harness = Harness::new(model)
+            .file_system(file_system)
+            .repository("repo");
+
+        // Act
+        let error = harness
+            .run("update", object_schema())
+            .await
+            .expect_err("denied write should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            TurnError::ToolDenied { name } if name == "write"
+        ));
     }
 
     #[tokio::test]

@@ -89,9 +89,11 @@ training. The Muse example defaults to the standard model and accepts an explici
 
 The current tool foundation includes:
 
-- A shared native `read` contract across Qwen, Kimi, and Muse.
-- Repository-scoped read round trips with explicit permission.
-- Schema-validated terminal output and typed failures.
+- Shared, typed `read` and `write` calls across Qwen, Kimi, and Muse.
+- Explicit repository roots and deny-by-default permissions through `Harness::allow()`.
+- Bounded tool execution and continuation to schema-validated terminal output.
+- Descriptor-relative file access without symlink traversal.
+- One-file unified-diff writes with stale-safe atomic replacement and typed failures.
 
 ## Session management
 
@@ -151,8 +153,8 @@ sequenceDiagram
 
 - **Write** - the model produces a git diff patch; the harness applies it. Alternative
   edit methods (exact-match string replacement, etc.) are future experiments.
-- **Diff** - applied changes are streamed back as structured file-diff events,
-  renderable directly as git diffs.
+- **Diff** - persisted sessions will stream applied changes as structured file-diff
+  events; current writes return bounded status metadata.
 - **Output caps** - oversized tool output is truncated head+tail with a marker, so one
   careless command can't flood the session's context. Per-tool limits; `read` supports
   line ranges for precise re-reads.
@@ -199,15 +201,13 @@ bounded, redacted, and disabled by default.
 
 ## Permissions
 
-All tools are denied by default. The session policy explicitly allows tools and, for
-`bash`, the permitted commands:
+All tools are denied by default. Applications enable current tools explicitly:
 
 ```rust
-Policy {
-    read: Allow,
-    write: Deny,
-    bash: AllowCommands(["cargo test", "git status", "rg *"]),
-}
+Harness::new(model)
+    .repository(repository_root)
+    .allow(Tool::Read)
+    .allow(Tool::Write)
 ```
 
 ## Model tiers
@@ -222,10 +222,10 @@ best cost and performance:
 
 ## Library API
 
-- **Harness** - creates and resumes sessions.
-- **Session** - holds model, policy, working directory, and state.
-- **Turn** - runs one prompt and streams text, diffs, completion, and failure events.
-- **App** - configures the session and renders its events.
+- **Harness** - runs bounded tool calls to validated terminal JSON.
+- **Model** - provider-neutral completion boundary.
+- **FileSystem** - injectable repository I/O boundary.
+- **Session, Turn, App** - planned persistence and event-streaming layers.
 
 ## Differences from existing harnesses
 
@@ -241,7 +241,7 @@ best cost and performance:
 ## Next iterations
 
 - [x] **Read tool round trip.** Complete a model-requested repository read.
-- [ ] **Write tool round trip.** Complete a model-requested repository write.
+- [x] **Write tool round trip.** Complete a model-requested repository write.
 - [x] **Completion metadata foundation.** Normalize provider response identity, finish
   outcome, optional token usage, and stable model failure classifications.
 - [x] **Lifecycle event foundation.** Emit ordered, correlated, metadata-only turn,

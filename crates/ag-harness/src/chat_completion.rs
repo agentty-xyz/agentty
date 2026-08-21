@@ -307,11 +307,8 @@ impl ChatCompletionBackend {
         calls: Vec<ChatCompletionToolCall>,
         metadata: model::CompletionMetadata,
     ) -> GeneratedResponse {
-        match Self::decode_tool_call_parts(request, content, reasoning_content.as_deref(), calls) {
-            Ok((id, arguments)) => GeneratedResponse::ToolCall {
-                call: tool::ToolCall::read(id, arguments, reasoning_content),
-                metadata,
-            },
+        match Self::decode_tool_call_parts(request, content, reasoning_content, calls) {
+            Ok(call) => GeneratedResponse::ToolCall { call, metadata },
             Err(error) => GeneratedResponse::failed(error, metadata),
         }
     }
@@ -319,9 +316,9 @@ impl ChatCompletionBackend {
     fn decode_tool_call_parts(
         request: &model::ModelRequest,
         content: Option<&str>,
-        reasoning_content: Option<&str>,
+        reasoning_content: Option<String>,
         mut calls: Vec<ChatCompletionToolCall>,
-    ) -> Result<(String, tool::ReadArguments), model::ModelError> {
+    ) -> Result<tool::ToolCall, model::ModelError> {
         if content.is_some_and(|content| !content.is_empty()) {
             return Err(model::ModelError::ToolCallWithContent);
         }
@@ -346,18 +343,27 @@ impl ChatCompletionBackend {
         }
         schema_contract::ensure_content_size(&function.arguments)
             .map_err(model::ModelError::from)?;
-        if let Some(reasoning_content) = reasoning_content {
+        if let Some(reasoning_content) = reasoning_content.as_deref() {
             schema_contract::ensure_content_size(reasoning_content)
                 .map_err(model::ModelError::from)?;
         }
-        let arguments =
-            serde_json::from_str::<tool::ReadArguments>(&function.arguments).map_err(|error| {
-                model::ModelError::InvalidToolArguments {
+        let call = if function.name == "write" {
+            let arguments = serde_json::from_str::<tool::WriteArguments>(&function.arguments)
+                .map_err(|error| model::ModelError::InvalidToolArguments {
                     reason: schema_contract::bounded_diagnostic(error),
-                }
-            })?;
+                })?;
 
-        Ok((call.id, arguments))
+            tool::ToolCall::write(call.id, arguments, reasoning_content)
+        } else {
+            let arguments = serde_json::from_str::<tool::ReadArguments>(&function.arguments)
+                .map_err(|error| model::ModelError::InvalidToolArguments {
+                    reason: schema_contract::bounded_diagnostic(error),
+                })?;
+
+            tool::ToolCall::read(call.id, arguments, reasoning_content)
+        };
+
+        Ok(call)
     }
 }
 
@@ -992,6 +998,85 @@ mod tests {
         assert_eq!(metadata.system_fingerprint(), None);
         assert_eq!(metadata.usage(), None);
         assert!(empty_response.into_completion().is_none());
+    }
+
+    #[test]
+    fn decodes_advertised_write_tool_call() {
+        // Arrange
+        let schema = schema_contract::OutputSchema::new(serde_json::json!({
+            "type": "object"
+        }))
+        .expect("schema should be valid");
+        let request =
+            model::ModelRequest::new("update", schema).with_tool(tool::ToolDefinition::write());
+        let calls = vec![ChatCompletionToolCall {
+            function: serde_json::json!({
+                "name": "write",
+                "arguments": r#"{"path":"src/lib.rs","patch":"--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n"}"#
+            }),
+            id: "call_write".to_string(),
+            kind: "function".to_string(),
+        }];
+
+        // Act
+        let response = ChatCompletionBackend::decode_tool_call(
+            &request,
+            None,
+            None,
+            calls,
+            model::CompletionMetadata::new("tool_calls".to_string(), None, None, None, None),
+        );
+
+        // Assert
+        assert!(matches!(
+            response,
+            GeneratedResponse::ToolCall {
+                ref call,
+                ref metadata,
+            } if metadata.finish_reason() == "tool_calls"
+                && call.name() == "write"
+                    && call.write_arguments().is_some_and(|arguments| {
+                        arguments.path() == "src/lib.rs"
+                            && arguments.patch().starts_with("--- a/src/lib.rs")
+                    })
+        ));
+    }
+
+    #[test]
+    fn retains_metadata_for_invalid_advertised_write_arguments() {
+        // Arrange
+        let schema = schema_contract::OutputSchema::new(serde_json::json!({
+            "type": "object"
+        }))
+        .expect("schema should be valid");
+        let request =
+            model::ModelRequest::new("update", schema).with_tool(tool::ToolDefinition::write());
+        let calls = vec![ChatCompletionToolCall {
+            function: serde_json::json!({
+                "name": "write",
+                "arguments": r#"{"path":"src/lib.rs","patch":""}"#
+            }),
+            id: "call_write".to_string(),
+            kind: "function".to_string(),
+        }];
+
+        // Act
+        let response = ChatCompletionBackend::decode_tool_call(
+            &request,
+            None,
+            None,
+            calls,
+            model::CompletionMetadata::new("tool_calls".to_string(), None, None, None, None),
+        );
+
+        // Assert
+        assert!(matches!(
+            response,
+            GeneratedResponse::Failed {
+                error: model::ModelError::InvalidToolArguments { .. },
+                metadata,
+            } if metadata.finish_reason() == "tool_calls"
+        ));
     }
 
     #[test]
