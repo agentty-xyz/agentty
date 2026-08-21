@@ -190,6 +190,11 @@ pub(crate) enum AppEvent {
         error: String,
         session_id: SessionId,
     },
+    /// Retries one automatic focused-review deferral write after a transient
+    /// persistence failure.
+    DeferredAutoReviewPersistenceRetry {
+        retry: crate::app::session_diff::DeferredAutoReviewPersistenceRetry,
+    },
     /// Retries one focused-review persistence write that failed while its
     /// cache generation remains current.
     FocusedReviewPersistenceRetry {
@@ -252,6 +257,8 @@ pub(super) struct AppEventBatch {
     pub(super) branch_publish_action_updates: Vec<BranchPublishActionUpdate>,
     pub(super) branch_publish_resolved_session_ids: HashSet<SessionId>,
     pub(super) branch_publish_started_session_ids: HashSet<SessionId>,
+    pub(super) deferred_auto_review_persistence_retries:
+        Vec<crate::app::session_diff::DeferredAutoReviewPersistenceRetry>,
     pub(super) diff_preview_updates: Vec<DiffPreviewUpdate>,
     pub(super) focused_review_persistence_retries: Vec<FocusedReviewPersistenceRetry>,
     pub(super) git_status_update: Option<GitStatusBatchUpdate>,
@@ -299,6 +306,9 @@ enum AppEventEffect {
     ReloadProjects,
     RefreshGitStatus,
     ApplyReviewUpdates(HashMap<SessionId, ReviewUpdate>),
+    PersistDeferredAutoReviewTriggers(
+        Vec<crate::app::session_diff::DeferredAutoReviewPersistenceRetry>,
+    ),
     PersistFocusedReviewUpdates(Vec<FocusedReviewPersistenceRetry>),
 }
 
@@ -413,6 +423,11 @@ impl AppEventBatch {
             .then(|| AppEventEffect::ApplyReviewUpdates(std::mem::take(&mut self.review_updates)))
             .into_iter()
             .collect::<Vec<_>>();
+        if !self.deferred_auto_review_persistence_retries.is_empty() {
+            after_snapshot_effects.push(AppEventEffect::PersistDeferredAutoReviewTriggers(
+                std::mem::take(&mut self.deferred_auto_review_persistence_retries),
+            ));
+        }
         if !self.focused_review_persistence_retries.is_empty() {
             after_snapshot_effects.push(AppEventEffect::PersistFocusedReviewUpdates(
                 std::mem::take(&mut self.focused_review_persistence_retries),
@@ -494,6 +509,7 @@ impl AppEventBatch {
             | AppEvent::SessionQueuedSyncResolved { .. }
             | AppEvent::ReviewPrepared { .. }
             | AppEvent::ReviewPreparationFailed { .. }
+            | AppEvent::DeferredAutoReviewPersistenceRetry { .. }
             | AppEvent::FocusedReviewPersistenceRetry { .. }
             | AppEvent::SessionUpdated { .. }
             | AppEvent::AgentResponseReceived { .. }
@@ -582,6 +598,7 @@ impl AppEventBatch {
             | AppEvent::SessionQueuedSyncResolved { .. }
             | AppEvent::ReviewPrepared { .. }
             | AppEvent::ReviewPreparationFailed { .. }
+            | AppEvent::DeferredAutoReviewPersistenceRetry { .. }
             | AppEvent::FocusedReviewPersistenceRetry { .. }
             | AppEvent::SessionUpdated { .. }
             | AppEvent::AgentResponseReceived { .. }
@@ -648,6 +665,9 @@ impl AppEventBatch {
                 error,
                 session_id,
             } => self.collect_review_preparation_failed(diff_hash, error, session_id),
+            AppEvent::DeferredAutoReviewPersistenceRetry { retry } => {
+                self.deferred_auto_review_persistence_retries.push(retry);
+            }
             AppEvent::FocusedReviewPersistenceRetry { retry } => {
                 self.focused_review_persistence_retries.push(retry);
             }
@@ -985,6 +1005,8 @@ impl App {
             &mut event_batch.session_review_comment_snapshots,
         ));
         let completed_turn_session_ids = event_batch.applied_turns.keys().cloned().collect();
+        let completed_review_session_ids =
+            Self::completed_review_session_ids(&event_batch.applied_turns);
         self.supersede_review_diff_loads(&completed_turn_session_ids);
         for session_diff_update in std::mem::take(&mut event_batch.session_diff_updates) {
             self.apply_session_diff_update(session_diff_update).await;
@@ -1029,8 +1051,9 @@ impl App {
             .await;
         let mut auto_review_session_ids =
             self.sessions_entering_review(&event_batch.session_ids, &previous_session_states);
-        auto_review_session_ids.extend(completed_turn_session_ids);
-        self.start_auto_review_diff_loads(&auto_review_session_ids);
+        auto_review_session_ids.extend(completed_review_session_ids);
+        self.start_or_defer_auto_reviews(&auto_review_session_ids)
+            .await;
         app::review::hydrate_review_transients(
             &self.review_cache,
             self.sessions.state_mut(),
@@ -1050,6 +1073,18 @@ impl App {
         if should_mark_dirty {
             self.mark_dirty();
         }
+    }
+
+    /// Returns completed turns eligible to trigger an automatic focused
+    /// review rather than clarification-question input.
+    fn completed_review_session_ids(
+        applied_turns: &HashMap<SessionId, TurnAppliedState>,
+    ) -> HashSet<SessionId> {
+        applied_turns
+            .iter()
+            .filter(|(_, turn_applied_state)| turn_applied_state.questions.is_empty())
+            .map(|(session_id, _)| session_id.clone())
+            .collect()
     }
 
     /// Applies queued worker actions that started or otherwise resolved.
@@ -1244,6 +1279,9 @@ impl App {
                     );
                     self.persist_focused_review_updates(focused_review_persistence)
                         .await;
+                }
+                AppEventEffect::PersistDeferredAutoReviewTriggers(retries) => {
+                    self.persist_deferred_auto_review_retries(retries).await;
                 }
                 AppEventEffect::PersistFocusedReviewUpdates(persistence_updates) => {
                     self.persist_focused_review_retries(persistence_updates)
@@ -1885,6 +1923,53 @@ impl App {
     /// Starts focused review generation for sessions that just entered review.
     pub(super) fn auto_start_reviews(&mut self, session_ids: &HashSet<SessionId>) {
         self.start_auto_review_diff_loads(session_ids);
+    }
+
+    /// Starts automatic reviews for loaded sessions and retains triggers for
+    /// sessions whose owning project is currently inactive.
+    async fn start_or_defer_auto_reviews(&mut self, session_ids: &HashSet<SessionId>) {
+        let mut loaded_session_ids = HashSet::new();
+
+        for session_id in session_ids {
+            let loaded_status = self
+                .sessions
+                .session_for_id(session_id)
+                .map(|session| session.status);
+            if loaded_status == Some(Status::InProgress) {
+                self.defer_auto_review_session(session_id).await;
+
+                continue;
+            }
+            if loaded_status.is_some() {
+                self.deferred_auto_review_session_ids.remove(session_id);
+                loaded_session_ids.insert(session_id.clone());
+
+                continue;
+            }
+
+            self.defer_auto_review_session(session_id).await;
+        }
+
+        self.start_auto_review_diff_loads(&loaded_session_ids);
+    }
+
+    /// Consumes deferred automatic-review triggers whose sessions were
+    /// restored by the latest project switch.
+    pub(super) fn resume_deferred_auto_reviews(&mut self, persisted_session_ids: Vec<String>) {
+        self.deferred_auto_review_session_ids
+            .extend(persisted_session_ids.into_iter().map(SessionId::from));
+        let loaded_session_ids = self
+            .deferred_auto_review_session_ids
+            .iter()
+            .filter(|session_id| self.sessions.session_for_id(session_id).is_some())
+            .cloned()
+            .collect::<HashSet<_>>();
+
+        for session_id in &loaded_session_ids {
+            self.deferred_auto_review_session_ids.remove(session_id);
+        }
+
+        self.start_auto_review_diff_loads(&loaded_session_ids);
     }
 
     /// Applies one completed branch-publish action to the session chat.
@@ -3006,6 +3091,142 @@ mod tests {
             [] as [crate::app::core::events::AppEventEffect; 0]
         );
         assert!(reduction_plan.changes_observable_state);
+    }
+
+    #[tokio::test]
+    async fn completed_turn_defers_auto_review_when_project_is_inactive() {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_test_app().await;
+        let session_id = SessionId::from("inactive-completed-session");
+        let inactive_project_path = base_dir.path().join("inactive-project");
+        let inactive_project_id = app
+            .services
+            .db()
+            .projects()
+            .upsert_project(&inactive_project_path.to_string_lossy(), None)
+            .await
+            .expect("failed to insert inactive project");
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                session_id.as_str(),
+                "gpt-5.6-sol",
+                "main",
+                "Review",
+                inactive_project_id,
+            )
+            .await
+            .expect("failed to insert inactive session");
+        let turn_applied_state = TurnAppliedState {
+            follow_up_tasks: Vec::new(),
+            questions: Vec::new(),
+            summary: None,
+            token_usage_delta: crate::domain::session::SessionStats::default(),
+        };
+
+        // Act
+        app.apply_app_events(AppEvent::AgentResponseReceived {
+            session_id: session_id.clone(),
+            turn_applied_state,
+        })
+        .await;
+
+        // Assert
+        assert_eq!(
+            app.deferred_auto_review_session_ids,
+            HashSet::from([session_id.clone()])
+        );
+        assert_eq!(
+            app.services
+                .db()
+                .sessions()
+                .load_pending_focused_review_session_ids(inactive_project_id)
+                .await
+                .expect("failed to load deferred review"),
+            [session_id.as_str()]
+        );
+    }
+
+    #[tokio::test]
+    async fn late_completed_turn_for_deleted_session_is_not_deferred() {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_test_app().await;
+        let session_id = SessionId::from("deleted-completed-session");
+        let inactive_project_path = base_dir.path().join("inactive-project");
+        let inactive_project_id = app
+            .services
+            .db()
+            .projects()
+            .upsert_project(&inactive_project_path.to_string_lossy(), None)
+            .await
+            .expect("failed to insert inactive project");
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                session_id.as_str(),
+                "gpt-5.6-sol",
+                "main",
+                "Review",
+                inactive_project_id,
+            )
+            .await
+            .expect("failed to insert inactive session");
+        app.services
+            .db()
+            .sessions()
+            .delete_session(session_id.as_str())
+            .await
+            .expect("failed to delete inactive session");
+        let turn_applied_state = TurnAppliedState {
+            follow_up_tasks: Vec::new(),
+            questions: Vec::new(),
+            summary: None,
+            token_usage_delta: crate::domain::session::SessionStats::default(),
+        };
+
+        // Act
+        app.apply_app_events(AppEvent::AgentResponseReceived {
+            session_id,
+            turn_applied_state,
+        })
+        .await;
+
+        // Assert
+        assert!(app.deferred_auto_review_session_ids.is_empty());
+        assert!(
+            app.services
+                .db()
+                .sessions()
+                .load_pending_focused_review_session_ids(inactive_project_id)
+                .await
+                .expect("failed to load deferred reviews")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_turn_with_questions_is_not_deferred() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let session_id = SessionId::from("inactive-question-session");
+        let turn_applied_state = TurnAppliedState {
+            follow_up_tasks: Vec::new(),
+            questions: vec![crate::domain::question::QuestionItem::new("Which project?")],
+            summary: None,
+            token_usage_delta: crate::domain::session::SessionStats::default(),
+        };
+
+        // Act
+        app.apply_app_events(AppEvent::AgentResponseReceived {
+            session_id,
+            turn_applied_state,
+        })
+        .await;
+
+        // Assert
+        assert!(app.deferred_auto_review_session_ids.is_empty());
     }
 
     #[tokio::test]

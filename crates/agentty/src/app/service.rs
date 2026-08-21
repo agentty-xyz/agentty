@@ -335,6 +335,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::SessionQueuedSyncResolved { .. } => "SessionQueuedSyncResolved",
         AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
         AppEvent::ReviewPreparationFailed { .. } => "ReviewPreparationFailed",
+        AppEvent::DeferredAutoReviewPersistenceRetry { .. } => "DeferredAutoReviewPersistenceRetry",
         AppEvent::FocusedReviewPersistenceRetry { .. } => "FocusedReviewPersistenceRetry",
         AppEvent::SessionUpdated { .. } => "SessionUpdated",
         AppEvent::AgentResponseReceived { .. } => "AgentResponseReceived",
@@ -425,6 +426,23 @@ mod tests {
 
         // Assert
         assert_eq!(label, "FocusedReviewPersistenceRetry");
+    }
+
+    #[test]
+    fn app_event_label_names_deferred_auto_review_persistence_retries() {
+        // Arrange
+        let event = AppEvent::DeferredAutoReviewPersistenceRetry {
+            retry: crate::app::session_diff::DeferredAutoReviewPersistenceRetry {
+                attempt: 1,
+                session_id: "session-id".into(),
+            },
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "DeferredAutoReviewPersistenceRetry");
     }
 
     #[test]

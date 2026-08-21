@@ -273,6 +273,9 @@ pub struct App {
     /// switches, is hydrated after restart, and is ready when the user presses
     /// `f`.
     pub(crate) review_cache: HashMap<SessionId, ReviewCacheEntry>,
+    /// Retains automatic focused-review triggers for completed sessions whose
+    /// owning project is not currently loaded.
+    pub(crate) deferred_auto_review_session_ids: HashSet<SessionId>,
     /// Retains focused-review cache generations until their durable writes
     /// settle so project-scoped refreshes cannot discard off-project output.
     pub(crate) pending_focused_review_persistence: HashMap<SessionId, FocusedReviewPersistence>,
@@ -456,6 +459,9 @@ impl App {
             .ok_or_else(|| {
                 AppError::Workflow(format!("Project with id `{project_id}` was not found"))
             })?;
+        let recoverable_focused_review_session_ids =
+            Self::load_recoverable_focused_review_session_ids(self.services.db(), project.id)
+                .await?;
         let git_branch = self
             .services
             .git_client()
@@ -520,6 +526,7 @@ impl App {
         }
         self.reload_projects().await;
         self.refresh_sessions_now().await;
+        self.resume_deferred_auto_reviews(recoverable_focused_review_session_ids);
 
         Ok(())
     }
@@ -1149,6 +1156,7 @@ impl App {
         if let Some(session_id) = session_id {
             app::at_mention_task::clear_pending_load(&session_id);
             self.discard_prompt_progress(&session_id).await;
+            self.discard_deleted_session_diff_state(&session_id);
             self.review_cache.remove(&session_id);
         }
 
@@ -1168,6 +1176,7 @@ impl App {
         if let Some(session_id) = session_id {
             app::at_mention_task::clear_pending_load(&session_id);
             self.discard_prompt_progress(&session_id).await;
+            self.discard_deleted_session_diff_state(&session_id);
             self.review_cache.remove(&session_id);
         }
 

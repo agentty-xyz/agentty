@@ -2048,6 +2048,57 @@ const QUEUED_REVIEW_FOLLOW_UP_ANSWER: &str = "Queued review follow-up completed 
 /// run as detached one-shot commands alongside session turns, so they need a
 /// response that no scenario assertion looks for.
 const QUEUED_FIFO_UTILITY_ANSWER: &str = "Queued FIFO helper response";
+/// Focused-review result emitted after a turn completes in an inactive project.
+const DEFERRED_PROJECT_REVIEW_TEXT: &str = "Deferred project completion received focused review.";
+
+/// Installs a delayed session turn plus a distinct focused-review response so
+/// project-switching scenarios can prove the automatic review ran.
+fn install_deferred_project_review_claude_stub(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r###"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+case "$prompt" in
+  *"Review the Git diff for display in a terminal UI."*)
+    result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- {DEFERRED_PROJECT_REVIEW_TEXT}\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[],\"summary\":null}}'
+    ;;
+  *"Generate a concise, commit-style title"*)
+    result='{{\"answer\":\"Cross-project focused review\",\"questions\":[],\"summary\":null}}'
+    ;;
+  *"Generate the canonical session commit message"*)
+    result='{{\"answer\":\"test: exercise cross-project review\",\"questions\":[],\"summary\":null}}'
+    ;;
+  *)
+    sleep 3
+    printf 'review me\n' > deferred-project-review.txt
+    result='{{\"answer\":\"Completed work while another project was active.\",\"questions\":[],\"summary\":null}}'
+    ;;
+esac
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":9}}}}"
+"###,
+    );
+
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+            ("DefaultReviewAgent", "claude"),
+            ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+        ],
+    )
+}
 
 /// Installs a delayed Claude turn so the scenario can queue sync while the
 /// worker is still active, optionally forcing its later validation to fail.
@@ -4397,6 +4448,53 @@ fn session_queued_action_survives_project_switching() -> E2eResult {
                 assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
                 assertion::assert_text_in_region(frame, "Enter: reply", &full);
                 assertion::assert_not_visible(frame, "≡ sync —");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify a turn that finishes while another project is active starts and
+/// displays focused review after its owning project is restored.
+#[test]
+fn completed_session_review_survives_project_switching() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("completed_session_review_survives_project_switching")
+        .with_git()
+        .setup(|env| {
+            install_deferred_project_review_claude_stub(env)?;
+            common::seed_second_project(env)
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::create_session_with_prompt_and_return_to_list(
+                        "Finish while I view another project",
+                    ))
+                    .press_key("p")
+                    .wait_for_text("Switch project", 5000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Project: zeta-project", 5000)
+                    .sleep_ms(6000)
+                    .press_key("p")
+                    .wait_for_text("Switch project", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Project: test-project", 5000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text(DEFERRED_PROJECT_REVIEW_TEXT, 30000)
+                    .capture_labeled(
+                        "restored_review",
+                        "Focused review after inactive-project completion",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, DEFERRED_PROJECT_REVIEW_TEXT, &full);
+                assertion::assert_text_in_region(frame, "Suggestions", &full);
+                assertion::assert_not_visible(frame, "Reviewing changes with");
             },
         )?;
 
