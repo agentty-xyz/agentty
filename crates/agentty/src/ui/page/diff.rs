@@ -534,11 +534,12 @@ struct DiffLineCommentInsertion {
 /// Short-lived inputs used to paint one inline-comment diff viewport.
 struct DiffVisibleLineRequest<'a> {
     comment_insertions: &'a [DiffLineCommentInsertion],
+    comment_highlight_ranges: &'a [Range<usize>],
     content_width: usize,
     line_comments: &'a DiffLineComments,
     prefix_width: usize,
     scroll_offset: u16,
-    highlighted_ranges: &'a [Range<usize>],
+    selected_range: Option<&'a Range<usize>>,
     viewport_height: u16,
 }
 
@@ -1077,7 +1078,7 @@ impl<'a> DiffPage<'a> {
             layout.line_count,
             layout.render_layout.viewport_height,
         );
-        let mut highlighted_ranges = layout.line_comment_highlight_ranges();
+        let comment_highlight_ranges = layout.line_comment_highlight_ranges();
         let selected_range = (self.focus == DiffFocus::Content)
             .then(|| {
                 let (start_changed_line_index, end_changed_line_index) = self
@@ -1088,18 +1089,16 @@ impl<'a> DiffPage<'a> {
                     .changed_line_selection_range(start_changed_line_index, end_changed_line_index)
             })
             .flatten();
-        if let Some(selected_range) = selected_range {
-            highlighted_ranges.push(selected_range);
-        }
         let paint_lines = Self::borrowed_visible_lines_with_comments(
             &layout.lines,
             &DiffVisibleLineRequest {
                 comment_insertions: &layout.comment_insertions,
+                comment_highlight_ranges: &comment_highlight_ranges,
                 content_width: layout.render_layout.content_width,
-                highlighted_ranges: &highlighted_ranges,
                 line_comments: self.line_comments,
                 prefix_width: layout.render_layout.prefix_width,
                 scroll_offset,
+                selected_range: selected_range.as_ref(),
                 viewport_height: layout.render_layout.viewport_height,
             },
         );
@@ -1157,9 +1156,18 @@ impl<'a> DiffPage<'a> {
                 let original_index = display_row.saturating_sub(preceding_comment_count);
                 let mut paint_line = text_util::borrowed_paint_line(lines.get(original_index)?);
                 if request
-                    .highlighted_ranges
+                    .comment_highlight_ranges
                     .iter()
                     .any(|range| range.contains(&display_row))
+                {
+                    paint_line.style = paint_line.style.bg(style::palette::surface_prompt());
+                    for span in &mut paint_line.spans {
+                        span.style = span.style.bg(style::palette::surface_prompt());
+                    }
+                }
+                if request
+                    .selected_range
+                    .is_some_and(|range| range.contains(&display_row))
                 {
                     paint_line.style = paint_line.style.add_modifier(Modifier::REVERSED);
                     for span in &mut paint_line.spans {
@@ -2025,7 +2033,7 @@ mod tests {
     }
 
     #[test]
-    fn test_diff_page_keeps_commented_range_highlighted_after_editing() {
+    fn test_diff_page_distinguishes_cursor_inside_commented_range() {
         // Arrange
         let diff = concat!(
             "diff --git a/src/main.rs b/src/main.rs\n",
@@ -2065,7 +2073,7 @@ mod tests {
             diff,
             diff_layout_cache: &diff_layout_cache,
             file_explorer_selected_index: 1,
-            focus: DiffFocus::Files,
+            focus: DiffFocus::Content,
             line_comments: &line_comments,
             markdown_render_cache: &markdown_render_cache,
             preview: test_diff_preview(),
@@ -2084,7 +2092,7 @@ mod tests {
             .expect("failed to render diff page");
 
         // Assert
-        let selected_source_row_count = terminal
+        let commented_source_rows = terminal
             .backend()
             .buffer()
             .content()
@@ -2094,30 +2102,23 @@ mod tests {
                     .iter()
                     .map(ratatui::buffer::Cell::symbol)
                     .collect::<String>();
-                (row_text.contains("fn main() {}") || row_text.contains("review();"))
-                    && row
-                        .iter()
-                        .any(|cell| cell.modifier.contains(Modifier::REVERSED))
+                row_text.contains("fn main() {}") || row_text.contains("review();")
             })
-            .count();
-        assert_eq!(selected_source_row_count, 2);
+            .collect::<Vec<_>>();
+        assert_eq!(commented_source_rows.len(), 2);
+        assert!(commented_source_rows.iter().all(|row| {
+            row.iter()
+                .any(|cell| cell.bg == style::palette::surface_prompt())
+        }));
         assert!(
-            terminal
-                .backend()
-                .buffer()
-                .content()
-                .chunks(100)
-                .all(|row| {
-                    let row_text = row
-                        .iter()
-                        .map(ratatui::buffer::Cell::symbol)
-                        .collect::<String>();
-
-                    !row_text.contains("comment: Explain both lines")
-                        || row
-                            .iter()
-                            .all(|cell| !cell.modifier.contains(Modifier::REVERSED))
-                })
+            commented_source_rows[0]
+                .iter()
+                .all(|cell| !cell.modifier.contains(Modifier::REVERSED))
+        );
+        assert!(
+            commented_source_rows[1]
+                .iter()
+                .any(|cell| cell.modifier.contains(Modifier::REVERSED))
         );
     }
 
