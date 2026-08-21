@@ -34,7 +34,10 @@ pub(crate) use project::SqliteProjectRepository;
 pub use project::{ProjectListRow, ProjectRepository, ProjectRow};
 pub use repository::AppRepositories;
 pub(crate) use review::SqliteReviewRepository;
-pub use review::{ReviewRepository, SessionReviewRequestRow};
+pub use review::{
+    NewSessionReviewCommentResolution, ReviewRepository, SessionReviewCommentResolutionRow,
+    SessionReviewRequestRow,
+};
 pub(crate) use session::SqliteSessionRepository;
 pub use session::{
     ForkSessionSnapshot, PersistedSessionCreation, SessionAgentModelRow, SessionDetailRow,

@@ -8,12 +8,13 @@ use ag_agent as agent;
 use ag_agent::{AgentError, OneShotClient, TurnResult};
 use ag_forge as forge;
 use ag_git::GitClient;
-use ag_protocol::{AgentResponse, ReviewCommentOutcome};
+use ag_protocol::{AgentResponse, ReviewCommentOutcome, ReviewCommentResolution};
 use serde_json;
 use tokio::sync::mpsc;
 use tracing::warn;
+use uuid::Uuid;
 
-use super::task::SessionTranscriptMessageAppend;
+use super::task::{AutoCommitOutcome, SessionTranscriptMessageAppend};
 use super::worker::{SessionWorkerContext, TurnMetadata, has_unfinished_branch_operation};
 use super::{SessionTaskService, StatusTransition, published_branch, turn};
 use crate::app::assist::AssistContext;
@@ -25,7 +26,7 @@ use crate::domain::session::{
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::db::{AppRepositories, SessionTurnMetadata};
+use crate::infra::db::{AppRepositories, NewSessionReviewCommentResolution, SessionTurnMetadata};
 use crate::infra::fs::FsClient;
 
 /// Personality state persisted after one successful main session turn.
@@ -177,6 +178,7 @@ impl TurnFinalizerContext {
 struct TurnPersistence<'a> {
     context: &'a PostTurnContext,
     personality: TurnPersonalityPersistence,
+    review_comment_resolutions: &'a [NewSessionReviewCommentResolution],
     session_agent: crate::domain::agent::AgentSelection,
 }
 
@@ -227,6 +229,7 @@ impl TurnPersistence<'_> {
                     model: session_model.as_str().to_string(),
                     provider_conversation_id: provider_conversation_id.map(str::to_string),
                     questions_json,
+                    review_comment_resolutions: self.review_comment_resolutions.to_vec(),
                     summary: summary.clone(),
                     token_usage_delta: token_usage_delta.clone(),
                 },
@@ -484,9 +487,16 @@ async fn apply_successful_turn_result(
         )
         .await;
     }
+    let review_comment_resolutions = prepare_review_comment_resolutions(
+        context,
+        &turn_metadata.review_comment_thread_ids,
+        &assistant_message.review_comment_outcomes,
+    )
+    .await?;
     let turn_applied_state = match (TurnPersistence {
         context,
         personality,
+        review_comment_resolutions: &review_comment_resolutions,
         session_agent: turn_metadata.session_agent,
     }
     .apply(
@@ -509,45 +519,33 @@ async fn apply_successful_turn_result(
     } else {
         Status::Question
     };
-    let review_comment_outcomes = valid_review_comment_outcomes(
-        &turn_metadata.review_comment_thread_ids,
-        &assistant_message.review_comment_outcomes,
-    );
     // Fire-and-forget: receiver may be dropped during shutdown.
     let _ = context.app_event_tx.send(AppEvent::AgentResponseReceived {
         session_id: context.session_id.clone(),
         turn_applied_state,
     });
     let owns_branch_changes = session_owns_branch_changes(&context.db, &context.session_id).await;
-    let commit_outcome = if owns_branch_changes {
-        SessionTaskService::handle_auto_commit(AssistContext {
-            app_event_tx: context.app_event_tx.clone(),
-            child_pid: Arc::clone(&context.child_pid),
-            db: context.db.clone(),
-            folder: context.folder.clone(),
-            git_client: Arc::clone(&context.git_client),
-            id: context.session_id.to_string(),
-            one_shot_client: Arc::clone(&context.one_shot_client),
-            session_agent: turn_metadata.session_agent,
-            session_update_versions: context.session_update_versions.clone(),
-            transcript: Arc::clone(&context.transcript),
-        })
-        .await
+    let (can_auto_push, review_request_commit_message) = if owns_branch_changes {
+        run_auto_commit(
+            context,
+            turn_metadata.session_agent,
+            !turn_metadata.review_comment_thread_ids.is_empty(),
+            &review_comment_resolutions,
+        )
+        .await?
     } else {
-        None
+        (true, None)
     };
-    let review_request_commit_message = commit_outcome.map(|outcome| outcome.commit_message);
     let review_request_session_summary = assistant_message
         .summary
         .as_ref()
         .map(|summary| summary.session.clone());
-    if owns_branch_changes {
+    if owns_branch_changes && can_auto_push {
         start_published_branch_auto_push(
             context,
             turn_metadata,
             review_request_commit_message,
             review_request_session_summary,
-            review_comment_outcomes,
         )
         .await;
     }
@@ -562,35 +560,255 @@ async fn apply_successful_turn_result(
     Ok(target_status)
 }
 
+/// Builds durable operations for accepted review-comment outcomes.
+async fn prepare_review_comment_resolutions(
+    context: &PostTurnContext,
+    allowed_thread_ids: &[String],
+    outcomes: &[ReviewCommentOutcome],
+) -> Result<Vec<NewSessionReviewCommentResolution>, SessionError> {
+    let validation = validate_review_comment_outcomes(allowed_thread_ids, outcomes);
+    if !validation.is_complete {
+        append_incomplete_review_comment_outcomes_notice(
+            context,
+            validation.accepted_count,
+            validation.expected_count,
+        )
+        .await;
+    }
+    if validation.outcomes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let review_request = match context
+        .db
+        .reviews()
+        .load_session_review_request(&context.session_id)
+        .await
+    {
+        Ok(Some(review_request)) => review_request,
+        Ok(None) => {
+            let error = SessionError::Workflow(
+                "the session no longer has a linked review request".to_string(),
+            );
+            append_review_comment_persistence_failure_notice(context, &error.to_string()).await;
+
+            return Err(error);
+        }
+        Err(error) => {
+            append_review_comment_persistence_failure_notice(context, &error.to_string()).await;
+
+            return Err(error.into());
+        }
+    };
+
+    Ok(validation
+        .outcomes
+        .iter()
+        .map(|outcome| NewSessionReviewCommentResolution {
+            commit_hash: None,
+            reply: outcome.reply.clone(),
+            reply_token: Uuid::new_v4().to_string(),
+            resolution: match outcome.resolution {
+                ReviewCommentResolution::Fixed => "fixed",
+                ReviewCommentResolution::NoChangeNeeded => "no_change_needed",
+            }
+            .to_string(),
+            review_request_display_id: review_request.display_id.clone(),
+            thread_id: outcome.thread_id.clone(),
+        })
+        .collect())
+}
+
+/// Reports that accepted outcomes could not be made durable and therefore
+/// cannot safely drive forge mutations.
+async fn append_review_comment_persistence_failure_notice(context: &PostTurnContext, error: &str) {
+    let message = TranscriptNotice::ReviewCommentsWarning.format(format!(
+        "Could not save the review-comment operation, so this response will not post replies or \
+         resolve threads: {error}"
+    ));
+    SessionTaskService::append_workflow_notice(
+        &context.transcript,
+        &context.db,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        &context.session_id,
+        &message,
+    )
+    .await;
+}
+
 async fn session_owns_branch_changes(db: &AppRepositories, session_id: &str) -> bool {
     turn::load_session_role(db, session_id)
         .await
         .owns_branch_changes()
 }
 
-/// Returns deduplicated outcomes whose thread identifiers were explicitly
-/// allowlisted for this turn and whose replies are nonblank.
-fn valid_review_comment_outcomes(
+/// Runs the automatic commit and returns whether post-commit branch effects
+/// may continue plus the optional generated commit message.
+async fn run_auto_commit(
+    context: &PostTurnContext,
+    session_agent: crate::domain::agent::AgentSelection,
+    has_review_comment_targets: bool,
+    review_comment_resolutions: &[NewSessionReviewCommentResolution],
+) -> Result<(bool, Option<String>), SessionError> {
+    let outcome = SessionTaskService::handle_auto_commit(AssistContext {
+        app_event_tx: context.app_event_tx.clone(),
+        child_pid: Arc::clone(&context.child_pid),
+        db: context.db.clone(),
+        folder: context.folder.clone(),
+        git_client: Arc::clone(&context.git_client),
+        id: context.session_id.to_string(),
+        one_shot_client: Arc::clone(&context.one_shot_client),
+        session_agent,
+        session_update_versions: context.session_update_versions.clone(),
+        transcript: Arc::clone(&context.transcript),
+    })
+    .await;
+
+    match outcome {
+        AutoCommitOutcome::Committed(outcome) => {
+            if !review_comment_resolutions.is_empty() {
+                let commit_hash = context.git_client.head_hash(context.folder.clone()).await?;
+                context
+                    .db
+                    .reviews()
+                    .bind_session_review_comment_resolutions_to_commit(
+                        &context.session_id,
+                        review_comment_resolutions,
+                        &commit_hash,
+                    )
+                    .await?;
+            }
+
+            Ok((true, Some(outcome.commit_message)))
+        }
+        AutoCommitOutcome::NoChanges => {
+            if !review_comment_resolutions.is_empty() {
+                let commit_hash = context.git_client.head_hash(context.folder.clone()).await?;
+                context
+                    .db
+                    .reviews()
+                    .bind_session_review_comment_resolutions_to_commit(
+                        &context.session_id,
+                        review_comment_resolutions,
+                        &commit_hash,
+                    )
+                    .await?;
+            }
+
+            Ok((true, None))
+        }
+        AutoCommitOutcome::Failed => {
+            context
+                .db
+                .reviews()
+                .discard_session_review_comment_resolutions(
+                    &context.session_id,
+                    review_comment_resolutions,
+                )
+                .await?;
+            if has_review_comment_targets {
+                append_review_comment_commit_failure_notice(context).await;
+            }
+
+            Ok((false, None))
+        }
+    }
+}
+
+/// Result of validating agent-reported outcomes against one turn's thread
+/// allowlist.
+struct ReviewCommentOutcomeValidation {
+    accepted_count: usize,
+    expected_count: usize,
+    is_complete: bool,
+    outcomes: Vec<ReviewCommentOutcome>,
+}
+
+/// Returns normalized outcomes only when the agent supplied exactly one valid
+/// outcome for every allowlisted thread.
+fn validate_review_comment_outcomes(
     allowed_thread_ids: &[String],
     outcomes: &[ReviewCommentOutcome],
-) -> Vec<ReviewCommentOutcome> {
+) -> ReviewCommentOutcomeValidation {
     let allowed_thread_ids = allowed_thread_ids
         .iter()
         .map(String::as_str)
         .collect::<HashSet<_>>();
     let mut accepted_thread_ids = HashSet::new();
+    let mut has_invalid_allowlisted_outcome = false;
+    let mut accepted_outcomes = Vec::new();
 
-    outcomes
-        .iter()
-        .filter(|outcome| allowed_thread_ids.contains(outcome.thread_id.as_str()))
-        .filter(|outcome| !outcome.reply.trim().is_empty())
-        .filter(|outcome| accepted_thread_ids.insert(outcome.thread_id.clone()))
-        .map(|outcome| ReviewCommentOutcome {
+    for outcome in outcomes {
+        if !allowed_thread_ids.contains(outcome.thread_id.as_str()) {
+            continue;
+        }
+        if outcome.reply.trim().is_empty() || !accepted_thread_ids.insert(outcome.thread_id.clone())
+        {
+            has_invalid_allowlisted_outcome = true;
+            continue;
+        }
+
+        accepted_outcomes.push(ReviewCommentOutcome {
             reply: outcome.reply.trim().to_string(),
             resolution: outcome.resolution,
             thread_id: outcome.thread_id.clone(),
-        })
-        .collect()
+        });
+    }
+
+    let accepted_count = accepted_outcomes.len();
+    let expected_count = allowed_thread_ids.len();
+    let is_complete = accepted_count == expected_count && !has_invalid_allowlisted_outcome;
+    if !is_complete {
+        accepted_outcomes.clear();
+    }
+
+    ReviewCommentOutcomeValidation {
+        accepted_count,
+        expected_count,
+        is_complete,
+        outcomes: accepted_outcomes,
+    }
+}
+
+/// Reports an incomplete structured response without applying a partial set of
+/// forge mutations.
+async fn append_incomplete_review_comment_outcomes_notice(
+    context: &PostTurnContext,
+    accepted_count: usize,
+    expected_count: usize,
+) {
+    let message = TranscriptNotice::ReviewCommentsWarning.format(format!(
+        "The agent returned exactly one valid outcome for {accepted_count} of {expected_count} \
+         selected review thread(s). No review replies were posted or threads resolved. Reopen \
+         review comments to retry."
+    ));
+    SessionTaskService::append_workflow_notice(
+        &context.transcript,
+        &context.db,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        &context.session_id,
+        &message,
+    )
+    .await;
+}
+
+/// Reports that forge effects were withheld because pending worktree changes
+/// did not reach a commit.
+async fn append_review_comment_commit_failure_notice(context: &PostTurnContext) {
+    let message = TranscriptNotice::ReviewCommentsWarning.format(
+        "Agentty could not commit the review-comment changes, so it did not push the branch, post \
+         replies, or resolve threads. Fix the commit error, then reopen review comments to retry.",
+    );
+    SessionTaskService::append_workflow_notice(
+        &context.transcript,
+        &context.db,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        &context.session_id,
+        &message,
+    )
+    .await;
 }
 
 /// Returns whether the completed session has materialized stacked children
@@ -632,7 +850,6 @@ async fn start_published_branch_auto_push(
     turn_metadata: TurnMetadata,
     review_request_commit_message: Option<String>,
     review_request_session_summary: Option<String>,
-    review_comment_outcomes: Vec<ReviewCommentOutcome>,
 ) {
     let Some(published_upstream_ref) = turn_metadata.published_upstream_ref else {
         return;
@@ -657,7 +874,6 @@ async fn start_published_branch_auto_push(
             git_client: Arc::clone(&context.git_client),
             one_shot_client: Arc::clone(&context.one_shot_client),
             published_upstream_ref,
-            review_comment_outcomes,
             review_request_client: Arc::clone(&context.review_request_client),
             review_request_commit_message,
             session_agent: turn_metadata.session_agent,
@@ -801,6 +1017,51 @@ mod tests {
         (context, status)
     }
 
+    /// Builds the narrow post-turn context used by review-operation tests.
+    fn review_operation_test_context(
+        db: AppRepositories,
+        git_client: MockGitClient,
+    ) -> PostTurnContext {
+        PostTurnContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db,
+            folder: PathBuf::from("/tmp/project"),
+            git_client: Arc::new(git_client),
+            one_shot_client: Arc::new(MockOneShotClient::new()),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            session_update_versions: Arc::default(),
+            session_id: "session-id".into(),
+            transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+        }
+    }
+
+    /// Links the review request fixture required to prepare durable outcomes.
+    async fn link_review_operation_test_request(db: &AppRepositories) {
+        db.reviews()
+            .update_session_review_request(
+                "session-id",
+                Some(crate::domain::session::ReviewRequest {
+                    last_refreshed_at: 100,
+                    summary: forge::ReviewRequestSummary {
+                        display_id: "#42".to_string(),
+                        forge_kind: forge::ForgeKind::GitHub,
+                        source_branch: "wt/session-id".to_string(),
+                        state: crate::domain::session::ReviewRequestState::Open,
+                        status_summary: None,
+                        target_branch: "main".to_string(),
+                        title: "Review title".to_string(),
+                        web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+                    },
+                }),
+            )
+            .await
+            .expect("failed to link review request");
+    }
+
     #[test]
     fn test_truncate_turn_error_notice_keeps_short_errors_intact() {
         // Arrange
@@ -830,7 +1091,7 @@ mod tests {
     }
 
     #[test]
-    fn test_valid_review_comment_outcomes_filters_and_normalizes_agent_output() {
+    fn test_review_comment_outcomes_require_exactly_one_valid_item_per_thread() {
         // Arrange
         let allowed_thread_ids = vec!["thread-fixed".to_string(), "thread-other".to_string()];
         let outcomes = vec![
@@ -862,11 +1123,46 @@ mod tests {
         ];
 
         // Act
-        let accepted = valid_review_comment_outcomes(&allowed_thread_ids, &outcomes);
+        let validation = validate_review_comment_outcomes(&allowed_thread_ids, &outcomes);
 
         // Assert
+        assert_eq!(validation.accepted_count, 2);
+        assert_eq!(validation.expected_count, 2);
+        assert!(!validation.is_complete);
+        assert_eq!(validation.outcomes, Vec::new());
+    }
+
+    #[test]
+    fn test_review_comment_outcomes_normalize_complete_allowlisted_response() {
+        // Arrange
+        let allowed_thread_ids = vec!["thread-fixed".to_string(), "thread-other".to_string()];
+        let outcomes = vec![
+            ReviewCommentOutcome {
+                reply: "  Applied the validation.  ".to_string(),
+                resolution: ReviewCommentResolution::Fixed,
+                thread_id: "thread-fixed".to_string(),
+            },
+            ReviewCommentOutcome {
+                reply: "No change needed.".to_string(),
+                resolution: ReviewCommentResolution::NoChangeNeeded,
+                thread_id: "thread-other".to_string(),
+            },
+            ReviewCommentOutcome {
+                reply: "Unknown thread.".to_string(),
+                resolution: ReviewCommentResolution::Fixed,
+                thread_id: "thread-unknown".to_string(),
+            },
+        ];
+
+        // Act
+        let validation = validate_review_comment_outcomes(&allowed_thread_ids, &outcomes);
+
+        // Assert
+        assert_eq!(validation.accepted_count, 2);
+        assert_eq!(validation.expected_count, 2);
+        assert!(validation.is_complete);
         assert_eq!(
-            accepted,
+            validation.outcomes,
             vec![
                 ReviewCommentOutcome {
                     reply: "Applied the validation.".to_string(),
@@ -880,6 +1176,142 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn review_comment_operations_preserve_complete_outcomes() {
+        // Arrange
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        insert_research_session(&db, "session-id").await;
+        link_review_operation_test_request(&db).await;
+        let context = review_operation_test_context(db, MockGitClient::new());
+        let thread_ids = vec!["thread-fixed".to_string(), "thread-other".to_string()];
+        let outcomes = vec![
+            ReviewCommentOutcome {
+                reply: "Applied the fix.".to_string(),
+                resolution: ReviewCommentResolution::Fixed,
+                thread_id: "thread-fixed".to_string(),
+            },
+            ReviewCommentOutcome {
+                reply: "No change is needed.".to_string(),
+                resolution: ReviewCommentResolution::NoChangeNeeded,
+                thread_id: "thread-other".to_string(),
+            },
+        ];
+
+        // Act
+        let operations = prepare_review_comment_resolutions(&context, &thread_ids, &outcomes)
+            .await
+            .expect("review operations should be prepared");
+
+        // Assert
+        assert_eq!(operations.len(), 2);
+        assert_eq!(operations[0].resolution, "fixed");
+        assert_eq!(operations[1].resolution, "no_change_needed");
+        assert!(operations.iter().all(|operation| {
+            operation.commit_hash.is_none()
+                && operation.review_request_display_id == "#42"
+                && !operation.reply_token.is_empty()
+        }));
+        assert_ne!(operations[0].reply_token, operations[1].reply_token);
+    }
+
+    #[tokio::test]
+    async fn review_comment_operations_require_a_linked_review_request() {
+        // Arrange
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        insert_research_session(&db, "session-id").await;
+        let context = review_operation_test_context(db, MockGitClient::new());
+        let outcomes = vec![ReviewCommentOutcome {
+            reply: "Applied the fix.".to_string(),
+            resolution: ReviewCommentResolution::Fixed,
+            thread_id: "thread-fixed".to_string(),
+        }];
+
+        // Act
+        let error =
+            prepare_review_comment_resolutions(&context, &["thread-fixed".to_string()], &outcomes)
+                .await
+                .expect_err("a linked review request should be required");
+        let transcript = context
+            .transcript
+            .lock()
+            .expect("transcript lock should remain usable")
+            .replay_text()
+            .expect("persistence warning should be rendered");
+
+        // Assert
+        assert!(
+            error
+                .to_string()
+                .contains("the session no longer has a linked review request")
+        );
+        assert!(transcript.contains(
+            "Could not save the review-comment operation, so this response will not post replies"
+        ));
+    }
+
+    #[tokio::test]
+    async fn review_comment_operations_report_link_lookup_failures() {
+        // Arrange
+        let (db, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        insert_research_session(&db, "session-id").await;
+        let context = review_operation_test_context(db, MockGitClient::new());
+        let outcomes = vec![ReviewCommentOutcome {
+            reply: "Applied the fix.".to_string(),
+            resolution: ReviewCommentResolution::Fixed,
+            thread_id: "thread-fixed".to_string(),
+        }];
+        pool.close().await;
+
+        // Act
+        let error =
+            prepare_review_comment_resolutions(&context, &["thread-fixed".to_string()], &outcomes)
+                .await
+                .expect_err("review request lookup should fail");
+        let transcript = context
+            .transcript
+            .lock()
+            .expect("transcript lock should remain usable")
+            .replay_text()
+            .expect("persistence warning should be rendered");
+
+        // Assert
+        assert!(error.to_string().contains("closed pool"));
+        assert!(transcript.contains(
+            "Could not save the review-comment operation, so this response will not post replies"
+        ));
+    }
+
+    #[tokio::test]
+    async fn ordinary_commit_failures_do_not_emit_review_comment_warnings() {
+        // Arrange
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        insert_research_session(&db, "session-id").await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_is_worktree_clean().once().returning(|_| {
+            Box::pin(async { Err(GitError::OutputParse("commit failed".to_string())) })
+        });
+        let context = review_operation_test_context(db, git_client);
+        let session_agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol);
+
+        // Act
+        let result = run_auto_commit(&context, session_agent, false, &[])
+            .await
+            .expect("commit failure handling should remain recoverable");
+        let transcript = context
+            .transcript
+            .lock()
+            .expect("transcript lock should remain usable")
+            .replay_text()
+            .expect("commit failure should be rendered");
+
+        // Assert
+        assert_eq!(result, (false, None));
+        assert!(transcript.contains("[Commit Error] commit failed"));
+        assert!(!transcript.contains("[Review Comments Warning]"));
     }
 
     #[tokio::test]
@@ -1163,7 +1595,6 @@ mod tests {
                     },
                     None,
                     None,
-                    Vec::new(),
                 )
                 .await;
             })

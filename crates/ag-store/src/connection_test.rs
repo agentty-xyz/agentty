@@ -8,8 +8,8 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
-    PersistedSessionCreation, SessionFocusedReviewRow, SessionOperationRow, SessionRow,
-    SessionTurnMetadata,
+    NewSessionReviewCommentResolution, PersistedSessionCreation, SessionFocusedReviewRow,
+    SessionOperationRow, SessionRow, SessionTurnMetadata,
 };
 
 /// Builds one deterministic persisted review-request fixture for DB tests.
@@ -2730,6 +2730,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 model: AgentModel::Gpt56Sol.as_str().to_string(),
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
+                review_comment_resolutions: Vec::new(),
                 summary: String::new(),
                 token_usage_delta: SessionStats {
                     added_lines: 0,
@@ -2758,6 +2759,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 model: AgentModel::Gpt56Sol.as_str().to_string(),
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
+                review_comment_resolutions: Vec::new(),
                 summary: String::new(),
                 token_usage_delta: SessionStats {
                     added_lines: 0,
@@ -3085,6 +3087,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
                 model: AgentModel::Gpt56Sol.as_str().to_string(),
                 provider_conversation_id: Some("thread-123".to_string()),
                 questions_json: r#"[{"text":"Need tests?"}]"#.to_string(),
+                review_comment_resolutions: Vec::new(),
                 summary: r#"{"turn":"Updated the worker.","session":"Session state changed."}"#
                     .to_string(),
                 token_usage_delta: SessionStats {
@@ -3118,6 +3121,107 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
     assert_eq!(session.input_tokens, 0);
     assert_eq!(session.output_tokens, 0);
     assert_eq!(provider_conversation_id.as_deref(), None);
+}
+
+#[tokio::test]
+/// Verifies a failed review-operation insert cannot leave a completed turn
+/// behind after the database is reopened.
+async fn test_persist_session_turn_metadata_and_review_operation_are_restart_atomic() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp directory");
+    let db_path = temp_dir.path().join("agentty.db");
+    let database = Database::open(&db_path)
+        .await
+        .expect("failed to open database");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    database
+        .sessions()
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
+        .await
+        .expect("failed to insert session");
+    let turn_metadata = |resolution: &str| SessionTurnMetadata {
+        applied_personality_id: None,
+        applied_personality_prompt_hash: None,
+        instruction_conversation_id: None,
+        model: AgentModel::Gpt56Sol.as_str().to_string(),
+        provider_conversation_id: Some("thread-123".to_string()),
+        questions_json: r#"[{"text":"Need tests?"}]"#.to_string(),
+        review_comment_resolutions: vec![NewSessionReviewCommentResolution {
+            commit_hash: None,
+            reply: "Applied the validation.".to_string(),
+            reply_token: "token-1".to_string(),
+            resolution: resolution.to_string(),
+            review_request_display_id: "#42".to_string(),
+            thread_id: "thread-1".to_string(),
+        }],
+        summary: "Completed turn".to_string(),
+        token_usage_delta: SessionStats::default(),
+    };
+
+    // Act
+    let result = database
+        .sessions()
+        .persist_session_turn_metadata("session-a", &turn_metadata("invalid"))
+        .await;
+    database.pool().close().await;
+    let database = Database::open(&db_path)
+        .await
+        .expect("failed to reopen database");
+    let session = load_session_row(&database, "session-a").await;
+    let operations = database
+        .reviews()
+        .load_session_review_comment_resolutions("session-a")
+        .await
+        .expect("failed to load review operations");
+    let provider_conversation_id = database
+        .sessions()
+        .get_session_provider_conversation_id("session-a")
+        .await
+        .expect("failed to load provider conversation id");
+
+    // Assert
+    assert!(matches!(result, Err(DbError::Query(_))));
+    assert_eq!(session.summary, None);
+    assert_eq!(session.questions, None);
+    assert_eq!(provider_conversation_id, None);
+    assert_eq!(operations, Vec::new());
+
+    // Act
+    database
+        .sessions()
+        .persist_session_turn_metadata("session-a", &turn_metadata("fixed"))
+        .await
+        .expect("failed to persist completed turn and review operation");
+    database.pool().close().await;
+    let database = Database::open(&db_path)
+        .await
+        .expect("failed to reopen database after retry");
+    let session = load_session_row(&database, "session-a").await;
+    let operations = database
+        .reviews()
+        .load_session_review_comment_resolutions("session-a")
+        .await
+        .expect("failed to load persisted review operations");
+    let provider_conversation_id = database
+        .sessions()
+        .get_session_provider_conversation_id("session-a")
+        .await
+        .expect("failed to load provider conversation id");
+
+    // Assert
+    assert_eq!(session.summary.as_deref(), Some("Completed turn"));
+    assert_eq!(
+        session.questions.as_deref(),
+        Some(r#"[{"text":"Need tests?"}]"#)
+    );
+    assert_eq!(provider_conversation_id.as_deref(), Some("thread-123"));
+    assert_eq!(operations.len(), 1);
+    assert_eq!(operations[0].reply, "Applied the validation.");
+    assert_eq!(operations[0].resolution, "fixed");
 }
 
 #[tokio::test]
