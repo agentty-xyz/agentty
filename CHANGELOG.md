@@ -7,6 +7,36 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.4] - 2026-08-20
+
+### Changed
+
+- agentty: support navigating and editing completed inline diff comments.
+- agentty: switch session permission modes with `Shift+Tab`.
+- ag-harness: run bounded repository reads and stale-safe unified-diff writes through
+  the model harness.
+- repo: expand Dependabot coverage to pre-commit updates, update the Rust toolchain
+  weekly, and pin `prek` to `0.4.14`.
+- deps: update the GitHub Actions dependency group.
+- docs: clarify application-owned lifecycle telemetry.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.4`.
+
+### Fixed
+
+- agentty: prevent partial and duplicate review-comment updates.
+- agentty: preserve the diff viewport and selected-range highlights while navigating
+  changed lines.
+- agentty: keep automatic focused reviews and diff loading recoverable across project
+  switches and worktree cleanup.
+- agentty: keep session synchronization responsive during branch operations.
+- agentty: extend Gemini utility prompt bootstrap deadlines.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.15.3] - 2026-08-19
 
 ### Added
