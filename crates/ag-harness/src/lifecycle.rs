@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -208,6 +209,83 @@ where
     fn observe(&self, event: LifecycleEvent) {
         self(event);
     }
+}
+
+/// Ordered fan-out to multiple lifecycle observers.
+///
+/// Observers run in registration order. A panic in one observer does not
+/// prevent later observers from receiving the event. Same-thread reentrant
+/// events are queued until every observer receives the current event, keeping
+/// each observer's stream in sequence order.
+pub struct LifecycleObserverSet {
+    available: Condvar,
+    observers: Vec<Arc<dyn LifecycleObserver>>,
+    state: Mutex<ObserverSetState>,
+}
+
+impl LifecycleObserverSet {
+    /// Creates a fan-out containing `observer`.
+    pub fn new(observer: impl LifecycleObserver + 'static) -> Self {
+        Self {
+            available: Condvar::new(),
+            observers: vec![Arc::new(observer)],
+            state: Mutex::new(ObserverSetState::default()),
+        }
+    }
+
+    /// Appends an observer to the fan-out.
+    #[must_use]
+    pub fn with_observer(mut self, observer: impl LifecycleObserver + 'static) -> Self {
+        self.observers.push(Arc::new(observer));
+
+        self
+    }
+
+    fn deliver(&self, event: &LifecycleEvent) {
+        for observer in &self.observers {
+            let event = event.clone();
+            let _ = catch_unwind(AssertUnwindSafe(|| observer.observe(event)));
+        }
+    }
+}
+
+impl LifecycleObserver for LifecycleObserverSet {
+    fn observe(&self, event: LifecycleEvent) {
+        let current_thread = thread::current().id();
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.owner == Some(current_thread) {
+            state.pending.push_back(event);
+
+            return;
+        }
+        state = self
+            .available
+            .wait_while(state, |state| state.owner.is_some())
+            .unwrap_or_else(PoisonError::into_inner);
+        state.owner = Some(current_thread);
+        drop(state);
+
+        let mut event = event;
+        loop {
+            self.deliver(&event);
+
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(next_event) = state.pending.pop_front() else {
+                state.owner = None;
+                self.available.notify_one();
+
+                return;
+            };
+            drop(state);
+            event = next_event;
+        }
+    }
+}
+
+#[derive(Default)]
+struct ObserverSetState {
+    owner: Option<ThreadId>,
+    pending: VecDeque<LifecycleEvent>,
 }
 
 #[derive(Clone, Default)]
@@ -550,6 +628,85 @@ mod tests {
         });
 
         (emitter, events)
+    }
+
+    #[test]
+    fn observer_set_preserves_order_during_reentrant_delivery() {
+        // Arrange
+        let emitter_holder = Arc::new(Mutex::new(None::<LifecycleEmitter>));
+        let first_emitter = Arc::clone(&emitter_holder);
+        let deliveries = Arc::new(Mutex::new(Vec::new()));
+        let first_deliveries = Arc::clone(&deliveries);
+        let second_deliveries = Arc::clone(&deliveries);
+        let observers = LifecycleObserverSet::new(move |event: LifecycleEvent| {
+            let sequence = event.sequence();
+            first_deliveries
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((0, sequence));
+            if sequence == 0 {
+                first_emitter
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                    .expect("emitter should be available to its observer")
+                    .emit(LifecycleEventKind::TurnStarted {
+                        turn_id: LifecycleId(1),
+                    });
+            }
+        })
+        .with_observer(move |event: LifecycleEvent| {
+            second_deliveries
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((1, event.sequence()));
+        });
+        let emitter = LifecycleEmitter::new(observers);
+        *emitter_holder
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(emitter.clone());
+
+        // Act
+        emitter.emit(LifecycleEventKind::TurnStarted {
+            turn_id: LifecycleId(0),
+        });
+
+        // Assert
+        assert_eq!(
+            *deliveries.lock().unwrap_or_else(PoisonError::into_inner),
+            vec![(0, 0), (1, 0), (0, 1), (1, 1)]
+        );
+    }
+
+    #[test]
+    fn observer_set_isolates_each_observer_panic() {
+        // Arrange
+        let deliveries = Arc::new(Mutex::new(Vec::new()));
+        let recorded_deliveries = Arc::clone(&deliveries);
+        let observers = LifecycleObserverSet::new(|_| {
+            std::panic::resume_unwind(Box::new("observer failed"));
+        })
+        .with_observer(move |event: LifecycleEvent| {
+            recorded_deliveries
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(event.sequence());
+        });
+        let emitter = LifecycleEmitter::new(observers);
+
+        // Act
+        emitter.emit(LifecycleEventKind::TurnStarted {
+            turn_id: LifecycleId(0),
+        });
+        emitter.emit(LifecycleEventKind::TurnStarted {
+            turn_id: LifecycleId(1),
+        });
+
+        // Assert
+        assert_eq!(
+            *deliveries.lock().unwrap_or_else(PoisonError::into_inner),
+            vec![0, 1]
+        );
     }
 
     #[test]

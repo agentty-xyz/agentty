@@ -5,10 +5,33 @@ use opentelemetry::{KeyValue, global};
 
 use crate::model::{CompletionMetadata, ModelError, ModelMetadata};
 
-const DURATION_BOUNDARIES_SECONDS: [f64; 14] = [
+pub(crate) const ATTRIBUTE_ERROR_TYPE: &str = "error.type";
+pub(crate) const ATTRIBUTE_OPERATION_NAME: &str = "gen_ai.operation.name";
+pub(crate) const ATTRIBUTE_PROVIDER_NAME: &str = "gen_ai.provider.name";
+pub(crate) const ATTRIBUTE_REQUEST_MODEL: &str = "gen_ai.request.model";
+pub(crate) const ATTRIBUTE_TOKEN_TYPE: &str = "gen_ai.token.type";
+pub(crate) const DURATION_BOUNDARIES_SECONDS: [f64; 14] = [
     0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
 ];
-const TOKEN_BOUNDARIES: [f64; 14] = [
+pub(crate) const DURATION_DESCRIPTION: &str = "GenAI operation duration.";
+pub(crate) const DURATION_METRIC: &str = "gen_ai.client.operation.duration";
+pub(crate) const DURATION_UNIT: &str = "s";
+pub(crate) const ERROR_CANCELLED: &str = "cancelled";
+pub(crate) const ERROR_INVALID_OUTPUT: &str = "invalid_output";
+pub(crate) const ERROR_INVALID_PROVIDER_RESPONSE: &str = "invalid_provider_response";
+pub(crate) const ERROR_INVALID_RESPONSE: &str = "invalid_response";
+pub(crate) const ERROR_INVALID_TOOL_CALL: &str = "invalid_tool_call";
+pub(crate) const ERROR_PROVIDER: &str = "provider_error";
+pub(crate) const ERROR_REQUEST: &str = "request_error";
+pub(crate) const ERROR_RESPONSE_TOO_LARGE: &str = "response_too_large";
+pub(crate) const ERROR_TRANSPORT: &str = "transport_error";
+pub(crate) const ERROR_UNSUPPORTED_OUTPUT: &str = "unsupported_output";
+pub(crate) const INSTRUMENTATION_SCOPE: &str = "ag-harness";
+pub(crate) const OPERATION_CHAT: &str = "chat";
+pub(crate) const PROVIDER_ALIBABA_CLOUD: &str = "alibaba_cloud";
+pub(crate) const PROVIDER_META: &str = "meta";
+pub(crate) const PROVIDER_MOONSHOT_AI: &str = "moonshot_ai";
+pub(crate) const TOKEN_BOUNDARIES: [f64; 14] = [
     1.0,
     4.0,
     16.0,
@@ -24,6 +47,11 @@ const TOKEN_BOUNDARIES: [f64; 14] = [
     16_777_216.0,
     67_108_864.0,
 ];
+pub(crate) const TOKEN_DESCRIPTION: &str = "Number of input and output tokens used.";
+pub(crate) const TOKEN_METRIC: &str = "gen_ai.client.token.usage";
+pub(crate) const TOKEN_TYPE_INPUT: &str = "input";
+pub(crate) const TOKEN_TYPE_OUTPUT: &str = "output";
+pub(crate) const TOKEN_UNIT: &str = "{token}";
 
 /// Records one model request's operational metrics.
 pub(crate) struct RequestMetrics<'a> {
@@ -68,19 +96,19 @@ impl<'a> RequestMetrics<'a> {
     }
 
     fn duration_histogram() -> Histogram<f64> {
-        global::meter("ag-harness")
-            .f64_histogram("gen_ai.client.operation.duration")
-            .with_description("GenAI operation duration.")
-            .with_unit("s")
+        global::meter(INSTRUMENTATION_SCOPE)
+            .f64_histogram(DURATION_METRIC)
+            .with_description(DURATION_DESCRIPTION)
+            .with_unit(DURATION_UNIT)
             .with_boundaries(DURATION_BOUNDARIES_SECONDS.to_vec())
             .build()
     }
 
     fn token_histogram() -> Histogram<u64> {
-        global::meter("ag-harness")
-            .u64_histogram("gen_ai.client.token.usage")
-            .with_description("Number of input and output tokens used.")
-            .with_unit("{token}")
+        global::meter(INSTRUMENTATION_SCOPE)
+            .u64_histogram(TOKEN_METRIC)
+            .with_description(TOKEN_DESCRIPTION)
+            .with_unit(TOKEN_UNIT)
             .with_boundaries(TOKEN_BOUNDARIES.to_vec())
             .build()
     }
@@ -100,25 +128,25 @@ impl<'a> RequestMetrics<'a> {
 
         if let Some(input) = usage.input_tokens() {
             let mut attributes = self.attributes(None);
-            attributes.push(KeyValue::new("gen_ai.token.type", "input"));
+            attributes.push(KeyValue::new(ATTRIBUTE_TOKEN_TYPE, TOKEN_TYPE_INPUT));
             metric.record(input, &attributes);
         }
         if let Some(output) = usage.output_tokens() {
             let mut attributes = self.attributes(None);
-            attributes.push(KeyValue::new("gen_ai.token.type", "output"));
+            attributes.push(KeyValue::new(ATTRIBUTE_TOKEN_TYPE, TOKEN_TYPE_OUTPUT));
             metric.record(output, &attributes);
         }
     }
 
     fn attributes(&self, error_type: Option<&str>) -> Vec<KeyValue> {
         let mut attributes = vec![
-            KeyValue::new("gen_ai.operation.name", "chat"),
-            KeyValue::new("gen_ai.provider.name", self.provider),
-            KeyValue::new("gen_ai.request.model", self.model.to_string()),
+            KeyValue::new(ATTRIBUTE_OPERATION_NAME, OPERATION_CHAT),
+            KeyValue::new(ATTRIBUTE_PROVIDER_NAME, self.provider),
+            KeyValue::new(ATTRIBUTE_REQUEST_MODEL, self.model.to_string()),
         ];
 
         if let Some(error_type) = error_type {
-            attributes.push(KeyValue::new("error.type", error_type.to_string()));
+            attributes.push(KeyValue::new(ATTRIBUTE_ERROR_TYPE, error_type.to_string()));
         }
 
         attributes
@@ -128,7 +156,7 @@ impl<'a> RequestMetrics<'a> {
 impl Drop for RequestMetrics<'_> {
     fn drop(&mut self) {
         if self.is_active {
-            self.record_duration(Some("cancelled"));
+            self.record_duration(Some(ERROR_CANCELLED));
         }
     }
 }

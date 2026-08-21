@@ -3,11 +3,11 @@ use std::env;
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::chat_completion;
 use crate::lifecycle::LifecycleObserver;
 use crate::model::{
     ModelClient, ModelCompletion, ModelError, ModelMetadataError, ModelRequest, ModelWithMetadata,
 };
+use crate::{chat_completion, telemetry};
 
 const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
 const MODEL_API_BASE_URL_ENV: &str = "MODEL_API_BASE_URL";
@@ -21,12 +21,11 @@ pub const MUSE_SPARK_1_2: &str = "muse-spark-1.2";
 /// completions to train future models.
 pub const MUSE_SPARK_1_2_CONTRIBUTOR: &str = "muse-spark-1.2-contributor";
 
-pub(crate) const PROVIDER_NAME: &str = "meta";
 pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
     chat_completion::ChatCompletionProviderPolicy {
         display_name: "Meta Model API",
         structured_output: chat_completion::StructuredOutputMode::JsonSchema,
-        telemetry_name: PROVIDER_NAME,
+        telemetry_name: telemetry::PROVIDER_META,
         unsupported_schema_reason: "Muse structured output requires an explicit object root schema",
     };
 

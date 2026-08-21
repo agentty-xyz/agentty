@@ -196,8 +196,69 @@ Applications may observe and persist them independently from OpenTelemetry expor
 neither configured, no lifecycle data is retained or sent externally. Applications own
 storage, retention, OpenTelemetry setup, export, and shutdown.
 
+`LifecycleObserverSet` composes projections over that one ordered stream. Observers run
+in registration order, and each callback has an independent panic boundary. Reentrant
+events wait behind the event currently being fanned out so every observer sees the same
+sequence order.
+
 Sensitive content is excluded. Any future content capture remains separate, explicit,
 bounded, redacted, and disabled by default.
+
+### OpenTelemetry semantic-convention contract
+
+`ag-harness` targets the OpenTelemetry GenAI semantic conventions at revision
+[`eaefa142a94cefe5d199d47e4a73727dfbd825df`](https://github.com/open-telemetry/semantic-conventions-genai/tree/eaefa142a94cefe5d199d47e4a73727dfbd825df).
+The conventions are Development status, so this immutable revision, rather than the
+repository's moving `main` branch, defines the compatibility contract.
+
+The current model-client projection implements these standard histograms:
+
+| Instrument                         | Unit      | Explicit bucket boundaries                    |
+| ---------------------------------- | --------- | --------------------------------------------- |
+| `gen_ai.client.operation.duration` | `s`       | `0.01` through `81.92`, doubling each step    |
+| `gen_ai.client.token.usage`        | `{token}` | `1` through `67108864`, quadrupling each step |
+
+Both instruments record the required `gen_ai.operation.name` value `chat`, the provider
+identity, and the requested model when available. Token measurements also record the
+required `gen_ai.token.type` value `input` or `output`. Failed duration measurements
+record `error.type`. Instrument names, descriptions, units, boundaries, attribute names,
+and well-known values are centralized in the telemetry module.
+
+The provider registry contains one standard value and two documented custom values:
+
+| Provider | `gen_ai.provider.name` | Registry status                                                            |
+| -------- | ---------------------- | -------------------------------------------------------------------------- |
+| Kimi     | `moonshot_ai`          | OpenTelemetry well-known value                                             |
+| Muse     | `meta`                 | Custom value; no OpenTelemetry value identifies Meta Model API             |
+| Qwen     | `alibaba_cloud`        | Custom value; no OpenTelemetry value identifies Alibaba Cloud Model Studio |
+
+Model request failures use this bounded `error.type` vocabulary:
+
+| Value                       | Meaning                                                 |
+| --------------------------- | ------------------------------------------------------- |
+| HTTP status code            | Provider returned that valid HTTP error status          |
+| `cancelled`                 | The request future was dropped before completion        |
+| `request_error`             | Request construction or an unclassified client failure  |
+| `transport_error`           | Transport failed before a provider response was decoded |
+| `provider_error`            | Provider failure without an available HTTP status       |
+| `invalid_provider_response` | Provider response envelope was malformed                |
+| `invalid_response`          | Successful response was incomplete or unusable          |
+| `unsupported_output`        | Provider could not satisfy the output contract          |
+| `response_too_large`        | Response exceeded a configured safety bound             |
+| `invalid_output`            | Output failed JSON parsing or schema validation         |
+| `invalid_tool_call`         | Tool call was missing, malformed, or unsupported        |
+
+Messages, prompts, system instructions, tool arguments, tool results, response bodies,
+repository content, and internal lifecycle identifiers are never projected to
+OpenTelemetry. Opt-in content attributes and events remain disabled even when the
+semantic conventions define them.
+
+Upgrading the pinned revision requires an explicit conformance change. That change must
+review the source models and generated metric, span, and event documents; update the
+pin, central constants, provider and error registries, contract tests, and this
+architecture page together; and preserve the metadata-only policy. When the pinned
+revision has no applicable convention, the fact remains an internal `LifecycleEvent`
+instead of being exported under an invented standard-looking name.
 
 ## Permissions
 

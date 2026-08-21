@@ -682,15 +682,15 @@ impl ModelErrorType {
     /// Returns the stable value intended for telemetry attributes.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Request => "request_error",
-            Self::Transport => "transport_error",
-            Self::Provider => "provider_error",
-            Self::InvalidProviderResponse => "invalid_provider_response",
-            Self::InvalidResponse => "invalid_response",
-            Self::UnsupportedOutput => "unsupported_output",
-            Self::ResponseTooLarge => "response_too_large",
-            Self::InvalidOutput => "invalid_output",
-            Self::InvalidToolCall => "invalid_tool_call",
+            Self::Request => telemetry::ERROR_REQUEST,
+            Self::Transport => telemetry::ERROR_TRANSPORT,
+            Self::Provider => telemetry::ERROR_PROVIDER,
+            Self::InvalidProviderResponse => telemetry::ERROR_INVALID_PROVIDER_RESPONSE,
+            Self::InvalidResponse => telemetry::ERROR_INVALID_RESPONSE,
+            Self::UnsupportedOutput => telemetry::ERROR_UNSUPPORTED_OUTPUT,
+            Self::ResponseTooLarge => telemetry::ERROR_RESPONSE_TOO_LARGE,
+            Self::InvalidOutput => telemetry::ERROR_INVALID_OUTPUT,
+            Self::InvalidToolCall => telemetry::ERROR_INVALID_TOOL_CALL,
         }
     }
 }

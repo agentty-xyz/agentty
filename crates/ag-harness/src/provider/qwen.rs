@@ -1,6 +1,5 @@
-use crate::chat_completion;
+use crate::{chat_completion, telemetry};
 
-pub(crate) const PROVIDER_NAME: &str = "alibaba_cloud";
 pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
     chat_completion::ChatCompletionProviderPolicy {
         display_name: "Qwen",
@@ -8,7 +7,7 @@ pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
             assistant_reasoning_content: false,
             tool_result_name: false,
         },
-        telemetry_name: PROVIDER_NAME,
+        telemetry_name: telemetry::PROVIDER_ALIBABA_CLOUD,
         unsupported_schema_reason: "Qwen JSON Object mode requires an explicit object root schema",
     };
 

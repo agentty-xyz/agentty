@@ -4,8 +4,9 @@ use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use ag_harness::{
-    CompletionMetadata, CompletionUsage, Harness, LifecycleEventKind, Model, ModelCompletion,
-    ModelError, ModelRequest, ModelResponse, ModelWithMetadata, OutputSchema, OutputSchemaError,
+    CompletionMetadata, CompletionUsage, Harness, LifecycleEventKind, LifecycleObserverSet, Model,
+    ModelCompletion, ModelError, ModelRequest, ModelResponse, ModelWithMetadata, OutputSchema,
+    OutputSchemaError,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -132,6 +133,46 @@ async fn external_metadata_provider_reaches_harness_lifecycle() -> Result<(), Bo
         } if metadata.response_id() == Some("external-response")
             && metadata.usage().and_then(|usage| usage.total_tokens()) == Some(6)
     )));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_observer_set_fans_out_lifecycle_events() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let first_events = Arc::new(Mutex::new(Vec::new()));
+    let observed_first_events = Arc::clone(&first_events);
+    let second_events = Arc::new(Mutex::new(Vec::new()));
+    let observed_second_events = Arc::clone(&second_events);
+    let observers = LifecycleObserverSet::new(move |event| {
+        observed_first_events
+            .lock()
+            .expect("first event recorder should not be poisoned")
+            .push(event);
+    })
+    .with_observer(move |event| {
+        observed_second_events
+            .lock()
+            .expect("second event recorder should not be poisoned")
+            .push(event);
+    });
+    let harness = Harness::new(ExternalMetadataModel).with_lifecycle_observer(observers);
+
+    // Act
+    let output = harness
+        .run("extract the name", request()?.schema().clone())
+        .await?;
+
+    // Assert
+    assert_eq!(output, json!({ "name": "Ada" }));
+    let first_events = first_events
+        .lock()
+        .expect("first event recorder should not be poisoned");
+    let second_events = second_events
+        .lock()
+        .expect("second event recorder should not be poisoned");
+    assert!(!first_events.is_empty());
+    assert_eq!(*first_events, *second_events);
 
     Ok(())
 }
