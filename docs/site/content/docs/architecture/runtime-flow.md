@@ -435,11 +435,13 @@ flowchart LR
    branch changes.
 1. If the session already tracks a published upstream branch and no chat message or sync
    operation is queued, a per-session branch-operation guard transfers to the detached
-   auto-push until it finishes. Every sync request holds the same guard through status
-   transition and operation persistence, so its rebase is observed before publish starts
-   or waits until the active publish completes. Post-rebase auto-push transfers the
-   guard again, preventing a subsequent sync from starting until that publish finishes.
-   After a successful push, linked review-request and commit metadata are resolved and
+   auto-push until it finishes. A sync request tries to reserve an idle guard while it
+   persists and queues the operation, but never waits for an existing owner on the
+   foreground event loop. The session worker acquires the guard before rebase execution,
+   so a request is observed before publish starts or waits behind an active publish
+   while the terminal remains responsive. Post-rebase auto-push retains the same guard,
+   preventing a subsequent sync from starting until that publish finishes. After a
+   successful push, linked review-request and commit metadata are resolved and
    refreshed. Agentty reads the current remote title and description after each
    successful push and sends them, the cumulative session summary, and the generated
    commit metadata through one semantic reconciliation prompt. The prompt keeps the
@@ -764,9 +766,11 @@ their triggers:
 - **Session merge task** (merge confirmation): rebase, squash merge with the session
   commit message, worktree cleanup.
 
-- **Session sync task** (view-mode `r`, stacked-parent fan-out): assisted rebase of the
-  session branch; post-merge stacked-child syncs use `git rebase --onto` with the
-  recorded parent commit as the old base.
+- **Session sync task** (view-mode `r`, stacked-parent fan-out): queues without waiting
+  for branch-operation ownership on the foreground event loop, then acquires that
+  ownership in the session worker before assisted rebase of the session branch;
+  post-merge stacked-child syncs use `git rebase --onto` with the recorded parent commit
+  as the old base.
 
 Title generation, focused review, commit-message generation, and conflict assistance
 submit owned `OneShotRequest` values through `OneShotClient`. Its production

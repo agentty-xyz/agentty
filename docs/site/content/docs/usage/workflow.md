@@ -266,10 +266,12 @@ only when sync resolves; while it waits, the consolidated queue shows
 the active `Rebasing...` loader starts. Agentty validates the session worktree before
 that promotion; a validation failure replaces the waiting row with a durable
 `[Sync Error]` notice without showing sync as active. Repeated `r` presses keep the
-single queued rebase instead of adding duplicates. Session sync reserves branch-publish
-ownership before it queues or starts, and retains that ownership through its post-rebase
-push. A completed turn or subsequent sync therefore cannot start a competing
-published-branch auto-push.
+single queued rebase instead of adding duplicates. Session sync tries to reserve idle
+branch-publish ownership while queueing but never waits for an active owner on the UI
+event loop. If an auto-push is already running, the session worker waits behind it while
+the terminal remains interactive. Once rebase execution acquires ownership, it retains
+that ownership through its post-rebase push. A completed turn or subsequent sync
+therefore cannot start a competing published-branch auto-push.
 
 Pressing `p` during a running turn opens the usual branch-name popup and queues
 review-request creation on that same worker. The session remains **InProgress** and
