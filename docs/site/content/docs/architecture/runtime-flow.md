@@ -820,19 +820,24 @@ orchestration paths:
   all tracked cleanup tasks before canceling unfinished work. Session view also loads
   comments on demand for its linked review request: `AppMode::DiffLoading` renders a
   cancelable page while the full diff loads, then `AppMode::Diff` renders its Files and
-  Comments sidebar immediately with a comment-loading state. `TaskService` resolves the
-  session worktree remote through the injected git/forge boundaries, falls back to the
-  persisted review-request URL after terminal-session worktree cleanup, and uses the
-  matching `AppEvent` to update only the still-open Diff workspace or its help overlay.
-  Inline code context is derived from the already loaded current diff. From a
-  reply-capable session, `a` marks an actionable thread to address, `d` marks it to
-  deny, and `Enter` renders every marked thread plus its requested action into one
-  `TurnPrompt`; outdated threads include an explicit stale-anchor marker. The selected
-  forge thread IDs are recorded in turn metadata. Post-turn handling accepts
-  deduplicated outcomes with an allowlisted ID and nonblank reply. After auto-commit and
-  a successful published-branch push, the worker posts every accepted reply and resolves
-  only outcomes reported as `fixed` through `ReviewRequestClient`; `no_change_needed`
-  outcomes remain open, and failed pushes never mutate forge thread state.
+  Comments sidebar immediately with a comment-loading state. The loading surface uses an
+  explicit Files placeholder instead of parsing its status text as an empty diff. A
+  failed interactive load restores its source mode with a transient workflow notice;
+  during managed merge cleanup, `TaskService` falls back from a repository-unavailable
+  live diff to the archived diff already persisted for that session. Other Git failures
+  remain visible diagnostics. `TaskService` resolves the session worktree remote through
+  the injected git/forge boundaries, falls back to the persisted review-request URL
+  after terminal-session worktree cleanup, and uses the matching `AppEvent` to update
+  only the still-open Diff workspace or its help overlay. Inline code context is derived
+  from the already loaded current diff. From a reply-capable session, `a` marks an
+  actionable thread to address, `d` marks it to deny, and `Enter` renders every marked
+  thread plus its requested action into one `TurnPrompt`; outdated threads include an
+  explicit stale-anchor marker. The selected forge thread IDs are recorded in turn
+  metadata. Post-turn handling accepts deduplicated outcomes with an allowlisted ID and
+  nonblank reply. After auto-commit and a successful published-branch push, the worker
+  posts every accepted reply and resolves only outcomes reported as `fixed` through
+  `ReviewRequestClient`; `no_change_needed` outcomes remain open, and failed pushes
+  never mutate forge thread state.
 
 ## Persistence and Recovery Boundaries
 

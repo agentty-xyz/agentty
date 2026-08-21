@@ -2586,15 +2586,15 @@ fn seed_clean_review_session_with_worktree_edit(env: &BuilderEnv) -> E2eResult {
     install_worktree_edit_tmux_stub(env)
 }
 
-/// Seeds a review diff whose external driver stays busy long enough to prove
-/// that the TUI renders and accepts cancellation before Git completes.
+/// Seeds a failing review diff whose external driver stays busy long enough
+/// to prove that the TUI accepts cancellation before Git completes.
 fn seed_slow_review_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
     seed_review_worktree_with_diff(env)?;
 
     let session_worktree = env.agentty_root.join("wt").join("review-s");
     let slow_diff_driver = session_worktree.join("slow-diff.sh");
-    std::fs::write(&slow_diff_driver, "#!/bin/sh\nsleep 3\nexit 0\n")?;
+    std::fs::write(&slow_diff_driver, "#!/bin/sh\nsleep 3\nexit 1\n")?;
     #[cfg(unix)]
     std::fs::set_permissions(&slow_diff_driver, std::fs::Permissions::from_mode(0o755))?;
     let slow_diff_driver = slow_diff_driver
@@ -7431,15 +7431,24 @@ fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
                         "diff_loading_canceled",
                         "Cancel returns before the slow Git diff completes",
                     )
+                    .press_key("d")
+                    .wait_for_text("Unable to load diff:", 5000)
+                    .capture_labeled(
+                        "diff_loading_failed",
+                        "Git failure returns to the session with a diagnostic",
+                    )
             },
             |frame, report| {
                 let loading_frame = common::frame_from_capture(&report.captures[0]);
                 let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());
                 assertion::assert_text_in_region(&loading_frame, "Loading diff...", &loading_full);
+                assertion::assert_not_visible(&loading_frame, "No files");
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Review-ready session shortcuts", &full);
+                assertion::assert_text_in_region(frame, "Unable to load diff:", &full);
                 assertion::assert_not_visible(frame, "Loading diff...");
+                assertion::assert_not_visible(frame, "No files");
             },
         )?;
 

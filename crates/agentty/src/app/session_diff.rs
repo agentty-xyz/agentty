@@ -323,6 +323,8 @@ impl App {
             }
         } else {
             SessionDiffTaskSource::Worktree {
+                archived_fallback: (session.is_managed() && session.status == Status::Merging)
+                    .then(|| self.services.db().clone()),
                 base_branch: session.base_branch.clone(),
                 git_client: self.services.git_client(),
             }
@@ -424,7 +426,25 @@ impl App {
             return;
         }
 
-        let diff = update.result.unwrap_or_else(|error| error);
+        let diff = match update.result {
+            Ok(diff) => diff,
+            Err(error) => {
+                self.mode = restore.map_or_else(
+                    || AppMode::View {
+                        scroll_offset: fallback_view_scroll_offset,
+                        session_id: session_id.clone(),
+                    },
+                    |restore| restore.into_mode(),
+                );
+                self.sessions.append_workflow_notice(
+                    &session_id,
+                    crate::domain::transcript_notice::TranscriptNotice::Error
+                        .format_line(format!("Unable to load diff: {error}")),
+                );
+
+                return;
+            }
+        };
         if diff.trim().is_empty() && !allow_empty {
             self.mode = restore.map_or_else(
                 || AppMode::View {
@@ -537,8 +557,13 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::input::InputState;
     use crate::domain::session::{
         ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    };
+    use crate::presentation::app_mode::PromptModeSnapshot;
+    use crate::presentation::prompt::{
+        PromptAttachmentState, PromptHistoryState, PromptSlashState,
     };
 
     /// Builds one Git-backed review session for diff-request state tests.
@@ -693,6 +718,47 @@ mod tests {
                 }),
                 ..
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn open_diff_failure_restores_prompt_snapshot() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = review_app().await;
+        let restore = DiffRestoreTarget::Prompt(PromptModeSnapshot {
+            at_mention_state: None,
+            attachment_state: PromptAttachmentState::default(),
+            history_state: PromptHistoryState::default(),
+            input: InputState::with_text("preserved draft".to_string()),
+            scroll_offset: Some(5),
+            session_id: session_id.clone(),
+            slash_state: PromptSlashState::default(),
+        });
+        assert!(app.start_diff_view_load(
+            &session_id,
+            Some(restore),
+            DiffSidebarFocus::Files,
+            false,
+        ));
+        let request_id = loading_request_id(&app).expect("diff loading mode should have a request");
+
+        // Act
+        app.apply_session_diff_update(SessionDiffUpdate {
+            request_id,
+            result: Err("worktree unavailable".to_string()),
+            session_id: session_id.clone(),
+        })
+        .await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                input,
+                scroll_offset: Some(5),
+                session_id: restored_session_id,
+                ..
+            } if input.text() == "preserved draft" && restored_session_id == &session_id
         ));
     }
 

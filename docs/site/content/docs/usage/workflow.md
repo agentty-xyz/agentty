@@ -217,8 +217,10 @@ diff output. Leaving the preview returns to the composer with the draft intact. 
 opening the writable session worktree, Agentty clears a known-empty result in memory and
 durable storage because external edits may follow. If durable invalidation fails, the
 worktree stays closed; otherwise `d` becomes available and reloads the diff. Full diffs
-load in the background; press `q` or `Esc` on **Loading diff...** to return immediately
-while a large repository is still being inspected.
+load in the background, with **Loading...** in Files until changed paths are available.
+Press `q` or `Esc` on **Loading diff...** to return immediately while a large repository
+is still being inspected. A failed load returns to the session and shows its diagnostic
+there instead of opening an empty Diff workspace.
 
 Inside diff view, `Shift+j` / `Shift+k` and `Up` / `Down` scroll the selected file while
 Files remains focused. Press `Enter` or `l` on a file to move focus from the file tree

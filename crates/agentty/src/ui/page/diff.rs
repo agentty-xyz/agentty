@@ -959,6 +959,7 @@ pub struct DiffPage<'a> {
     pub session: &'a Session,
     /// Sidebar section currently controlling the right pane.
     pub sidebar_focus: DiffSidebarFocus,
+    is_loading: bool,
 }
 
 /// Borrowed inputs required to construct a [`DiffPage`] for one frame.
@@ -1025,7 +1026,16 @@ impl<'a> DiffPage<'a> {
             selected_diff_line_index,
             session,
             sidebar_focus,
+            is_loading: false,
         }
+    }
+
+    /// Marks this page as a pending diff load with an explicit sidebar
+    /// placeholder.
+    pub(crate) fn loading(mut self) -> Self {
+        self.is_loading = true;
+
+        self
     }
 
     /// Renders the right-side diff panel with line-number gutters and
@@ -1462,12 +1472,12 @@ pub(crate) fn diff_changed_line_layout(
     diff_layout_cache.resolved_layout(&content, line_comments, selected_file_index, diff_area)
 }
 
-impl Page for DiffPage<'_> {
-    fn render(&mut self, f: &mut Frame, area: Rect) {
-        let areas = diff_util::diff_page_areas(area);
-        let content = self.diff_layout_cache.content(self.diff);
-        let sidebar_areas =
-            diff_util::diff_sidebar_areas(areas.file_list_area, self.review_comments.is_some());
+impl DiffPage<'_> {
+    /// Builds the Files sidebar for either a pending or completed diff load.
+    fn file_explorer(&self, content: &DiffContentSnapshot) -> FileExplorer {
+        if self.is_loading {
+            return FileExplorer::loading();
+        }
 
         FileExplorer::from_cached_lines(
             content.file_list_lines(),
@@ -1475,7 +1485,18 @@ impl Page for DiffPage<'_> {
         )
         .selected_index(self.file_explorer_selected_index)
         .focused(self.sidebar_focus == DiffSidebarFocus::Files && self.focus == DiffFocus::Files)
-        .render(f, sidebar_areas.file_list_area);
+    }
+}
+
+impl Page for DiffPage<'_> {
+    fn render(&mut self, f: &mut Frame, area: Rect) {
+        let areas = diff_util::diff_page_areas(area);
+        let content = self.diff_layout_cache.content(self.diff);
+        let sidebar_areas =
+            diff_util::diff_sidebar_areas(areas.file_list_area, self.review_comments.is_some());
+
+        self.file_explorer(&content)
+            .render(f, sidebar_areas.file_list_area);
 
         let review_comment_page = self.review_comments.map(|review_comments| {
             let rows = review_comments

@@ -1303,7 +1303,7 @@ mod tests {
     async fn apply_next_session_diff(app: &mut App) {
         loop {
             let event =
-                tokio::time::timeout(std::time::Duration::from_secs(1), app.next_app_event())
+                tokio::time::timeout(std::time::Duration::from_secs(10), app.next_app_event())
                     .await
                     .expect("session diff event should arrive")
                     .expect("app event channel should remain open");

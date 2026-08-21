@@ -28,6 +28,13 @@ pub enum GitError {
     #[error("{0}")]
     OutputParse(String),
 
+    /// The requested repository or worktree is no longer available.
+    #[error("{detail}")]
+    RepositoryUnavailable {
+        /// Original repository-discovery failure detail.
+        detail: String,
+    },
+
     /// A filesystem or process-spawn operation failed.
     #[error("{0}")]
     Io(#[from] std::io::Error),
@@ -108,6 +115,20 @@ mod tests {
             matches!(error, GitError::OutputParse(ref message) if message == "unexpected rev-parse output")
         );
         assert_eq!(error.to_string(), "unexpected rev-parse output");
+    }
+
+    #[test]
+    fn repository_unavailable_display_shows_original_detail() {
+        // Arrange
+        let error = GitError::RepositoryUnavailable {
+            detail: "git rev-parse: not a git repository".to_string(),
+        };
+
+        // Act
+        let display = error.to_string();
+
+        // Assert
+        assert_eq!(display, "git rev-parse: not a git repository");
     }
 
     #[test]

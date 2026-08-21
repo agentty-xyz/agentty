@@ -61,6 +61,9 @@ pub(super) enum SessionDiffTaskSource {
     },
     /// Compute a live worktree diff against the session base branch.
     Worktree {
+        /// Archived diff used when managed merge cleanup wins the live-load
+        /// race.
+        archived_fallback: Option<crate::infra::db::AppRepositories>,
         base_branch: String,
         git_client: Arc<dyn GitClient>,
     },
@@ -113,12 +116,28 @@ impl TaskService {
                     .map(Option::unwrap_or_default)
                     .map_err(|error| format!("Failed to load archived diff: {error}")),
                 SessionDiffTaskSource::Worktree {
+                    archived_fallback,
                     base_branch,
                     git_client,
-                } => git_client
-                    .diff(input.folder, base_branch)
-                    .await
-                    .map_err(|error| format!("Failed to run git diff: {error}")),
+                } => match git_client.diff(input.folder, base_branch).await {
+                    Ok(diff) => Ok(diff),
+                    Err(error @ ag_git::GitError::RepositoryUnavailable { .. }) => {
+                        let archived_diff_result = if let Some(repositories) = archived_fallback {
+                            repositories
+                                .sessions()
+                                .load_session_archived_diff(&input.session_id)
+                                .await
+                                .map_err(|error| format!("Failed to load archived diff: {error}"))
+                        } else {
+                            Ok(None)
+                        };
+
+                        archived_diff_result.and_then(|archived_diff| {
+                            archived_diff.ok_or_else(|| format!("Failed to run git diff: {error}"))
+                        })
+                    }
+                    Err(error) => Err(format!("Failed to run git diff: {error}")),
+                },
             };
             let _ = input.app_event_tx.send(AppEvent::SessionDiffLoaded {
                 request_id,
@@ -635,6 +654,208 @@ mod tests {
         fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
             std::panic::resume_unwind(Box::new("version probe failed".to_string()));
         }
+    }
+
+    /// Seeds one archived session diff for background diff fallback tests.
+    async fn archived_diff_repositories(
+        archived_diff: Option<&str>,
+    ) -> crate::infra::db::AppRepositories {
+        let repositories = crate::infra::db::AppRepositories::in_memory()
+            .await
+            .expect("in-memory repositories should open");
+        let project_id = repositories
+            .projects()
+            .upsert_project("/tmp/session-diff-project", None)
+            .await
+            .expect("project fixture should persist");
+        repositories
+            .sessions()
+            .insert_session("session-id", "gpt-5.6-sol", "main", "Merging", project_id)
+            .await
+            .expect("session fixture should persist");
+        repositories
+            .sessions()
+            .update_session_archived_diff(
+                "session-id",
+                archived_diff.map(std::string::ToString::to_string),
+            )
+            .await
+            .expect("archived diff fixture should persist");
+
+        repositories
+    }
+
+    #[tokio::test]
+    async fn session_diff_task_falls_back_to_archived_managed_merge_diff() {
+        // Arrange
+        let archived_diff = "diff --git a/file.rs b/file.rs\n+archived\n";
+        let repositories = archived_diff_repositories(Some(archived_diff)).await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_diff().once().returning(|_, _| {
+            Box::pin(async {
+                Err(ag_git::GitError::RepositoryUnavailable {
+                    detail: "worktree removed".to_string(),
+                })
+            })
+        });
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let input = SessionDiffTaskInput {
+            app_event_tx,
+            folder: PathBuf::from("/tmp/removed-worktree"),
+            session_id: "session-id".into(),
+            source: SessionDiffTaskSource::Worktree {
+                archived_fallback: Some(repositories),
+                base_branch: "main".to_string(),
+                git_client: Arc::new(git_client),
+            },
+        };
+
+        // Act
+        let request_id = TaskService::spawn_session_diff_task(input);
+        let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("timed out waiting for session diff event")
+            .expect("session diff task should emit one event");
+
+        // Assert
+        assert!(matches!(
+            app_event,
+            AppEvent::SessionDiffLoaded {
+                request_id: event_request_id,
+                result: Ok(diff),
+                ref session_id,
+            } if event_request_id == request_id
+                && diff == archived_diff
+                && session_id == "session-id"
+        ));
+    }
+
+    #[tokio::test]
+    async fn session_diff_task_preserves_git_error_without_archived_fallback() {
+        // Arrange
+        let repositories = archived_diff_repositories(None).await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_diff().once().returning(|_, _| {
+            Box::pin(async {
+                Err(ag_git::GitError::RepositoryUnavailable {
+                    detail: "worktree removed".to_string(),
+                })
+            })
+        });
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let input = SessionDiffTaskInput {
+            app_event_tx,
+            folder: PathBuf::from("/tmp/removed-worktree"),
+            session_id: "session-id".into(),
+            source: SessionDiffTaskSource::Worktree {
+                archived_fallback: Some(repositories),
+                base_branch: "main".to_string(),
+                git_client: Arc::new(git_client),
+            },
+        };
+
+        // Act
+        TaskService::spawn_session_diff_task(input);
+        let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("timed out waiting for session diff event")
+            .expect("session diff task should emit one event");
+
+        // Assert
+        assert!(matches!(
+            app_event,
+            AppEvent::SessionDiffLoaded {
+                result: Err(error),
+                ..
+            } if error == "Failed to run git diff: worktree removed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn session_diff_task_propagates_archived_diff_database_failure() {
+        // Arrange
+        let (repositories, pool) = crate::infra::db::AppRepositories::in_memory_with_pool()
+            .await
+            .expect("in-memory repositories should open");
+        pool.close().await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_diff().once().returning(|_, _| {
+            Box::pin(async {
+                Err(ag_git::GitError::RepositoryUnavailable {
+                    detail: "worktree removed".to_string(),
+                })
+            })
+        });
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let input = SessionDiffTaskInput {
+            app_event_tx,
+            folder: PathBuf::from("/tmp/removed-worktree"),
+            session_id: "session-id".into(),
+            source: SessionDiffTaskSource::Worktree {
+                archived_fallback: Some(repositories),
+                base_branch: "main".to_string(),
+                git_client: Arc::new(git_client),
+            },
+        };
+
+        // Act
+        TaskService::spawn_session_diff_task(input);
+        let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("timed out waiting for session diff event")
+            .expect("session diff task should emit one event");
+
+        // Assert
+        assert!(matches!(
+            app_event,
+            AppEvent::SessionDiffLoaded {
+                result: Err(error),
+                ..
+            } if error.starts_with("Failed to load archived diff:")
+                && !error.contains("worktree removed")
+        ));
+    }
+
+    #[tokio::test]
+    async fn session_diff_task_does_not_archive_fallback_for_unrelated_git_error() {
+        // Arrange
+        let repositories = archived_diff_repositories(Some("stale archived diff")).await;
+        let mut git_client = MockGitClient::new();
+        git_client.expect_diff().once().returning(|_, _| {
+            Box::pin(async {
+                Err(ag_git::GitError::CommandTimedOut {
+                    command: "git diff main".to_string(),
+                    timeout: Duration::from_secs(30),
+                })
+            })
+        });
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let input = SessionDiffTaskInput {
+            app_event_tx,
+            folder: PathBuf::from("/tmp/live-worktree"),
+            session_id: "session-id".into(),
+            source: SessionDiffTaskSource::Worktree {
+                archived_fallback: Some(repositories),
+                base_branch: "main".to_string(),
+                git_client: Arc::new(git_client),
+            },
+        };
+
+        // Act
+        TaskService::spawn_session_diff_task(input);
+        let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("timed out waiting for session diff event")
+            .expect("session diff task should emit one event");
+
+        // Assert
+        assert!(matches!(
+            app_event,
+            AppEvent::SessionDiffLoaded {
+                result: Err(error),
+                ..
+            } if error == "Failed to run git diff: git diff main timed out after 30s"
+        ));
     }
 
     #[tokio::test]
