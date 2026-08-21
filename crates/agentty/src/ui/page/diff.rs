@@ -584,6 +584,17 @@ impl DiffResolvedLayout {
         self.changed_line_ranges.len()
     }
 
+    /// Returns the first changed source line intersecting or below the viewport
+    /// top.
+    pub(crate) fn changed_line_index_at_scroll_offset(&self, scroll_offset: u16) -> Option<usize> {
+        let scroll_offset = usize::from(scroll_offset);
+
+        self.changed_line_ranges
+            .iter()
+            .position(|range| range.end > scroll_offset)
+            .or_else(|| self.changed_line_ranges.len().checked_sub(1))
+    }
+
     /// Returns the scroll offset that keeps one changed source line visible.
     pub(crate) fn changed_line_scroll_offset(
         &self,
@@ -2395,6 +2406,9 @@ mod tests {
         let scrolled_down = layout
             .changed_line_scroll_offset(20, 0)
             .expect("selected changed line should have a rendered range");
+        let first_visible_changed_line = layout
+            .changed_line_index_at_scroll_offset(scrolled_down)
+            .expect("scrolled viewport should contain a changed line");
         let scrolled_up = layout
             .changed_line_scroll_offset(0, scrolled_down)
             .expect("first changed line should have a rendered range");
@@ -2411,6 +2425,8 @@ mod tests {
         // Assert
         assert_eq!(layout.changed_line_count(), 40);
         assert!(scrolled_down > 0);
+        assert!(first_visible_changed_line > 0);
+        assert!(first_visible_changed_line <= 20);
         assert!(scrolled_up < scrolled_down);
         assert_eq!(zero_height_scroll_offset, 0);
         assert_eq!(
@@ -2418,6 +2434,26 @@ mod tests {
             layout.changed_line_ranges[2].start..layout.changed_line_ranges[4].end
         );
         assert_eq!(missing_selection_range, None);
+    }
+
+    #[test]
+    fn test_diff_changed_line_layout_selects_last_change_below_viewport() {
+        // Arrange
+        let diff = "diff --git a/main.rs b/main.rs\n@@ -0,0 +1 @@\n+changed\n context";
+        let cache = DiffLayoutCache::default();
+        let layout = diff_changed_line_layout(
+            diff,
+            &DiffLineComments::default(),
+            0,
+            Rect::new(0, 0, 80, 12),
+            &cache,
+        );
+
+        // Act
+        let selected_index = layout.changed_line_index_at_scroll_offset(u16::MAX);
+
+        // Assert
+        assert_eq!(selected_index, Some(0));
     }
 
     #[test]

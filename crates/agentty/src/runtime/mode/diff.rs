@@ -768,7 +768,7 @@ enum DiffContentDirection {
     Previous,
 }
 
-/// Moves focus into a file's preview or first added/removed line.
+/// Moves focus into a file's preview or first visible added/removed line.
 fn focus_selected_file_changes(
     navigation: &mut DiffContentNavigation<'_>,
     content_area: Rect,
@@ -800,12 +800,14 @@ fn focus_selected_file_changes(
         content_area,
         render_cache_store.diff_layout_cache(),
     );
-    if changed_line_layout.changed_line_count() == 0 {
+    let Some(selected_diff_line_index) =
+        changed_line_layout.changed_line_index_at_scroll_offset(*navigation.scroll_offset)
+    else {
         return;
-    }
+    };
 
     *navigation.focus = DiffFocus::Content;
-    *navigation.selected_diff_line_index = 0;
+    *navigation.selected_diff_line_index = selected_diff_line_index;
     *navigation.scroll_offset = changed_line_layout
         .changed_line_scroll_offset(
             *navigation.selected_diff_line_index,
@@ -1459,6 +1461,44 @@ mod tests {
                 } if comments.is_empty()
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn test_handle_l_from_files_focus_preserves_scrolled_position() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::Diff {
+            diff: scrollable_diff_fixture(),
+            file_explorer_selected_index: 1,
+            focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
+            preview: DiffPreview::default(),
+            review_comments: None,
+            restore: None,
+            scroll_cache: None,
+            scroll_offset: 20,
+            selected_diff_line_index: 0,
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                focus: DiffFocus::Content,
+                scroll_offset: 20,
+                selected_diff_line_index,
+                ..
+            } if selected_diff_line_index > 0
+        ));
     }
 
     #[tokio::test]

@@ -7554,7 +7554,7 @@ fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
 }
 
 /// Verify that the right-hand patch scrolls while Files remains focused, then
-/// `l` moves focus into changed-line navigation like `Enter`.
+/// `l` moves focus into changed-line navigation without resetting the viewport.
 #[test]
 fn test_diff_changed_line_navigation() -> E2eResult {
     // Arrange, Act, Assert
@@ -7572,7 +7572,7 @@ fn test_diff_changed_line_navigation() -> E2eResult {
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000);
                 let scenario = (0..70).fold(scenario, |scenario, _| scenario.press_key("Down"));
-                let scenario = scenario
+                scenario
                     .wait_for_text("changed line 70", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
@@ -7580,16 +7580,13 @@ fn test_diff_changed_line_navigation() -> E2eResult {
                         "Selected file scrolled without leaving Files focus",
                     )
                     .press_key("l")
-                    .wait_for_text("Esc/Left: files", 5000);
-                let scenario = (0..70).fold(scenario, |scenario, _| scenario.press_key("Down"));
-
-                scenario
+                    .wait_for_text("Esc/Left: files", 5000)
                     .wait_for_text("changed line 70", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "diff_changed_line_navigation",
-                        "Changed-line cursor scrolled through the selected file",
+                        "Changed-line cursor entered at the retained file position",
                     )
             },
             |frame, report| {
