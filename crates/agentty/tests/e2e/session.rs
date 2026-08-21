@@ -4915,6 +4915,52 @@ fn test_session_output_chronology() -> E2eResult {
     Ok(())
 }
 
+/// Verify session sync queues behind an active published-branch auto-push
+/// without blocking session-view input or redraws.
+#[test]
+fn session_sync_remains_responsive_during_auto_push() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_sync_responsive_during_auto_push")
+        .with_git()
+        .with_terminal_size(120, 30)
+        .setup(seed_published_session_output_chronology)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Enter: reply", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("Continue after the sync")
+                    .press_key("Enter")
+                    .wait_for_text("Got it. What would you like me to do?", 30000)
+                    .wait_for_text("Auto-pushing", 10000)
+                    .press_key("r")
+                    .press_key("?")
+                    .wait_for_text("Keybindings", 3000)
+                    .capture_labeled(
+                        "responsive_during_auto_push",
+                        "Session help opens while sync waits behind auto-push",
+                    )
+                    .press_key("q")
+                    .wait_for_text("[Sync] Successfully synced", 15000)
+            },
+            |frame, report| {
+                let help_frame = common::frame_from_capture(&report.captures[0]);
+                let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                assertion::assert_text_in_region(&help_frame, "Keybindings", &help_full);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
+                assertion::assert_not_visible(frame, "active session worker is unavailable");
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify a completed automatic branch push remains visible after its owning
 /// project is switched out while the push is running and then restored.
 #[test]

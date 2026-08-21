@@ -5527,8 +5527,10 @@ async fn test_rebase_session_invalid_id() {
     );
 }
 
+/// Verifies session sync queues without waiting for an active branch
+/// operation, then runs after that operation releases ownership.
 #[tokio::test]
-async fn test_rebase_session_updates_session_worktree_to_base_head() {
+async fn test_rebase_session_queues_while_branch_operation_is_busy() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_git(dir.path()).await;
@@ -5592,12 +5594,28 @@ async fn test_rebase_session_updates_session_worktree_to_base_head() {
     {
         *session_status = Status::Review;
     }
+    let branch_operation_lock = Arc::clone(
+        &app.sessions
+            .session_handles_or_err(&session_id)
+            .expect("expected session handles")
+            .branch_operation_lock,
+    );
+    let existing_operation_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
 
     // Act
-    let result = app.rebase_session(&session_id).await;
+    let start_result = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        app.rebase_session(&session_id),
+    )
+    .await;
 
     // Assert
-    assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
+    let result = start_result.expect("queueing sync should not wait for the branch operation");
+    assert!(result.is_ok(), "sync should queue: {:?}", result.err());
+    assert!(branch_operation_lock.try_lock().is_err());
+
+    // Act, Assert
+    drop(existing_operation_guard);
     wait_for_output_contains(&mut app, &session_id, "[Sync] Successfully synced", 200).await;
 }
 

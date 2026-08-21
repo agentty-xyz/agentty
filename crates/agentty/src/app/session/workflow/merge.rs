@@ -12,7 +12,7 @@ use ag_forge as forge;
 use ag_git::{self as git, GitClient};
 use ag_protocol::AgentResponseSummary;
 use askama::Template;
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedMutexGuard, mpsc};
 use tracing::warn;
 
 use super::published_branch::{self, PublishedBranchAutoPushInput};
@@ -258,9 +258,9 @@ pub(super) struct RebaseCommandInput {
 /// Bundled context for finalizing one rebase task.
 struct FinalizeRebaseInput<'a> {
     app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
-    /// Serializes post-rebase publish ownership with other queued/running
-    /// branch operations for the same session.
-    branch_operation_lock: &'a Arc<tokio::sync::Mutex<()>>,
+    /// Retains branch-operation ownership through rebase finalization and any
+    /// post-rebase auto-push.
+    branch_operation_guard: OwnedMutexGuard<()>,
     clock: &'a Arc<dyn Clock>,
     db: &'a AppRepositories,
     folder: &'a Path,
@@ -279,9 +279,8 @@ struct FinalizeRebaseInput<'a> {
 /// Bundled context for starting post-rebase auto-publish.
 struct RebaseAutoPushInput<'a> {
     app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
-    /// Serializes post-rebase publish ownership with other queued/running
-    /// branch operations for the same session.
-    branch_operation_lock: &'a Arc<tokio::sync::Mutex<()>>,
+    /// Transfers branch-operation ownership from rebase to auto-push.
+    branch_operation_guard: OwnedMutexGuard<()>,
     clock: &'a Arc<dyn Clock>,
     db: &'a AppRepositories,
     folder: &'a Path,
@@ -858,7 +857,10 @@ impl SessionMergeService {
             .session_handles_or_err(session_id)
             .map(|handles| Arc::clone(&handles.branch_operation_lock))
             .map_err(|_| SessionError::HandlesNotFound)?;
-        let _branch_operation_guard = branch_operation_lock.lock_owned().await;
+        // Reserve an idle branch while the operation is persisted. An active
+        // owner already serializes execution in the worker, so the foreground
+        // event loop must never wait here.
+        let _branch_operation_guard = branch_operation_lock.try_lock_owned().ok();
 
         let command = SessionCommand::Rebase {
             base_branch,
@@ -1845,6 +1847,7 @@ impl SessionManager {
             status,
             transcript,
         } = input;
+        let branch_operation_guard = branch_operation_lock.lock_owned().await;
 
         let status_transition = StatusTransition::from_parts(
             app_event_tx.clone(),
@@ -1893,7 +1896,7 @@ impl SessionManager {
 
         Self::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
-            branch_operation_lock: &branch_operation_lock,
+            branch_operation_guard,
             clock: &clock,
             db: &db,
             folder: &folder,
@@ -2141,7 +2144,7 @@ impl SessionManager {
     async fn finalize_rebase_task(input: FinalizeRebaseInput<'_>) {
         let FinalizeRebaseInput {
             app_event_tx,
-            branch_operation_lock,
+            branch_operation_guard,
             clock,
             db,
             folder,
@@ -2173,7 +2176,7 @@ impl SessionManager {
 
                 Self::start_auto_push_after_rebase(RebaseAutoPushInput {
                     app_event_tx,
-                    branch_operation_lock,
+                    branch_operation_guard,
                     clock,
                     db,
                     folder,
@@ -2221,7 +2224,7 @@ impl SessionManager {
     async fn start_auto_push_after_rebase(input: RebaseAutoPushInput<'_>) {
         let RebaseAutoPushInput {
             app_event_tx,
-            branch_operation_lock,
+            branch_operation_guard,
             clock,
             db,
             folder,
@@ -2234,7 +2237,6 @@ impl SessionManager {
             transcript,
         } = input;
 
-        let branch_operation_guard = Arc::clone(branch_operation_lock).lock_owned().await;
         let published_upstream_ref = db
             .sessions()
             .load_session_published_upstream_ref(session_id)
@@ -5185,7 +5187,7 @@ mod tests {
         // Act
         SessionManager::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
-            branch_operation_lock: &branch_operation_lock,
+            branch_operation_guard: Arc::clone(&branch_operation_lock).lock_owned().await,
             clock: &clock,
             db: &db,
             folder: &folder,
@@ -5492,11 +5494,12 @@ mod tests {
         let git_client: Arc<dyn GitClient> = Arc::new(metadata_sync_git_client());
         let review_request_client: Arc<dyn forge::ReviewRequestClient> =
             Arc::new(metadata_sync_review_request_client(folder.clone()));
+        let branch_operation_guard = Arc::new(tokio::sync::Mutex::new(())).lock_owned().await;
 
         // Act
         SessionManager::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
-            branch_operation_lock: &Arc::new(tokio::sync::Mutex::new(())),
+            branch_operation_guard,
             clock: &clock,
             db: &db,
             folder: &folder,
@@ -5592,11 +5595,12 @@ mod tests {
             });
         let git_client: Arc<dyn GitClient> = Arc::new(mock_git_client);
         let review_request_client = empty_review_request_client();
+        let branch_operation_guard = Arc::new(tokio::sync::Mutex::new(())).lock_owned().await;
 
         // Act
         SessionManager::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
-            branch_operation_lock: &Arc::new(tokio::sync::Mutex::new(())),
+            branch_operation_guard,
             clock: &clock,
             db: &db,
             folder: &folder,
@@ -5669,11 +5673,12 @@ mod tests {
             Arc::clone(&status),
         );
         let git_client: Arc<dyn GitClient> = Arc::new(git::MockGitClient::new());
+        let branch_operation_guard = Arc::new(tokio::sync::Mutex::new(())).lock_owned().await;
 
         // Act
         SessionManager::finalize_rebase_task(FinalizeRebaseInput {
             app_event_tx: &app_event_tx,
-            branch_operation_lock: &Arc::new(tokio::sync::Mutex::new(())),
+            branch_operation_guard,
             clock: &clock,
             db: &db,
             folder: &folder,
