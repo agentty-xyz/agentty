@@ -6,6 +6,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
@@ -33,6 +34,13 @@ pub(crate) trait AppServerRuntimeTransport: Send {
     fn wait_for_response_line(
         &mut self,
         response_id: String,
+    ) -> AppServerTransportFuture<'_, Result<String, AppServerTransportError>>;
+
+    /// Waits for one matching response using a provider-selected timeout.
+    fn wait_for_response_line_with_timeout(
+        &mut self,
+        response_id: String,
+        response_timeout: Duration,
     ) -> AppServerTransportFuture<'_, Result<String, AppServerTransportError>>;
 
     /// Reads the next raw stdout line from the runtime.
@@ -102,6 +110,22 @@ impl AppServerRuntimeTransport for AppServerStdioTransport {
         })
     }
 
+    /// Waits for one matching response line using an explicit deadline.
+    fn wait_for_response_line_with_timeout(
+        &mut self,
+        response_id: String,
+        response_timeout: Duration,
+    ) -> AppServerTransportFuture<'_, Result<String, AppServerTransportError>> {
+        Box::pin(async move {
+            app_server_transport::wait_for_response_line_with_timeout(
+                &mut self.stdout_lines,
+                &response_id,
+                response_timeout,
+            )
+            .await
+        })
+    }
+
     /// Reads one raw JSON line from runtime stdout.
     fn next_stdout(
         &mut self,
@@ -117,5 +141,47 @@ impl AppServerRuntimeTransport for AppServerStdioTransport {
                     source,
                 })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn explicit_response_timeout_round_trips_matching_line() {
+        // Arrange
+        let command = std::process::Command::new("cat");
+        let (mut child, stdin, stdout) =
+            app_server_transport::spawn_runtime_command(command, "cat")
+                .expect("`cat` transport fixture should spawn");
+        let mut transport = AppServerStdioTransport::new(
+            stdin,
+            stdout,
+            "test stdin is unavailable",
+            "failed reading test stdout",
+        );
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "response-1",
+            "result": {},
+        });
+        transport
+            .write_json_line(payload.clone())
+            .await
+            .expect("fixture request should be written");
+
+        // Act
+        let response_line = transport
+            .wait_for_response_line_with_timeout("response-1".to_string(), Duration::from_secs(1))
+            .await;
+
+        // Assert
+        assert_eq!(
+            response_line.expect("matching response should arrive"),
+            payload.to_string()
+        );
+        transport.close_stdin();
+        app_server_transport::shutdown_child(&mut child).await;
     }
 }
