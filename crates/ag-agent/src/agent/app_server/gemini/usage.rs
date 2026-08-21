@@ -100,39 +100,35 @@ fn extract_token_count_object(value: Option<&Value>) -> Option<(u64, u64)> {
 
 /// Extracts assistant text from known ACP prompt completion result shapes.
 pub(super) fn extract_prompt_result_text(result: &Value) -> Option<String> {
-    if let Some(response_text) = result.get("response").and_then(Value::as_str) {
-        return Some(response_text.to_string());
-    }
+    extract_string_field(result, "response")
+        .or_else(|| extract_string_field(result, "text"))
+        .or_else(|| extract_nonempty_content_field(result, "content"))
+        .or_else(|| result.get("message").and_then(extract_message_text))
+        .or_else(|| extract_output_text(result.get("output")?))
+}
 
-    if let Some(message_text) = result.get("text").and_then(Value::as_str) {
-        return Some(message_text.to_string());
-    }
+fn extract_string_field(value: &Value, field: &str) -> Option<String> {
+    value.get(field).and_then(Value::as_str).map(str::to_string)
+}
 
-    if let Some(content) = result.get("content")
-        && let Some(content_text) = extract_text_from_content_value(content)
-        && !content_text.is_empty()
-    {
-        return Some(content_text);
-    }
+fn extract_nonempty_content_field(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(extract_text_from_content_value)
+        .filter(|text| !text.is_empty())
+}
 
-    if let Some(message) = result.get("message") {
-        if let Some(message_text) = message.get("text").and_then(Value::as_str) {
-            return Some(message_text.to_string());
-        }
+fn extract_message_text(message: &Value) -> Option<String> {
+    extract_string_field(message, "text")
+        .or_else(|| extract_nonempty_content_field(message, "content"))
+}
 
-        if let Some(content) = message.get("content")
-            && let Some(content_text) = extract_text_from_content_value(content)
-            && !content_text.is_empty()
-        {
-            return Some(content_text);
-        }
-    }
-
-    let output_items = result.get("output").and_then(Value::as_array)?;
+fn extract_output_text(output: &Value) -> Option<String> {
+    let output_items = output.as_array()?;
     let mut output_text = String::new();
     for output_item in output_items {
-        if let Some(item_text) = output_item.get("text").and_then(Value::as_str) {
-            output_text.push_str(item_text);
+        if let Some(item_text) = extract_string_field(output_item, "text") {
+            output_text.push_str(&item_text);
 
             continue;
         }
@@ -155,42 +151,75 @@ pub(super) fn extract_prompt_result_text(result: &Value) -> Option<String> {
 pub(super) fn extract_text_from_content_value(content: &Value) -> Option<String> {
     match content {
         Value::String(text) => Some(text.clone()),
-        Value::Array(parts) => {
-            let mut combined_text = String::new();
-            for part in parts {
-                if let Some(part_text) = extract_text_from_content_value(part) {
-                    combined_text.push_str(&part_text);
-                }
-            }
-            if combined_text.is_empty() {
-                return None;
-            }
-
-            Some(combined_text)
-        }
-        Value::Object(_) => {
-            if let Some(text) = content.get("text").and_then(Value::as_str) {
-                return Some(text.to_string());
-            }
-
-            if let Some(parts_text) = content
-                .get("parts")
-                .and_then(extract_text_from_content_value)
-                && !parts_text.is_empty()
-            {
-                return Some(parts_text);
-            }
-
-            if let Some(nested_content_text) = content
-                .get("content")
-                .and_then(extract_text_from_content_value)
-                && !nested_content_text.is_empty()
-            {
-                return Some(nested_content_text);
-            }
-
-            None
-        }
+        Value::Array(parts) => extract_text_from_parts(parts),
+        Value::Object(_) => extract_text_from_content_object(content),
         _ => None,
+    }
+}
+
+fn extract_text_from_parts(parts: &[Value]) -> Option<String> {
+    let combined_text = parts
+        .iter()
+        .filter_map(extract_text_from_content_value)
+        .collect::<String>();
+
+    (!combined_text.is_empty()).then_some(combined_text)
+}
+
+fn extract_text_from_content_object(content: &Value) -> Option<String> {
+    extract_string_field(content, "text")
+        .or_else(|| extract_nonempty_content_field(content, "parts"))
+        .or_else(|| extract_nonempty_content_field(content, "content"))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::extract_prompt_result_text;
+
+    #[test]
+    fn prompt_result_text_flattens_nested_content_parts() {
+        // Arrange
+        let result = json!({
+            "content": {
+                "parts": [null, "First", {"content": {"text": " second"}}]
+            }
+        });
+
+        // Act
+        let text = extract_prompt_result_text(&result);
+
+        // Assert
+        assert_eq!(text.as_deref(), Some("First second"));
+    }
+
+    #[test]
+    fn prompt_result_text_reads_message_content() {
+        // Arrange
+        let result = json!({"message": {"content": ["Message text"]}});
+
+        // Act
+        let text = extract_prompt_result_text(&result);
+
+        // Assert
+        assert_eq!(text.as_deref(), Some("Message text"));
+    }
+
+    #[test]
+    fn prompt_result_text_combines_output_items() {
+        // Arrange
+        let result = json!({
+            "output": [
+                {"text": "First"},
+                {"content": {"text": " second"}}
+            ]
+        });
+
+        // Act
+        let text = extract_prompt_result_text(&result);
+
+        // Assert
+        assert_eq!(text.as_deref(), Some("First second"));
     }
 }

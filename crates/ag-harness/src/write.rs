@@ -270,6 +270,188 @@ struct UnifiedDiff {
     original_path: String,
 }
 
+#[derive(Default)]
+struct PatchTermination {
+    new_side: bool,
+    old_side: bool,
+}
+
+impl PatchTermination {
+    fn apply_marker(
+        &mut self,
+        hunk_lines: &mut [PatchLine],
+        marker_repeated: bool,
+    ) -> Result<(), WriteError> {
+        if marker_repeated {
+            return Err(patch_error("newline marker cannot be repeated"));
+        }
+        let previous = hunk_lines
+            .last_mut()
+            .ok_or_else(|| patch_error("newline marker has no preceding patch line"))?;
+        previous.text.newline = false;
+        match previous.kind {
+            PatchLineKind::Addition => self.new_side = true,
+            PatchLineKind::Context => {
+                self.old_side = true;
+                self.new_side = true;
+            }
+            PatchLineKind::Removal => self.old_side = true,
+        }
+
+        Ok(())
+    }
+
+    fn validate_line(&self, kind: PatchLineKind) -> Result<(), WriteError> {
+        if (self.old_side && kind != PatchLineKind::Addition)
+            || (self.new_side && kind != PatchLineKind::Removal)
+        {
+            return Err(patch_error(
+                "newline marker must terminate its affected file side",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+struct HunkApplier<'a> {
+    new_side_terminated: bool,
+    output: String,
+    output_index: usize,
+    previous_original_end: Option<usize>,
+    source_index: usize,
+    source_lines: std::str::SplitInclusive<'a, char>,
+}
+
+impl<'a> HunkApplier<'a> {
+    fn new(current: &'a str) -> Self {
+        Self {
+            new_side_terminated: false,
+            output: String::with_capacity(current.len()),
+            output_index: 0,
+            previous_original_end: None,
+            source_index: 0,
+            source_lines: current.split_inclusive('\n'),
+        }
+    }
+
+    fn apply_hunk(&mut self, hunk: &Hunk) -> Result<(), WriteError> {
+        let original_index = hunk_start(hunk.old_start, hunk.old_count, "original")?;
+        let modified_index = hunk_start(hunk.new_start, hunk.new_count, "modified")?;
+        self.validate_original_range(original_index, hunk.old_count)?;
+        self.copy_source_until(original_index)?;
+        if modified_index != self.output_index {
+            return Err(patch_error(
+                "hunk modified range does not match its original range",
+            ));
+        }
+        for line in &hunk.lines {
+            self.apply_line(line)?;
+        }
+
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<String, WriteError> {
+        if self.new_side_terminated && self.source_lines.next().is_some() {
+            return Err(patch_error(
+                "newline marker must terminate its affected file side",
+            ));
+        }
+        for source_line in self.source_lines {
+            self.output.push_str(source_line);
+        }
+
+        Ok(self.output)
+    }
+
+    fn validate_original_range(
+        &mut self,
+        original_index: usize,
+        old_count: usize,
+    ) -> Result<(), WriteError> {
+        if self
+            .previous_original_end
+            .is_some_and(|end| original_index < end)
+        {
+            return Err(patch_error(
+                "hunks must use ascending, non-overlapping original ranges",
+            ));
+        }
+        self.previous_original_end = Some(
+            original_index
+                .checked_add(old_count)
+                .ok_or_else(|| patch_error("hunk original range overflowed"))?,
+        );
+
+        Ok(())
+    }
+
+    fn copy_source_until(&mut self, original_index: usize) -> Result<(), WriteError> {
+        while self.source_index < original_index {
+            if self.new_side_terminated {
+                return Err(patch_error(
+                    "newline marker must terminate its affected file side",
+                ));
+            }
+            let source_line = self
+                .source_lines
+                .next()
+                .ok_or_else(|| patch_error("hunk starts beyond the end of the target"))?;
+            self.output.push_str(source_line);
+            self.output_index += 1;
+            self.source_index += 1;
+        }
+
+        Ok(())
+    }
+
+    fn apply_line(&mut self, line: &PatchLine) -> Result<(), WriteError> {
+        match line.kind {
+            PatchLineKind::Addition => {
+                push_text_line(&mut self.output, &line.text);
+                self.output_index += 1;
+                self.new_side_terminated = !line.text.newline;
+            }
+            PatchLineKind::Context => {
+                let source_line = self.next_matching_source_line(
+                    &line.text,
+                    "hunk context does not match the target",
+                )?;
+                self.output.push_str(source_line);
+                self.output_index += 1;
+                self.source_index += 1;
+                self.new_side_terminated = !line.text.newline;
+            }
+            PatchLineKind::Removal => {
+                self.next_matching_source_line(
+                    &line.text,
+                    "hunk removal does not match the target",
+                )?;
+                self.source_index += 1;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn next_matching_source_line(
+        &mut self,
+        expected: &TextLine,
+        mismatch_error: &'static str,
+    ) -> Result<&'a str, WriteError> {
+        let source_line = self
+            .source_lines
+            .next()
+            .ok_or_else(|| patch_error(mismatch_error))?;
+        if !source_line_matches(source_line, expected) {
+            return Err(patch_error(mismatch_error));
+        }
+
+        Ok(source_line)
+    }
+}
+
 fn apply_unified_diff(
     requested_path: &str,
     current: Option<&[u8]>,
@@ -299,70 +481,12 @@ fn parse_unified_diff(patch: &str) -> Result<UnifiedDiff, WriteError> {
     let original_path = parse_header(lines.next(), "--- ")?;
     let modified_path = parse_header(lines.next(), "+++ ")?;
     let mut hunks = Vec::new();
-    let mut old_side_terminated = false;
-    let mut new_side_terminated = false;
+    let mut termination = PatchTermination::default();
     while let Some(header) = lines.next() {
         let header = strip_patch_newline(header);
         let (old_start, old_count, new_start, new_count) = parse_hunk_header(header)?;
-        let mut hunk_lines: Vec<PatchLine> = Vec::new();
-        let mut previous_line_had_marker = false;
-        while let Some(line) = lines.next_if(|line| !line.starts_with("@@ ")) {
-            let line = strip_patch_newline(line);
-            if line == "\\ No newline at end of file" {
-                if previous_line_had_marker {
-                    return Err(patch_error("newline marker cannot be repeated"));
-                }
-                let previous = hunk_lines
-                    .last_mut()
-                    .ok_or_else(|| patch_error("newline marker has no preceding patch line"))?;
-                previous.text.newline = false;
-                match previous.kind {
-                    PatchLineKind::Addition => new_side_terminated = true,
-                    PatchLineKind::Context => {
-                        old_side_terminated = true;
-                        new_side_terminated = true;
-                    }
-                    PatchLineKind::Removal => old_side_terminated = true,
-                }
-                previous_line_had_marker = true;
-                continue;
-            }
-            let (prefix, content) = line
-                .split_at_checked(1)
-                .ok_or_else(|| patch_error("hunk contains an empty patch line"))?;
-            let kind = match prefix {
-                "+" => PatchLineKind::Addition,
-                " " => PatchLineKind::Context,
-                "-" => PatchLineKind::Removal,
-                _ => return Err(patch_error("hunk line must start with space, `+`, or `-`")),
-            };
-            if (old_side_terminated && kind != PatchLineKind::Addition)
-                || (new_side_terminated && kind != PatchLineKind::Removal)
-            {
-                return Err(patch_error(
-                    "newline marker must terminate its affected file side",
-                ));
-            }
-            hunk_lines.push(PatchLine {
-                kind,
-                text: TextLine {
-                    content: content.to_string(),
-                    newline: true,
-                },
-            });
-            previous_line_had_marker = false;
-        }
-        let actual_old = hunk_lines
-            .iter()
-            .filter(|line| line.kind != PatchLineKind::Addition)
-            .count();
-        let actual_new = hunk_lines
-            .iter()
-            .filter(|line| line.kind != PatchLineKind::Removal)
-            .count();
-        if actual_old != old_count || actual_new != new_count {
-            return Err(patch_error("hunk line counts do not match its header"));
-        }
+        let hunk_lines = parse_hunk_lines(&mut lines, &mut termination)?;
+        validate_hunk_line_counts(&hunk_lines, old_count, new_count)?;
         hunks.push(Hunk {
             lines: hunk_lines,
             new_count,
@@ -380,6 +504,72 @@ fn parse_unified_diff(patch: &str) -> Result<UnifiedDiff, WriteError> {
         modified_path,
         original_path,
     })
+}
+
+fn parse_hunk_lines<'a, I>(
+    lines: &mut std::iter::Peekable<I>,
+    termination: &mut PatchTermination,
+) -> Result<Vec<PatchLine>, WriteError>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut hunk_lines = Vec::new();
+    let mut previous_line_had_marker = false;
+    while let Some(line) = lines.next_if(|line| !line.starts_with("@@ ")) {
+        let line = strip_patch_newline(line);
+        if line == "\\ No newline at end of file" {
+            termination.apply_marker(&mut hunk_lines, previous_line_had_marker)?;
+            previous_line_had_marker = true;
+
+            continue;
+        }
+        let patch_line = parse_patch_line(line)?;
+        termination.validate_line(patch_line.kind)?;
+        hunk_lines.push(patch_line);
+        previous_line_had_marker = false;
+    }
+
+    Ok(hunk_lines)
+}
+
+fn parse_patch_line(line: &str) -> Result<PatchLine, WriteError> {
+    let (prefix, content) = line
+        .split_at_checked(1)
+        .ok_or_else(|| patch_error("hunk contains an empty patch line"))?;
+    let kind = match prefix {
+        "+" => PatchLineKind::Addition,
+        " " => PatchLineKind::Context,
+        "-" => PatchLineKind::Removal,
+        _ => return Err(patch_error("hunk line must start with space, `+`, or `-`")),
+    };
+
+    Ok(PatchLine {
+        kind,
+        text: TextLine {
+            content: content.to_string(),
+            newline: true,
+        },
+    })
+}
+
+fn validate_hunk_line_counts(
+    hunk_lines: &[PatchLine],
+    old_count: usize,
+    new_count: usize,
+) -> Result<(), WriteError> {
+    let actual_old = hunk_lines
+        .iter()
+        .filter(|line| line.kind != PatchLineKind::Addition)
+        .count();
+    let actual_new = hunk_lines
+        .iter()
+        .filter(|line| line.kind != PatchLineKind::Removal)
+        .count();
+    if actual_old != old_count || actual_new != new_count {
+        return Err(patch_error("hunk line counts do not match its header"));
+    }
+
+    Ok(())
 }
 
 fn parse_header(line: Option<&str>, prefix: &str) -> Result<String, WriteError> {
@@ -499,96 +689,22 @@ fn normalize_line_endings<'a>(
 }
 
 fn apply_hunks(current: &str, hunks: &[Hunk]) -> Result<String, WriteError> {
-    let mut source_lines = current.split_inclusive('\n');
-    let mut output = String::with_capacity(current.len());
-    let mut output_index = 0;
-    let mut source_index = 0;
-    let mut previous_original_end = None;
-    let mut new_side_terminated = false;
+    let mut applier = HunkApplier::new(current);
     for hunk in hunks {
-        let original_index = if hunk.old_count == 0 {
-            hunk.old_start
-        } else {
-            hunk.old_start
-                .checked_sub(1)
-                .ok_or_else(|| patch_error("non-empty hunk cannot start at original line zero"))?
-        };
-        let modified_index = if hunk.new_count == 0 {
-            hunk.new_start
-        } else {
-            hunk.new_start
-                .checked_sub(1)
-                .ok_or_else(|| patch_error("non-empty hunk cannot start at modified line zero"))?
-        };
-        if previous_original_end.is_some_and(|end| original_index < end) {
-            return Err(patch_error(
-                "hunks must use ascending, non-overlapping original ranges",
-            ));
-        }
-        previous_original_end = Some(
-            original_index
-                .checked_add(hunk.old_count)
-                .ok_or_else(|| patch_error("hunk original range overflowed"))?,
-        );
-        while source_index < original_index {
-            if new_side_terminated {
-                return Err(patch_error(
-                    "newline marker must terminate its affected file side",
-                ));
-            }
-            let source_line = source_lines
-                .next()
-                .ok_or_else(|| patch_error("hunk starts beyond the end of the target"))?;
-            output.push_str(source_line);
-            output_index += 1;
-            source_index += 1;
-        }
-        if modified_index != output_index {
-            return Err(patch_error(
-                "hunk modified range does not match its original range",
-            ));
-        }
-        for line in &hunk.lines {
-            match line.kind {
-                PatchLineKind::Addition => {
-                    push_text_line(&mut output, &line.text);
-                    output_index += 1;
-                    new_side_terminated = !line.text.newline;
-                }
-                PatchLineKind::Context => {
-                    let source_line = source_lines
-                        .next()
-                        .ok_or_else(|| patch_error("hunk context does not match the target"))?;
-                    if !source_line_matches(source_line, &line.text) {
-                        return Err(patch_error("hunk context does not match the target"));
-                    }
-                    output.push_str(source_line);
-                    output_index += 1;
-                    source_index += 1;
-                    new_side_terminated = !line.text.newline;
-                }
-                PatchLineKind::Removal => {
-                    let source_line = source_lines
-                        .next()
-                        .ok_or_else(|| patch_error("hunk removal does not match the target"))?;
-                    if !source_line_matches(source_line, &line.text) {
-                        return Err(patch_error("hunk removal does not match the target"));
-                    }
-                    source_index += 1;
-                }
-            }
-        }
-    }
-    if new_side_terminated && source_lines.next().is_some() {
-        return Err(patch_error(
-            "newline marker must terminate its affected file side",
-        ));
-    }
-    for source_line in source_lines {
-        output.push_str(source_line);
+        applier.apply_hunk(hunk)?;
     }
 
-    Ok(output)
+    applier.finish()
+}
+
+fn hunk_start(start: usize, count: usize, side: &str) -> Result<usize, WriteError> {
+    if count == 0 {
+        return Ok(start);
+    }
+
+    start
+        .checked_sub(1)
+        .ok_or_else(|| patch_error(format!("non-empty hunk cannot start at {side} line zero")))
 }
 
 fn source_line_matches(source: &str, expected: &TextLine) -> bool {

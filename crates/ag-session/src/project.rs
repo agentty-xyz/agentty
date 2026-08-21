@@ -87,7 +87,7 @@ pub fn ordered_project_items<'a>(
 #[must_use]
 pub fn project_name_from_path(path: &Path) -> String {
     path.file_name()
-        .and_then(|name| name.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .unwrap_or_default()
         .to_string()
 }

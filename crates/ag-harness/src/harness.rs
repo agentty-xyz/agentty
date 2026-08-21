@@ -120,58 +120,14 @@ impl Harness {
         schema: OutputSchema,
         turn_id: Option<LifecycleId>,
     ) -> Result<Value, TurnError> {
-        let mut request = ModelRequest::new(prompt, schema);
-        if self.lifecycle.is_enabled() {
-            request.mark_lifecycle_observed();
-        }
-        let read_allowed = self.policy.allows(Tool::Read);
-        let write_allowed = self.policy.allows(Tool::Write);
-        let mut read_tool = None;
-        let mut write_tool = None;
-        if read_allowed || write_allowed {
-            let repository_root = self
-                .repository_root
-                .as_ref()
-                .ok_or(TurnError::RepositoryRequired)?;
-            if read_allowed {
-                request = request.with_tool(ToolDefinition::read());
-                read_tool = Some(ReadTool::new(
-                    self.file_system.clone(),
-                    repository_root.clone(),
-                ));
-            }
-            if write_allowed {
-                request = request.with_tool(ToolDefinition::write());
-                write_tool = Some(WriteTool::new(
-                    self.file_system.clone(),
-                    repository_root.clone(),
-                ));
-            }
-        }
+        let (mut request, read_tool, write_tool) = self.prepare_request(prompt, schema)?;
         let mut completed_tool_calls = 0_usize;
         let mut model_request_index = 0_u64;
 
         loop {
-            let model_lifecycle =
-                self.lifecycle
-                    .start_model_request(None, model_request_index, turn_id);
-            let (response, completion) = match self
-                .model
-                .complete_with_optional_metadata(request.clone())
-                .await
-            {
-                Ok(completion) => completion,
-                Err(error) => {
-                    if let Some(model_lifecycle) = model_lifecycle {
-                        model_lifecycle.failed(error.error_type());
-                    }
-
-                    return Err(error.into());
-                }
-            };
-            if let Some(model_lifecycle) = model_lifecycle {
-                model_lifecycle.completed(completion, response.response_type());
-            }
+            let response = self
+                .complete_model_request(&request, model_request_index, turn_id)
+                .await?;
             model_request_index += 1;
 
             match response {
@@ -191,6 +147,66 @@ impl Harness {
                 }
             }
         }
+    }
+
+    fn prepare_request(
+        &self,
+        prompt: String,
+        schema: OutputSchema,
+    ) -> Result<(ModelRequest, Option<ReadTool>, Option<WriteTool>), TurnError> {
+        let mut request = ModelRequest::new(prompt, schema);
+        if self.lifecycle.is_enabled() {
+            request.mark_lifecycle_observed();
+        }
+        let read_allowed = self.policy.allows(Tool::Read);
+        let write_allowed = self.policy.allows(Tool::Write);
+        if !read_allowed && !write_allowed {
+            return Ok((request, None, None));
+        }
+        let repository_root = self
+            .repository_root
+            .as_ref()
+            .ok_or(TurnError::RepositoryRequired)?;
+        let read_tool = read_allowed.then(|| {
+            request = request.clone().with_tool(ToolDefinition::read());
+            ReadTool::new(self.file_system.clone(), repository_root.clone())
+        });
+        let write_tool = write_allowed.then(|| {
+            request = request.clone().with_tool(ToolDefinition::write());
+            WriteTool::new(self.file_system.clone(), repository_root.clone())
+        });
+
+        Ok((request, read_tool, write_tool))
+    }
+
+    async fn complete_model_request(
+        &self,
+        request: &ModelRequest,
+        model_request_index: u64,
+        turn_id: Option<LifecycleId>,
+    ) -> Result<ModelResponse, TurnError> {
+        let model_lifecycle =
+            self.lifecycle
+                .start_model_request(None, model_request_index, turn_id);
+        let (response, completion) = match self
+            .model
+            .complete_with_optional_metadata(request.clone())
+            .await
+        {
+            Ok(completion) => completion,
+            Err(error) => {
+                if let Some(model_lifecycle) = model_lifecycle {
+                    model_lifecycle.failed(error.error_type());
+                }
+
+                return Err(error.into());
+            }
+        };
+        if let Some(model_lifecycle) = model_lifecycle {
+            model_lifecycle.completed(completion, response.response_type());
+        }
+
+        Ok(response)
     }
 
     async fn execute_tool_call(

@@ -598,7 +598,7 @@ fn repo_root_from_git_dir(repo_path: &Path, git_dir: &Path) -> Result<PathBuf, G
 fn repo_root_from_dot_git_dir(git_dir: &Path) -> Result<Option<PathBuf>, GitError> {
     if git_dir
         .file_name()
-        .and_then(|name| name.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .is_none_or(|name| name != ".git")
     {
         return Ok(None);
