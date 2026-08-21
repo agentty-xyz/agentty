@@ -38,7 +38,7 @@ runs:
       # steps that run hooks.
       run: |
         mkdir -p "$UV_TOOL_BIN_DIR"
-        uv tool install --no-build prek==0.4.3
+        uv tool install --no-build prek==0.4.14
         echo "/tmp/agentty-uv-tools/bin" >> "$GITHUB_PATH"
 
     - name: Install pinned Rust nightly toolchain
