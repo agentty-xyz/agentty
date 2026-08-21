@@ -1901,8 +1901,8 @@ mod tests {
                 },
             ]
         );
-        assert!(folder_lines.is_empty());
-        assert!(reversed_lines.is_empty());
+        assert_eq!(folder_lines, []);
+        assert_eq!(reversed_lines, []);
         assert_eq!(folder_anchor_index, None);
         assert_eq!(missing_anchor_index, None);
     }
@@ -2275,7 +2275,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["old first", "new first", "unchanged second"]
         );
-        assert!(missing_path_lines.is_empty());
+        assert_eq!(missing_path_lines, []);
     }
 
     #[test]
@@ -2465,7 +2465,7 @@ mod tests {
 
         // Assert
         assert_eq!(line_comments.comments.len(), 2);
-        assert!(insertions.is_empty());
+        assert_eq!(insertions, []);
     }
 
     #[test]

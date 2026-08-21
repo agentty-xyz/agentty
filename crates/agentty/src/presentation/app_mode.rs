@@ -1158,9 +1158,9 @@ mod tests {
         line_comments.finish_editing();
 
         // Assert
-        assert!(line_comments.comments.is_empty());
+        assert_eq!(line_comments.comments, []);
         assert!(line_comments.editing_input_mut().is_none());
-        assert!(line_comments.prompt_text().is_empty());
+        assert_eq!(line_comments.prompt_text(), "");
     }
 
     #[test]

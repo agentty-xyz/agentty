@@ -5310,7 +5310,7 @@ mod tests {
             OrchestrationTaskStatus::Reported.to_string()
         );
         assert!(research.last_error.is_none());
-        assert!(backend.calls().is_empty());
+        assert_eq!(backend.calls(), [] as [String; 0]);
     }
 
     #[tokio::test]
@@ -6359,8 +6359,8 @@ mod tests {
             task.kind == OrchestrationTaskKind::Implementation.to_string()
                 && task.status == OrchestrationTaskStatus::Proposed.to_string()
         }));
-        assert!(implementation_response.subtasks.is_empty());
-        assert!(implementation_response.questions.is_empty());
+        assert_eq!(implementation_response.subtasks, []);
+        assert_eq!(implementation_response.questions, []);
     }
 
     #[tokio::test]
@@ -6431,7 +6431,7 @@ mod tests {
             "Inspect architecture and dependency boundaries"
         );
         assert!(refreshed_tasks[0].research_report.is_none());
-        assert!(correction.subtasks.is_empty());
+        assert_eq!(correction.subtasks, []);
     }
 
     #[tokio::test]

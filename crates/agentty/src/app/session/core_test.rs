@@ -3193,7 +3193,7 @@ async fn test_enqueue_message_rejects_empty_payload() {
         .iter()
         .find(|session| session.id == session_id)
         .expect("session present");
-    assert!(session.queued_messages.is_empty());
+    assert_eq!(session.queued_messages, []);
 }
 
 #[tokio::test]

@@ -559,7 +559,7 @@ mod tests {
             .expect_complete_with_optional_metadata()
             .times(1)
             .returning(|request| {
-                assert!(request.tools().is_empty());
+                assert_eq!(request.tools(), []);
 
                 Ok(response_without_metadata(ModelResponse::ToolCall(
                     read_call("call_denied"),

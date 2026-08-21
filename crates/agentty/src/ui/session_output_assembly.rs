@@ -985,7 +985,7 @@ mod tests {
 
         // Assert
         assert_eq!(loader_line_index, None);
-        assert!(lines.is_empty());
+        assert_eq!(lines, []);
     }
 
     #[test]

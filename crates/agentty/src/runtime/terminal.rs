@@ -432,7 +432,7 @@ mod tests {
         // Assert
         let _stdout = result.expect("setup should use Kitty enhancement directly");
         assert_eq!(guard.enhancement(), enhancement_fixture(true, false));
-        assert!(xterm_startup_sequence.is_empty());
+        assert_eq!(xterm_startup_sequence, "");
     }
 
     /// Verifies support-query failures fall back to the legacy key mode so TUI
@@ -657,8 +657,8 @@ mod tests {
             .expect("disable sequence should render");
 
         // Assert
-        assert!(disabled_enable_sequence.is_empty());
-        assert!(disabled_disable_sequence.is_empty());
+        assert_eq!(disabled_enable_sequence, "");
+        assert_eq!(disabled_disable_sequence, "");
         assert_eq!(enable_sequence, "\x1B[>4;1f\x1B[>4;2m");
         assert_eq!(disable_sequence, "\x1B[>4f\x1B[>4m");
     }
