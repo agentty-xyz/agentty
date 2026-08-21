@@ -144,7 +144,24 @@ pub(crate) async fn wait_for_response_line<R>(
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    tokio::time::timeout(STARTUP_TIMEOUT, async {
+    wait_for_response_line_with_timeout(stdout_lines, response_id, STARTUP_TIMEOUT).await
+}
+
+/// Reads stdout lines until a matching response arrives or `response_timeout`
+/// elapses.
+///
+/// Provider lifecycles whose documented bootstrap work includes long-running
+/// initialization may select a wider deadline without weakening the default
+/// startup bound for every app-server request.
+pub(crate) async fn wait_for_response_line_with_timeout<R>(
+    stdout_lines: &mut Lines<BufReader<R>>,
+    response_id: &str,
+    response_timeout: Duration,
+) -> Result<String, AppServerTransportError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    tokio::time::timeout(response_timeout, async {
         loop {
             let stdout_line = stdout_lines
                 .next_line()
@@ -166,7 +183,7 @@ where
     .await
     .map_err(|_| AppServerTransportError::Timeout {
         response_id: response_id.to_string(),
-        timeout_seconds: STARTUP_TIMEOUT.as_secs(),
+        timeout_seconds: response_timeout.as_secs(),
     })?
 }
 
@@ -442,6 +459,29 @@ mod tests {
             "expected ProcessTerminated, got: {response_result:?}"
         );
         writer_task.await.expect("writer task should finish");
+    }
+
+    /// Verifies provider-selected response deadlines are preserved in timeout
+    /// diagnostics instead of falling back to the shared startup window.
+    #[tokio::test]
+    async fn wait_for_response_line_with_timeout_uses_selected_deadline() {
+        // Arrange
+        let (reader, _writer) = tokio::io::duplex(256);
+        let mut stdout_lines = BufReader::new(reader).lines();
+        let response_timeout = Duration::from_millis(1);
+
+        // Act
+        let response_result =
+            wait_for_response_line_with_timeout(&mut stdout_lines, "req-1", response_timeout).await;
+
+        // Assert
+        assert!(matches!(
+            response_result,
+            Err(AppServerTransportError::Timeout {
+                ref response_id,
+                timeout_seconds: 0,
+            }) if response_id == "req-1"
+        ));
     }
 
     #[test]

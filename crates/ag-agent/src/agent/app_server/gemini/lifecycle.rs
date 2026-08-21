@@ -109,7 +109,9 @@ pub(super) async fn start_runtime_with_built_command(
         request.permission_mode,
     );
 
-    match bootstrap_runtime_session(&mut transport, state.folder.as_path()).await {
+    let bootstrap_timeout = bootstrap_response_timeout(&request.request_kind);
+    match bootstrap_runtime_session(&mut transport, state.folder.as_path(), bootstrap_timeout).await
+    {
         Ok(session_id) => {
             state.session_id = session_id;
 
@@ -129,21 +131,42 @@ pub(super) async fn start_runtime_with_built_command(
 pub(super) async fn bootstrap_runtime_session<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     folder: &Path,
+    response_timeout: std::time::Duration,
 ) -> Result<String, AppServerError> {
-    initialize_runtime(transport).await?;
+    initialize_runtime(transport, response_timeout).await?;
 
-    start_session(transport, folder).await
+    start_session(transport, folder, response_timeout).await
+}
+
+/// Selects a long-running bootstrap deadline for isolated utility prompts.
+///
+/// Gemini initializes plan-mode tools and creates a fresh ACP session before
+/// one-shot focused review can submit its prompt. Normal persistent sessions
+/// retain the bounded startup timeout so unrelated configuration failures are
+/// still reported promptly.
+fn bootstrap_response_timeout(
+    request_kind: &crate::channel::AgentRequestKind,
+) -> std::time::Duration {
+    if matches!(
+        request_kind,
+        crate::channel::AgentRequestKind::UtilityPrompt
+    ) {
+        app_server_transport::TURN_TIMEOUT
+    } else {
+        app_server_transport::STARTUP_TIMEOUT
+    }
 }
 
 /// Sends the ACP initialize handshake.
 pub(super) async fn initialize_runtime<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
+    response_timeout: std::time::Duration,
 ) -> Result<(), AppServerError> {
     let initialization_request_id = format!("init-{}", uuid::Uuid::new_v4());
     let initialization_request = build_initialize_request_payload(&initialization_request_id)?;
     transport.write_json_line(initialization_request).await?;
     let initialize_response_line = transport
-        .wait_for_response_line(initialization_request_id)
+        .wait_for_response_line_with_timeout(initialization_request_id, response_timeout)
         .await?;
     let initialize_response =
         serde_json::from_str::<Value>(&initialize_response_line).map_err(|error| {
@@ -235,6 +258,7 @@ pub(super) fn parse_json_rpc_result<T: serde::de::DeserializeOwned>(
 pub(super) async fn start_session<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     folder: &Path,
+    response_timeout: std::time::Duration,
 ) -> Result<String, AppServerError> {
     let session_new_id = format!("session-new-{}", uuid::Uuid::new_v4());
     let session_new_payload = build_json_rpc_request_payload(
@@ -243,7 +267,9 @@ pub(super) async fn start_session<Transport: AppServerRuntimeTransport>(
         NewSessionRequest::new(folder.to_path_buf()),
     )?;
     transport.write_json_line(session_new_payload).await?;
-    let response_line = transport.wait_for_response_line(session_new_id).await?;
+    let response_line = transport
+        .wait_for_response_line_with_timeout(session_new_id, response_timeout)
+        .await?;
     let response_value = serde_json::from_str::<Value>(&response_line).map_err(|error| {
         AppServerError::Provider(format!(
             "Failed to parse session/new response JSON: {error}"
@@ -501,6 +527,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn utility_prompts_receive_long_running_bootstrap_timeout() {
+        // Arrange
+        let utility_request_kind = crate::channel::AgentRequestKind::UtilityPrompt;
+        let session_request_kind = crate::channel::AgentRequestKind::SessionStart;
+
+        // Act
+        let utility_timeout = bootstrap_response_timeout(&utility_request_kind);
+        let session_timeout = bootstrap_response_timeout(&session_request_kind);
+
+        // Assert
+        assert_eq!(utility_timeout, app_server_transport::TURN_TIMEOUT);
+        assert_eq!(session_timeout, app_server_transport::STARTUP_TIMEOUT);
+    }
+
     #[tokio::test]
     async fn start_runtime_reports_spawn_error_for_missing_folder() {
         // Arrange
@@ -537,6 +578,186 @@ mod tests {
         assert!(
             error.to_string().contains("initialize"),
             "unexpected bootstrap error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_runtime_session_propagates_long_running_response_timeout() {
+        // Arrange
+        let folder = tempdir().expect("create session folder");
+        let mut transport = MockAppServerRuntimeTransport::new();
+        transport
+            .expect_write_json_line()
+            .times(3)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        transport
+            .expect_wait_for_response_line_with_timeout()
+            .times(2)
+            .withf(|_, response_timeout| *response_timeout == app_server_transport::TURN_TIMEOUT)
+            .returning(|response_id, _| {
+                let response = if response_id.starts_with("init-") {
+                    let result = InitializeResponse::new(ProtocolVersion::LATEST);
+
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": response_id,
+                        "result": result,
+                    })
+                } else {
+                    let result = NewSessionResponse::new("gemini-review-session");
+
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": response_id,
+                        "result": result,
+                    })
+                };
+
+                Box::pin(async move { Ok(response.to_string()) })
+            });
+
+        // Act
+        let session_id = bootstrap_runtime_session(
+            &mut transport,
+            folder.path(),
+            app_server_transport::TURN_TIMEOUT,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            session_id.expect("Gemini bootstrap should accept the long-running timeout"),
+            "gemini-review-session"
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_runtime_uses_long_running_response_timeout() {
+        // Arrange
+        let request_id = Arc::new(Mutex::new(None));
+        let mut transport = MockAppServerRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|payload| {
+                payload.get("method").and_then(Value::as_str) == Some(AGENT_METHOD_NAMES.initialize)
+            })
+            .returning({
+                let request_id = Arc::clone(&request_id);
+
+                move |payload| {
+                    *request_id
+                        .lock()
+                        .expect("initialize id lock should remain usable") = payload
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        transport
+            .expect_wait_for_response_line_with_timeout()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|_, response_timeout| *response_timeout == app_server_transport::TURN_TIMEOUT)
+            .returning(move |_, _| {
+                let response_id = request_id
+                    .lock()
+                    .expect("initialize id lock should remain usable")
+                    .clone()
+                    .expect("initialize id should be captured");
+                let response = InitializeResponse::new(ProtocolVersion::LATEST);
+
+                Box::pin(async move {
+                    Ok(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": response_id,
+                        "result": response,
+                    })
+                    .to_string())
+                })
+            });
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|payload| payload.get("method").and_then(Value::as_str) == Some("initialized"))
+            .return_once(|_| Box::pin(async { Ok(()) }));
+
+        // Act
+        let result = initialize_runtime(&mut transport, app_server_transport::TURN_TIMEOUT).await;
+
+        // Assert
+        result.expect("Gemini initialization should accept the long-running timeout");
+    }
+
+    #[tokio::test]
+    async fn start_session_uses_long_running_response_timeout() {
+        // Arrange
+        let folder = tempdir().expect("create session folder");
+        let request_id = Arc::new(Mutex::new(None));
+        let mut transport = MockAppServerRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|payload| {
+                payload.get("method").and_then(Value::as_str)
+                    == Some(AGENT_METHOD_NAMES.session_new)
+            })
+            .returning({
+                let request_id = Arc::clone(&request_id);
+
+                move |payload| {
+                    *request_id
+                        .lock()
+                        .expect("session/new id lock should remain usable") = payload
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        transport
+            .expect_wait_for_response_line_with_timeout()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|_, response_timeout| *response_timeout == app_server_transport::TURN_TIMEOUT)
+            .returning(move |_, _| {
+                let response_id = request_id
+                    .lock()
+                    .expect("session/new id lock should remain usable")
+                    .clone()
+                    .expect("session/new id should be captured");
+                let response = NewSessionResponse::new("gemini-review-session");
+
+                Box::pin(async move {
+                    Ok(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": response_id,
+                        "result": response,
+                    })
+                    .to_string())
+                })
+            });
+
+        // Act
+        let session_id = start_session(
+            &mut transport,
+            folder.path(),
+            app_server_transport::TURN_TIMEOUT,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            session_id.expect("Gemini session creation should accept the long-running timeout"),
+            "gemini-review-session"
         );
     }
 

@@ -1076,8 +1076,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Ensures the detached review-assist task emits the completed review
-    /// through the app event channel.
+    /// Ensures a detached Gemini review-assist task uses the utility-prompt
+    /// route and emits the completed review through the app event channel.
     async fn spawn_review_assist_task_with_client_emits_completed_review() {
         // Arrange
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
@@ -1086,8 +1086,12 @@ mod tests {
             .expect_submit()
             .times(1)
             .returning(|request| {
-                assert_eq!(request.agent_kind, AgentKind::Claude);
+                assert_eq!(request.agent_kind, AgentKind::Gemini);
                 assert_eq!(request.permission_mode, ag_agent::PermissionMode::ReadOnly);
+                assert!(matches!(
+                    request.request_kind,
+                    ag_agent::AgentRequestKind::UtilityPrompt
+                ));
                 assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
                 assert_eq!(request.speed_mode, crate::domain::agent::SpeedMode::Fast);
                 assert!(
@@ -1106,7 +1110,7 @@ mod tests {
             diff_hash: 42,
             reasoning_level: ReasoningLevel::XHigh,
             review_diff: "diff --git a/src/lib.rs b/src/lib.rs".to_string(),
-            review_selection: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            review_selection: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
             session_chat_history: None,
             session_folder: PathBuf::from("/tmp/review-assist"),
             session_id: "session-42".into(),
