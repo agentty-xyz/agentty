@@ -7,15 +7,38 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.5] - 2026-08-22
+
+### Added
+
+- ag-harness: expose lifecycle observer fan-out and GenAI metrics for agent duration,
+  model and tool calls, executed-tool duration, and stable turn outcomes.
+
 ### Changed
 
+- agentty: show the active agent, model, reasoning level, and speed mode while focused
+  reviews are loading.
+- agentty: align changed-line focus with the selected file explorer row and review
+  comment sidebar.
 - ag-agent: require Antigravity CLI 1.1.18 and retain native long-context sessions
   through its persistent NDJSON transport.
+- ag-harness: standardize GenAI telemetry metadata against the pinned OpenTelemetry
+  semantic convention revision.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.5`.
 
 ### Fixed
 
 - ag-agent: normalize Antigravity's string-valued summary fallback before strict
   protocol parsing instead of failing the turn in native schema validation.
+- ag-agent: preserve sandboxed plan mode for read-only Gemini sessions while keeping
+  utility prompts on standard ACP startup.
+- ag-harness: harden unified-diff validation, nested response parsing, request
+  preparation, and orchestration cancellation.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
 
 ## [v0.15.4] - 2026-08-20
 
