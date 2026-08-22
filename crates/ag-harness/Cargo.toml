@@ -24,7 +24,9 @@ tokio.workspace = true
 [dev-dependencies]
 mockall.workspace = true
 opentelemetry-otlp.workspace = true
+opentelemetry-proto.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
+prost.workspace = true
 wiremock.workspace = true
 
 [lints]
