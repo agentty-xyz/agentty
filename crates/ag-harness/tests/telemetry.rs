@@ -154,6 +154,8 @@ fn assert_duration_metric(metrics: &[&Metric]) {
         .iter()
         .find(|metric| metric.name() == "gen_ai.client.operation.duration")
         .expect("duration metric should be exported");
+    assert_eq!(duration.description(), "GenAI operation duration.");
+    assert_eq!(duration.unit(), "s");
     assert!(matches!(
         duration.data(),
         AggregatedMetrics::F64(MetricData::Histogram(histogram)) if {
@@ -219,6 +221,11 @@ fn assert_token_usage_metric(metrics: &[&Metric]) {
         .iter()
         .find(|metric| metric.name() == "gen_ai.client.token.usage")
         .expect("token-usage metric should be exported");
+    assert_eq!(
+        token_usage.description(),
+        "Number of input and output tokens used."
+    );
+    assert_eq!(token_usage.unit(), "{token}");
     assert!(matches!(
         token_usage.data(),
         AggregatedMetrics::U64(MetricData::Histogram(histogram)) if {

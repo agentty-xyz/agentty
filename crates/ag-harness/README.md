@@ -24,9 +24,13 @@ continue calling allowed tools until it returns schema-valid JSON.
 Use `ModelWithMetadata::complete_with_metadata()` for normalized completion metadata.
 
 Attach `with_lifecycle_observer()` to receive ordered metadata-only lifecycle events.
+Use `LifecycleObserverSet` to send the same stream to multiple observers, such as
+metrics, traces, and a host-owned journal.
 
 ## Telemetry
 
 When the application installs an OpenTelemetry meter provider, `ModelClient` records
 request duration and provider-reported input and output tokens. Missing usage is not
 estimated, sensitive content is excluded, and the application owns export and shutdown.
+The emitted instruments follow the pinned OpenTelemetry GenAI semantic-convention
+contract documented in the architecture guide.

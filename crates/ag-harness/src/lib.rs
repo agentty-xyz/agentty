@@ -21,8 +21,8 @@ mod write;
 pub use file_system::{FileSystem, LocalFileSystem};
 pub use harness::{Harness, TurnError};
 pub use lifecycle::{
-    LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, ModelResponseType,
-    ToolErrorType, TurnErrorType,
+    LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, LifecycleObserverSet,
+    ModelResponseType, ToolErrorType, TurnErrorType,
 };
 pub use model::{
     CompletionMetadata, CompletionUsage, Model, ModelClient, ModelCompletion, ModelError,

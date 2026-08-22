@@ -1,6 +1,5 @@
-use crate::chat_completion;
+use crate::{chat_completion, telemetry};
 
-pub(crate) const PROVIDER_NAME: &str = "moonshot_ai";
 pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
     chat_completion::ChatCompletionProviderPolicy {
         display_name: "Kimi",
@@ -8,7 +7,7 @@ pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
             assistant_reasoning_content: true,
             tool_result_name: true,
         },
-        telemetry_name: PROVIDER_NAME,
+        telemetry_name: telemetry::PROVIDER_MOONSHOT_AI,
         unsupported_schema_reason: "Kimi JSON Object mode requires an explicit object root schema",
     };
 
