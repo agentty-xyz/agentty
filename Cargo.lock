@@ -70,7 +70,9 @@ dependencies = [
 name = "ag-harness"
 version = "0.15.4"
 dependencies = [
+ "assert_cmd",
  "async-trait",
+ "clap",
  "jsonschema",
  "mockall",
  "opentelemetry",

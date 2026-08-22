@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use thiserror::Error;
@@ -9,7 +10,9 @@ use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::{
     LifecycleEmitter, LifecycleId, LifecycleObserver, ToolErrorType, TurnErrorType, TurnLifecycle,
 };
-use crate::model::{Model, ModelError, ModelRequest, ModelResponse};
+use crate::model::{
+    CompletionMetadata, Model, ModelError, ModelMessage, ModelRequest, ModelResponse,
+};
 use crate::policy::Policy;
 use crate::read::{ReadError, ReadTool};
 use crate::schema_contract::OutputSchema;
@@ -19,6 +22,167 @@ use crate::tool::{
 use crate::write::{WriteError, WriteTool};
 
 const DEFAULT_MAX_TOOL_CALLS: usize = 8;
+
+/// Successful model turn paired with observable execution activity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TurnOutcome {
+    output: Value,
+    report: TurnReport,
+}
+
+impl TurnOutcome {
+    /// Returns the locally validated structured model output.
+    pub fn output(&self) -> &Value {
+        &self.output
+    }
+
+    /// Returns sanitized timing, model, and tool activity for the turn.
+    pub fn report(&self) -> &TurnReport {
+        &self.report
+    }
+
+    /// Consumes the outcome and returns its validated output.
+    pub fn into_output(self) -> Value {
+        self.output
+    }
+}
+
+/// Observable, content-free activity from one successful model turn.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TurnReport {
+    duration: Duration,
+    model_requests: Vec<ModelRequestActivity>,
+    tool_calls: Vec<ToolActivity>,
+}
+
+impl TurnReport {
+    /// Returns the complete elapsed turn time.
+    pub fn duration(&self) -> Duration {
+        self.duration
+    }
+
+    /// Returns one entry for every provider request made during the turn.
+    pub fn model_requests(&self) -> &[ModelRequestActivity] {
+        &self.model_requests
+    }
+
+    /// Returns successful repository tool activity without file contents.
+    pub fn tool_calls(&self) -> &[ToolActivity] {
+        &self.tool_calls
+    }
+}
+
+/// Observable facts about one successful provider request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelRequestActivity {
+    completion: Option<CompletionMetadata>,
+    duration: Duration,
+    response_type: crate::lifecycle::ModelResponseType,
+}
+
+impl ModelRequestActivity {
+    /// Returns normalized provider completion metadata, when available.
+    pub fn completion(&self) -> Option<&CompletionMetadata> {
+        self.completion.as_ref()
+    }
+
+    /// Returns the elapsed provider-request time.
+    pub fn duration(&self) -> Duration {
+        self.duration
+    }
+
+    /// Returns whether the request produced output or a tool call.
+    pub fn response_type(&self) -> crate::lifecycle::ModelResponseType {
+        self.response_type
+    }
+}
+
+/// Sanitized details about one successful built-in tool operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ToolActivity {
+    /// A bounded repository file read.
+    Read {
+        /// Elapsed tool-execution time.
+        duration: Duration,
+        /// Final included one-based line, when the file was nonempty.
+        end_line: Option<u64>,
+        /// Repository-relative path that was read.
+        path: String,
+        /// Requested one-based starting line.
+        start_line: u64,
+        /// Whether additional file content followed the result.
+        truncated: bool,
+    },
+    /// A repository file write.
+    Write {
+        /// Number of bytes in the resulting file.
+        bytes_written: usize,
+        /// Elapsed tool-execution time.
+        duration: Duration,
+        /// Repository-relative path that was written.
+        path: String,
+    },
+    /// A model-correctable repository write rejection returned to the model.
+    WriteRejected {
+        /// Elapsed tool-execution time.
+        duration: Duration,
+        /// Repository-relative path that was rejected.
+        path: String,
+    },
+}
+
+impl ToolActivity {
+    /// Returns the elapsed tool-execution time.
+    pub fn duration(&self) -> Duration {
+        match self {
+            Self::Read { duration, .. }
+            | Self::Write { duration, .. }
+            | Self::WriteRejected { duration, .. } => *duration,
+        }
+    }
+
+    /// Returns the bounded built-in tool name.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Read { .. } => "read",
+            Self::Write { .. } | Self::WriteRejected { .. } => "write",
+        }
+    }
+
+    /// Returns the repository-relative target path.
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Read { path, .. }
+            | Self::Write { path, .. }
+            | Self::WriteRejected { path, .. } => path,
+        }
+    }
+}
+
+/// In-memory sequence of model turns sharing conversation and tool history.
+pub struct ChatSession<'a> {
+    harness: &'a Harness,
+    messages: Vec<ModelMessage>,
+    schema: OutputSchema,
+}
+
+impl ChatSession<'_> {
+    /// Sends one prompt and retains the successful turn in session history.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TurnError`] under the same conditions as [`Harness::run`]. A
+    /// failed turn is not added to the conversation history.
+    pub async fn send(&mut self, prompt: impl Into<String>) -> Result<TurnOutcome, TurnError> {
+        let request =
+            ModelRequest::with_history(self.messages.clone(), prompt.into(), self.schema.clone());
+        let (outcome, messages) = self.harness.run_request(request).await?;
+        self.messages = messages;
+
+        Ok(outcome)
+    }
+}
 
 /// Application-facing harness for one complete model turn.
 ///
@@ -100,9 +264,41 @@ impl Harness {
         prompt: impl Into<String>,
         schema: OutputSchema,
     ) -> Result<Value, TurnError> {
+        self.run_report(prompt, schema)
+            .await
+            .map(TurnOutcome::into_output)
+    }
+
+    /// Runs one prompt and returns validated output with sanitized activity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TurnError`] under the same conditions as [`Harness::run`].
+    pub async fn run_report(
+        &self,
+        prompt: impl Into<String>,
+        schema: OutputSchema,
+    ) -> Result<TurnOutcome, TurnError> {
+        let request = ModelRequest::new(prompt, schema);
+        self.run_request(request).await.map(|(outcome, _)| outcome)
+    }
+
+    /// Starts an in-memory chat whose responses must match `schema`.
+    pub fn chat(&self, schema: OutputSchema) -> ChatSession<'_> {
+        ChatSession {
+            harness: self,
+            messages: Vec::new(),
+            schema,
+        }
+    }
+
+    async fn run_request(
+        &self,
+        request: ModelRequest,
+    ) -> Result<(TurnOutcome, Vec<ModelMessage>), TurnError> {
         let turn = self.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
-        let result = self.run_turn(prompt.into(), schema, turn_id).await;
+        let result = self.run_turn(request, turn_id).await;
 
         if let Some(turn) = turn {
             match &result {
@@ -116,24 +312,36 @@ impl Harness {
 
     async fn run_turn(
         &self,
-        prompt: String,
-        schema: OutputSchema,
+        request: ModelRequest,
         turn_id: Option<LifecycleId>,
-    ) -> Result<Value, TurnError> {
-        let (mut request, read_tool, write_tool) = self.prepare_request(prompt, schema)?;
+    ) -> Result<(TurnOutcome, Vec<ModelMessage>), TurnError> {
+        let started_at = Instant::now();
+        let (mut request, read_tool, write_tool) = self.prepare_request(request)?;
         let mut completed_tool_calls = 0_usize;
         let mut model_request_index = 0_u64;
+        let mut model_requests = Vec::new();
+        let mut tool_calls = Vec::new();
 
         loop {
-            let response = self
+            let (response, activity) = self
                 .complete_model_request(&request, model_request_index, turn_id)
                 .await?;
+            model_requests.push(activity);
             model_request_index += 1;
 
             match response {
-                ModelResponse::Output(output) => return Ok(output),
+                ModelResponse::Output(output) => {
+                    request.record_output(&output);
+                    let report = TurnReport {
+                        duration: started_at.elapsed(),
+                        model_requests,
+                        tool_calls,
+                    };
+
+                    return Ok((TurnOutcome { output, report }, request.into_messages()));
+                }
                 ModelResponse::ToolCall(call) => {
-                    let result = self
+                    let (result, activity) = self
                         .execute_tool_call(
                             &call,
                             read_tool.as_ref(),
@@ -143,6 +351,7 @@ impl Harness {
                         )
                         .await?;
                     request.record_tool_result(call, result);
+                    tool_calls.push(activity);
                     completed_tool_calls += 1;
                 }
             }
@@ -151,10 +360,8 @@ impl Harness {
 
     fn prepare_request(
         &self,
-        prompt: String,
-        schema: OutputSchema,
+        mut request: ModelRequest,
     ) -> Result<(ModelRequest, Option<ReadTool>, Option<WriteTool>), TurnError> {
-        let mut request = ModelRequest::new(prompt, schema);
         if self.lifecycle.is_enabled() {
             request.mark_lifecycle_observed();
         }
@@ -184,7 +391,8 @@ impl Harness {
         request: &ModelRequest,
         model_request_index: u64,
         turn_id: Option<LifecycleId>,
-    ) -> Result<ModelResponse, TurnError> {
+    ) -> Result<(ModelResponse, ModelRequestActivity), TurnError> {
+        let started_at = Instant::now();
         let model_lifecycle =
             self.lifecycle
                 .start_model_request(None, model_request_index, turn_id);
@@ -202,11 +410,17 @@ impl Harness {
                 return Err(error.into());
             }
         };
+        let response_type = response.response_type();
+        let activity = ModelRequestActivity {
+            completion: completion.clone(),
+            duration: started_at.elapsed(),
+            response_type,
+        };
         if let Some(model_lifecycle) = model_lifecycle {
-            model_lifecycle.completed(completion, response.response_type());
+            model_lifecycle.completed(completion, response_type);
         }
 
-        Ok(response)
+        Ok((response, activity))
     }
 
     async fn execute_tool_call(
@@ -216,7 +430,7 @@ impl Harness {
         write_tool: Option<&WriteTool>,
         completed_tool_calls: usize,
         turn_id: Option<LifecycleId>,
-    ) -> Result<String, TurnError> {
+    ) -> Result<(String, ToolActivity), TurnError> {
         let mut tool_lifecycle = self
             .lifecycle
             .request_tool(call.name().to_string(), turn_id);
@@ -315,23 +529,53 @@ enum ToolExecution<'a> {
     Write(&'a WriteTool, &'a WriteArguments),
 }
 
-async fn execute_tool(execution: ToolExecution<'_>) -> Result<String, TurnError> {
+async fn execute_tool(execution: ToolExecution<'_>) -> Result<(String, ToolActivity), TurnError> {
+    let started_at = Instant::now();
+
     match execution {
-        ToolExecution::Read(read_tool, arguments) => read_tool
-            .execute(arguments)
-            .await?
-            .to_tool_result()
-            .map_err(ReadError::from)
-            .map_err(TurnError::from),
-        ToolExecution::Write(write_tool, arguments) => match write_tool.execute(arguments).await {
-            Ok(output) => output
+        ToolExecution::Read(read_tool, arguments) => {
+            let output = read_tool.execute(arguments).await?;
+            let activity = ToolActivity::Read {
+                duration: started_at.elapsed(),
+                end_line: output.end_line(),
+                path: output.path().to_string(),
+                start_line: output.start_line(),
+                truncated: output.truncated(),
+            };
+            let result = output
                 .to_tool_result()
-                .map_err(WriteError::from)
-                .map_err(TurnError::from),
+                .map_err(ReadError::from)
+                .map_err(TurnError::from)?;
+
+            Ok((result, activity))
+        }
+        ToolExecution::Write(write_tool, arguments) => match write_tool.execute(arguments).await {
+            Ok(output) => {
+                let activity = ToolActivity::Write {
+                    bytes_written: output.bytes_written(),
+                    duration: started_at.elapsed(),
+                    path: output.path().to_string(),
+                };
+                let result = output
+                    .to_tool_result()
+                    .map_err(WriteError::from)
+                    .map_err(TurnError::from)?;
+
+                Ok((result, activity))
+            }
             Err(error) if error.is_model_correctable() => error
                 .to_tool_result(arguments.path())
                 .map_err(WriteError::from)
-                .map_err(TurnError::from),
+                .map_err(TurnError::from)
+                .map(|result| {
+                    (
+                        result,
+                        ToolActivity::WriteRejected {
+                            duration: started_at.elapsed(),
+                            path: arguments.path().to_string(),
+                        },
+                    )
+                }),
             Err(error) => Err(error.into()),
         },
     }
@@ -374,6 +618,28 @@ mod tests {
         response: ModelResponse,
     ) -> (ModelResponse, Option<crate::CompletionMetadata>) {
         (response, None)
+    }
+
+    fn response_with_metadata(
+        response: ModelResponse,
+    ) -> (ModelResponse, Option<crate::CompletionMetadata>) {
+        (
+            response,
+            Some(crate::CompletionMetadata::new(
+                "stop".to_string(),
+                Some("response-1".to_string()),
+                Some("reported-model".to_string()),
+                None,
+                Some(crate::CompletionUsage::new(
+                    None,
+                    None,
+                    Some(12),
+                    Some(4),
+                    None,
+                    Some(16),
+                )),
+            )),
+        )
     }
 
     fn write_call(id: &str, patch: &str) -> ToolCall {
@@ -567,6 +833,195 @@ mod tests {
 
         // Assert
         assert_eq!(output, json!({ "summary": "workspace" }));
+    }
+
+    #[tokio::test]
+    async fn chat_retains_successful_conversation_history() {
+        // Arrange
+        let mut model = MockModel::new();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        model
+            .expect_complete_with_optional_metadata()
+            .times(2)
+            .returning(move |request| {
+                let call_index = call_count.fetch_add(1, Ordering::SeqCst);
+                if call_index == 0 {
+                    assert_eq!(
+                        request.messages(),
+                        &[ModelMessage::User("first question".to_string())]
+                    );
+
+                    return Ok(response_without_metadata(ModelResponse::Output(json!({
+                        "summary": "first answer"
+                    }))));
+                }
+                assert_eq!(
+                    request.messages(),
+                    &[
+                        ModelMessage::User("first question".to_string()),
+                        ModelMessage::Assistant(r#"{"summary":"first answer"}"#.to_string()),
+                        ModelMessage::User("second question".to_string()),
+                    ]
+                );
+
+                Ok(response_without_metadata(ModelResponse::Output(json!({
+                    "summary": "second answer"
+                }))))
+            });
+        let harness = Harness::new(model);
+        let mut chat = harness.chat(object_schema());
+
+        // Act
+        let first = chat
+            .send("first question")
+            .await
+            .expect("first chat turn should succeed");
+        let second = chat
+            .send("second question")
+            .await
+            .expect("second chat turn should succeed");
+
+        // Assert
+        assert_eq!(first.output(), &json!({"summary": "first answer"}));
+        assert_eq!(second.output(), &json!({"summary": "second answer"}));
+        assert_eq!(second.report().model_requests().len(), 1);
+        assert!(second.report().duration() >= second.report().model_requests()[0].duration());
+    }
+
+    #[tokio::test]
+    async fn chat_does_not_retain_a_failed_turn() {
+        // Arrange
+        let mut model = MockModel::new();
+        let mut sequence = Sequence::new();
+        model
+            .expect_complete_with_optional_metadata()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Err(ModelError::InvalidResponse));
+        model
+            .expect_complete_with_optional_metadata()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|request| {
+                assert_eq!(
+                    request.messages(),
+                    &[ModelMessage::User("retry".to_string())]
+                );
+
+                Ok(response_without_metadata(ModelResponse::Output(json!({
+                    "summary": "recovered"
+                }))))
+            });
+        let harness = Harness::new(model);
+        let mut chat = harness.chat(object_schema());
+
+        // Act
+        let error = chat
+            .send("failed question")
+            .await
+            .expect_err("the first turn should fail");
+        let recovered = chat
+            .send("retry")
+            .await
+            .expect("the next turn should start from clean history");
+
+        // Assert
+        assert!(matches!(
+            error,
+            TurnError::Model(ModelError::InvalidResponse)
+        ));
+        assert_eq!(recovered.output(), &json!({"summary": "recovered"}));
+    }
+
+    #[tokio::test]
+    async fn report_describes_model_requests_and_repository_reads() {
+        // Arrange
+        let mut model = MockModel::new();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        model
+            .expect_complete_with_optional_metadata()
+            .times(2)
+            .returning(move |_| {
+                if call_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Ok(response_without_metadata(ModelResponse::ToolCall(
+                        read_call("call_read"),
+                    )));
+                }
+
+                Ok(response_with_metadata(ModelResponse::Output(json!({
+                    "summary": "workspace"
+                }))))
+            });
+        let harness = Harness::new(model)
+            .file_system(readable_file_system())
+            .repository("repo")
+            .allow(Tool::Read);
+
+        // Act
+        let outcome = harness
+            .run_report("inspect", object_schema())
+            .await
+            .expect("reported turn should succeed");
+
+        // Assert
+        assert_eq!(outcome.output(), &json!({"summary": "workspace"}));
+        assert_eq!(outcome.report().model_requests().len(), 2);
+        let final_request = &outcome.report().model_requests()[1];
+        assert_eq!(
+            final_request.response_type(),
+            crate::ModelResponseType::Output
+        );
+        assert_eq!(
+            final_request
+                .completion()
+                .expect("metadata should be present")
+                .response_model(),
+            Some("reported-model")
+        );
+        assert_eq!(outcome.report().tool_calls().len(), 1);
+        let activity = &outcome.report().tool_calls()[0];
+        assert_eq!(activity.name(), "read");
+        assert_eq!(activity.path(), "Cargo.toml");
+        assert!(activity.duration() <= outcome.report().duration());
+        assert!(matches!(
+            activity,
+            ToolActivity::Read {
+                end_line: Some(1),
+                start_line: 1,
+                truncated: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn write_activity_exposes_only_sanitized_summary() {
+        // Arrange
+        let activity = ToolActivity::Write {
+            bytes_written: 42,
+            duration: Duration::from_millis(3),
+            path: "src/lib.rs".to_string(),
+        };
+
+        // Act and Assert
+        assert_eq!(activity.name(), "write");
+        assert_eq!(activity.path(), "src/lib.rs");
+        assert_eq!(activity.duration(), Duration::from_millis(3));
+        assert!(matches!(
+            activity,
+            ToolActivity::Write {
+                bytes_written: 42,
+                ..
+            }
+        ));
+
+        let rejected = ToolActivity::WriteRejected {
+            duration: Duration::from_millis(2),
+            path: "src/rejected.rs".to_string(),
+        };
+        assert_eq!(rejected.name(), "write");
+        assert_eq!(rejected.path(), "src/rejected.rs");
+        assert_eq!(rejected.duration(), Duration::from_millis(2));
     }
 
     #[tokio::test]

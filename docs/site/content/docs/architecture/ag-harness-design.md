@@ -95,6 +95,11 @@ The current tool foundation includes:
 - Descriptor-relative file access without symlink traversal.
 - One-file unified-diff writes with stale-safe atomic replacement and typed failures.
 
+The current `ag-harness` binary is a deliberately small interactive consumer of this
+foundation. Its `run <model> [prompt]` command uses the Muse-compatible model path and
+keeps history in memory, allows bounded reads beneath the current directory, and prints
+sanitized model and tool metadata after each answer.
+
 ## Session management
 
 - One host process manages multiple independent sessions.
@@ -332,6 +337,8 @@ best cost and performance:
   and checkpoint policy, retention, corruption recovery, and compatibility behavior.
 - [ ] **Persisted session round trip.** Run sequential turns in one resumable session,
   and persist model and tool history.
+- [x] **In-memory chat round trip.** Run sequential turns with user, assistant, and tool
+  history, plus sanitized per-turn activity reports.
 - [x] **Second provider.** Integrate Kimi through the structured-output contract.
 
 ## Roadmap
