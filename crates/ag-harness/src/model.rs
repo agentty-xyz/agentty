@@ -328,6 +328,24 @@ impl ModelRequest {
         }
     }
 
+    pub(crate) fn with_history(
+        messages: Vec<ModelMessage>,
+        prompt: impl Into<String>,
+        schema: OutputSchema,
+    ) -> Self {
+        let prompt = prompt.into();
+        let mut messages = messages;
+        messages.push(ModelMessage::User(prompt.clone()));
+
+        Self {
+            lifecycle_observed: false,
+            messages,
+            prompt,
+            schema,
+            tools: Vec::new(),
+        }
+    }
+
     /// Advertises one native function tool for this request.
     #[must_use]
     pub fn with_tool(mut self, tool: tool::ToolDefinition) -> Self {
@@ -379,10 +397,20 @@ impl ModelRequest {
             name,
         });
     }
+
+    pub(crate) fn record_output(&mut self, output: &Value) {
+        self.messages
+            .push(ModelMessage::Assistant(output.to_string()));
+    }
+
+    pub(crate) fn into_messages(self) -> Vec<ModelMessage> {
+        self.messages
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ModelMessage {
+    Assistant(String),
     User(String),
     AssistantToolCall(tool::ToolCall),
     ToolResult {

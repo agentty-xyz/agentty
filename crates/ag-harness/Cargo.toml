@@ -11,6 +11,7 @@ readme = "README.md"
 
 [dependencies]
 async-trait.workspace = true
+clap.workspace = true
 jsonschema.workspace = true
 opentelemetry.workspace = true
 reqwest.workspace = true
@@ -19,9 +20,10 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
 tempfile.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
 
 [dev-dependencies]
+assert_cmd.workspace = true
 mockall.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["testing"] }

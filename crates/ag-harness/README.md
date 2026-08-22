@@ -2,6 +2,19 @@
 
 Run a model with bounded repository tools and validated structured output.
 
+## Command line
+
+Set `MODEL_API_KEY`, then start a chat:
+
+```sh
+MODEL_API_KEY=your-key cargo run -p ag-harness -- run muse-spark-1.2
+```
+
+Run `cargo run -p ag-harness -- --help` for usage, examples, environment variables, and
+chat behavior.
+
+## Library
+
 ```rust
 use ag_harness::{Harness, MUSE_SPARK_1_2, Muse, Tool};
 
@@ -20,6 +33,8 @@ Tools are denied by default and repository tools require an explicit root. `read
 returns bounded file content; `write` applies one bounded unified diff to one text file.
 Both use the injected `FileSystem` boundary without shell commands, and the model may
 continue calling allowed tools until it returns schema-valid JSON.
+
+Use `Harness::chat()` for sequential in-memory turns and sanitized activity reports.
 
 Use `ModelWithMetadata::complete_with_metadata()` for normalized completion metadata.
 

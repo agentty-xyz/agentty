@@ -211,6 +211,12 @@ impl ChatCompletionBackend {
         }
         for message in request.messages() {
             match message {
+                model::ModelMessage::Assistant(content) => {
+                    messages.push(ChatCompletionMessagePayload::Text {
+                        content: content.clone(),
+                        role: "assistant",
+                    });
+                }
                 model::ModelMessage::User(content) => {
                     messages.push(ChatCompletionMessagePayload::Text {
                         content: content.clone(),
@@ -880,6 +886,49 @@ mod tests {
                     "role": "tool",
                     "tool_call_id": "call_read"
                 }
+            ])
+        );
+    }
+
+    #[test]
+    fn serializes_conversation_history() {
+        // Arrange
+        let backend = ChatCompletionBackend::with_client(
+            "test-key".to_string(),
+            "https://example.com/v1".to_string(),
+            "native-schema-model".to_string(),
+            ChatCompletionProviderPolicy {
+                display_name: "Native schema provider",
+                structured_output: StructuredOutputMode::JsonSchema,
+                telemetry_name: "native_schema",
+                unsupported_schema_reason: "object schema required",
+            },
+            default_client(),
+        );
+        let schema = schema_contract::OutputSchema::new(serde_json::json!({
+            "type": "object"
+        }))
+        .expect("schema should be valid");
+        let mut request = model::ModelRequest::new("first question", schema.clone());
+        request.record_output(&serde_json::json!({"message": "first answer"}));
+        let request =
+            model::ModelRequest::with_history(request.into_messages(), "second question", schema);
+
+        // Act
+        let messages = serde_json::to_value(
+            backend
+                .messages(&request)
+                .expect("conversation history should serialize"),
+        )
+        .expect("messages should encode as JSON");
+
+        // Assert
+        assert_eq!(
+            messages,
+            serde_json::json!([
+                {"content": "first question", "role": "user"},
+                {"content": r#"{"message":"first answer"}"#, "role": "assistant"},
+                {"content": "second question", "role": "user"}
             ])
         );
     }
