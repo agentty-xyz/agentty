@@ -203,6 +203,7 @@ async fn observes_one_terminal_event_for_success_failure_and_cancellation() {
         failure_events[1].kind(),
         LifecycleEventKind::ModelRequestFailed {
             error_type: ModelErrorType::Provider,
+            http_status: Some(503),
             turn_id: None,
             ..
         }
@@ -256,10 +257,10 @@ async fn harness_owns_model_events_without_duplicate_model_observation() {
     assert!(matches!(
         harness_events[1].kind(),
         LifecycleEventKind::ModelRequestStarted {
-            model: None,
+            model: Some(model),
             turn_id: Some(_),
             ..
-        }
+        } if model.provider() == "alibaba_cloud" && model.model() == "harness-model"
     ));
     assert!(matches!(
         harness_events[2].kind(),

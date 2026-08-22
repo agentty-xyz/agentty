@@ -4272,6 +4272,12 @@ mod tests {
                 text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
             },
         );
+        let mut mock_git_client = ag_git::MockGitClient::new();
+        mock_git_client
+            .expect_diff()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok("current diff".to_string()) }));
+        install_mock_git_client(&mut app, mock_git_client);
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act

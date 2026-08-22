@@ -39,10 +39,10 @@ mockall = "0.15"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false }
 objc2-foundation = { version = "0.3", default-features = false }
-opentelemetry = { version = "0.32", default-features = false, features = ["metrics"] }
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "metrics", "reqwest-blocking-client"] }
+opentelemetry = { version = "0.32", default-features = false, features = ["metrics", "trace"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "metrics", "reqwest-blocking-client", "trace"] }
 opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "metrics", "trace"] }
-opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics", "trace"] }
 percent-encoding = "2"
 portable-pty = "0.9"
 prost = "0.14"

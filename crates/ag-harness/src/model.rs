@@ -16,6 +16,12 @@ use crate::{chat_completion, telemetry, tool};
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait Model: Send + Sync {
+    /// Returns the configured model identity when the implementation exposes
+    /// it.
+    fn metadata(&self) -> Option<ModelMetadata> {
+        None
+    }
+
     /// Completes one model request.
     ///
     /// # Errors
@@ -46,6 +52,12 @@ pub trait Model: Send + Sync {
 /// Object-safe model boundary that guarantees normalized completion metadata.
 #[async_trait]
 pub trait ModelWithMetadata: Send + Sync {
+    /// Returns the configured model identity when the implementation exposes
+    /// it.
+    fn metadata(&self) -> Option<ModelMetadata> {
+        None
+    }
+
     /// Completes one model request and returns normalized provider metadata.
     ///
     /// # Errors
@@ -63,6 +75,10 @@ impl<ModelType> Model for ModelType
 where
     ModelType: ModelWithMetadata + ?Sized,
 {
+    fn metadata(&self) -> Option<ModelMetadata> {
+        ModelWithMetadata::metadata(self)
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
         self.complete_with_metadata(request)
             .await
@@ -181,7 +197,12 @@ impl ModelClient {
             self.lifecycle
                 .start_model_request(Some(self.metadata.clone()), 0, None)
         };
-        let (result, failure_metadata) = match self.backend.generate(&request).await {
+        let operation = self.backend.generate(&request);
+        let generated = match lifecycle.as_ref() {
+            Some(lifecycle) => lifecycle.scope(operation).await,
+            None => operation.await,
+        };
+        let (result, failure_metadata) = match generated {
             Ok(chat_completion::GeneratedResponse::Failed { error, metadata }) => {
                 (Err(error), Some(metadata))
             }
@@ -218,7 +239,7 @@ impl ModelClient {
                     Some(completion.metadata.clone()),
                     completion.response.response_type(),
                 ),
-                Err(error) => lifecycle.failed(error.error_type()),
+                Err(error) => lifecycle.failed(error.error_type(), error.http_status()),
             }
         }
 
@@ -245,6 +266,10 @@ impl ModelClient {
 
 #[async_trait]
 impl ModelWithMetadata for ModelClient {
+    fn metadata(&self) -> Option<ModelMetadata> {
+        Some(self.metadata.clone())
+    }
+
     async fn complete_with_metadata(
         &self,
         request: ModelRequest,
@@ -851,12 +876,14 @@ mod tests {
         let model = ResponseOnlyModel;
 
         // Act
+        let model_metadata = Model::metadata(&model);
         let (response, metadata) = model
             .complete_with_optional_metadata(test_request())
             .await
             .expect("response-only model should complete");
 
         // Assert
+        assert!(model_metadata.is_none());
         assert_eq!(response.output(), Some(&json!({ "name": "Ada" })));
         assert!(metadata.is_none());
     }
@@ -867,6 +894,7 @@ mod tests {
         let model = MetadataModel;
 
         // Act
+        let model_metadata = ModelWithMetadata::metadata(&model);
         let response = Model::complete(&model, test_request())
             .await
             .expect("metadata model should complete through Model");
@@ -876,6 +904,7 @@ mod tests {
                 .expect("metadata model should expose optional metadata");
 
         // Assert
+        assert!(model_metadata.is_none());
         assert_eq!(response.output(), Some(&json!({ "name": "Ada" })));
         assert_eq!(optional_response.output(), Some(&json!({ "name": "Ada" })));
         assert_eq!(
@@ -896,6 +925,8 @@ mod tests {
 
         // Act
         let metadata = client.metadata();
+        let trait_metadata = ModelWithMetadata::metadata(&client)
+            .expect("model client should expose configured metadata through the trait");
 
         // Assert
         assert_eq!(metadata.provider(), "alibaba_cloud");
@@ -904,6 +935,7 @@ mod tests {
             metadata,
             &ModelMetadata::new("alibaba_cloud", "qwen-plus").expect("metadata should be valid")
         );
+        assert_eq!(&trait_metadata, metadata);
     }
 
     #[tokio::test]
@@ -1012,6 +1044,7 @@ mod tests {
             events[1].kind(),
             crate::LifecycleEventKind::ModelRequestFailed {
                 error_type: ModelErrorType::Provider,
+                http_status: Some(503),
                 ..
             }
         ));
