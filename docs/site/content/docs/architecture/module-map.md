@@ -20,8 +20,8 @@ For file-level detail, read the module docstrings directly.
   unsupported-backend reporting.
 - `crates/ag-agent/`: Shared agent backend library crate with provider model metadata,
   prompt templates, provider-neutral channel contracts, the injectable `OneShotClient`
-  submission boundary, provider availability probes, and crate-private CLI/app-server
-  transport wiring.
+  submission boundary, provider availability probes, and crate-private
+  CLI/managed-runtime transport wiring.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
   review-request and comment-thread types, GitHub/GitLab remote detection, thread
   reply/resolution, and the `gh`/`glab` adapters behind the `ReviewRequestClient` and

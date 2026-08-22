@@ -11,8 +11,8 @@ use crate::model::agent::AgentKind;
 
 /// Creates the provider-specific channel for the given agent kind.
 ///
-/// CLI providers (Antigravity, Claude) use [`CliAgentChannel`];
-/// app-server providers (Gemini, Codex) use [`AppServerAgentChannel`].
+/// Claude uses [`CliAgentChannel`]; persistent runtime providers
+/// (Antigravity, Gemini, Codex) use [`AppServerAgentChannel`].
 pub fn create_agent_channel(
     kind: AgentKind,
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
@@ -55,7 +55,7 @@ mod tests {
     }
 
     #[test]
-    fn create_agent_channel_returns_cli_channel_for_antigravity() {
+    fn create_agent_channel_returns_managed_channel_for_antigravity() {
         // Arrange / Act
         let channel = create_agent_channel(AgentKind::Antigravity, None);
 

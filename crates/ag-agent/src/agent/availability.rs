@@ -14,7 +14,7 @@ use crate::model::agent::{AgentCliInfo, AgentKind};
 
 /// Oldest Antigravity CLI release supported by Agentty's native stream
 /// protocol.
-const ANTIGRAVITY_MINIMUM_VERSION: Version = Version::new(1, 1, 7);
+const ANTIGRAVITY_MINIMUM_VERSION: Version = Version::new(1, 1, 18);
 /// Maximum time spent waiting for one provider CLI `--version` command.
 const AGENT_CLI_VERSION_TIMEOUT: Duration = Duration::from_secs(2);
 /// Maximum time spent waiting for one provider CLI `update` command.
@@ -579,7 +579,7 @@ mod tests {
         let codex_path = temp_directory.path().join("codex");
         fs::write(
             &antigravity_path,
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'agy 1.1.6\\n'; fi\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'agy 1.1.17\\n'; fi\n",
         )
         .expect("failed to create agy executable");
         fs::write(&codex_path, "").expect("failed to create codex executable");
@@ -644,7 +644,7 @@ mod tests {
     /// compatibility check.
     fn test_validate_antigravity_cli_version_accepts_supported_versions() {
         // Arrange / Act / Assert
-        assert_eq!(validate_antigravity_cli_version(Some("1.1.7")), Ok(()));
+        assert_eq!(validate_antigravity_cli_version(Some("1.1.18")), Ok(()));
         assert_eq!(validate_antigravity_cli_version(Some("v1.2.0")), Ok(()));
     }
 
@@ -652,13 +652,13 @@ mod tests {
     /// Ensures old Antigravity versions return an actionable upgrade error.
     fn test_validate_antigravity_cli_version_rejects_old_version() {
         // Arrange / Act
-        let error = validate_antigravity_cli_version(Some("1.1.6"))
+        let error = validate_antigravity_cli_version(Some("1.1.17"))
             .expect_err("old Antigravity should be rejected");
 
         // Assert
         assert_eq!(
             error,
-            "Antigravity CLI 1.1.7 or newer is required, but `1.1.6` is installed. Run `agy \
+            "Antigravity CLI 1.1.18 or newer is required, but `1.1.17` is installed. Run `agy \
              update`, then retry."
         );
     }

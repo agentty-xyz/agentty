@@ -148,14 +148,19 @@ struct AgentProviderDescriptor {
 fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
     match kind {
         AgentKind::Antigravity => AgentProviderDescriptor {
-            app_server_client_factory: |_default_client| None,
+            app_server_client_factory: |default_client| {
+                Some(default_client.unwrap_or_else(|| {
+                    Arc::new(super::app_server::RealAntigravityClient::new())
+                        as Arc<dyn AppServerClient>
+                }))
+            },
             app_server_thought_policy: AppServerThoughtPolicy::None,
             backend_factory: || Box::new(super::antigravity::AntigravityBackend::new()),
             parse_response: super::response_parser::parse_antigravity_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_antigravity_stream_output_line,
             prompt_transport: AgentPromptTransport::Argv,
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
-            transport: AgentTransport::Cli,
+            transport: AgentTransport::AppServer,
         },
         AgentKind::Gemini => AgentProviderDescriptor {
             app_server_client_factory: |default_client| {
@@ -234,7 +239,7 @@ mod tests {
         let gemini_transport = transport_mode(gemini_kind);
 
         // Assert
-        assert_eq!(antigravity_transport, AgentTransport::Cli);
+        assert_eq!(antigravity_transport, AgentTransport::AppServer);
         assert_eq!(claude_transport, AgentTransport::Cli);
         assert_eq!(codex_transport, AgentTransport::AppServer);
         assert_eq!(gemini_transport, AgentTransport::AppServer);

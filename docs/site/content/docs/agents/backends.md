@@ -20,7 +20,7 @@ requires its respective CLI to be installed and available on your `PATH`.
   [Codex CLI](https://github.com/openai/codex), then run `codex login`.
 - Claude (`claude`): install [Claude Code](https://github.com/anthropics/claude-code),
   then run `claude auth login`.
-- Antigravity (`agy` 1.1.7 or newer): install the
+- Antigravity (`agy` 1.1.18 or newer): install the
   [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli), then run
   `agy` and follow its sign-in flow. Agentty excludes older versions from provider
   selection and reports `agy update` as the recovery step if a session encounters an
@@ -51,10 +51,10 @@ Agentty requires at least one supported backend CLI on `PATH` at startup and fai
 an install hint when none is found.
 
 Agentty uses each provider's official non-interactive CLI or app-server surface
-(`claude -p`, `agy --print`, `codex app-server`, or `gemini --acp`) after you
-authenticate with that provider's CLI. It does not implement OAuth flows, read provider
-OAuth tokens directly, or call private provider APIs. You are responsible for choosing
-an authentication method permitted for your account, plan, and usage pattern.
+(`claude -p`, `agy --input-format stream-json`, `codex app-server`, or `gemini --acp`)
+after you authenticate with that provider's CLI. It does not implement OAuth flows, read
+provider OAuth tokens directly, or call private provider APIs. You are responsible for
+choosing an authentication method permitted for your account, plan, and usage pattern.
 
 ## Authentication and Usage
 
@@ -91,18 +91,18 @@ claude auth status
 
 ### Antigravity
 
-<a id="backends-antigravity-authentication"></a> For Agentty usage through
-`agy --print`, prefer authentication backed by a Google Cloud project or API key rather
+<a id="backends-antigravity-authentication"></a> For Agentty usage through `agy`
+headless mode, prefer authentication backed by a Google Cloud project or API key rather
 than Google Account subscription sign-in. The
 [Antigravity terms](https://antigravity.google/terms) do not currently explain how
-subscription access applies when third-party tools invoke `agy --print`.
+subscription access applies when third-party tools invoke headless sessions.
 
-Antigravity's non-interactive surface accepts the rendered prompt as the value of
-`--print`; it does not expose a prompt-file or standard-input alternative. Agentty
-therefore rejects a rendered prompt larger than 32 KiB before process launch, avoiding
-platform command-size failures. This most commonly affects resumed sessions whose
-replayed transcript is large. Start a new Antigravity session or shorten the prompt when
-that guard is reported.
+Agentty starts `agy` with `--input-format stream-json` and sends each prompt as an
+NDJSON user event over standard input. The process remains active between turns, so
+Antigravity retains native conversation context and performs its own context compaction
+instead of receiving a replayed transcript on every follow-up. Agentty persists the
+native conversation ID and resumes it after a process or application restart. Prompts
+are no longer constrained by an operating-system command-argument limit.
 
 ### Gemini
 

@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app_server::AppServerError;
 
-/// Shared runtime registry used by app-server providers.
+/// Shared runtime registry used by managed provider processes.
 ///
 /// Each session id maps to one idle runtime process. Workers temporarily remove
 /// a runtime while executing a turn and register a cancellation token so
