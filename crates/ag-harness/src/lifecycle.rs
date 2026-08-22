@@ -181,6 +181,20 @@ pub enum TurnErrorType {
     RepositoryRequired,
 }
 
+impl TurnErrorType {
+    /// Returns the stable value intended for telemetry attributes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cancelled => crate::telemetry::ERROR_CANCELLED,
+            Self::Model(error_type) => error_type.as_str(),
+            Self::Tool => crate::telemetry::ERROR_TOOL_EXECUTION,
+            Self::ToolDenied => crate::telemetry::ERROR_TOOL_DENIED,
+            Self::ToolCallLimit => crate::telemetry::ERROR_TOOL_CALL_LIMIT,
+            Self::RepositoryRequired => crate::telemetry::ERROR_REPOSITORY_REQUIRED,
+        }
+    }
+}
+
 /// Stable, low-cardinality reason that a tool operation failed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -191,6 +205,17 @@ pub enum ToolErrorType {
     CallLimit,
     /// The allowed tool failed while executing or encoding its result.
     Execution,
+}
+
+impl ToolErrorType {
+    /// Returns the stable value intended for telemetry attributes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cancelled => crate::telemetry::ERROR_CANCELLED,
+            Self::CallLimit => crate::telemetry::ERROR_TOOL_CALL_LIMIT,
+            Self::Execution => crate::telemetry::ERROR_TOOL_EXECUTION,
+        }
+    }
 }
 
 /// Synchronous destination for ordered harness lifecycle events.

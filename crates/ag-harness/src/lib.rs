@@ -34,5 +34,6 @@ pub use provider::{
 };
 pub use read::{ReadError, ReadOutput};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
+pub use telemetry::LifecycleMetrics;
 pub use tool::{ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments};
 pub use write::{WriteError, WriteOutput};

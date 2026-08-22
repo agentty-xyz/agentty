@@ -4,9 +4,9 @@ use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use ag_harness::{
-    CompletionMetadata, CompletionUsage, Harness, LifecycleEventKind, LifecycleObserverSet, Model,
-    ModelCompletion, ModelError, ModelRequest, ModelResponse, ModelWithMetadata, OutputSchema,
-    OutputSchemaError,
+    CompletionMetadata, CompletionUsage, Harness, LifecycleEventKind, LifecycleMetrics,
+    LifecycleObserverSet, Model, ModelCompletion, ModelError, ModelRequest, ModelResponse,
+    ModelWithMetadata, OutputSchema, OutputSchemaError,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -155,7 +155,8 @@ async fn external_observer_set_fans_out_lifecycle_events() -> Result<(), Box<dyn
             .lock()
             .expect("second event recorder should not be poisoned")
             .push(event);
-    });
+    })
+    .with_observer(LifecycleMetrics::new());
     let harness = Harness::new(ExternalMetadataModel).with_lifecycle_observer(observers);
 
     // Act

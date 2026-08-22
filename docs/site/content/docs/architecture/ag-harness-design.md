@@ -211,18 +211,27 @@ bounded, redacted, and disabled by default.
 The conventions are Development status, so this immutable revision, rather than the
 repository's moving `main` branch, defines the compatibility contract.
 
-The current model-client projection implements these standard histograms:
+The current projections implement these standard histograms:
 
-| Instrument                         | Unit      | Explicit bucket boundaries                    |
-| ---------------------------------- | --------- | --------------------------------------------- |
-| `gen_ai.client.operation.duration` | `s`       | `0.01` through `81.92`, doubling each step    |
-| `gen_ai.client.token.usage`        | `{token}` | `1` through `67108864`, quadrupling each step |
+| Instrument                            | Unit               | Explicit bucket boundaries                    |
+| ------------------------------------- | ------------------ | --------------------------------------------- |
+| `gen_ai.client.operation.duration`    | `s`                | `0.01` through `81.92`, doubling each step    |
+| `gen_ai.client.token.usage`           | `{token}`          | `1` through `67108864`, quadrupling each step |
+| `gen_ai.invoke_agent.duration`        | `s`                | `0.1` through `409.6`, doubling each step     |
+| `gen_ai.invoke_agent.inference_calls` | `{inference_call}` | `1` through `128`, doubling each step         |
+| `gen_ai.invoke_agent.tool_calls`      | `{tool_call}`      | `1` through `128`, doubling each step         |
+| `gen_ai.execute_tool.duration`        | `s`                | `0.01` through `81.92`, doubling each step    |
 
-Both instruments record the required `gen_ai.operation.name` value `chat`, the provider
-identity, and the requested model when available. Token measurements also record the
-required `gen_ai.token.type` value `input` or `output`. Failed duration measurements
-record `error.type`. Instrument names, descriptions, units, boundaries, attribute names,
-and well-known values are centralized in the telemetry module.
+Both model-client instruments record the required `gen_ai.operation.name` value `chat`,
+the provider identity, and the requested model when available. Token measurements also
+record the required `gen_ai.token.type` value `input` or `output`. Failed duration
+measurements record `error.type`. Instrument names, descriptions, units, boundaries,
+attribute names, and well-known values are centralized in the telemetry module.
+
+`LifecycleMetrics` counts started model requests and requested client-side tools once
+per turn, but records tool duration only after `ToolStarted`. Executions include
+`gen_ai.tool.name` and `gen_ai.tool.type=function`; unavailable agent identity and
+dynamic model identity are omitted.
 
 The provider registry contains one standard value and two documented custom values:
 
@@ -247,6 +256,9 @@ Model request failures use this bounded `error.type` vocabulary:
 | `response_too_large`        | Response exceeded a configured safety bound             |
 | `invalid_output`            | Output failed JSON parsing or schema validation         |
 | `invalid_tool_call`         | Tool call was missing, malformed, or unsupported        |
+
+Turn and tool projections additionally use `cancelled`, `tool_execution_error`,
+`tool_denied`, `tool_call_limit`, and `repository_required`.
 
 Messages, prompts, system instructions, tool arguments, tool results, response bodies,
 repository content, and internal lifecycle identifiers are never projected to
@@ -310,7 +322,7 @@ best cost and performance:
 - [x] **Model-client metrics.** Record request duration, reported input and output token
   usage, operation and model identity, and bounded failures without sensitive or
   high-cardinality content.
-- [ ] **Turn and tool metric projection.** Derive aggregate turn and tool measurements
+- [x] **Turn and tool metric projection.** Derive aggregate turn and tool measurements
   from lifecycle facts without double-counting model-client metrics.
 - [ ] **Lifecycle trace projection.** Represent a turn as a parent span with correlated
   model and tool children, including correct completion, failure, and cancellation.
