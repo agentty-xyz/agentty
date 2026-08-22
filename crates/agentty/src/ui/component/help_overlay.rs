@@ -101,7 +101,6 @@ mod tests {
     use crate::presentation::help_action::HelpAction;
 
     #[test]
-
     fn test_popup_area_centers_within_area() {
         // Arrange
 
@@ -123,7 +122,6 @@ mod tests {
     }
 
     #[test]
-
     fn test_popup_area_clamps_to_area_when_small() {
         // Arrange
 
@@ -141,7 +139,6 @@ mod tests {
     }
 
     #[test]
-
     fn test_popup_area_respects_minimum_dimensions() {
         // Arrange
 

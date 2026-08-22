@@ -261,7 +261,7 @@ fn clipboard_png_path_from_text(clipboard: &mut Clipboard) -> Result<PathBuf, Cl
 /// Returns whether a filesystem path names a PNG image.
 fn is_png_path(path: &Path) -> bool {
     path.extension()
-        .and_then(|extension| extension.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
 }
 

@@ -89,14 +89,14 @@ fn collect_artifacts(dir: &Path) -> Result<Vec<Artifact>, ProofError> {
             continue;
         }
 
-        let name = match path.file_name().and_then(|name| name.to_str()) {
+        let name = match path.file_name().and_then(std::ffi::OsStr::to_str) {
             Some(name) if name != INDEX_FILE_NAME => name.to_string(),
             _ => continue,
         };
 
         let kind = path
             .extension()
-            .and_then(|extension| extension.to_str())
+            .and_then(std::ffi::OsStr::to_str)
             .map(str::to_ascii_lowercase)
             .and_then(|extension| ArtifactKind::from_extension(&extension));
 

@@ -624,74 +624,8 @@ impl App {
             .sessions
             .session_for_id(session_id)
             .is_some_and(|session| session.role == SessionRole::Orchestrator);
-        if is_orchestrator
-            && let Some(orchestration) = self
-                .services
-                .db()
-                .orchestrations()
-                .load_orchestration_for_controller(session_id)
-                .await
-                .map_err(|error| ApiSessionError::Operation(error.to_string()))?
-            && self
-                .services
-                .db()
-                .orchestrations()
-                .begin_orchestration_cancellation(orchestration.id)
-                .await
-                .map_err(|error| ApiSessionError::Operation(error.to_string()))?
-        {
-            let tasks = self
-                .services
-                .db()
-                .orchestrations()
-                .load_orchestration_tasks(orchestration.id)
-                .await
-                .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-            for task in tasks.into_iter().filter(|task| {
-                task.status
-                    .parse::<OrchestrationTaskStatus>()
-                    .is_ok_and(|status| !status.is_settled())
-            }) {
-                let child_session_id = if task.child_session_id.is_some() {
-                    task.child_session_id
-                } else {
-                    self.services
-                        .db()
-                        .orchestrations()
-                        .load_child_session_id_for_task(task.id)
-                        .await
-                        .map_err(|error| ApiSessionError::Operation(error.to_string()))?
-                };
-                if let Some(child_session_id) = child_session_id.as_deref()
-                    && !child_session_is_stopped(task.child_status.as_deref())
-                {
-                    self.sessions
-                        .cancel_managed_session(&self.services, child_session_id)
-                        .await
-                        .map_err(api_error_from_session)?;
-                }
-                self.services
-                    .db()
-                    .orchestrations()
-                    .update_orchestration_task_status(
-                        task.id,
-                        &OrchestrationTaskStatus::Canceled.to_string(),
-                        None,
-                    )
-                    .await
-                    .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-            }
-            self.services
-                .db()
-                .orchestrations()
-                .update_orchestration_status(
-                    orchestration.id,
-                    &OrchestrationStatus::Canceled.to_string(),
-                )
-                .await
-                .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-            self.sessions
-                .update_orchestration_progress(session_id, None);
+        if is_orchestrator {
+            self.cancel_api_orchestration(session_id).await?;
         }
 
         if access == SessionRuntimeAccess::Coordinator
@@ -710,6 +644,86 @@ impl App {
         self.cancel_session(session_id)
             .await
             .map_err(api_error_from_app)
+    }
+
+    async fn cancel_api_orchestration(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<(), ApiSessionError> {
+        let Some(orchestration) = self
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_for_controller(session_id)
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))?
+        else {
+            return Ok(());
+        };
+        let cancellation_started = self
+            .services
+            .db()
+            .orchestrations()
+            .begin_orchestration_cancellation(orchestration.id)
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+        if !cancellation_started {
+            return Ok(());
+        }
+        let tasks = self
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_tasks(orchestration.id)
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+        for task in tasks.into_iter().filter(|task| {
+            task.status
+                .parse::<OrchestrationTaskStatus>()
+                .is_ok_and(|status| !status.is_settled())
+        }) {
+            let child_session_id = if task.child_session_id.is_some() {
+                task.child_session_id
+            } else {
+                self.services
+                    .db()
+                    .orchestrations()
+                    .load_child_session_id_for_task(task.id)
+                    .await
+                    .map_err(|error| ApiSessionError::Operation(error.to_string()))?
+            };
+            if let Some(child_session_id) = child_session_id.as_deref()
+                && !child_session_is_stopped(task.child_status.as_deref())
+            {
+                self.sessions
+                    .cancel_managed_session(&self.services, child_session_id)
+                    .await
+                    .map_err(api_error_from_session)?;
+            }
+            self.services
+                .db()
+                .orchestrations()
+                .update_orchestration_task_status(
+                    task.id,
+                    &OrchestrationTaskStatus::Canceled.to_string(),
+                    None,
+                )
+                .await
+                .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+        }
+        self.services
+            .db()
+            .orchestrations()
+            .update_orchestration_status(
+                orchestration.id,
+                &OrchestrationStatus::Canceled.to_string(),
+            )
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+        self.sessions
+            .update_orchestration_progress(session_id, None);
+
+        Ok(())
     }
 
     /// Returns the active child count displayed in orchestration cancellation
@@ -2385,6 +2399,50 @@ mod tests {
                 })
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn cancel_api_orchestration_ignores_missing_orchestration() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let session_id = SessionId::from("missing-orchestration");
+
+        // Act
+        let result = app.cancel_api_orchestration(&session_id).await;
+
+        // Assert
+        assert_eq!(result, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn cancel_api_orchestration_ignores_settled_orchestration() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let fixture = seed_active_orchestration_child(&mut app, true).await;
+        app.services
+            .db()
+            .orchestrations()
+            .update_orchestration_status(
+                fixture.orchestration,
+                &OrchestrationStatus::Done.to_string(),
+            )
+            .await
+            .expect("orchestration should settle");
+
+        // Act
+        let result = app.cancel_api_orchestration(&fixture.controller).await;
+        let orchestration = app
+            .services
+            .db()
+            .orchestrations()
+            .load_orchestration_for_controller(&fixture.controller)
+            .await
+            .expect("orchestration should load")
+            .expect("orchestration should exist");
+
+        // Assert
+        assert_eq!(result, Ok(()));
+        assert_eq!(orchestration.status, OrchestrationStatus::Done.to_string());
     }
 
     #[tokio::test]

@@ -201,7 +201,7 @@ impl SessionManager {
         } = input;
         let project_name = working_dir
             .file_name()
-            .and_then(|name| name.to_str())
+            .and_then(std::ffi::OsStr::to_str)
             .unwrap_or_default()
             .to_string();
 

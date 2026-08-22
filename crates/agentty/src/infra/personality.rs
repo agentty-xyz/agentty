@@ -318,7 +318,7 @@ async fn resolve_personality_definition(
         contain_personality_definition(resolved_path, canonical_workspace, &definition_path)?;
     let directory_id = agent_directory
         .file_name()
-        .and_then(|name| name.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .unwrap_or_default()
         .to_string();
 

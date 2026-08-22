@@ -481,7 +481,7 @@ pub(super) fn build_image_content_block(
 pub(super) fn prompt_image_mime_type(local_image_path: &Path) -> &'static str {
     let Some(extension) = local_image_path
         .extension()
-        .and_then(|extension| extension.to_str())
+        .and_then(std::ffi::OsStr::to_str)
     else {
         return "image/png";
     };
@@ -540,6 +540,21 @@ mod tests {
         // Assert
         assert_eq!(utility_timeout, app_server_transport::TURN_TIMEOUT);
         assert_eq!(session_timeout, app_server_transport::STARTUP_TIMEOUT);
+    }
+
+    #[test]
+    fn prompt_image_mime_type_uses_file_extension() {
+        // Arrange
+        let paths = ["image.GIF", "image.jpg", "image.webp", "image"];
+
+        // Act
+        let mime_types = paths.map(Path::new).map(prompt_image_mime_type);
+
+        // Assert
+        assert_eq!(
+            mime_types,
+            ["image/gif", "image/jpeg", "image/webp", "image/png"]
+        );
     }
 
     #[tokio::test]
