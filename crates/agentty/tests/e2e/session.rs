@@ -7688,6 +7688,20 @@ fn test_diff_changed_line_navigation() -> E2eResult {
                 assertion::assert_text_in_region(frame, "changed line 70", &full);
                 assertion::assert_text_in_region(frame, "Esc/Left: files", &full);
                 assertion::assert_text_in_region(frame, "j/k: select row", &full);
+                let file_row = frame
+                    .find_text("src/")
+                    .first()
+                    .expect("selected file's parent folder should remain visible")
+                    .rect
+                    .row
+                    .saturating_add(1);
+                let aligned_changed_line_row = frame
+                    .find_text("changed line 65")
+                    .first()
+                    .expect("aligned changed line should remain visible")
+                    .rect
+                    .row;
+                assert_eq!(aligned_changed_line_row, file_row);
             },
         )?;
 
