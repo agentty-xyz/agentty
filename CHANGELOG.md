@@ -7,6 +7,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- ag-agent: require Antigravity CLI 1.1.18 and retain native long-context sessions
+  through its persistent NDJSON transport.
+
+### Fixed
+
+- ag-agent: normalize Antigravity's string-valued summary fallback before strict
+  protocol parsing instead of failing the turn in native schema validation.
+
 ## [v0.15.4] - 2026-08-20
 
 ### Changed

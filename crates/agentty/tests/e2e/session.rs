@@ -37,9 +37,9 @@ const LOADER_SESSION_ID: &str = "loader-session-0001";
 /// Stable id for the session whose branch conflicts with `main`.
 const MERGE_CONFLICT_SESSION_ID: &str = "merge-conflict-0001";
 
-/// Stable id for the Antigravity session whose replay exceeds the safe
-/// command-argument limit.
-const ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID: &str = "antigravity-oversized-replay";
+/// Stable id for the Antigravity session whose replay exceeds the former argv
+/// transport limit.
+const ANTIGRAVITY_LARGE_REPLAY_SESSION_ID: &str = "antigravity-large-replay";
 
 /// Stable id for the seeded running session used by stop-turn tests.
 const RUNNING_STOP_SESSION_ID: &str = "running-stop-0001";
@@ -1587,7 +1587,7 @@ fn seed_outdated_antigravity_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn st
     let antigravity_path = env.stub_bin.join("agy");
     std::fs::write(
         &antigravity_path,
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'agy 1.1.6\\n'; exit 0; fi\nexit \
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'agy 1.1.17\\n'; exit 0; fi\nexit \
          1\n",
     )?;
     let codex_path = env.stub_bin.join("codex");
@@ -1602,9 +1602,8 @@ fn seed_outdated_antigravity_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn st
     Ok(())
 }
 
-/// Adds a supported Antigravity stub that requires structured output flags and
-/// a prompt argument immediately after `--print`.
-fn seed_antigravity_argv_prompt_project(
+/// Adds an Antigravity stub that validates persistent NDJSON prompt delivery.
+fn seed_antigravity_stream_prompt_project(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let stub_agent_path = env.stub_bin.join("agy");
@@ -1612,11 +1611,15 @@ fn seed_antigravity_argv_prompt_project(
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'agy 1.2.0\n'; exit 0; fi
 output_format=''
+input_format=''
 schema=''
-prompt=''
-valid_print=false
+has_print=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --input-format)
+      input_format=$2
+      shift 2
+      ;;
     --output-format)
       output_format=$2
       shift 2
@@ -1626,10 +1629,7 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --print)
-      if [ "$#" -eq 2 ]; then
-        prompt=$2
-        valid_print=true
-      fi
+      has_print=true
       shift 2
       ;;
     *)
@@ -1637,20 +1637,43 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
-if [ "$valid_print" != true ]; then
-  answer='Antigravity invocation did not satisfy the CLI contract: print.'
+contract_error=''
+if [ "$has_print" = true ]; then
+  contract_error='Antigravity invocation did not satisfy the CLI contract: argv.'
+elif [ "$input_format" != stream-json ]; then
+  contract_error='Antigravity invocation did not satisfy the CLI contract: input.'
 elif [ "$output_format" != stream-json ]; then
-  answer='Antigravity invocation did not satisfy the CLI contract: output.'
+  contract_error='Antigravity invocation did not satisfy the CLI contract: output.'
 elif ! printf '%s' "$schema" | grep -q '"required"' ||
      ! printf '%s' "$schema" | grep -q '"answer"'; then
-  answer='Antigravity invocation did not satisfy the CLI contract: schema.'
-elif ! printf '%s' "$prompt" | grep -q 'Hi from Agentty argv'; then
-  answer='Antigravity invocation did not satisfy the CLI contract: prompt.'
-else
-  answer='Antigravity received the argv prompt.'
+  contract_error='Antigravity invocation did not satisfy the CLI contract: schema.'
 fi
-printf '%s\n' '{"event":"reasoning","value":"Reading the Agentty prompt"}'
-printf '{"event":"result","result":{"conversation_id":"stub-conversation","status":"SUCCESS","response":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[],\\"summary\\":{\\"session\\":\\"Antigravity prompt delivery verified.\\",\\"turn\\":\\"Verified argv prompt delivery.\\"}}","error":"","duration_seconds":0.1,"num_turns":1,"usage":{"input_tokens":7,"output_tokens":6,"thinking_tokens":1,"cache_read_tokens":2,"total_tokens":16}}}\n' "$answer"
+printf '%s\n' '{"event":"init","conversation_id":"stub-conversation","init":{"cwd":"stub"}}'
+turn=0
+while IFS= read -r prompt_event; do
+  turn=$((turn + 1))
+  if [ -n "$contract_error" ]; then
+    answer=$contract_error
+  elif ! printf '%s' "$prompt_event" | grep -q '"event":"user"'; then
+    answer='Antigravity invocation did not satisfy the CLI contract: event.'
+  elif printf '%s' "$prompt_event" | grep -q 'Hi from Agentty stdin'; then
+    answer='Antigravity received the stdin prompt.'
+  elif printf '%s' "$prompt_event" | grep -q 'Keep the native conversation'; then
+    if [ "$turn" -eq 2 ]; then
+      answer='Antigravity preserved the native conversation.'
+    else
+      answer='Antigravity invocation did not preserve the native conversation.'
+    fi
+  elif printf '%s' "$prompt_event" | grep -q 'Continue work'; then
+    answer='Antigravity accepted the large stdin replay.'
+  else
+    answer='Antigravity handled an Agentty utility prompt.'
+  fi
+  cumulative_input=$((turn * 7))
+  cumulative_output=$((turn * 6))
+  printf '{"event":"step_update","step_update":{"conversation_id":"stub-conversation","step_index":%s,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":7,"output_tokens":6}}}\n' "$turn"
+  printf '{"event":"result","result":{"conversation_id":"stub-conversation","status":"SUCCESS","response":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[],\\"summary\\":\\"Antigravity summary fallback.\\"}","structured_output":{"answer":"%s","questions":[],"review_comment_outcomes":[],"summary":"Antigravity summary fallback."},"error":"","duration_seconds":0.1,"num_turns":%s,"usage":{"input_tokens":%s,"output_tokens":%s,"thinking_tokens":1,"cache_read_tokens":2,"total_tokens":16}}}\n' "$answer" "$answer" "$turn" "$cumulative_input" "$cumulative_output"
+done
 "#;
     std::fs::write(&stub_agent_path, script)?;
 
@@ -1668,31 +1691,31 @@ printf '{"event":"result","result":{"conversation_id":"stub-conversation","statu
     Ok(())
 }
 
-/// Seeds a review-ready Antigravity session with an oversized replay
-/// transcript and a valid worktree.
-fn seed_antigravity_oversized_replay_project(
+/// Seeds a review-ready Antigravity session with a large replay transcript and
+/// a valid worktree.
+fn seed_antigravity_large_replay_project(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_antigravity_argv_prompt_project(env)?;
+    seed_antigravity_stream_prompt_project(env)?;
     common::seed_session(
         env,
         SessionSeed::regular(
-            ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID,
+            ANTIGRAVITY_LARGE_REPLAY_SESSION_ID,
             "gemini-3.1-pro-preview",
             "main",
             "Review",
         )
-        .with_title("Oversized Antigravity replay"),
+        .with_title("Large Antigravity replay"),
     )?;
 
     let runtime = common::seed_runtime()?;
-    let oversized_answer = "x".repeat(40 * 1024);
+    let large_answer = "x".repeat(40 * 1024);
     runtime.block_on(async {
         let database = common::open_database(env).await?;
         database
             .sessions()
             .append_session_message(
-                ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID,
+                ANTIGRAVITY_LARGE_REPLAY_SESSION_ID,
                 SessionMessageKind::UserPrompt,
                 "Complete the initial task.",
             )
@@ -1700,15 +1723,15 @@ fn seed_antigravity_oversized_replay_project(
         database
             .sessions()
             .append_session_message(
-                ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID,
+                ANTIGRAVITY_LARGE_REPLAY_SESSION_ID,
                 SessionMessageKind::AssistantAnswer,
-                &oversized_answer,
+                &large_answer,
             )
             .await?;
         database
             .sessions()
             .update_session_prompt(
-                ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID,
+                ANTIGRAVITY_LARGE_REPLAY_SESSION_ID,
                 "Complete the initial task.",
             )
             .await
@@ -1716,7 +1739,7 @@ fn seed_antigravity_oversized_replay_project(
 
     let session_worktree = test_support::session_folder(
         &env.agentty_root.join("wt"),
-        ANTIGRAVITY_OVERSIZED_REPLAY_SESSION_ID,
+        ANTIGRAVITY_LARGE_REPLAY_SESSION_ID,
     );
     let session_worktree = session_worktree.to_string_lossy();
     run_git(
@@ -3551,14 +3574,14 @@ fn test_claude_structured_output_response() -> E2eResult {
     Ok(())
 }
 
-/// Verify Antigravity receives the typed user prompt as the value of its
-/// string-valued `--print` flag.
+/// Verify Antigravity receives stdin prompts and retains one native process
+/// across follow-up turns.
 #[test]
-fn session_antigravity_receives_argv_prompt() -> E2eResult {
+fn test_session_antigravity_preserves_stream_context() -> E2eResult {
     // Arrange
-    FeatureTest::new("session_antigravity_argv_prompt")
+    FeatureTest::new("session_antigravity_stream_context")
         .with_git()
-        .setup(seed_antigravity_argv_prompt_project)
+        .setup(seed_antigravity_stream_prompt_project)
         .run(
             |scenario| {
                 // Act
@@ -3568,13 +3591,19 @@ fn session_antigravity_receives_argv_prompt() -> E2eResult {
                     .press_key("a")
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
-                    .write_text("Hi from Agentty argv")
-                    .wait_for_text("Hi from Agentty argv", 3000)
+                    .write_text("Hi from Agentty stdin")
+                    .wait_for_text("Hi from Agentty stdin", 3000)
                     .press_key("Enter")
-                    .wait_for_text("Antigravity received the argv prompt.", 60000)
+                    .wait_for_text("Antigravity received the stdin prompt.", 60000)
+                    .wait_for_text("Enter: reply", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("Keep the native conversation")
+                    .press_key("Enter")
+                    .wait_for_text("Antigravity preserved the native conversation.", 60000)
                     .capture_labeled(
                         "antigravity_response",
-                        "Antigravity response to the argv prompt",
+                        "Antigravity retains native context across stdin turns",
                     )
             },
             |frame, _report| {
@@ -3582,7 +3611,7 @@ fn session_antigravity_receives_argv_prompt() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(
                     frame,
-                    "Antigravity received the argv prompt.",
+                    "Antigravity preserved the native conversation.",
                     &full,
                 );
                 assertion::assert_not_visible(
@@ -3595,14 +3624,14 @@ fn session_antigravity_receives_argv_prompt() -> E2eResult {
     Ok(())
 }
 
-/// Verify oversized resumed transcripts fail before Agentty attempts to spawn
-/// Antigravity with an unsafe command argument.
+/// Verify resumed transcripts larger than the former argv ceiling are sent
+/// successfully through Antigravity stdin.
 #[test]
-fn session_antigravity_rejects_oversized_replay_prompt() -> E2eResult {
+fn test_session_antigravity_accepts_large_replay() -> E2eResult {
     // Arrange
-    FeatureTest::new("session_antigravity_oversized_replay")
+    FeatureTest::new("session_antigravity_large_replay")
         .with_git()
-        .setup(seed_antigravity_oversized_replay_project)
+        .setup(seed_antigravity_large_replay_project)
         .run(
             |scenario| {
                 // Act
@@ -3616,18 +3645,21 @@ fn session_antigravity_rejects_oversized_replay_prompt() -> E2eResult {
                     .write_text("Continue work")
                     .wait_for_text("Continue work", 3000)
                     .press_key("Enter")
-                    .wait_for_text("32768-byte", 30000)
+                    .wait_for_text("Antigravity accepted the large stdin replay.", 30000)
                     .capture_labeled(
-                        "oversized_replay_error",
-                        "Oversized Antigravity replay is rejected safely",
+                        "large_replay_response",
+                        "Large Antigravity replay succeeds through stdin",
                     )
             },
             |frame, _report| {
                 // Assert
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "32768-byte", &full);
-                assertion::assert_text_in_region(frame, "Antigravity prompt is", &full);
-                assertion::assert_not_visible(frame, "Antigravity received the argv prompt.");
+                assertion::assert_text_in_region(
+                    frame,
+                    "Antigravity accepted the large stdin replay.",
+                    &full,
+                );
+                assertion::assert_not_visible(frame, "32768-byte");
             },
         )?;
 

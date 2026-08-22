@@ -539,13 +539,14 @@ flowchart TD
   factory["ag-agent root factory"]
   provider["Provider registry<br/>ag-agent/src/agent/provider.rs"]
   cli_mode["transport_mode() -> Cli"]
-  cli_channel["CliAgentChannel<br/>Antigravity/Claude; subprocess per turn"]
+  cli_channel["CliAgentChannel<br/>Claude; subprocess per turn"]
   app_server_mode["transport_mode() -> AppServer"]
   app_server_client["create_app_server_client()"]
-  app_server_channel["AppServerAgentChannel<br/>Codex/Gemini"]
+  app_server_channel["AppServerAgentChannel<br/>Antigravity/Codex/Gemini"]
   client_trait["AppServerClient"]
   codex_client["RealCodexAppServerClient"]
   gemini_client["RealGeminiAcpClient"]
+  antigravity_client["RealAntigravityClient"]
 
   worker --> turn
   turn --> factory
@@ -558,6 +559,7 @@ flowchart TD
   app_server_channel --> client_trait
   client_trait --> codex_client
   client_trait --> gemini_client
+  client_trait --> antigravity_client
 ```
 
 <a id="architecture-key-types"></a> Key types
@@ -573,8 +575,8 @@ with prompt payloads owned by `ag-protocol` and re-exported through
 | `TurnResult`       | Assistant output, usage, and provider id.                |
 | `AgentRequestKind` | Start, resume, account-read, or utility intent.          |
 
-<a id="architecture-provider-conversation-id-flow"></a> App-server providers return a
-`provider_conversation_id` in `TurnResult`. Post-turn application persists it, along
+<a id="architecture-provider-conversation-id-flow"></a> Managed-runtime providers return
+a `provider_conversation_id` in `TurnResult`. Post-turn application persists it, along
 with an instruction-bootstrap marker. The next worker turn constructs one
 `TurnContinuation`, so channels receive only valid combinations for a fresh request,
 transcript replay, or native provider resume and can choose between resending the full
@@ -586,9 +588,11 @@ changed, and emit a clear marker when the personality was removed. Successful tu
 persistence records the applied ID and prompt fingerprint so retries do not advance the
 delivery state prematurely.
 
-Codex keeps its app-server runtime resident between turns. Gemini ACP shuts down after
-each completed turn and replays the persisted transcript when a follow-up starts, so
-review-ready sessions do not accumulate idle Gemini processes. Both app-server providers
+Codex keeps its app-server runtime resident between turns. Antigravity likewise keeps
+one `agy --input-format stream-json` process resident, sends each prompt as an NDJSON
+user event, and persists the native conversation ID for recovery. Gemini ACP shuts down
+after each completed turn and replays the persisted transcript when a follow-up starts,
+so review-ready sessions do not accumulate idle Gemini processes. All managed runtimes
 run in isolated process groups; shutdown terminates the runtime and any tool or MCP
 descendants it spawned.
 
@@ -612,8 +616,8 @@ descendants it spawned.
   for interactive input. Codex tool input requests receive an empty answer set for the
   same reason. Claude turns receive session-scoped settings that deny writes to the
   known main checkout while retaining Claude Code's unsandboxed command fallback, Gemini
-  ACP requests prefer one-shot allow options, and CLI-backed providers run from the
-  session worktree process directory. Researcher requests instead carry
+  ACP requests prefer one-shot allow options, and CLI processes run from the session
+  worktree process directory. Researcher requests instead carry
   `PermissionMode::ReadOnly` through CLI and app-server launch boundaries. Codex selects
   `readOnly` sandbox payloads and rejects command or file-change approvals; Claude
   exposes only inspection tools in plan mode; Gemini starts with sandboxed plan approval
@@ -628,18 +632,17 @@ one structured response protocol (`answer`, `questions`, `review_comment_outcome
 optional `summary`):
 
 1. Prompt builders in `crates/ag-agent/src/agent/` ask `crates/ag-protocol/src/` to
-   prepend the shared protocol preamble with a self-descriptive JSON schema. CLI turns
-   resend it every turn; persistent app-server turns reuse a compact reminder when the
-   provider context already received the full bootstrap, and replay the transcript when
-   provider context was lost. Transcript replay frames the new prompt as a follow-up in
-   the whole-session context, so rollback wording applies to changes made during the
-   Agentty session unless the user explicitly says otherwise. `crates/ag-protocol/src/`
-   owns the shared response model, schema, parser diagnostics, protocol prompt
-   envelopes, repair prompts, and turn prompt payloads.
+   prepend the shared protocol preamble with a self-descriptive JSON schema. Stateless
+   CLI turns resend it every turn; persistent managed-runtime turns reuse a compact
+   reminder when the provider context already received the full bootstrap, and replay
+   the transcript when provider context was lost. Transcript replay frames the new
+   prompt as a follow-up in the whole-session context, so rollback wording applies to
+   changes made during the Agentty session unless the user explicitly says otherwise.
+   `crates/ag-protocol/src/` owns the shared response model, schema, parser diagnostics,
+   protocol prompt envelopes, repair prompts, and turn prompt payloads.
 1. Session-title generation bounds the persisted original request, current title,
-   session summary, and latest request independently at UTF-8 boundaries. The rendered
-   utility prompt is capped below 24 KiB, reserving more than 8 KiB for the shared
-   protocol envelope before Antigravity applies its 32 KiB command-argument check.
+   session summary, and latest request independently at UTF-8 boundaries so utility
+   prompts remain focused even when the durable session transcript is large.
 1. Channels emit transient loader updates as `TurnEvent::ThoughtDelta` values while the
    turn runs; assistant transcript output is appended once from the final parsed result.
 1. Transports that enforce the schema natively receive it through
@@ -650,14 +653,14 @@ optional `summary`):
    turns leave `review_comment_outcomes` empty; review-comment prompts provide the only
    accepted thread-ID allowlist.
 1. Final output must parse as the shared protocol JSON object. Claude, Gemini, and Codex
-   session turns fail closed on invalid output. Antigravity uses native `stream-json`
-   output with the same schema enforcement and fail-closed protocol-repair behavior. Its
-   rendered prompt immediately follows the string-valued `--print` flag, and the final
-   protocol object is extracted from the supported `result.response` envelope while
-   token counters come from `result.usage`. Because the CLI exposes no non-argument
-   prompt transport, Agentty rejects rendered Antigravity prompts over 32 KiB before
-   spawning. Claude result events prefer the schema-validated `structured_output` value
-   over the legacy string-valued `result` field before protocol parsing.
+   session turns fail closed on invalid output. Antigravity uses native bidirectional
+   `stream-json` with the same schema enforcement and fail-closed protocol-repair
+   behavior. Agentty writes one NDJSON user event per turn, extracts the final protocol
+   object from `result.structured_output` or `result.response`, and persists the
+   returned `conversation_id`. Completed-step usage supplies per-turn token counts
+   because the terminal result counters are cumulative across the native conversation.
+   Claude result events prefer the schema-validated `structured_output` value over the
+   legacy string-valued `result` field before protocol parsing.
 1. Turn errors are rendered into the session transcript, so no failure surface
    reproduces provider output. A rejected payload surfaces the parse reason plus
    *derived* diagnostics only (response sizing, parser location, visible top-level

@@ -13,14 +13,14 @@ use crate::model::session::SpeedMode;
 /// Transport runtime used to execute turns for one backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentTransport {
-    /// Provider runs through persistent app-server sessions.
+    /// Provider runs through a managed session runtime.
     AppServer,
     /// Provider runs as direct CLI subprocess commands.
     Cli,
 }
 
 impl AgentTransport {
-    /// Returns whether this transport uses app-server sessions.
+    /// Returns whether this transport uses managed runtime sessions.
     pub fn uses_app_server(self) -> bool {
         matches!(self, Self::AppServer)
     }
@@ -35,7 +35,7 @@ pub(crate) enum AgentPromptTransport {
     Stdin,
 }
 
-/// App-server thought-stream classification policy for one provider.
+/// Managed-runtime thought-stream classification policy for one provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AppServerThoughtPolicy {
     /// Provider does not expose dedicated thought phases.
@@ -106,9 +106,9 @@ pub trait AgentBackend: Send + Sync {
 
     /// Builds one provider transport command.
     ///
-    /// CLI-backed providers return the per-turn subprocess command. App-server
-    /// providers return the long-lived runtime command that owns later RPC
-    /// turn execution.
+    /// CLI-backed providers return the per-turn subprocess command. Managed
+    /// providers return the long-lived runtime command that owns later turn
+    /// execution over its native protocol.
     ///
     /// # Errors
     /// Returns an error when prompt rendering or provider argument

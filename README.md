@@ -99,17 +99,17 @@ authenticate at least one provider CLI before starting a session:
 > uncertainty, but commentary does not guarantee that subscription-backed usage is safe
 > for third-party tool invocation.
 
-- Antigravity (`agy`): install version 1.1.7 or newer of the
+- Antigravity (`agy`): install version 1.1.18 or newer of the
   [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli) and run `agy`
   to sign in when prompted.
 
 > [!WARNING]
 >
-> For Agentty usage through `agy --print`, use authentication backed by a Google Cloud
-> project or an API key when available for your Antigravity setup, rather than a Google
-> Account subscription sign-in. The
+> For Agentty usage through `agy` headless mode, use authentication backed by a Google
+> Cloud project or an API key when available for your Antigravity setup, rather than a
+> Google Account subscription sign-in. The
 > [Antigravity terms](https://antigravity.google/terms) do not yet clearly describe how
-> subscription access applies when `agy --print` is invoked by third-party tools.
+> subscription access applies when `agy` headless mode is invoked by third-party tools.
 
 - Gemini (`gemini`): install the
   [Gemini CLI](https://github.com/google-gemini/gemini-cli) and authenticate with an API
@@ -124,10 +124,11 @@ authenticate at least one provider CLI before starting a session:
 > those for the Gemini backend, or use the Antigravity (`agy`) backend instead.
 
 Agentty uses each provider's official non-interactive CLI or app-server surface
-(`claude -p`, `agy --print`, `codex app-server`, or `gemini --acp`) after you
-authenticate with that provider's CLI. It does not implement OAuth flows, read provider
-OAuth tokens directly, or call private provider APIs. You are responsible for choosing
-an authentication method that is permitted for your account, plan, and usage pattern.
+(`claude -p`, `agy --input-format stream-json`, `codex app-server`, or `gemini --acp`)
+after you authenticate with that provider's CLI. It does not implement OAuth flows, read
+provider OAuth tokens directly, or call private provider APIs. You are responsible for
+choosing an authentication method that is permitted for your account, plan, and usage
+pattern.
 
 ## Usage
 
