@@ -603,14 +603,18 @@ impl DiffResolvedLayout {
         self.adjacent_content_selection(selected_changed_line_index, selected_comment_index, false)
     }
 
-    /// Returns the first changed source line intersecting or below the viewport
-    /// top.
-    pub(crate) fn changed_line_index_at_scroll_offset(&self, scroll_offset: u16) -> Option<usize> {
-        let scroll_offset = usize::from(scroll_offset);
+    /// Returns the first changed source line intersecting or below one visual
+    /// row in the current viewport.
+    pub(crate) fn changed_line_index_at_visual_row(
+        &self,
+        scroll_offset: u16,
+        visual_row: u16,
+    ) -> Option<usize> {
+        let target_row = usize::from(scroll_offset).saturating_add(usize::from(visual_row));
 
         self.changed_line_ranges
             .iter()
-            .position(|range| range.end > scroll_offset)
+            .position(|range| range.end > target_row)
             .or_else(|| self.changed_line_ranges.len().checked_sub(1))
     }
 
@@ -2572,8 +2576,11 @@ mod tests {
             .changed_line_scroll_offset(20, 0)
             .expect("selected changed line should have a rendered range");
         let first_visible_changed_line = layout
-            .changed_line_index_at_scroll_offset(scrolled_down)
+            .changed_line_index_at_visual_row(scrolled_down, 0)
             .expect("scrolled viewport should contain a changed line");
+        let aligned_changed_line = layout
+            .changed_line_index_at_visual_row(scrolled_down, 3)
+            .expect("aligned viewport row should contain a changed line");
         let scrolled_up = layout
             .changed_line_scroll_offset(0, scrolled_down)
             .expect("first changed line should have a rendered range");
@@ -2592,6 +2599,7 @@ mod tests {
         assert!(scrolled_down > 0);
         assert!(first_visible_changed_line > 0);
         assert!(first_visible_changed_line <= 20);
+        assert!(aligned_changed_line > first_visible_changed_line);
         assert!(scrolled_up < scrolled_down);
         assert_eq!(zero_height_scroll_offset, 0);
         assert_eq!(
@@ -2615,7 +2623,7 @@ mod tests {
         );
 
         // Act
-        let selected_index = layout.changed_line_index_at_scroll_offset(u16::MAX);
+        let selected_index = layout.changed_line_index_at_visual_row(u16::MAX, 0);
 
         // Assert
         assert_eq!(selected_index, Some(0));

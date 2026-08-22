@@ -587,6 +587,7 @@ impl DiffKeyNavigation<'_> {
             focus: self.focus,
             line_comments: self.line_comments,
             preview: self.preview,
+            review_comments_are_visible: self.review_comments.is_some(),
             scroll_cache: self.scroll_cache,
             scroll_offset: self.scroll_offset,
             selected_diff_line_index: self.selected_diff_line_index,
@@ -761,6 +762,7 @@ struct DiffContentNavigation<'a> {
     focus: &'a mut DiffFocus,
     line_comments: &'a mut DiffLineComments,
     preview: &'a DiffPreview,
+    review_comments_are_visible: bool,
     scroll_cache: &'a mut Option<DiffScrollCache>,
     scroll_offset: &'a mut u16,
     selected_diff_line_index: &'a mut usize,
@@ -806,8 +808,19 @@ fn focus_selected_file_changes(
         content_area,
         render_cache_store.diff_layout_cache(),
     );
-    let Some(selected_diff_line_index) =
-        changed_line_layout.changed_line_index_at_scroll_offset(*navigation.scroll_offset)
+    let page_areas = diff_util::diff_page_areas(content_area);
+    let sidebar_areas = diff_util::diff_sidebar_areas(
+        page_areas.file_list_area,
+        navigation.review_comments_are_visible,
+    );
+    let selected_visual_row = FileExplorer::selected_visual_row(
+        navigation.file_explorer_selected_index,
+        content.item_count(),
+        sidebar_areas.file_list_area,
+    )
+    .unwrap_or_default();
+    let Some(selected_diff_line_index) = changed_line_layout
+        .changed_line_index_at_visual_row(*navigation.scroll_offset, selected_visual_row)
     else {
         return;
     };
@@ -1188,6 +1201,24 @@ mod tests {
         )
     }
 
+    /// Returns eight file rows whose last file starts changing at line 33.
+    fn aligned_file_diff_fixture() -> String {
+        let preceding_files = ('a'..='g')
+            .map(|file_name| {
+                format!("diff --git a/{file_name}.rs b/{file_name}.rs\n@@ -0,0 +1 @@\n+seed")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let selected_file_lines = (33..=42)
+            .map(|line_number| format!("+line {line_number}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        format!(
+            "{preceding_files}\ndiff --git a/h.rs b/h.rs\n@@ -0,0 +33,10 @@\n{selected_file_lines}"
+        )
+    }
+
     /// Builds a diff-mode snapshot for focused navigation tests.
     fn diff_mode_fixture(
         diff: &str,
@@ -1494,6 +1525,49 @@ mod tests {
                 } if comments.is_empty()
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn test_handle_l_focuses_changed_line_aligned_with_selected_file_row() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let diff = aligned_file_diff_fixture();
+        app.mode = AppMode::Diff {
+            diff: diff.clone(),
+            file_explorer_selected_index: 7,
+            focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
+            preview: DiffPreview::default(),
+            review_comments: None,
+            restore: None,
+            scroll_cache: None,
+            scroll_offset: 2,
+            selected_diff_line_index: 0,
+            session_id: "session-id".into(),
+        };
+        let content_area = Rect::new(0, 0, 80, 20);
+
+        // Act
+        handle(
+            &mut app,
+            content_area,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                focus: DiffFocus::Content,
+                selected_diff_line_index: 7,
+                ..
+            }
+        ));
+        let selected_anchor = page::diff::DiffLayoutCache::default()
+            .content(&diff)
+            .selected_changed_line(7, 7)
+            .expect("aligned changed line should resolve");
+        assert_eq!(selected_anchor.line, 40);
     }
 
     #[tokio::test]

@@ -176,6 +176,29 @@ impl FileExplorer {
         }
     }
 
+    /// Returns the selected item's row inside the bordered list viewport.
+    ///
+    /// The explorer creates a fresh [`ListState`] for every render. Ratatui
+    /// therefore starts at offset zero and, when necessary, scrolls just far
+    /// enough to keep the selected one-line item visible at the bottom.
+    pub(crate) fn selected_visual_row(
+        selected_index: usize,
+        item_count: usize,
+        area: Rect,
+    ) -> Option<u16> {
+        if item_count == 0 {
+            return None;
+        }
+        let viewport_height = Block::default().borders(Borders::ALL).inner(area).height;
+        if viewport_height == 0 {
+            return None;
+        }
+        let selected_index = Self::normalize_selected_index(selected_index, item_count);
+        let last_visual_row = usize::from(viewport_height.saturating_sub(1));
+
+        u16::try_from(selected_index.min(last_visual_row)).ok()
+    }
+
     /// Returns the number of items (files and folders) in the explorer list.
     pub fn count_items(parsed_lines: &[DiffLine<'_>]) -> usize {
         let (lines, _) = Self::file_tree(parsed_lines);
@@ -582,6 +605,28 @@ mod tests {
             .iter()
             .map(|span| span.content.to_string())
             .collect()
+    }
+
+    #[test]
+    fn test_selected_visual_row_matches_fresh_list_state_scrolling() {
+        // Arrange
+        let tall_area = Rect::new(0, 0, 20, 12);
+        let short_area = Rect::new(0, 0, 20, 5);
+        let flat_area = Rect::new(0, 0, 20, 2);
+
+        // Act
+        let visible_row = FileExplorer::selected_visual_row(7, 10, tall_area);
+        let scrolled_row = FileExplorer::selected_visual_row(7, 10, short_area);
+        let clamped_row = FileExplorer::selected_visual_row(usize::MAX, 2, tall_area);
+        let empty_row = FileExplorer::selected_visual_row(0, 0, tall_area);
+        let flat_row = FileExplorer::selected_visual_row(0, 1, flat_area);
+
+        // Assert
+        assert_eq!(visible_row, Some(7));
+        assert_eq!(scrolled_row, Some(2));
+        assert_eq!(clamped_row, Some(1));
+        assert_eq!(empty_row, None);
+        assert_eq!(flat_row, None);
     }
 
     #[test]
