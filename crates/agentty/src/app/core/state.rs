@@ -865,13 +865,22 @@ impl App {
         session::unix_timestamp_from_system_time(self.sessions.state().now_system_time())
     }
 
+    /// Returns the active agent profile used for focused review generation.
+    pub(crate) fn review_agent(&self) -> app::review::ReviewAgent {
+        (
+            self.settings.default_review_selection,
+            self.settings.default_review_reasoning_level,
+            self.settings.default_review_speed_mode,
+        )
+    }
+
     /// Returns the focused-review output state that should be shown when one
     /// session view is reopened.
     pub(crate) fn review_view_state(&self, session_id: &str) -> (Option<String>, Option<&str>) {
         let status_message = match self.review_cache.get(session_id) {
-            Some(ReviewCacheEntry::Loading { .. }) => Some(review_loading_message(
-                self.settings.default_review_selection.model(),
-            )),
+            Some(ReviewCacheEntry::Loading { review_agent, .. }) => {
+                Some(review_loading_message(*review_agent))
+            }
             Some(ReviewCacheEntry::Failed { error, .. }) => Some(review_failure_message(error)),
             Some(ReviewCacheEntry::Ready { .. } | ReviewCacheEntry::Suppressed) | None => None,
         };
@@ -898,7 +907,6 @@ impl App {
             &self.review_cache,
             self.sessions.state_mut(),
             session_id,
-            self.settings.default_review_selection.model(),
         );
     }
 
@@ -1490,9 +1498,13 @@ impl App {
         diff_hash: u64,
         review_diff: &str,
     ) {
+        let review_agent = app::review::normalize_review_agent(self.review_agent());
         self.review_cache.insert(
             SessionId::from(session_id),
-            ReviewCacheEntry::Loading { diff_hash },
+            ReviewCacheEntry::Loading {
+                diff_hash,
+                review_agent,
+            },
         );
         let session_chat_history = self
             .sessions
@@ -1517,9 +1529,7 @@ impl App {
         if let Some(session) = self.sessions.state_mut().session_mut_for_id(session_id) {
             session.transient_messages.upsert(TransientMessage {
                 anchor: TransientMessageAnchor::Tail,
-                body: TransientMessageBody::Loading(review_loading_message(
-                    self.settings.default_review_selection.model(),
-                )),
+                body: TransientMessageBody::Loading(review_loading_message(review_agent)),
                 lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
                 slot: TransientMessageSlot::Review,
                 turn_position: session.latest_user_prompt_position(),
@@ -1528,11 +1538,7 @@ impl App {
 
         spawn_review_assist(
             self.services.event_sender(),
-            (
-                self.settings.default_review_selection,
-                self.settings.default_review_reasoning_level,
-                self.settings.default_review_speed_mode,
-            ),
+            review_agent,
             session_id,
             session_folder,
             diff_hash,
@@ -1556,11 +1562,7 @@ impl App {
                 &self.pending_focused_review_persistence,
                 self.sessions.state(),
             );
-            app::review::hydrate_review_transients(
-                &self.review_cache,
-                self.sessions.state_mut(),
-                self.settings.default_review_selection.model(),
-            );
+            app::review::hydrate_review_transients(&self.review_cache, self.sessions.state_mut());
         }
 
         refreshed
@@ -1576,11 +1578,7 @@ impl App {
             &self.pending_focused_review_persistence,
             self.sessions.state(),
         );
-        app::review::hydrate_review_transients(
-            &self.review_cache,
-            self.sessions.state_mut(),
-            self.settings.default_review_selection.model(),
-        );
+        app::review::hydrate_review_transients(&self.review_cache, self.sessions.state_mut());
         self.restart_git_status_task();
     }
 

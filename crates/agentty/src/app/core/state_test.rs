@@ -23,7 +23,7 @@ use crate::app::branch_publish::{BranchPublishActionUpdate, BranchPublishTaskSuc
 use crate::app::review::ReviewUpdate;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppServiceDeps, Tab, diff_content_hash};
-use crate::domain::agent::AgentModel;
+use crate::domain::agent::{AgentModel, ReasoningLevel, SpeedMode};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
@@ -167,6 +167,18 @@ fn insert_test_ready_review(app: &mut App, session_id: &str) {
             text: "inactive review".to_string(),
         },
     );
+}
+
+/// Builds one loading focused-review entry with a stable test profile.
+fn test_loading_review(diff_hash: u64) -> ReviewCacheEntry {
+    ReviewCacheEntry::Loading {
+        diff_hash,
+        review_agent: (
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            ReasoningLevel::High,
+            SpeedMode::Normal,
+        ),
+    }
 }
 
 /// Builds a successful branch-publish batch payload for one session.
@@ -545,10 +557,8 @@ async fn test_switch_project_restores_project_scoped_focused_reviews() {
         .times(3)
         .returning(|_| Box::pin(async { None }));
     install_mock_git_client(&mut app, mock_git_client);
-    app.review_cache.insert(
-        loading_session_id.into(),
-        ReviewCacheEntry::Loading { diff_hash: 21 },
-    );
+    app.review_cache
+        .insert(loading_session_id.into(), test_loading_review(21));
     app.deferred_auto_review_session_ids
         .insert(loading_session_id.into());
     insert_test_ready_review(&mut app, "inactive-review");
@@ -565,7 +575,7 @@ async fn test_switch_project_restores_project_scoped_focused_reviews() {
     ));
     assert!(matches!(
         app.review_cache.get(loading_session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash: 21 })
+        Some(ReviewCacheEntry::Loading { diff_hash: 21, .. })
     ));
     assert!(app.deferred_auto_review_session_ids.is_empty());
     assert!(!app.review_cache.contains_key("inactive-review"));
@@ -4752,7 +4762,7 @@ async fn apply_app_events_agent_response_starts_auto_review_from_synced_handle_s
     // Assert
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
+        Some(ReviewCacheEntry::Loading { diff_hash, .. }) if *diff_hash == expected_hash
     ));
     assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
     assert_eq!(
@@ -4849,7 +4859,7 @@ async fn apply_app_events_agent_response_supersedes_pending_auto_review_diff() {
     );
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
+        Some(ReviewCacheEntry::Loading { diff_hash, .. }) if *diff_hash == expected_hash
     ));
     assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
     assert!(matches!(
@@ -5976,10 +5986,8 @@ async fn apply_review_update_stores_success_in_cache() {
         session_id.to_string().into(),
         SessionHandles::new(Status::AgentReview),
     );
-    app.review_cache.insert(
-        session_id.to_string().into(),
-        ReviewCacheEntry::Loading { diff_hash: 123 },
-    );
+    app.review_cache
+        .insert(session_id.to_string().into(), test_loading_review(123));
 
     // Act
     app.apply_review_update(
@@ -6022,10 +6030,8 @@ async fn apply_review_update_stores_failure_in_cache() {
     session.id = session_id.to_string().into();
     session.status = Status::AgentReview;
     app.sessions.push_session(session);
-    app.review_cache.insert(
-        session_id.to_string().into(),
-        ReviewCacheEntry::Loading { diff_hash: 456 },
-    );
+    app.review_cache
+        .insert(session_id.to_string().into(), test_loading_review(456));
 
     // Act
     app.apply_review_update(
@@ -6051,10 +6057,8 @@ async fn apply_review_update_ignores_stale_diff_hash() {
     )
     .await;
     let session_id = "session-review-stale";
-    app.review_cache.insert(
-        session_id.to_string().into(),
-        ReviewCacheEntry::Loading { diff_hash: 999 },
-    );
+    app.review_cache
+        .insert(session_id.to_string().into(), test_loading_review(999));
 
     // Act
     app.apply_review_update(
@@ -6068,7 +6072,7 @@ async fn apply_review_update_ignores_stale_diff_hash() {
     // Assert
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == 999
+        Some(ReviewCacheEntry::Loading { diff_hash, .. }) if *diff_hash == 999
     ));
 }
 
@@ -6090,10 +6094,8 @@ async fn apply_review_update_keeps_non_agent_review_status_unchanged() {
         session_id.to_string().into(),
         SessionHandles::new(Status::InProgress),
     );
-    app.review_cache.insert(
-        session_id.to_string().into(),
-        ReviewCacheEntry::Loading { diff_hash: 222 },
-    );
+    app.review_cache
+        .insert(session_id.to_string().into(), test_loading_review(222));
 
     // Act
     app.apply_review_update(
@@ -6217,10 +6219,8 @@ async fn auto_start_reviews_skips_when_already_loading_with_same_hash() {
 
     let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
     let hash = diff_content_hash(diff_text);
-    app.review_cache.insert(
-        session_id.to_string().into(),
-        ReviewCacheEntry::Loading { diff_hash: hash },
-    );
+    app.review_cache
+        .insert(session_id.to_string().into(), test_loading_review(hash));
     let session_ids = HashSet::from([session_id.into()]);
 
     let mut mock_git_client = ag_git::MockGitClient::new();
@@ -6233,7 +6233,7 @@ async fn auto_start_reviews_skips_when_already_loading_with_same_hash() {
     // Assert — still Loading, not re-triggered
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == hash
+        Some(ReviewCacheEntry::Loading { diff_hash, .. }) if *diff_hash == hash
     ));
     // Status remains Review because mark_session_agent_review was not called.
     assert_eq!(app.sessions.sessions()[0].status, Status::Review);
@@ -6331,7 +6331,7 @@ async fn auto_start_reviews_starts_loading_for_review_session() {
     // Assert
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
+        Some(ReviewCacheEntry::Loading { diff_hash, .. }) if *diff_hash == expected_hash
     ));
     assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
 }
@@ -6364,7 +6364,7 @@ async fn startup_recovery_restarts_incomplete_managed_focused_review() {
     // Assert
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
+        Some(ReviewCacheEntry::Loading { diff_hash, .. }) if *diff_hash == expected_hash
     ));
     assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
 }

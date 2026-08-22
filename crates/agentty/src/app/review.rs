@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use super::core::AppEvent;
 use super::task;
 use crate::app::session_state::SessionState;
-use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
+use crate::domain::agent::{AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::review::FocusedReviewStatus;
 use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transient_message::{
@@ -24,6 +24,8 @@ pub(crate) enum ReviewCacheEntry {
     Loading {
         /// Hash of the diff text that triggered this review generation.
         diff_hash: u64,
+        /// Normalized agent profile selected for this review generation.
+        review_agent: ReviewAgent,
     },
     /// Review text was successfully generated.
     Ready {
@@ -50,7 +52,7 @@ impl ReviewCacheEntry {
     /// Returns the diff content hash stored by generated review states.
     pub(crate) fn diff_hash(&self) -> Option<u64> {
         match self {
-            Self::Loading { diff_hash }
+            Self::Loading { diff_hash, .. }
             | Self::Ready { diff_hash, .. }
             | Self::Failed { diff_hash, .. } => Some(*diff_hash),
             Self::Suppressed => None,
@@ -144,6 +146,10 @@ impl FocusedReviewPersistenceRetry {
 /// prepared.
 const REVIEW_LOADING_MESSAGE_PREFIX: &str = "Reviewing changes with";
 
+/// Agent selection, reasoning effort, and response speed used for focused
+/// review generation.
+pub(crate) type ReviewAgent = (AgentSelection, ReasoningLevel, SpeedMode);
+
 /// Stable manual-review result shown when the session has no diff changes.
 pub(crate) const REVIEW_NO_DIFF_MESSAGE: &str = "No diff changes found for review.";
 
@@ -158,9 +164,17 @@ pub(crate) fn diff_content_hash(diff: &str) -> u64 {
     })
 }
 
-/// Formats the focused-review loading status with the active model name.
-pub(crate) fn review_loading_message(review_model: AgentModel) -> String {
-    format!("{REVIEW_LOADING_MESSAGE_PREFIX} {}", review_model.as_str())
+/// Formats the focused-review loading status with the active agent profile.
+pub(crate) fn review_loading_message(review_agent: ReviewAgent) -> String {
+    let (review_selection, reasoning_level, speed_mode) = normalize_review_agent(review_agent);
+
+    format!(
+        "{REVIEW_LOADING_MESSAGE_PREFIX} {} ({}[{}][{}])",
+        review_selection.kind(),
+        review_selection.model().as_str(),
+        reasoning_level.as_str(),
+        speed_mode.as_str(),
+    )
 }
 
 /// Formats a focused-review failure for the session output panel.
@@ -188,10 +202,9 @@ pub(crate) fn review_view_text<'a>(
 pub(crate) fn hydrate_review_transients(
     review_cache: &HashMap<SessionId, ReviewCacheEntry>,
     session_state: &mut SessionState,
-    review_model: AgentModel,
 ) {
     for session in session_state.sessions_mut() {
-        hydrate_session_review_transient(review_cache, session, review_model);
+        hydrate_session_review_transient(review_cache, session);
     }
 }
 
@@ -201,13 +214,12 @@ pub(crate) fn hydrate_review_transient(
     review_cache: &HashMap<SessionId, ReviewCacheEntry>,
     session_state: &mut SessionState,
     session_id: &str,
-    review_model: AgentModel,
 ) {
     let Some(session) = session_state.session_mut_for_id(session_id) else {
         return;
     };
 
-    hydrate_session_review_transient(review_cache, session, review_model);
+    hydrate_session_review_transient(review_cache, session);
 }
 
 /// Evicts inactive completed review entries while retaining in-flight work.
@@ -249,7 +261,6 @@ pub(crate) fn focused_review_result_anchor(session: &Session) -> TransientMessag
 fn hydrate_session_review_transient(
     review_cache: &HashMap<SessionId, ReviewCacheEntry>,
     session: &mut Session,
-    review_model: AgentModel,
 ) {
     if !matches!(
         session.status,
@@ -269,9 +280,9 @@ fn hydrate_session_review_transient(
         return;
     };
     let (anchor, body) = match cache_entry {
-        ReviewCacheEntry::Loading { .. } => (
+        ReviewCacheEntry::Loading { review_agent, .. } => (
             TransientMessageAnchor::Tail,
-            TransientMessageBody::Loading(review_loading_message(review_model)),
+            TransientMessageBody::Loading(review_loading_message(*review_agent)),
         ),
         ReviewCacheEntry::Ready { text, .. } => (
             focused_review_result_anchor(session),
@@ -322,15 +333,14 @@ pub(crate) fn review_cache_from_rows(
 /// Spawns one focused review-assist task for the provided session diff.
 pub(crate) fn start_review_assist(
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    review_agent: (AgentSelection, ReasoningLevel, SpeedMode),
+    review_agent: ReviewAgent,
     session_id: &str,
     session_folder: &Path,
     diff_hash: u64,
     review_diff: &str,
     session_chat_history: Option<&str>,
 ) {
-    let (review_selection, reasoning_level, speed_mode) = review_agent;
-    let (review_selection, speed_mode) = normalize_review_agent(review_selection, speed_mode);
+    let (review_selection, reasoning_level, speed_mode) = normalize_review_agent(review_agent);
 
     task::TaskService::spawn_review_assist_task(task::ReviewAssistTaskInput {
         app_event_tx,
@@ -345,10 +355,8 @@ pub(crate) fn start_review_assist(
     });
 }
 
-fn normalize_review_agent(
-    review_selection: AgentSelection,
-    speed_mode: SpeedMode,
-) -> (AgentSelection, SpeedMode) {
+pub(crate) fn normalize_review_agent(review_agent: ReviewAgent) -> ReviewAgent {
+    let (review_selection, reasoning_level, speed_mode) = review_agent;
     let speed_mode = if review_selection.kind().supports_speed_mode() {
         speed_mode
     } else {
@@ -356,7 +364,7 @@ fn normalize_review_agent(
     };
     let review_selection = review_selection.compatible_with_speed_mode(speed_mode);
 
-    (review_selection, speed_mode)
+    (review_selection, reasoning_level, speed_mode)
 }
 
 /// Marks one review-ready session as transient `AgentReview` while focused
@@ -396,14 +404,13 @@ pub(crate) fn fail_review_preparation(
     session_state: &mut SessionState,
     session_id: &SessionId,
     error: String,
-    review_model: AgentModel,
 ) -> FocusedReviewPersistence {
     let diff_hash = diff_content_hash("");
     review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Failed { diff_hash, error },
     );
-    hydrate_review_transient(review_cache, session_state, session_id, review_model);
+    hydrate_review_transient(review_cache, session_state, session_id);
 
     FocusedReviewPersistence {
         diff_hash: Some(diff_hash),
@@ -495,7 +502,7 @@ mod tests {
 
     use super::*;
     use crate::app::session_state::SessionState;
-    use crate::domain::agent::AgentKind;
+    use crate::domain::agent::{AgentKind, AgentModel};
     use crate::domain::selection::SelectionState;
     use crate::infra::clock::RealClock;
     use crate::test_support::SessionFixtureBuilder;
@@ -513,12 +520,28 @@ mod tests {
         )
     }
 
+    /// Builds a normal-speed review profile for hydration tests whose status
+    /// text is not under test.
+    fn test_review_agent() -> ReviewAgent {
+        (
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            ReasoningLevel::High,
+            SpeedMode::Normal,
+        )
+    }
+
     /// Builds a single loading review cache entry for one session.
     fn loading_review_cache(
         session_id: &SessionId,
         diff_hash: u64,
     ) -> HashMap<SessionId, ReviewCacheEntry> {
-        HashMap::from([(session_id.clone(), ReviewCacheEntry::Loading { diff_hash })])
+        HashMap::from([(
+            session_id.clone(),
+            ReviewCacheEntry::Loading {
+                diff_hash,
+                review_agent: test_review_agent(),
+            },
+        )])
     }
 
     /// Builds a single successful review update for one session.
@@ -561,15 +584,22 @@ mod tests {
     }
 
     #[test]
-    fn review_loading_message_uses_requested_model_name() {
+    fn review_loading_message_uses_normalized_agent_profile() {
         // Arrange
-        let review_model = AgentModel::Gpt56Sol;
+        let review_agent = (
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
+            ReasoningLevel::XHigh,
+            SpeedMode::Fast,
+        );
 
         // Act
-        let message = review_loading_message(review_model);
+        let message = review_loading_message(review_agent);
 
         // Assert
-        assert_eq!(message, "Reviewing changes with gpt-5.6-sol");
+        assert_eq!(
+            message,
+            "Reviewing changes with codex (gpt-5.6-sol[xhigh][fast])"
+        );
     }
 
     #[test]
@@ -583,18 +613,31 @@ mod tests {
         );
 
         // Act
-        let supported = normalize_review_agent(supported_selection, SpeedMode::Fast);
-        let unsupported = normalize_review_agent(unsupported_selection, SpeedMode::Fast);
+        let supported =
+            normalize_review_agent((supported_selection, ReasoningLevel::XHigh, SpeedMode::Fast));
+        let unsupported = normalize_review_agent((
+            unsupported_selection,
+            ReasoningLevel::Medium,
+            SpeedMode::Fast,
+        ));
 
         // Assert
         assert_eq!(
             supported,
             (
                 AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+                ReasoningLevel::XHigh,
                 SpeedMode::Fast,
             )
         );
-        assert_eq!(unsupported, (unsupported_selection, SpeedMode::Normal));
+        assert_eq!(
+            unsupported,
+            (
+                unsupported_selection,
+                ReasoningLevel::Medium,
+                SpeedMode::Normal,
+            )
+        );
     }
 
     #[test]
@@ -603,7 +646,10 @@ mod tests {
         let mut review_cache = HashMap::new();
         review_cache.insert(
             "session-id".into(),
-            ReviewCacheEntry::Loading { diff_hash: 7 },
+            ReviewCacheEntry::Loading {
+                diff_hash: 7,
+                review_agent: test_review_agent(),
+            },
         );
 
         // Act
@@ -635,7 +681,10 @@ mod tests {
             status,
             text: None,
         };
-        let loading = ReviewCacheEntry::Loading { diff_hash: 42 };
+        let loading = ReviewCacheEntry::Loading {
+            diff_hash: 42,
+            review_agent: test_review_agent(),
+        };
         let ready = ReviewCacheEntry::Ready {
             diff_hash: 42,
             text: "review".to_string(),
@@ -733,7 +782,7 @@ mod tests {
         );
 
         // Act
-        hydrate_review_transients(&review_cache, &mut session_state, AgentModel::Gpt56Sol);
+        hydrate_review_transients(&review_cache, &mut session_state);
 
         // Assert
         assert!(
@@ -751,12 +800,7 @@ mod tests {
         let mut session_state = session_state_with_stale_review(&session_id);
 
         // Act
-        hydrate_review_transient(
-            &HashMap::new(),
-            &mut session_state,
-            &session_id,
-            AgentModel::Gpt56Sol,
-        );
+        hydrate_review_transient(&HashMap::new(), &mut session_state, &session_id);
 
         // Assert
         assert!(
@@ -775,12 +819,7 @@ mod tests {
         let mut session_state = session_state_with_stale_review(&session_id);
 
         // Act
-        hydrate_review_transient(
-            &review_cache,
-            &mut session_state,
-            &session_id,
-            AgentModel::Gpt56Sol,
-        );
+        hydrate_review_transient(&review_cache, &mut session_state, &session_id);
 
         // Assert
         assert!(
@@ -805,12 +844,7 @@ mod tests {
         let mut session_state = session_state_with_stale_review(&session_id);
 
         // Act
-        hydrate_review_transient(
-            &review_cache,
-            &mut session_state,
-            &session_id,
-            AgentModel::Gpt56Sol,
-        );
+        hydrate_review_transient(&review_cache, &mut session_state, &session_id);
 
         // Assert
         assert_eq!(
@@ -830,12 +864,7 @@ mod tests {
         let mut session_state = empty_session_state();
 
         // Act
-        hydrate_review_transient(
-            &HashMap::new(),
-            &mut session_state,
-            "missing-session",
-            AgentModel::Gpt56Sol,
-        );
+        hydrate_review_transient(&HashMap::new(), &mut session_state, "missing-session");
 
         // Assert
         assert!(session_state.sessions().is_empty());
@@ -872,7 +901,10 @@ mod tests {
             ("inactive-suppressed".into(), ReviewCacheEntry::Suppressed),
             (
                 loading_session_id.clone(),
-                ReviewCacheEntry::Loading { diff_hash: 4 },
+                ReviewCacheEntry::Loading {
+                    diff_hash: 4,
+                    review_agent: test_review_agent(),
+                },
             ),
         ]);
         let pending_persistence = HashMap::from([(
@@ -895,7 +927,7 @@ mod tests {
         assert!(review_cache.contains_key(&pending_session_id));
         assert!(matches!(
             review_cache.get(&loading_session_id),
-            Some(ReviewCacheEntry::Loading { diff_hash: 4 })
+            Some(ReviewCacheEntry::Loading { diff_hash: 4, .. })
         ));
     }
 

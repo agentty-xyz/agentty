@@ -1299,7 +1299,7 @@ mod tests {
         let status_line = session_output_status_line(
             Status::AgentReview,
             None,
-            Some("Reviewing changes with gpt-5.6-sol"),
+            Some("Reviewing changes with codex (gpt-5.6-sol[xhigh][fast])"),
             None,
         )
         .expect("agent-review sessions should render a status line");
@@ -1308,7 +1308,7 @@ mod tests {
         assert!(
             status_line
                 .to_string()
-                .contains("Reviewing changes with gpt-5.6-sol")
+                .contains("Reviewing changes with codex (gpt-5.6-sol[xhigh][fast])")
         );
     }
 

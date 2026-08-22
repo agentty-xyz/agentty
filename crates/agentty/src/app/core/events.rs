@@ -1054,11 +1054,7 @@ impl App {
         auto_review_session_ids.extend(completed_review_session_ids);
         self.start_or_defer_auto_reviews(&auto_review_session_ids)
             .await;
-        app::review::hydrate_review_transients(
-            &self.review_cache,
-            self.sessions.state_mut(),
-            self.settings.default_review_selection.model(),
-        );
+        app::review::hydrate_review_transients(&self.review_cache, self.sessions.state_mut());
 
         if let Some(sync_main_result) = event_batch.sync_main_result {
             let sync_popup_context = self.sync_popup_context();
@@ -3255,9 +3251,13 @@ mod tests {
             )
             .await
             .expect("failed to insert inactive review session");
+        let review_agent = app.review_agent();
         app.review_cache.insert(
             session_id.clone(),
-            app::review::ReviewCacheEntry::Loading { diff_hash: 42 },
+            app::review::ReviewCacheEntry::Loading {
+                diff_hash: 42,
+                review_agent,
+            },
         );
 
         // Act
