@@ -224,25 +224,27 @@ there instead of opening an empty Diff workspace.
 
 Inside diff view, `Shift+j` / `Shift+k` and `Up` / `Down` scroll the selected file while
 Files remains focused. Press `Enter` or `l` on a file to move focus from the file tree
-to its patch, then press `Enter` to open an inline editor beneath the selected added or
-removed line. Type the feedback, then press `Enter` or `Esc` to finish without leaving
-Diff mode. Use `j` / `k` or the arrow keys to move through changed lines and completed
-inline comments while Agentty keeps the cursor visible. Press `Enter` on a changed line
-to add feedback or on an inline comment to edit its text again. To comment on a range,
-press `Shift+V` on the first changed row, extend the visual selection with `j` / `k` or
-the arrow keys, then press `Enter`; `Esc` cancels the selection without leaving the
-patch. The full range stays highlighted while its inline editor is open and after the
-comment is finished, so every inline comment retains its visible source context.
+to its patch, or press `Shift+C` to open a whole-file editor above that patch. Within
+the patch, press `Enter` to open an inline editor beneath the selected added or removed
+line. Type the feedback, then press `Enter` or `Esc` to finish without leaving Diff
+mode. Use `j` / `k` or the arrow keys to move through changed lines and completed file
+or inline comments while Agentty keeps the cursor visible. Press `Enter` on a changed
+line to add feedback or on a completed comment to edit its text again. To comment on a
+range, press `Shift+V` on the first changed row, extend the visual selection with `j` /
+`k` or the arrow keys, then press `Enter`; `Esc` cancels the selection without leaving
+the patch. The full range stays highlighted while its inline editor is open and after
+the comment is finished, so every inline comment retains its visible source context.
 Finishing empty text removes the comment and its source highlight. Completed comments
 keep a distinct inset background, and the active editor uses the stronger selection
 highlight. The linked review-request Comments section retains its separate `Enter`
-action for submitting marked review threads. Press `s` to submit every finished line or
-range comment together as the next session turn. The submitted prompt uses one compact
-row per comment with its repository-relative path, old or new side, and line or range,
-and keeps draft instructions or image attachments that were present before opening the
-diff. Selected deleted rows also include their captured pre-change source text because
-that context is absent from the current worktree. Inline comment editing and submission
-are available only when the session can accept a reply. Read-only diffs such as `Merged`
+action for submitting marked review threads. Press `s` to submit every finished file,
+line, or range comment together as the next session turn. The submitted prompt uses one
+compact row per comment: file feedback carries its repository-relative path, while
+inline feedback also carries its old or new side and line or range. The batch keeps
+draft instructions or image attachments that were present before opening the diff.
+Selected deleted rows also include their captured pre-change source text because that
+context is absent from the current worktree. Diff comment editing and submission are
+available only when the session can accept a reply. Read-only diffs such as `Merged`
 sessions keep line navigation but omit the comment actions from the footer and help
 overlay. With no visual selection active, press `Esc`, `Left`, `h`, or `f` to return to
 the file tree. Select a changed markdown file and press `p` to render its complete

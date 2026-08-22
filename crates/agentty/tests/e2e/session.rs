@@ -7740,7 +7740,7 @@ fn test_diff_changed_line_navigation() -> E2eResult {
     Ok(())
 }
 
-/// Verify that multiple changed-line comments stay inline until one batch is
+/// Verify that file and changed-line comments stay inline until one batch is
 /// submitted as the next session turn.
 #[test]
 fn test_diff_line_comments() -> E2eResult {
@@ -7751,8 +7751,8 @@ fn test_diff_line_comments() -> E2eResult {
     FeatureTest::new("diff_line_comments")
         .with_git()
         .zola(
-            "Comment on changed lines",
-            "Write multiple inline diff comments and submit them together in the next turn.",
+            "Comment on files and changed lines",
+            "Write file and inline diff comments, then submit them together in the next turn.",
             47,
         )
         .setup(|env| {
@@ -7772,7 +7772,17 @@ fn test_diff_line_comments() -> E2eResult {
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .wait_for_text("Enter/l: open", 5000)
-                    .press_key("l")
+                    .wait_for_text("Shift+C: comment", 5000)
+                    .write_text("C")
+                    .wait_for_text("file comment: |", 5000)
+                    .write_text("Review the whole file.")
+                    .press_key(ENTER_KEY)
+                    .wait_for_text("file comment: Review the whole file.", 3000)
+                    .capture_labeled(
+                        "whole_file_comment",
+                        "Whole-file feedback appears above the selected patch",
+                    )
+                    .press_key("j")
                     .wait_for_text("Enter: comment", 5000)
                     .press_key(ENTER_KEY)
                     .wait_for_text("comment: |", 5000)
@@ -7803,6 +7813,8 @@ fn test_diff_line_comments() -> E2eResult {
                     )
                     .viewing_pause_ms(1500)
                     .press_key("s")
+                    .wait_for_text("File comments:", 5000)
+                    .wait_for_text("src/main.rs: Review the whole file.", 5000)
                     .wait_for_text("Line comments:", 5000)
                     .wait_for_text(
                         "src/main.rs:1 [new]: Explain the entry point. Updated.",
@@ -7830,7 +7842,15 @@ fn test_diff_line_comments() -> E2eResult {
 
 /// Verifies inline comment selection, editing, and next-turn submission.
 fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
-    let selected_comment_frame = common::frame_from_capture(&report.captures[0]);
+    let file_comment_frame = common::frame_from_capture(&report.captures[0]);
+    let file_comment_full = Region::full(file_comment_frame.cols(), file_comment_frame.rows());
+    assertion::assert_text_in_region(
+        &file_comment_frame,
+        "file comment: Review the whole file.",
+        &file_comment_full,
+    );
+
+    let selected_comment_frame = common::frame_from_capture(&report.captures[1]);
     let selected_comment_full =
         Region::full(selected_comment_frame.cols(), selected_comment_frame.rows());
     assertion::assert_text_in_region(
@@ -7839,7 +7859,7 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
         &selected_comment_full,
     );
 
-    let diff_frame = common::frame_from_capture(&report.captures[1]);
+    let diff_frame = common::frame_from_capture(&report.captures[2]);
     let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
     assertion::assert_text_in_region(
         &diff_frame,
