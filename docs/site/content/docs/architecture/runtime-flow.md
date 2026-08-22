@@ -769,7 +769,9 @@ their triggers:
 
 - **Focused review assist** (entering review): runs the review prompt with the diff and
   saved user/agent chat history through the provider-enforced read-only permission mode,
-  then stores the result or error.
+  then stores the result or error. Gemini utility prompts use standard ACP startup and
+  cancel every mutation permission request, avoiding plan-mode sandbox initialization;
+  persistent read-only research sessions continue to use sandboxed plan mode.
 
 - **Sync-main workflow** (list-mode `s`): pull/rebase/push of the project branch through
   the sync orchestrator, with assisted conflict resolution.

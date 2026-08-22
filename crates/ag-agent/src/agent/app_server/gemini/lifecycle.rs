@@ -60,7 +60,6 @@ pub(super) async fn start_runtime(
     ),
     AppServerError,
 > {
-    let request_kind = crate::channel::AgentRequestKind::SessionStart;
     let command = agent::create_backend(AgentKind::Gemini)
         .build_command(agent::BuildCommandRequest {
             attachments: &[],
@@ -72,7 +71,7 @@ pub(super) async fn start_runtime(
             personality_prompt: None,
             prompt: "",
             reasoning_level: request.reasoning_level,
-            request_kind: &request_kind,
+            request_kind: &request.request_kind,
             speed_mode: request.speed_mode,
         })
         .map_err(|error| {

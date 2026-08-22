@@ -82,6 +82,8 @@ const PROMPT_FOCUS_DRAFT_TEXT: &str = "Draft kept while reading chat";
 /// Focused-review output emitted when the prompt carries both the saved
 /// decision and the instruction to honor it.
 const RESOLVED_DECISION_REVIEW_TEXT: &str = "Resolved session decision honored.";
+/// Focused-review output emitted after Gemini starts without plan-mode flags.
+const GEMINI_FOCUSED_REVIEW_TEXT: &str = "Gemini focused review completed without plan mode.";
 /// Review-request notice body used by the timeline-order regression.
 const REVIEW_REQUEST_TIMELINE_NOTICE_TEXT: &str =
     "Created PR https://github.com/agentty-xyz/agentty/pull/42";
@@ -717,6 +719,59 @@ done
         &[
             ("DefaultReviewAgent", "codex"),
             ("DefaultReviewModel", "gpt-5.6-sol"),
+        ],
+    )
+}
+
+/// Seeds a Gemini focused review whose ACP stub rejects plan-mode startup.
+fn seed_gemini_focused_review_without_plan_mode(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+    seed_review_worktree_with_diff(env)?;
+
+    let gemini_path = env.stub_bin.join("gemini");
+    let script = format!(
+        r###"#!/bin/sh
+if [ "$1" = "--version" ]; then printf 'gemini 0.0.0-test\n'; exit 0; fi
+answer='{GEMINI_FOCUSED_REVIEW_TEXT}'
+for argument in "$@"; do
+    if [ "$argument" = "--approval-mode" ] || [ "$argument" = "--sandbox" ]; then
+        answer='Gemini focused review incorrectly used plan mode.'
+    fi
+done
+
+extract_id() {{
+    printf '%s\n' "$1" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
+}}
+
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            request_id=$(extract_id "$request")
+            printf '{{"jsonrpc":"2.0","id":"%s","result":{{"protocolVersion":1}}}}\n' "$request_id"
+            ;;
+        *'"method":"session/new"'*)
+            request_id=$(extract_id "$request")
+            printf '{{"jsonrpc":"2.0","id":"%s","result":{{"sessionId":"review-session"}}}}\n' "$request_id"
+            ;;
+        *'"method":"session/prompt"'*)
+            request_id=$(extract_id "$request")
+            printf '{{"jsonrpc":"2.0","id":"%s","result":{{"response":"{{\\"answer\\":\\"## Review\\n\\n### Project Impact\\n\\n- %s\\n\\n### Suggestions\\n\\n- None.\\",\\"questions\\":[],\\"summary\\":null}}","usage":{{"inputTokens":5,"outputTokens":9}}}}}}\n' "$request_id" "$answer"
+            ;;
+    esac
+done
+"###,
+    );
+    std::fs::write(&gemini_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&gemini_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultReviewAgent", "gemini"),
+            ("DefaultReviewModel", "gemini-3.1-pro-preview"),
         ],
     )
 }
@@ -8699,6 +8754,38 @@ fn focused_review_ignores_blank_completed_fallback() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Final focused review result.", &full);
                 assertion::assert_text_in_region(frame, "Suggestions", &full);
                 assertion::assert_not_visible(frame, "I will inspect the current code.");
+                assertion::assert_not_visible(frame, "Reviewing changes with");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify Gemini focused review avoids the plan-mode bootstrap.
+#[test]
+fn gemini_focused_review_avoids_plan_mode_bootstrap() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("gemini_focused_review_avoids_plan_mode_bootstrap")
+        .with_git()
+        .setup(seed_gemini_focused_review_without_plan_mode)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .press_key("f")
+                    .wait_for_text("Suggestions", 30000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "gemini_review",
+                        "Gemini focused review completes without plan-mode startup",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, GEMINI_FOCUSED_REVIEW_TEXT, &full);
+                assertion::assert_text_in_region(frame, "Suggestions", &full);
                 assertion::assert_not_visible(frame, "Reviewing changes with");
             },
         )?;
