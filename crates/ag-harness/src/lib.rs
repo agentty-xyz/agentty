@@ -20,7 +20,9 @@ mod trace;
 mod write;
 
 pub use file_system::{FileSystem, LocalFileSystem};
-pub use harness::{Harness, TurnError};
+pub use harness::{
+    ChatSession, Harness, ModelRequestActivity, ToolActivity, TurnError, TurnOutcome, TurnReport,
+};
 pub use lifecycle::{
     LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, LifecycleObserverSet,
     LifecycleOperationGuard, ModelResponseType, ToolErrorType, TurnErrorType,

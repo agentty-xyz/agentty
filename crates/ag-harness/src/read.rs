@@ -7,6 +7,7 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _, BufReader};
 
 use crate::file_system::FileSystem;
+use crate::schema_contract;
 use crate::tool::ReadArguments;
 
 const MAX_READ_BYTES: usize = 50 * 1024;
@@ -138,6 +139,27 @@ pub enum ReadError {
     /// The successful result could not be encoded for the model.
     #[error("failed to encode read result: {0}")]
     Encode(#[from] serde_json::Error),
+}
+
+impl ReadError {
+    pub(crate) fn is_model_correctable(&self) -> bool {
+        !matches!(self, Self::RepositoryRoot { .. } | Self::Encode(_))
+    }
+
+    pub(crate) fn to_tool_result(&self, path: &str) -> Result<String, serde_json::Error> {
+        #[derive(Serialize)]
+        struct RejectedRead<'a> {
+            error: String,
+            path: &'a str,
+            status: &'static str,
+        }
+
+        serde_json::to_string(&RejectedRead {
+            error: schema_contract::bounded_diagnostic(self),
+            path,
+            status: "rejected",
+        })
+    }
 }
 
 pub(crate) struct ReadTool {

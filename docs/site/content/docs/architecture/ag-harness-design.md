@@ -71,11 +71,14 @@ module. API-family clients remain separate so multiple providers can reuse a wir
 protocol without sharing provider policy.
 
 Qwen, Kimi, and Muse share Chat Completions request execution and bounded response
-decoding. Qwen and Kimi request JSON Object output and include the requested
-`OutputSchema` in the system instruction. Muse uses Meta Model API's native JSON Schema
-response format instead. Every provider retains shared local schema validation before
-returning a successful response. Schemas without an explicit object root and unsupported
-configurations fail explicitly rather than falling back to unstructured output.
+decoding. Qwen and Kimi include the requested `OutputSchema` in the system instruction;
+they request JSON Object output when no tools are active and omit that provider mode
+during native tool calls. Muse uses Meta Model API's native JSON Schema response format
+instead. Every provider retains shared local schema validation before returning a
+successful response. Schemas without an explicit object root and unsupported
+configurations fail explicitly rather than falling back to unstructured output. The
+shared transport retries one failed send and up to two rate-limited requests, with
+provider retry delays capped at five seconds.
 
 Muse intentionally omits Meta's optional `strict` flag, whose documented default is
 `false`. That keeps standard JSON Schema available while Meta enforces service limits,
@@ -92,8 +95,12 @@ The current tool foundation includes:
 - Shared, typed `read` and `write` calls across Qwen, Kimi, and Muse.
 - Explicit repository roots and deny-by-default permissions through `Harness::allow()`.
 - Bounded tool execution and continuation to schema-validated terminal output.
+- Model-correctable read and write rejections returned through the tool loop.
 - Descriptor-relative file access without symlink traversal.
 - One-file unified-diff writes with stale-safe atomic replacement and typed failures.
+
+The `ag-harness` CLI starts an in-memory chat with Muse, Kimi, or Qwen. Reads are scoped
+to `--read-dir`; writes require `--allow-write`.
 
 ## Session management
 
@@ -342,6 +349,8 @@ best cost and performance:
   and checkpoint policy, retention, corruption recovery, and compatibility behavior.
 - [ ] **Persisted session round trip.** Run sequential turns in one resumable session,
   and persist model and tool history.
+- [x] **In-memory chat round trip.** Run sequential turns with user, assistant, and tool
+  history, plus sanitized per-turn activity reports.
 - [x] **Second provider.** Integrate Kimi through the structured-output contract.
 
 ## Roadmap

@@ -1195,7 +1195,6 @@ mod tests {
 
     use crossterm::event::KeyModifiers;
     use mockall::predicate::eq;
-    use tempfile::tempdir;
     use tracing::instrument::WithSubscriber;
 
     use super::*;
@@ -1245,6 +1244,27 @@ mod tests {
                 return;
             }
         }
+    }
+
+    /// Applies a deterministic completion for the one pending session-diff
+    /// request.
+    async fn apply_pending_session_diff(
+        app: &mut App,
+        session_id: &SessionId,
+        result: Result<&str, &str>,
+    ) {
+        let request_id = app
+            .pending_session_diff_requests
+            .keys()
+            .copied()
+            .next()
+            .expect("session diff request should be pending");
+        app.apply_app_events(AppEvent::SessionDiffLoaded {
+            request_id,
+            result: result.map(str::to_string).map_err(str::to_string),
+            session_id: session_id.clone(),
+        })
+        .await;
     }
 
     /// Builds one git-backed test app with one created session and an
@@ -2102,7 +2122,7 @@ mod tests {
 
         // Act
         open_review_output_mode(&mut app, &view_context);
-        apply_next_session_diff(&mut app).await;
+        apply_pending_session_diff(&mut app, &view_context.session_id, Ok("")).await;
 
         // Assert
         let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
@@ -2139,9 +2159,6 @@ mod tests {
     async fn test_show_diff_for_view_session_switches_mode_to_diff() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        let session_folder = app.sessions.sessions()[0].folder.clone();
-        std::fs::write(session_folder.join("README.md"), "updated content")
-            .expect("failed to write diff fixture");
         let context = ViewContext {
             scroll_offset: Some(0),
             session_id: session_id.clone().into(),
@@ -2151,7 +2168,12 @@ mod tests {
         // Act
         let opened = show_diff_for_view_session(&mut app, &context);
         let loading = matches!(app.mode, AppMode::DiffLoading { .. });
-        apply_next_session_diff(&mut app).await;
+        apply_pending_session_diff(
+            &mut app,
+            &context.session_id,
+            Ok("diff --git a/README.md b/README.md\n+updated content\n"),
+        )
+        .await;
 
         // Assert
         assert!(opened);
@@ -2183,7 +2205,7 @@ mod tests {
         // Act
         let opened = show_diff_for_view_session(&mut app, &context);
         let loading = matches!(app.mode, AppMode::DiffLoading { .. });
-        apply_next_session_diff(&mut app).await;
+        apply_pending_session_diff(&mut app, &context.session_id, Ok("")).await;
 
         // Assert
         assert!(opened);
@@ -2202,8 +2224,6 @@ mod tests {
     async fn test_show_diff_for_view_session_restores_view_after_git_error() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        let non_git_dir = tempdir().expect("failed to create non-git dir");
-        app.sessions.sessions_mut()[0].folder = non_git_dir.path().to_path_buf();
         app.mode = AppMode::View {
             session_id: session_id.clone().into(),
             scroll_offset: Some(0),
@@ -2216,7 +2236,12 @@ mod tests {
 
         // Act
         let opened = show_diff_for_view_session(&mut app, &context);
-        apply_next_session_diff(&mut app).await;
+        apply_pending_session_diff(
+            &mut app,
+            &context.session_id,
+            Err("Failed to run git diff: repository unavailable"),
+        )
+        .await;
 
         // Assert
         assert!(opened);

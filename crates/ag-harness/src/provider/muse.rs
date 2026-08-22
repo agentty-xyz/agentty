@@ -25,6 +25,7 @@ pub const MUSE_SPARK_1_2_CONTRIBUTOR: &str = "muse-spark-1.2-contributor";
 pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
     chat_completion::ChatCompletionProviderPolicy {
         display_name: "Meta Model API",
+        response_format_with_tools: true,
         structured_output: chat_completion::StructuredOutputMode::JsonSchema,
         telemetry_name: telemetry::PROVIDER_META,
         unsupported_schema_reason: "Muse structured output requires an explicit object root schema",

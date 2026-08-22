@@ -2,6 +2,25 @@
 
 Run a model with bounded repository tools and validated structured output.
 
+## Command line
+
+Set the provider credentials, then start a chat:
+
+```sh
+MODEL_API_KEY=your-key cargo run -p ag-harness -- run muse-spark-1.2
+```
+
+The current directory is readable by the model by default. Use `--read-dir <DIR>` to
+choose another root; files read beneath it are sent to the configured provider. Use
+`--provider <muse|kimi|qwen>` to select a provider. Muse uses `MODEL_API_KEY` and the
+optional `MODEL_API_BASE_URL`; Kimi uses `KIMI_API_KEY` and `KIMI_BASE_URL`; Qwen uses
+`DASHSCOPE_API_KEY` and `DASHSCOPE_BASE_URL`. `--base-url` overrides the corresponding
+URL variable.
+
+Run `cargo run -p ag-harness -- --help` for commands.
+
+## Library
+
 ```rust
 use ag_harness::{Harness, MUSE_SPARK_1_2, Muse, Tool};
 
@@ -20,6 +39,10 @@ Tools are denied by default and repository tools require an explicit root. `read
 returns bounded file content; `write` applies one bounded unified diff to one text file.
 Both use the injected `FileSystem` boundary without shell commands, and the model may
 continue calling allowed tools until it returns schema-valid JSON.
+
+Use `Harness::chat()` for sequential in-memory turns and sanitized activity reports.
+Chat history retains complete recent turns within a 256 KiB payload budget; use
+`Harness::max_history_bytes()` to override it.
 
 Use `ModelWithMetadata::complete_with_metadata()` for normalized completion metadata.
 
