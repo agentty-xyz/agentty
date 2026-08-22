@@ -53,6 +53,18 @@ use crate::presentation::app_mode::{
     AppMode, DiffFocus, DiffLineComments, DiffPreview, HelpContext, ReviewCommentSelection,
 };
 
+/// Builds one loading focused-review entry with a stable test profile.
+fn test_loading_review(diff_hash: u64) -> ReviewCacheEntry {
+    ReviewCacheEntry::Loading {
+        diff_hash,
+        review_agent: (
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            ReasoningLevel::High,
+            SpeedMode::Normal,
+        ),
+    }
+}
+
 /// Builds a filesystem mock that delegates operations to local disk.
 fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
     let mut mock_fs_client = fs::MockFsClient::new();
@@ -3742,9 +3754,17 @@ async fn test_periodic_session_refresh_preserves_focused_review_states() {
         db.clone(),
     )
     .await;
+    let loading_review_agent = (
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
+        ReasoningLevel::XHigh,
+        SpeedMode::Normal,
+    );
     app.review_cache.insert(
         loading_session_id.into(),
-        ReviewCacheEntry::Loading { diff_hash: 43 },
+        ReviewCacheEntry::Loading {
+            diff_hash: 43,
+            review_agent: loading_review_agent,
+        },
     );
     app.review_cache.insert(
         failed_session_id.into(),
@@ -3753,12 +3773,11 @@ async fn test_periodic_session_refresh_preserves_focused_review_states() {
             error: review_error.to_string(),
         },
     );
-    let review_model = app.settings.default_review_selection.model();
-    crate::app::review::hydrate_review_transients(
-        &app.review_cache,
-        app.sessions.state_mut(),
-        review_model,
-    );
+    crate::app::review::hydrate_review_transients(&app.review_cache, app.sessions.state_mut());
+    app.settings.default_review_selection =
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Terra);
+    app.settings.default_review_reasoning_level = ReasoningLevel::Low;
+    app.settings.default_review_speed_mode = SpeedMode::Fast;
     let clock = Arc::new(TestClock::new(Instant::now(), SystemTime::now()));
     app.sessions.state_mut().clock = clock.clone();
     app.sessions.state_mut().refresh_deadline = clock.now_instant() + SESSION_REFRESH_INTERVAL;
@@ -3778,7 +3797,10 @@ async fn test_periodic_session_refresh_preserves_focused_review_states() {
 
     let loading_message = review_message_body(&app, loading_session_id);
     assert!(matches!(loading_message, TransientMessageBody::Loading(_)));
-    assert_eq!(loading_message.text(), review_loading_message(review_model));
+    assert_eq!(
+        loading_message.text(),
+        review_loading_message(loading_review_agent)
+    );
 
     let failed_message = review_message_body(&app, failed_session_id);
     assert!(matches!(failed_message, TransientMessageBody::Plain(_)));
@@ -5648,10 +5670,8 @@ async fn test_rebase_session_cancels_pending_focused_review() {
         session_id: session_id.clone().into(),
         scroll_offset: None,
     };
-    app.review_cache.insert(
-        session_id.clone().into(),
-        ReviewCacheEntry::Loading { diff_hash: 777 },
-    );
+    app.review_cache
+        .insert(session_id.clone().into(), test_loading_review(777));
 
     // Act
     let result = app.rebase_session(&session_id).await;
@@ -5718,10 +5738,8 @@ async fn test_rebase_session_cleanup_failure_does_not_start_sync() {
         session_id: session_id.clone().into(),
         scroll_offset: None,
     };
-    app.review_cache.insert(
-        session_id.clone().into(),
-        ReviewCacheEntry::Loading { diff_hash: 777 },
-    );
+    app.review_cache
+        .insert(session_id.clone().into(), test_loading_review(777));
     let mut mock_git_client = git::MockGitClient::new();
     mock_git_client.expect_rebase_start().times(0);
     install_mock_git_client(&mut app, mock_git_client);

@@ -93,6 +93,8 @@ fn seed_orchestrator_auto_review_scope(env: &BuilderEnv) -> E2eResult {
         for (setting_name, setting_value) in [
             ("DefaultReviewAgent", "claude"),
             ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+            ("DefaultReviewReasoningLevel", "xhigh"),
+            ("DefaultReviewSpeedMode", "normal"),
         ] {
             sqlx::query(
                 "INSERT INTO project_setting (project_id, name, value) VALUES (?, ?, ?) ON \
@@ -559,7 +561,10 @@ fn test_orchestrator_auto_review_scope() -> E2eResult {
                     .press_key("j")
                     .compose(&common::open_selected_session_view())
                     .wait_for_text("Managed by controller-0001", 5000)
-                    .wait_for_text("Reviewing changes with claude-haiku-4-5-20251001", 5000)
+                    .wait_for_text(
+                        "Reviewing changes with claude (claude-haiku-4-5-20251001[xhigh][normal])",
+                        5000,
+                    )
                     .capture_labeled(
                         "worker_auto_review",
                         "Managed worker starts focused review automatically",
@@ -585,7 +590,7 @@ fn test_orchestrator_auto_review_scope() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
                 assertion::assert_text_in_region(
                     frame,
-                    "Reviewing changes with claude-haiku-4-5-20251001",
+                    "Reviewing changes with claude (claude-haiku-4-5-20251001[xhigh][normal])",
                     &full,
                 );
             },

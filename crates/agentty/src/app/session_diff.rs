@@ -503,10 +503,12 @@ impl App {
         }
 
         if is_manual && cached_diff_hash.is_none() {
+            let review_agent = review::normalize_review_agent(self.review_agent());
             self.review_cache.insert(
                 session_id.clone(),
                 ReviewCacheEntry::Loading {
                     diff_hash: review::diff_content_hash(""),
+                    review_agent,
                 },
             );
             review::mark_session_agent_review(self.sessions.state_mut(), session_id);
@@ -514,7 +516,7 @@ impl App {
                 session.transient_messages.upsert(TransientMessage {
                     anchor: TransientMessageAnchor::Tail,
                     body: TransientMessageBody::Loading(review::review_loading_message(
-                        self.settings.default_review_selection.model(),
+                        review_agent,
                     )),
                     lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
                     slot: TransientMessageSlot::Review,
@@ -639,7 +641,6 @@ impl App {
                     self.sessions.state_mut(),
                     &session_id,
                     error,
-                    self.settings.default_review_selection.model(),
                 );
                 self.persist_focused_review_updates(vec![persistence]).await;
                 review::restore_session_review_status(self.sessions.state_mut(), &session_id);
@@ -1237,8 +1238,14 @@ mod tests {
             .keys()
             .next()
             .expect("apply diff request should be pending");
-        app.review_cache
-            .insert(session_id.clone(), ReviewCacheEntry::Loading { diff_hash });
+        let review_agent = app.review_agent();
+        app.review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Loading {
+                diff_hash,
+                review_agent,
+            },
+        );
 
         // Act
         app.apply_session_diff_update(SessionDiffUpdate {
@@ -1252,7 +1259,10 @@ mod tests {
         assert!(app.pending_session_diff_requests.is_empty());
         assert!(matches!(
             app.review_cache.get(&session_id),
-            Some(ReviewCacheEntry::Loading { diff_hash: cached_hash })
+            Some(ReviewCacheEntry::Loading {
+                diff_hash: cached_hash,
+                ..
+            })
                 if *cached_hash == diff_hash
         ));
         assert_eq!(app.sessions.sessions()[0].status, Status::Review);

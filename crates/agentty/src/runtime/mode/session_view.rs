@@ -2079,7 +2079,7 @@ mod tests {
         let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
         assert_eq!(
             review_status_message,
-            Some(review_loading_message(AgentModel::ClaudeOpus5))
+            Some(review_loading_message(app.review_agent()))
         );
         assert_eq!(review_text, None);
         assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
@@ -2733,9 +2733,13 @@ mod tests {
             crate::domain::agent::AgentKind::Claude,
             AgentModel::ClaudeOpus5,
         );
+        let review_agent = app.review_agent();
         app.review_cache.insert(
             session_id.clone().into(),
-            ReviewCacheEntry::Loading { diff_hash: 456 },
+            ReviewCacheEntry::Loading {
+                diff_hash: 456,
+                review_agent,
+            },
         );
         let view_context = ViewContext {
             scroll_offset: None,
@@ -2750,7 +2754,7 @@ mod tests {
         let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
         assert_eq!(
             review_status_message,
-            Some(review_loading_message(AgentModel::ClaudeOpus5))
+            Some(review_loading_message(review_agent))
         );
         assert_eq!(review_text, None);
     }
@@ -2810,9 +2814,13 @@ mod tests {
     async fn test_open_or_regenerate_skips_when_loading_in_progress() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let review_agent = app.review_agent();
         app.review_cache.insert(
             session_id.clone().into(),
-            ReviewCacheEntry::Loading { diff_hash: 42 },
+            ReviewCacheEntry::Loading {
+                diff_hash: 42,
+                review_agent,
+            },
         );
         app.mode = AppMode::View {
             scroll_offset: None,
@@ -2831,7 +2839,7 @@ mod tests {
         // Assert — cache and loading state are preserved, no duplicate spawned
         assert!(matches!(
             app.review_cache.get(session_id.as_str()),
-            Some(ReviewCacheEntry::Loading { diff_hash: 42 })
+            Some(ReviewCacheEntry::Loading { diff_hash: 42, .. })
         ));
         assert!(matches!(
             app.mode,

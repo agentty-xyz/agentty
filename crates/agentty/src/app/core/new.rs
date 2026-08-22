@@ -13,7 +13,7 @@ use crate::app::session::{SessionManager, migrate_active_sessions_off_retired_mo
 use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
 use crate::app::{AppError, review, sync, task};
-use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel};
+use crate::domain::agent::{AgentCliInfo, AgentKind};
 use crate::infra::clock::{self, Clock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
@@ -146,13 +146,8 @@ impl App {
         )
         .await;
         let (review_cache, recoverable_focused_review_session_ids) =
-            Self::load_startup_focused_reviews(
-                &repositories,
-                active_project_id,
-                &mut sessions,
-                settings.default_review_selection.model(),
-            )
-            .await?;
+            Self::load_startup_focused_reviews(&repositories, active_project_id, &mut sessions)
+                .await?;
 
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);
@@ -199,7 +194,6 @@ impl App {
         repositories: &AppRepositories,
         active_project_id: i64,
         sessions: &mut SessionManager,
-        review_model: AgentModel,
     ) -> Result<
         (
             std::collections::HashMap<crate::domain::session::SessionId, review::ReviewCacheEntry>,
@@ -211,7 +205,7 @@ impl App {
         let recoverable_session_ids =
             Self::load_recoverable_focused_review_session_ids(repositories, active_project_id)
                 .await?;
-        review::hydrate_review_transients(&review_cache, sessions.state_mut(), review_model);
+        review::hydrate_review_transients(&review_cache, sessions.state_mut());
 
         Ok((review_cache, recoverable_session_ids))
     }
