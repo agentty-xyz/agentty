@@ -17,7 +17,12 @@ impl AgentBackend for GeminiBackend {
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
         let mut command = build_gemini_acp_command(request.folder, request.model);
-        if request.permission_mode.is_read_only() {
+        if request.permission_mode.is_read_only()
+            && !matches!(
+                request.request_kind,
+                crate::channel::AgentRequestKind::UtilityPrompt
+            )
+        {
             command.arg("--approval-mode").arg("plan").arg("--sandbox");
         }
 
@@ -36,6 +41,11 @@ mod tests {
     /// Returns a utility request kind for Gemini command construction tests.
     fn utility_request_kind() -> AgentRequestKind {
         AgentRequestKind::UtilityPrompt
+    }
+
+    /// Returns a session request kind for Gemini command construction tests.
+    fn session_request_kind() -> AgentRequestKind {
+        AgentRequestKind::SessionStart
     }
 
     #[test]
@@ -112,7 +122,7 @@ mod tests {
                 personality_prompt: None,
                 prompt: "Inspect the architecture",
                 reasoning_level: ReasoningLevel::default(),
-                request_kind: &utility_request_kind(),
+                request_kind: &session_request_kind(),
                 speed_mode: crate::model::session::SpeedMode::default(),
             },
         )
@@ -134,5 +144,40 @@ mod tests {
                 "--sandbox"
             ]
         );
+    }
+
+    #[test]
+    /// Verifies read-only Gemini utility prompts avoid the plan-mode bootstrap
+    /// while ACP permission cancellation continues to reject mutations.
+    fn test_gemini_read_only_utility_command_uses_standard_acp_mode() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let backend = GeminiBackend;
+
+        // Act
+        let command = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[],
+                folder: temp_directory.path(),
+                main_checkout_root: None,
+                replay_transcript: None,
+                model: "gemini-3.7-flash",
+                permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+                personality_prompt: None,
+                prompt: "Review the supplied diff",
+                reasoning_level: ReasoningLevel::default(),
+                request_kind: &utility_request_kind(),
+                speed_mode: crate::model::session::SpeedMode::default(),
+            },
+        )
+        .expect("command should build");
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(args, vec!["--acp", "--model", "gemini-3.7-flash"]);
     }
 }
