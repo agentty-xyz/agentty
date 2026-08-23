@@ -156,9 +156,9 @@ State-specific differences:
   the running turn. Each `Ctrl+c` retracts the newest queued message; when the queue is
   empty, `Ctrl+c` stops the active turn.
 
-- **Rebasing** sessions use `Enter` to queue a follow-up message behind the active
-  session sync. Slash commands and branch actions remain unavailable until sync
-  finishes.
+- **Rebasing** sessions use `Enter` to queue a follow-up message and keep `p` available
+  to queue review-request creation behind the active session sync. Slash commands and
+  other branch actions remain unavailable until sync finishes.
 
 - Root **Review** and **AgentReview** sessions offer `F` to fork the current branch and
   copied transcript history into a new independent session; stacked children hide `F`.

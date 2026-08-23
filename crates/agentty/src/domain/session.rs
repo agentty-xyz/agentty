@@ -585,7 +585,7 @@ impl Session {
     }
 
     /// Returns the review-request publish action currently available in session
-    /// view, including queueing behind an active turn.
+    /// view, including queueing behind active turn or rebase work.
     pub fn publish_pull_request_action(&self) -> Option<PublishBranchAction> {
         let is_publish_active = self
             .transient_messages
@@ -594,7 +594,8 @@ impl Session {
 
         (self.accepts_user_turns()
             && self.owns_branch_changes()
-            && (self.status.allows_review_actions() || self.status == Status::InProgress)
+            && (self.status.allows_review_actions()
+                || matches!(self.status, Status::InProgress | Status::Rebasing))
             && !is_publish_active)
             .then_some(PublishBranchAction::PublishPullRequest)
     }
@@ -2286,51 +2287,22 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
-    fn test_publish_pull_request_action_queues_for_in_progress_session() {
+    fn test_publish_pull_request_action_queues_for_active_session() {
         // Arrange
-        let session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::new(),
-            follow_up_tasks: Vec::new(),
-            id: "session-id".into(),
-            in_progress_started_at: Some(60),
-            in_progress_total_seconds: 120,
-            is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
-            agent: AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini37Flash,
-            ),
-            parent_session_id: None,
-            permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
-            personality_id: None,
-            project_name: "project".to_string(),
-            prompt: String::new(),
-            queued_messages: Vec::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: Some("origin/wt/session-id".to_string()),
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            speed_mode: SpeedMode::default(),
-            stats: SessionStats::default(),
-            status: Status::InProgress,
-            summary: None,
-            title: None,
-            transcript: None,
-            updated_at: 0,
-            transient_messages: TransientMessageStore::default(),
-        };
+        let sessions = [Status::InProgress, Status::Rebasing]
+            .map(|status| SessionFixtureBuilder::new().status(status).build());
 
         // Act
-        let action = session.publish_pull_request_action();
+        let actions = sessions.map(|session| session.publish_pull_request_action());
 
         // Assert
-        assert_eq!(action, Some(PublishBranchAction::PublishPullRequest));
+        assert_eq!(
+            actions,
+            [
+                Some(PublishBranchAction::PublishPullRequest),
+                Some(PublishBranchAction::PublishPullRequest),
+            ]
+        );
     }
 
     #[test]

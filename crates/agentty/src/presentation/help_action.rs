@@ -1189,7 +1189,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_rebasing_shows_queue_and_hides_open_and_stop() {
+    fn test_view_actions_rebasing_shows_queue_publish_and_hides_open_and_stop() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
@@ -1200,7 +1200,7 @@ mod tests {
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
-            publish_pull_request_action: None,
+            publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Rebasing,
         };
 
@@ -1213,6 +1213,7 @@ mod tests {
                 .iter()
                 .any(|action| { action.key == "Enter" && action.popup_label == "Queue message" })
         );
+        assert!(actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(!actions.iter().any(|action| action.key == "d"));
@@ -1715,7 +1716,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_footer_actions_rebasing_shows_queue_and_hides_open_and_stop() {
+    fn test_view_footer_actions_rebasing_shows_queue_publish_and_hides_open_and_stop() {
         // Arrange
         let state = ViewHelpState {
             can_fork_session: ViewActionAvailability::Enabled,
@@ -1726,7 +1727,7 @@ mod tests {
             can_open_worktree: ViewActionAvailability::Enabled,
             reply_to_session: ViewActionAvailability::Enabled,
             can_start_staged_session: ViewActionAvailability::Disabled,
-            publish_pull_request_action: None,
+            publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Rebasing,
         };
 
@@ -1735,7 +1736,7 @@ mod tests {
 
         // Assert
         assert!(!actions.iter().any(|action| action.key == "o"));
-        assert!(!actions.iter().any(|action| action.key == "p"));
+        assert!(actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(
             actions
