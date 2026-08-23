@@ -1,7 +1,10 @@
 use std::collections::VecDeque;
+use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::task::{Context as TaskContext, Poll};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
@@ -92,6 +95,8 @@ pub enum LifecycleEventKind {
         duration: Duration,
         /// Stable failure classification.
         error_type: ModelErrorType,
+        /// Provider HTTP status used as `error.type`, when available.
+        http_status: Option<u16>,
         /// Identifier shared by this request's lifecycle events.
         model_call_id: LifecycleId,
         /// Owning turn, or `None` for a standalone model request.
@@ -108,6 +113,8 @@ pub enum LifecycleEventKind {
     },
     /// The model requested one tool operation.
     ToolRequested {
+        /// Provider-assigned identifier for this tool call.
+        provider_call_id: String,
         /// Identifier shared by this tool operation's lifecycle events.
         tool_call_id: LifecycleId,
         /// Bounded built-in tool name.
@@ -225,7 +232,20 @@ impl ToolErrorType {
 pub trait LifecycleObserver: Send + Sync {
     /// Receives one event before the operation continues.
     fn observe(&self, event: LifecycleEvent);
+
+    /// Enters ambient state for one poll of the identified operation.
+    #[doc(hidden)]
+    fn enter_operation(
+        &self,
+        _operation_id: LifecycleId,
+    ) -> Option<Box<dyn LifecycleOperationGuard>> {
+        None
+    }
 }
+
+/// Guard for ambient state installed while an operation future is polled.
+#[doc(hidden)]
+pub trait LifecycleOperationGuard {}
 
 impl<Observe> LifecycleObserver for Observe
 where
@@ -305,6 +325,60 @@ impl LifecycleObserver for LifecycleObserverSet {
             event = next_event;
         }
     }
+
+    fn enter_operation(
+        &self,
+        operation_id: LifecycleId,
+    ) -> Option<Box<dyn LifecycleOperationGuard>> {
+        let guards = self
+            .observers
+            .iter()
+            .filter_map(|observer| {
+                catch_unwind(AssertUnwindSafe(|| observer.enter_operation(operation_id)))
+                    .ok()
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        (!guards.is_empty()).then(|| {
+            Box::new(LifecycleOperationGuardSet { guards }) as Box<dyn LifecycleOperationGuard>
+        })
+    }
+}
+
+struct LifecycleOperationGuardSet {
+    guards: Vec<Box<dyn LifecycleOperationGuard>>,
+}
+
+impl LifecycleOperationGuard for LifecycleOperationGuardSet {}
+
+impl Drop for LifecycleOperationGuardSet {
+    fn drop(&mut self) {
+        while let Some(guard) = self.guards.pop() {
+            drop_operation_guard(guard);
+        }
+    }
+}
+
+struct IsolatedLifecycleOperationGuard {
+    guard: Option<Box<dyn LifecycleOperationGuard>>,
+}
+
+impl IsolatedLifecycleOperationGuard {
+    fn new(guard: Option<Box<dyn LifecycleOperationGuard>>) -> Self {
+        Self { guard }
+    }
+}
+
+impl Drop for IsolatedLifecycleOperationGuard {
+    fn drop(&mut self) {
+        if let Some(guard) = self.guard.take() {
+            drop_operation_guard(guard);
+        }
+    }
+}
+
+fn drop_operation_guard(guard: Box<dyn LifecycleOperationGuard>) {
+    let _ = catch_unwind(AssertUnwindSafe(|| drop(guard)));
 }
 
 #[derive(Default)]
@@ -370,12 +444,14 @@ impl LifecycleEmitter {
 
     pub(crate) fn request_tool(
         &self,
+        provider_call_id: String,
         tool_name: String,
         turn_id: Option<LifecycleId>,
     ) -> Option<ToolLifecycle> {
         let turn_id = turn_id?;
         let tool_call_id = self.next_id()?;
         self.emit(LifecycleEventKind::ToolRequested {
+            provider_call_id,
             tool_call_id,
             tool_name,
             turn_id,
@@ -407,6 +483,44 @@ impl LifecycleEmitter {
         };
 
         let _ = catch_unwind(AssertUnwindSafe(|| state.observer.observe(event)));
+    }
+
+    fn scope<F>(&self, operation_id: LifecycleId, future: F) -> LifecycleOperation<F>
+    where
+        F: Future,
+    {
+        LifecycleOperation {
+            future: Box::pin(future),
+            observer: self.state.as_ref().map(|state| Arc::clone(&state.observer)),
+            operation_id,
+        }
+    }
+}
+
+struct LifecycleOperation<F> {
+    future: Pin<Box<F>>,
+    observer: Option<Arc<dyn LifecycleObserver>>,
+    operation_id: LifecycleId,
+}
+
+impl<F> Future for LifecycleOperation<F>
+where
+    F: Future,
+{
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, task_context: &mut TaskContext<'_>) -> Poll<Self::Output> {
+        let operation = self.get_mut();
+        let guard = operation.observer.as_ref().and_then(|observer| {
+            catch_unwind(AssertUnwindSafe(|| {
+                observer.enter_operation(operation.operation_id)
+            }))
+            .ok()
+            .flatten()
+        });
+        let _guard = IsolatedLifecycleOperationGuard::new(guard);
+
+        operation.future.as_mut().poll(task_context)
     }
 }
 
@@ -533,6 +647,13 @@ pub(crate) struct ModelRequestLifecycle {
 }
 
 impl ModelRequestLifecycle {
+    pub(crate) fn scope<F>(&self, future: F) -> impl Future<Output = F::Output>
+    where
+        F: Future,
+    {
+        self.emitter.scope(self.model_call_id, future)
+    }
+
     pub(crate) fn completed(
         mut self,
         completion: Option<CompletionMetadata>,
@@ -549,11 +670,12 @@ impl ModelRequestLifecycle {
             });
     }
 
-    pub(crate) fn failed(mut self, error_type: ModelErrorType) {
+    pub(crate) fn failed(mut self, error_type: ModelErrorType, http_status: Option<u16>) {
         self.active = false;
         self.emitter.emit(LifecycleEventKind::ModelRequestFailed {
             duration: self.started_at.elapsed(),
             error_type,
+            http_status,
             model_call_id: self.model_call_id,
             turn_id: self.turn_id,
         });
@@ -582,6 +704,13 @@ pub(crate) struct ToolLifecycle {
 }
 
 impl ToolLifecycle {
+    pub(crate) fn scope<F>(&self, future: F) -> impl Future<Output = F::Output>
+    where
+        F: Future,
+    {
+        self.emitter.scope(self.tool_call_id, future)
+    }
+
     pub(crate) fn started(&mut self) {
         self.emitter.emit(LifecycleEventKind::ToolStarted {
             tool_call_id: self.tool_call_id,
@@ -634,12 +763,50 @@ impl Drop for ToolLifecycle {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::{Barrier, Mutex, mpsc};
 
     use super::*;
 
     fn completion_metadata() -> CompletionMetadata {
         CompletionMetadata::new("stop".to_string(), None, None, None, None)
+    }
+
+    fn emit_tool_terminal_events(emitter: &LifecycleEmitter, turn_id: LifecycleId) {
+        let mut completed_tool = emitter
+            .request_tool(
+                "provider-completed".to_string(),
+                "read".to_string(),
+                Some(turn_id),
+            )
+            .expect("tool should be observed");
+        completed_tool.started();
+        completed_tool.completed();
+        emitter
+            .request_tool(
+                "provider-denied".to_string(),
+                "read".to_string(),
+                Some(turn_id),
+            )
+            .expect("tool should be observed")
+            .denied();
+        emitter
+            .request_tool(
+                "provider-failed".to_string(),
+                "read".to_string(),
+                Some(turn_id),
+            )
+            .expect("tool should be observed")
+            .failed(ToolErrorType::CallLimit);
+        drop(
+            emitter
+                .request_tool(
+                    "provider-cancelled".to_string(),
+                    "read".to_string(),
+                    Some(turn_id),
+                )
+                .expect("tool should be observed"),
+        );
     }
 
     fn recording_emitter() -> (LifecycleEmitter, Arc<Mutex<Vec<LifecycleEvent>>>) {
@@ -653,6 +820,129 @@ mod tests {
         });
 
         (emitter, events)
+    }
+
+    struct CountingOperationGuard {
+        active_scopes: Arc<AtomicUsize>,
+        panics_on_drop: bool,
+    }
+
+    impl LifecycleOperationGuard for CountingOperationGuard {}
+
+    impl Drop for CountingOperationGuard {
+        fn drop(&mut self) {
+            self.active_scopes.fetch_sub(1, AtomicOrdering::SeqCst);
+            if self.panics_on_drop {
+                std::panic::resume_unwind(Box::new("operation guard drop failed"));
+            }
+        }
+    }
+
+    struct ScopeObserver {
+        active_scopes: Arc<AtomicUsize>,
+        panics_on_drop: bool,
+        panics_on_enter: bool,
+    }
+
+    impl LifecycleObserver for ScopeObserver {
+        fn observe(&self, _event: LifecycleEvent) {}
+
+        fn enter_operation(
+            &self,
+            _operation_id: LifecycleId,
+        ) -> Option<Box<dyn LifecycleOperationGuard>> {
+            if self.panics_on_enter {
+                std::panic::resume_unwind(Box::new("operation scope failed"));
+            }
+            self.active_scopes.fetch_add(1, AtomicOrdering::SeqCst);
+
+            Some(Box::new(CountingOperationGuard {
+                active_scopes: Arc::clone(&self.active_scopes),
+                panics_on_drop: self.panics_on_drop,
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn observer_set_composes_operation_scopes_and_isolates_all_panics() {
+        // Arrange
+        let active_scopes = Arc::new(AtomicUsize::new(0));
+        let observers = LifecycleObserverSet::new(ScopeObserver {
+            active_scopes: Arc::clone(&active_scopes),
+            panics_on_drop: false,
+            panics_on_enter: true,
+        })
+        .with_observer(ScopeObserver {
+            active_scopes: Arc::clone(&active_scopes),
+            panics_on_drop: false,
+            panics_on_enter: false,
+        })
+        .with_observer(ScopeObserver {
+            active_scopes: Arc::clone(&active_scopes),
+            panics_on_drop: true,
+            panics_on_enter: false,
+        });
+        let emitter = LifecycleEmitter::new(observers);
+        let request = emitter
+            .start_model_request(None, 0, None)
+            .expect("model request should be observed");
+
+        // Act
+        let active_during_operation = request
+            .scope(async {
+                tokio::task::yield_now().await;
+
+                active_scopes.load(AtomicOrdering::SeqCst)
+            })
+            .await;
+
+        // Assert
+        assert_eq!(active_during_operation, 2);
+        assert_eq!(active_scopes.load(AtomicOrdering::SeqCst), 0);
+        request.completed(None, ModelResponseType::Output);
+    }
+
+    #[tokio::test]
+    async fn direct_operation_scope_panic_does_not_change_control_flow() {
+        // Arrange
+        let active_scopes = Arc::new(AtomicUsize::new(0));
+        let emitter = LifecycleEmitter::new(ScopeObserver {
+            active_scopes,
+            panics_on_drop: false,
+            panics_on_enter: true,
+        });
+        let request = emitter
+            .start_model_request(None, 0, None)
+            .expect("model request should be observed");
+
+        // Act
+        let output = request.scope(async { 42 }).await;
+
+        // Assert
+        assert_eq!(output, 42);
+        request.completed(None, ModelResponseType::Output);
+    }
+
+    #[tokio::test]
+    async fn direct_operation_guard_drop_panic_does_not_change_control_flow() {
+        // Arrange
+        let active_scopes = Arc::new(AtomicUsize::new(0));
+        let emitter = LifecycleEmitter::new(ScopeObserver {
+            active_scopes: Arc::clone(&active_scopes),
+            panics_on_drop: true,
+            panics_on_enter: false,
+        });
+        let request = emitter
+            .start_model_request(None, 0, None)
+            .expect("model request should be observed");
+
+        // Act
+        let output = request.scope(async { 42 }).await;
+
+        // Assert
+        assert_eq!(output, 42);
+        assert_eq!(active_scopes.load(AtomicOrdering::SeqCst), 0);
+        request.completed(None, ModelResponseType::Output);
     }
 
     #[test]
@@ -757,30 +1047,13 @@ mod tests {
         emitter
             .start_model_request(None, 1, Some(turn_id))
             .expect("model request should be observed")
-            .failed(ModelErrorType::Provider);
+            .failed(ModelErrorType::Provider, Some(503));
         drop(
             emitter
                 .start_model_request(None, 2, Some(turn_id))
                 .expect("model request should be observed"),
         );
-        let mut completed_tool = emitter
-            .request_tool("read".to_string(), Some(turn_id))
-            .expect("tool should be observed");
-        completed_tool.started();
-        completed_tool.completed();
-        emitter
-            .request_tool("read".to_string(), Some(turn_id))
-            .expect("tool should be observed")
-            .denied();
-        emitter
-            .request_tool("read".to_string(), Some(turn_id))
-            .expect("tool should be observed")
-            .failed(ToolErrorType::CallLimit);
-        drop(
-            emitter
-                .request_tool("read".to_string(), Some(turn_id))
-                .expect("tool should be observed"),
-        );
+        emit_tool_terminal_events(&emitter, turn_id);
 
         // Assert
         let events = events
@@ -846,7 +1119,7 @@ mod tests {
         // Act
         let turn = emitter.start_turn();
         let model_request = emitter.start_model_request(None, 0, None);
-        let tool = emitter.request_tool("read".to_string(), None);
+        let tool = emitter.request_tool("provider-call".to_string(), "read".to_string(), None);
         emitter.emit(LifecycleEventKind::TurnStarted {
             turn_id: LifecycleId(0),
         });
@@ -985,7 +1258,11 @@ mod tests {
         });
         let turn_id = LifecycleId(0);
         let mut tool = emitter
-            .request_tool("read".to_string(), Some(turn_id))
+            .request_tool(
+                "provider-call".to_string(),
+                "read".to_string(),
+                Some(turn_id),
+            )
             .expect("tool should be observed");
 
         // Act

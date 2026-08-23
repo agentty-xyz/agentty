@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use ag_harness::{
     CompletionMetadata, CompletionUsage, Harness, LifecycleEventKind, LifecycleMetrics,
-    LifecycleObserverSet, Model, ModelCompletion, ModelError, ModelRequest, ModelResponse,
-    ModelWithMetadata, OutputSchema, OutputSchemaError,
+    LifecycleObserverSet, LifecycleTraceObserver, Model, ModelCompletion, ModelError,
+    ModelMetadata, ModelRequest, ModelResponse, ModelWithMetadata, OutputSchema, OutputSchemaError,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -24,6 +24,10 @@ struct ExternalMetadataModel;
 
 #[async_trait]
 impl ModelWithMetadata for ExternalMetadataModel {
+    fn metadata(&self) -> Option<ModelMetadata> {
+        ModelMetadata::new("external_provider", "external-model").ok()
+    }
+
     async fn complete_with_metadata(
         &self,
         _request: ModelRequest,
@@ -42,6 +46,17 @@ impl ModelWithMetadata for ExternalMetadataModel {
             ModelResponse::Output(json!({ "name": "Ada" })),
         ))
     }
+}
+
+fn assert_observer<Observer: ag_harness::LifecycleObserver>(_observer: Observer) {}
+
+#[test]
+fn external_consumer_constructs_lifecycle_trace_observer() {
+    // Arrange & Act
+    let observer = LifecycleTraceObserver::new();
+
+    // Assert
+    assert_observer(observer);
 }
 
 fn request() -> Result<ModelRequest, OutputSchemaError> {
@@ -80,10 +95,15 @@ async fn external_provider_constructs_metadata_completion_through_dynamic_dispat
     let model: Box<dyn ModelWithMetadata> = Box::new(ExternalMetadataModel);
 
     // Act
+    let configured_metadata = model
+        .metadata()
+        .expect("external provider should expose configured identity");
     let completion = model.complete_with_metadata(request()?).await?;
 
     // Assert
     assert_model::<ExternalMetadataModel>();
+    assert_eq!(configured_metadata.provider(), "external_provider");
+    assert_eq!(configured_metadata.model(), "external-model");
     assert_eq!(
         completion.response().output(),
         Some(&json!({ "name": "Ada" }))
@@ -125,6 +145,13 @@ async fn external_metadata_provider_reaches_harness_lifecycle() -> Result<(), Bo
     let events = events
         .lock()
         .expect("event recorder should not be poisoned");
+    assert!(events.iter().any(|event| matches!(
+        event.kind(),
+        LifecycleEventKind::ModelRequestStarted {
+            model: Some(model),
+            ..
+        } if model.provider() == "external_provider" && model.model() == "external-model"
+    )));
     assert!(events.iter().any(|event| matches!(
         event.kind(),
         LifecycleEventKind::ModelRequestCompleted {

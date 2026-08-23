@@ -187,16 +187,17 @@ impl Harness {
     ) -> Result<ModelResponse, TurnError> {
         let model_lifecycle =
             self.lifecycle
-                .start_model_request(None, model_request_index, turn_id);
-        let (response, completion) = match self
-            .model
-            .complete_with_optional_metadata(request.clone())
-            .await
-        {
+                .start_model_request(self.model.metadata(), model_request_index, turn_id);
+        let operation = self.model.complete_with_optional_metadata(request.clone());
+        let completion = match model_lifecycle.as_ref() {
+            Some(model_lifecycle) => model_lifecycle.scope(operation).await,
+            None => operation.await,
+        };
+        let (response, completion) = match completion {
             Ok(completion) => completion,
             Err(error) => {
                 if let Some(model_lifecycle) = model_lifecycle {
-                    model_lifecycle.failed(error.error_type());
+                    model_lifecycle.failed(error.error_type(), error.http_status());
                 }
 
                 return Err(error.into());
@@ -217,9 +218,9 @@ impl Harness {
         completed_tool_calls: usize,
         turn_id: Option<LifecycleId>,
     ) -> Result<String, TurnError> {
-        let mut tool_lifecycle = self
-            .lifecycle
-            .request_tool(call.name().to_string(), turn_id);
+        let mut tool_lifecycle =
+            self.lifecycle
+                .request_tool(call.id().to_string(), call.name().to_string(), turn_id);
         let execution = match call.arguments() {
             ToolCallArguments::Read(arguments) => {
                 read_tool.map(|tool| ToolExecution::Read(tool, arguments))
@@ -249,7 +250,12 @@ impl Harness {
         if let Some(tool_lifecycle) = tool_lifecycle.as_mut() {
             tool_lifecycle.started();
         }
-        match execute_tool(execution).await {
+        let operation = execute_tool(execution);
+        let result = match tool_lifecycle.as_ref() {
+            Some(tool_lifecycle) => tool_lifecycle.scope(operation).await,
+            None => operation.await,
+        };
+        match result {
             Ok(result) => {
                 if let Some(tool_lifecycle) = tool_lifecycle {
                     tool_lifecycle.completed();
@@ -348,7 +354,14 @@ mod tests {
 
     use super::*;
     use crate::file_system::MockFileSystem;
-    use crate::model::{MockModel, ModelMessage};
+    use crate::model::ModelMessage;
+
+    fn model() -> crate::model::MockModel {
+        let mut model = crate::model::MockModel::new();
+        model.expect_metadata().return_const(None);
+
+        model
+    }
 
     fn object_schema() -> OutputSchema {
         OutputSchema::new(json!({
@@ -462,10 +475,13 @@ mod tests {
         assert!(matches!(
             events[3].kind(),
             crate::LifecycleEventKind::ToolRequested {
+                provider_call_id,
                 tool_name,
                 turn_id: event_turn_id,
                 ..
-            } if tool_name == "read" && *event_turn_id == turn_id
+            } if provider_call_id == "provider-call-id"
+                && tool_name == "read"
+                && *event_turn_id == turn_id
         ));
         assert!(matches!(
             events[4].kind(),
@@ -514,7 +530,7 @@ mod tests {
     #[tokio::test]
     async fn completes_read_tool_round_trip() {
         // Arrange
-        let mut model = MockModel::new();
+        let mut model = model();
         let call_count = Arc::new(AtomicUsize::new(0));
         model
             .expect_complete_with_optional_metadata()
@@ -572,7 +588,7 @@ mod tests {
     #[tokio::test]
     async fn emits_correlated_lifecycle_for_read_tool_round_trip() {
         // Arrange
-        let mut model = MockModel::new();
+        let mut model = model();
         let call_count = Arc::new(AtomicUsize::new(0));
         model
             .expect_complete_with_optional_metadata()
@@ -624,14 +640,13 @@ mod tests {
         assert_read_tool_lifecycle(&events);
         let event_debug = format!("{events:?}");
         assert!(!event_debug.contains("sensitive prompt"));
-        assert!(!event_debug.contains("provider-call-id"));
         assert!(!event_debug.contains("[workspace]"));
     }
 
     #[tokio::test]
     async fn requires_repository_when_read_is_allowed() {
         // Arrange
-        let mut model = MockModel::new();
+        let mut model = model();
         model.expect_complete_with_optional_metadata().times(0);
         let harness = Harness::new(model)
             .allow(Tool::Read)
@@ -652,7 +667,7 @@ mod tests {
     async fn completes_write_tool_round_trip() {
         // Arrange
         let patch = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n";
-        let mut model = MockModel::new();
+        let mut model = model();
         let call_count = Arc::new(AtomicUsize::new(0));
         model
             .expect_complete_with_optional_metadata()
@@ -722,7 +737,7 @@ mod tests {
     #[tokio::test]
     async fn returns_correctable_write_rejection_to_model() {
         // Arrange
-        let mut model = MockModel::new();
+        let mut model = model();
         let call_count = Arc::new(AtomicUsize::new(0));
         model
             .expect_complete_with_optional_metadata()
@@ -772,7 +787,7 @@ mod tests {
     #[tokio::test]
     async fn returns_terminal_write_boundary_failure() {
         // Arrange
-        let mut model = MockModel::new();
+        let mut model = model();
         model
             .expect_complete_with_optional_metadata()
             .times(1)
@@ -811,7 +826,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_write_call_when_policy_denies_write() {
         // Arrange
-        let mut model = MockModel::new();
+        let mut model = model();
         model
             .expect_complete_with_optional_metadata()
             .times(1)
@@ -849,7 +864,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_tool_call_when_policy_denies_read() {
         // Arrange
-        let mut model = MockModel::new();
+        let mut model = model();
         model
             .expect_complete_with_optional_metadata()
             .times(1)
@@ -885,7 +900,7 @@ mod tests {
     #[tokio::test]
     async fn enforces_tool_call_limit() {
         // Arrange
-        let mut model = MockModel::new();
+        let mut model = model();
         model
             .expect_complete_with_optional_metadata()
             .times(2)
@@ -915,7 +930,7 @@ mod tests {
     #[tokio::test]
     async fn returns_typed_read_failure() {
         // Arrange
-        let mut model = MockModel::new();
+        let mut model = model();
         model
             .expect_complete_with_optional_metadata()
             .times(1)
@@ -952,7 +967,7 @@ mod tests {
     #[tokio::test]
     async fn returns_typed_model_failure() {
         // Arrange
-        let mut model = MockModel::new();
+        let mut model = model();
         model
             .expect_complete_with_optional_metadata()
             .times(1)

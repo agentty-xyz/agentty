@@ -16,13 +16,14 @@ mod read;
 mod schema_contract;
 mod telemetry;
 mod tool;
+mod trace;
 mod write;
 
 pub use file_system::{FileSystem, LocalFileSystem};
 pub use harness::{Harness, TurnError};
 pub use lifecycle::{
     LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, LifecycleObserverSet,
-    ModelResponseType, ToolErrorType, TurnErrorType,
+    LifecycleOperationGuard, ModelResponseType, ToolErrorType, TurnErrorType,
 };
 pub use model::{
     CompletionMetadata, CompletionUsage, Model, ModelClient, ModelCompletion, ModelError,
@@ -36,4 +37,5 @@ pub use read::{ReadError, ReadOutput};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use telemetry::LifecycleMetrics;
 pub use tool::{ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments};
+pub use trace::LifecycleTraceObserver;
 pub use write::{WriteError, WriteOutput};

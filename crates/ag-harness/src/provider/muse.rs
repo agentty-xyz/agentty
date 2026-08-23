@@ -5,7 +5,8 @@ use thiserror::Error;
 
 use crate::lifecycle::LifecycleObserver;
 use crate::model::{
-    ModelClient, ModelCompletion, ModelError, ModelMetadataError, ModelRequest, ModelWithMetadata,
+    ModelClient, ModelCompletion, ModelError, ModelMetadata, ModelMetadataError, ModelRequest,
+    ModelWithMetadata,
 };
 use crate::{chat_completion, telemetry};
 
@@ -73,6 +74,10 @@ impl Muse {
 
 #[async_trait]
 impl ModelWithMetadata for Muse {
+    fn metadata(&self) -> Option<ModelMetadata> {
+        Some(self.client.metadata().clone())
+    }
+
     async fn complete_with_metadata(
         &self,
         request: ModelRequest,
@@ -191,10 +196,12 @@ mod tests {
         // Arrange and Act
         let muse = Muse::from_environment(MUSE_SPARK_1_2, default_environment)
             .expect("fixture environment should be valid");
+        let metadata = ModelWithMetadata::metadata(&muse)
+            .expect("Muse should expose its configured model identity");
 
         // Assert
-        assert_eq!(muse.client.metadata().provider(), "meta");
-        assert_eq!(muse.client.metadata().model(), MUSE_SPARK_1_2);
+        assert_eq!(metadata.provider(), "meta");
+        assert_eq!(metadata.model(), MUSE_SPARK_1_2);
     }
 
     #[test]

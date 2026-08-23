@@ -9,12 +9,23 @@ use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleId, Lifecycl
 use crate::model::{CompletionMetadata, ModelError, ModelMetadata};
 
 pub(crate) const ATTRIBUTE_ERROR_TYPE: &str = "error.type";
-pub(crate) const ATTRIBUTE_TOOL_NAME: &str = "gen_ai.tool.name";
-pub(crate) const ATTRIBUTE_TOOL_TYPE: &str = "gen_ai.tool.type";
+pub(crate) const ATTRIBUTE_OUTPUT_TYPE: &str = "gen_ai.output.type";
 pub(crate) const ATTRIBUTE_OPERATION_NAME: &str = "gen_ai.operation.name";
 pub(crate) const ATTRIBUTE_PROVIDER_NAME: &str = "gen_ai.provider.name";
 pub(crate) const ATTRIBUTE_REQUEST_MODEL: &str = "gen_ai.request.model";
+pub(crate) const ATTRIBUTE_RESPONSE_FINISH_REASONS: &str = "gen_ai.response.finish_reasons";
+pub(crate) const ATTRIBUTE_RESPONSE_ID: &str = "gen_ai.response.id";
+pub(crate) const ATTRIBUTE_RESPONSE_MODEL: &str = "gen_ai.response.model";
 pub(crate) const ATTRIBUTE_TOKEN_TYPE: &str = "gen_ai.token.type";
+pub(crate) const ATTRIBUTE_TOOL_CALL_ID: &str = "gen_ai.tool.call.id";
+pub(crate) const ATTRIBUTE_TOOL_NAME: &str = "gen_ai.tool.name";
+pub(crate) const ATTRIBUTE_TOOL_TYPE: &str = "gen_ai.tool.type";
+pub(crate) const ATTRIBUTE_USAGE_CACHE_READ_INPUT_TOKENS: &str =
+    "gen_ai.usage.cache_read.input_tokens";
+pub(crate) const ATTRIBUTE_USAGE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";
+pub(crate) const ATTRIBUTE_USAGE_OUTPUT_TOKENS: &str = "gen_ai.usage.output_tokens";
+pub(crate) const ATTRIBUTE_USAGE_REASONING_OUTPUT_TOKENS: &str =
+    "gen_ai.usage.reasoning.output_tokens";
 pub(crate) const DURATION_BOUNDARIES_SECONDS: [f64; 14] = [
     0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
 ];
@@ -22,10 +33,6 @@ pub(crate) const DURATION_DESCRIPTION: &str = "GenAI operation duration.";
 pub(crate) const DURATION_METRIC: &str = "gen_ai.client.operation.duration";
 pub(crate) const DURATION_UNIT: &str = "s";
 pub(crate) const ERROR_CANCELLED: &str = "cancelled";
-pub(crate) const ERROR_REPOSITORY_REQUIRED: &str = "repository_required";
-pub(crate) const ERROR_TOOL_CALL_LIMIT: &str = "tool_call_limit";
-pub(crate) const ERROR_TOOL_DENIED: &str = "tool_denied";
-pub(crate) const ERROR_TOOL_EXECUTION: &str = "tool_execution_error";
 pub(crate) const ERROR_INVALID_OUTPUT: &str = "invalid_output";
 pub(crate) const ERROR_INVALID_PROVIDER_RESPONSE: &str = "invalid_provider_response";
 pub(crate) const ERROR_INVALID_RESPONSE: &str = "invalid_response";
@@ -34,9 +41,16 @@ pub(crate) const ERROR_PROVIDER: &str = "provider_error";
 pub(crate) const ERROR_REQUEST: &str = "request_error";
 pub(crate) const ERROR_RESPONSE_TOO_LARGE: &str = "response_too_large";
 pub(crate) const ERROR_TRANSPORT: &str = "transport_error";
+pub(crate) const ERROR_TOOL_CALL_LIMIT: &str = "tool_call_limit";
+pub(crate) const ERROR_TOOL_DENIED: &str = "tool_denied";
+pub(crate) const ERROR_TOOL_EXECUTION: &str = "tool_execution_error";
+pub(crate) const ERROR_REPOSITORY_REQUIRED: &str = "repository_required";
 pub(crate) const ERROR_UNSUPPORTED_OUTPUT: &str = "unsupported_output";
 pub(crate) const INSTRUMENTATION_SCOPE: &str = "ag-harness";
 pub(crate) const OPERATION_CHAT: &str = "chat";
+pub(crate) const OPERATION_EXECUTE_TOOL: &str = "execute_tool";
+pub(crate) const OPERATION_INVOKE_AGENT: &str = "invoke_agent";
+pub(crate) const OUTPUT_JSON: &str = "json";
 pub(crate) const PROVIDER_ALIBABA_CLOUD: &str = "alibaba_cloud";
 pub(crate) const PROVIDER_META: &str = "meta";
 pub(crate) const PROVIDER_MOONSHOT_AI: &str = "moonshot_ai";
@@ -80,7 +94,7 @@ const AGENT_TOOL_CALLS_METRIC: &str = "gen_ai.invoke_agent.tool_calls";
 const AGENT_TOOL_CALLS_UNIT: &str = "{tool_call}";
 const TOOL_DURATION_DESCRIPTION: &str = "The duration of a single tool execution.";
 const TOOL_DURATION_METRIC: &str = "gen_ai.execute_tool.duration";
-const TOOL_TYPE_FUNCTION: &str = "function";
+pub(crate) const TOOL_TYPE_FUNCTION: &str = "function";
 
 /// OpenTelemetry metric projection over ordered harness lifecycle events.
 ///
@@ -211,6 +225,7 @@ impl LifecycleMetricState {
                 tool_call_id,
                 tool_name,
                 turn_id,
+                ..
             } => {
                 if let Some(turn) = self.turns.get_mut(turn_id) {
                     turn.tool_calls += 1;
@@ -479,14 +494,22 @@ mod tests {
         lifecycle
             .start_model_request(None, 0, Some(denied_turn_id))
             .expect("observer should start a model request")
-            .failed(crate::model::ModelErrorType::InvalidOutput);
+            .failed(crate::model::ModelErrorType::InvalidOutput, None);
         let mut completed_tool = lifecycle
-            .request_tool("read".to_string(), Some(denied_turn_id))
+            .request_tool(
+                "completed-call".to_string(),
+                "read".to_string(),
+                Some(denied_turn_id),
+            )
             .expect("observer should request a tool");
         completed_tool.started();
         completed_tool.completed();
         lifecycle
-            .request_tool("write".to_string(), Some(denied_turn_id))
+            .request_tool(
+                "denied-call".to_string(),
+                "write".to_string(),
+                Some(denied_turn_id),
+            )
             .expect("observer should request a denied tool")
             .denied();
         denied_turn.failed(crate::lifecycle::TurnErrorType::ToolDenied);
@@ -496,7 +519,11 @@ mod tests {
             .expect("observer should start a turn");
         let failed_turn_id = failed_turn.id();
         let mut failed_tool = lifecycle
-            .request_tool("read".to_string(), Some(failed_turn_id))
+            .request_tool(
+                "failed-call".to_string(),
+                "read".to_string(),
+                Some(failed_turn_id),
+            )
             .expect("observer should request a tool");
         failed_tool.started();
         failed_tool.failed(crate::lifecycle::ToolErrorType::Execution);
@@ -512,7 +539,11 @@ mod tests {
                 .expect("observer should start a model request"),
         );
         let mut cancelled_tool = lifecycle
-            .request_tool("write".to_string(), Some(cancelled_turn_id))
+            .request_tool(
+                "cancelled-call".to_string(),
+                "write".to_string(),
+                Some(cancelled_turn_id),
+            )
             .expect("observer should request a tool");
         cancelled_tool.started();
         drop(cancelled_tool);
@@ -523,7 +554,11 @@ mod tests {
             .expect("observer should start a turn");
         let limited_turn_id = limited_turn.id();
         lifecycle
-            .request_tool("read".to_string(), Some(limited_turn_id))
+            .request_tool(
+                "limited-call".to_string(),
+                "read".to_string(),
+                Some(limited_turn_id),
+            )
             .expect("observer should request a limited tool")
             .failed(crate::lifecycle::ToolErrorType::CallLimit);
         limited_turn.failed(crate::lifecycle::TurnErrorType::ToolCallLimit);
