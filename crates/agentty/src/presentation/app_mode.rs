@@ -153,32 +153,66 @@ impl DiffLineCommentTarget {
     }
 }
 
-/// One editable comment attached to one or more changed diff rows.
+/// Repository file or changed source rows that own one diff comment.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DiffLineComment {
-    /// User-authored inline comment text.
-    pub(crate) input: InputState,
-    /// Changed source rows that own this comment.
-    pub(crate) target: DiffLineCommentTarget,
+pub enum DiffCommentTarget {
+    /// One complete changed file, independent of a source line.
+    File {
+        /// Repository-relative changed file path.
+        path: String,
+    },
+    /// One or more changed source rows.
+    Lines(DiffLineCommentTarget),
 }
 
-/// Inline comments accumulated while the unified diff remains open.
+impl DiffCommentTarget {
+    /// Creates a whole-file comment target.
+    pub(crate) fn file(path: impl Into<String>) -> Self {
+        Self::File { path: path.into() }
+    }
+
+    /// Builds one compact next-turn prompt line for this target.
+    fn prompt_line(&self, comment: &str) -> String {
+        match self {
+            Self::File { path } => format!("- {path}: {}", comment.trim()),
+            Self::Lines(target) => target.prompt_line(comment),
+        }
+    }
+}
+
+impl From<DiffLineCommentTarget> for DiffCommentTarget {
+    fn from(target: DiffLineCommentTarget) -> Self {
+        Self::Lines(target)
+    }
+}
+
+/// One editable comment attached to a changed file or source rows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiffLineComment {
+    /// User-authored diff comment text.
+    pub(crate) input: InputState,
+    /// Whole file or changed source rows that own this comment.
+    pub(crate) target: DiffCommentTarget,
+}
+
+/// File and inline comments accumulated while the unified diff remains open.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct DiffLineComments {
-    /// Comments retained in the order in which their lines were selected.
+    /// Comments retained in the order in which their targets were selected.
     pub(crate) comments: Vec<DiffLineComment>,
     /// Index of the comment currently receiving text input.
     pub(crate) editing_index: Option<usize>,
     /// Changed-row index where visual line selection started.
     pub(crate) selection_anchor_index: Option<usize>,
-    /// Inline comment currently selected for navigation, when any.
+    /// Diff comment currently selected for navigation, when any.
     pub(crate) selected_comment_index: Option<usize>,
 }
 
 impl DiffLineComments {
     /// Starts editing the existing comment for `target` or inserts a new one,
     /// retaining any active visual row selection until editing finishes.
-    pub(crate) fn start_editing_target(&mut self, target: DiffLineCommentTarget) -> usize {
+    pub(crate) fn start_editing_target(&mut self, target: impl Into<DiffCommentTarget>) -> usize {
+        let target = target.into();
         let editing_index = self
             .comments
             .iter()
@@ -197,19 +231,19 @@ impl DiffLineComments {
         editing_index
     }
 
-    /// Selects an existing inline comment for navigation and editing.
+    /// Selects an existing diff comment for navigation and editing.
     pub(crate) fn select_comment(&mut self, comment_index: usize) {
         self.selected_comment_index = self.comments.get(comment_index).map(|_| comment_index);
     }
 
-    /// Returns the selected inline comment index, when it is still valid.
+    /// Returns the selected diff comment index, when it is still valid.
     pub(crate) fn selected_comment_index(&self) -> Option<usize> {
         self.selected_comment_index
             .filter(|comment_index| self.comments.get(*comment_index).is_some())
     }
 
-    /// Returns the target owned by the selected inline comment.
-    pub(crate) fn selected_comment_target(&self) -> Option<&DiffLineCommentTarget> {
+    /// Returns the target owned by the selected diff comment.
+    pub(crate) fn selected_comment_target(&self) -> Option<&DiffCommentTarget> {
         self.selected_comment_index()
             .and_then(|comment_index| self.comments.get(comment_index))
             .map(|comment| &comment.target)
@@ -247,7 +281,7 @@ impl DiffLineComments {
         )
     }
 
-    /// Returns the input currently receiving inline comment keystrokes.
+    /// Returns the input currently receiving diff comment keystrokes.
     pub(crate) fn editing_input_mut(&mut self) -> Option<&mut InputState> {
         self.editing_index
             .and_then(|editing_index| self.comments.get_mut(editing_index))
@@ -270,25 +304,37 @@ impl DiffLineComments {
         }
     }
 
-    /// Returns whether an inline comment currently owns keyboard focus.
+    /// Returns whether a diff comment currently owns keyboard focus.
     pub(crate) fn is_editing(&self) -> bool {
         self.editing_index.is_some()
     }
 
-    /// Builds one next-turn prompt containing every completed comment.
+    /// Builds one next-turn prompt containing every completed file and line
+    /// comment.
     pub(crate) fn prompt_text(&self) -> String {
-        let comments = self
+        let mut file_comments = Vec::new();
+        let mut line_comments = Vec::new();
+        for comment in self
             .comments
             .iter()
             .filter(|comment| !comment.input.text().trim().is_empty())
-            .map(|comment| comment.target.prompt_line(comment.input.text()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        if comments.is_empty() {
-            return comments;
+        {
+            let prompt_line = comment.target.prompt_line(comment.input.text());
+            match &comment.target {
+                DiffCommentTarget::File { .. } => file_comments.push(prompt_line),
+                DiffCommentTarget::Lines(_) => line_comments.push(prompt_line),
+            }
         }
 
-        format!("Line comments:\n{comments}")
+        let mut sections = Vec::new();
+        if !file_comments.is_empty() {
+            sections.push(format!("File comments:\n{}", file_comments.join("\n")));
+        }
+        if !line_comments.is_empty() {
+            sections.push(format!("Line comments:\n{}", line_comments.join("\n")));
+        }
+
+        sections.join("\n\n")
     }
 }
 
@@ -634,7 +680,7 @@ impl DiffRestoreTarget {
     }
 }
 
-/// Returns whether the visible diff may collect and submit inline comments.
+/// Returns whether the visible diff may collect and submit diff comments.
 pub(crate) fn allows_diff_line_comment_reply(
     session: &Session,
     sessions: &[Session],
@@ -809,7 +855,7 @@ pub enum AppMode {
         file_explorer_selected_index: usize,
         /// Panel currently receiving changed-file navigation input.
         focus: DiffFocus,
-        /// Inline changed-line comments accumulated for the next turn.
+        /// File and inline comments accumulated for the next turn.
         line_comments: DiffLineComments,
         /// Sticky rendered-markdown preview state for the selected file.
         preview: DiffPreview,
@@ -900,7 +946,7 @@ pub enum HelpContext {
     },
     /// Diff-view help context and restorable diff state.
     Diff {
-        /// Whether this session may collect inline comments for a reply.
+        /// Whether this session may collect diff comments for a reply.
         can_comment: bool,
         /// Raw git diff to restore after help closes.
         diff: String,
@@ -908,7 +954,7 @@ pub enum HelpContext {
         file_explorer_selected_index: usize,
         /// Panel that held keyboard focus before help opened.
         focus: DiffFocus,
-        /// Inline changed-line comments accumulated before help opened.
+        /// File and inline comments accumulated before help opened.
         line_comments: DiffLineComments,
         /// Rendered-markdown preview state to restore.
         preview: DiffPreview,
@@ -1066,6 +1112,46 @@ mod tests {
 
         // Assert
         assert_eq!(line_comments.selected_comment_index(), None);
+    }
+
+    #[test]
+    fn test_diff_comments_build_file_and_line_prompt_sections() {
+        // Arrange
+        let mut comments = DiffLineComments::default();
+        let file_target = DiffCommentTarget::file("src/main.rs");
+        let line_target = DiffLineCommentTarget::single(DiffLineCommentAnchor {
+            content: "review();".to_string(),
+            line: 8,
+            path: "src/main.rs".to_string(),
+            side: DiffLineSide::New,
+        });
+        comments.start_editing_target(file_target.clone());
+        comments
+            .editing_input_mut()
+            .expect("file comment should be editable")
+            .insert_text("Review the module boundaries.");
+        comments.finish_editing();
+        comments.start_editing_target(line_target.clone());
+        comments
+            .editing_input_mut()
+            .expect("line comment should be editable")
+            .insert_text("Explain this call.");
+        comments.finish_editing();
+
+        // Act
+        let prompt = comments.prompt_text();
+
+        // Assert
+        assert_eq!(
+            prompt,
+            concat!(
+                "File comments:\n",
+                "- src/main.rs: Review the module boundaries.\n\n",
+                "Line comments:\n",
+                "- src/main.rs:8 [new]: Explain this call.",
+            )
+        );
+        assert_ne!(file_target, DiffCommentTarget::from(line_target));
     }
 
     #[test]

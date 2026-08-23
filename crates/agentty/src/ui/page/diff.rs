@@ -15,8 +15,8 @@ use rustc_hash::FxHasher;
 
 use crate::domain::session::Session;
 use crate::presentation::app_mode::{
-    DiffFocus, DiffLineComment, DiffLineCommentAnchor, DiffLineComments, DiffLineSide, DiffPreview,
-    DiffPreviewUnavailableReason, DiffReviewComments, DiffSidebarFocus,
+    DiffCommentTarget, DiffFocus, DiffLineComment, DiffLineCommentAnchor, DiffLineComments,
+    DiffLineSide, DiffPreview, DiffPreviewUnavailableReason, DiffReviewComments, DiffSidebarFocus,
 };
 use crate::presentation::{help_action, review_comment as review_comment_selection};
 use crate::ui::component::file_explorer::FileExplorer;
@@ -158,13 +158,20 @@ impl DiffContentSnapshot {
 
     /// Returns the selected repository-relative markdown file path.
     pub(crate) fn selected_markdown_path(&self, selected_index: usize) -> Option<&str> {
-        let FileTreeItem::File(path) = self.tree_items.get(selected_index)? else {
-            return None;
-        };
+        let path = self.selected_file_path(selected_index)?;
         let extension = Path::new(path).extension()?.to_str()?;
         if !extension.eq_ignore_ascii_case("md") {
             return None;
         }
+
+        Some(path)
+    }
+
+    /// Returns the repository-relative path for the selected file row.
+    pub(crate) fn selected_file_path(&self, selected_index: usize) -> Option<&str> {
+        let FileTreeItem::File(path) = self.tree_items.get(selected_index)? else {
+            return None;
+        };
 
         Some(path)
     }
@@ -521,17 +528,17 @@ pub(crate) struct DiffResolvedLayout {
     comment_insertions: Vec<DiffLineCommentInsertion>,
 }
 
-/// One inline comment row inserted after its changed source line.
+/// One diff comment row inserted adjacent to its file or changed rows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DiffLineCommentInsertion {
     comment: usize,
     display_row: usize,
     end_changed_line_index: usize,
+    highlight_changed_line_bounds: Option<(usize, usize)>,
     source_end: usize,
-    start_changed_line_index: usize,
 }
 
-/// Short-lived inputs used to paint one inline-comment diff viewport.
+/// Short-lived inputs used to paint one commented diff viewport.
 struct DiffVisibleLineRequest<'a> {
     comment_insertions: &'a [DiffLineCommentInsertion],
     comment_highlight_ranges: &'a [Range<usize>],
@@ -545,7 +552,7 @@ struct DiffVisibleLineRequest<'a> {
 }
 
 impl DiffResolvedLayout {
-    /// Adds inline comment rows to one cached source layout.
+    /// Adds file and inline comment rows to one cached source layout.
     fn with_line_comments(
         cached_layout: DiffCachedLayout,
         content: &DiffContentSnapshot,
@@ -585,7 +592,7 @@ impl DiffResolvedLayout {
         self.changed_line_ranges.len()
     }
 
-    /// Returns the next selectable source or inline-comment row.
+    /// Returns the next selectable source or diff-comment row.
     pub(crate) fn next_content_selection(
         &self,
         selected_changed_line_index: usize,
@@ -594,7 +601,7 @@ impl DiffResolvedLayout {
         self.adjacent_content_selection(selected_changed_line_index, selected_comment_index, true)
     }
 
-    /// Returns the previous selectable source or inline-comment row.
+    /// Returns the previous selectable source or diff-comment row.
     pub(crate) fn previous_content_selection(
         &self,
         selected_changed_line_index: usize,
@@ -655,7 +662,7 @@ impl DiffResolvedLayout {
         Some(start_range.start..end_range.end)
     }
 
-    /// Returns the rendered range for the selected source or inline-comment
+    /// Returns the rendered range for the selected source or diff-comment
     /// row.
     fn content_selection_range(
         &self,
@@ -777,23 +784,23 @@ impl DiffResolvedLayout {
         self.comment_insertions
             .iter()
             .filter_map(|insertion| {
-                self.changed_line_selection_range(
-                    insertion.start_changed_line_index,
-                    insertion.end_changed_line_index,
-                )
+                let (start_changed_line_index, end_changed_line_index) =
+                    insertion.highlight_changed_line_bounds?;
+
+                self.changed_line_selection_range(start_changed_line_index, end_changed_line_index)
             })
             .collect()
     }
 }
 
-/// One selectable source or inline-comment row in rendered order.
+/// One selectable source or diff-comment row in rendered order.
 struct DiffContentSelection {
     changed_line_index: usize,
     comment_index: Option<usize>,
     display_row: usize,
 }
 
-/// Resolves inline comment rows and their display positions for one file.
+/// Resolves diff comment rows and their display positions for one file.
 fn diff_line_comment_insertions(
     content: &DiffContentSnapshot,
     selected_file_index: usize,
@@ -805,21 +812,39 @@ fn diff_line_comment_insertions(
         .iter()
         .enumerate()
         .filter_map(|(comment_index, line_comment)| {
-            let start_changed_line_index = content.changed_line_index_for_anchor(
-                selected_file_index,
-                line_comment.target.first_anchor(),
-            )?;
-            let end_changed_line_index = content.changed_line_index_for_anchor(
-                selected_file_index,
-                line_comment.target.last_anchor(),
-            )?;
-            let insertion_index = changed_line_ranges.get(end_changed_line_index)?.end;
+            let (insertion_index, end_changed_line_index, highlight_changed_line_bounds) =
+                match &line_comment.target {
+                    DiffCommentTarget::File { path }
+                        if content.selected_file_path(selected_file_index)
+                            == Some(path.as_str()) =>
+                    {
+                        (0, 0, None)
+                    }
+                    DiffCommentTarget::File { .. } => return None,
+                    DiffCommentTarget::Lines(target) => {
+                        let start_changed_line_index = content.changed_line_index_for_anchor(
+                            selected_file_index,
+                            target.first_anchor(),
+                        )?;
+                        let end_changed_line_index = content.changed_line_index_for_anchor(
+                            selected_file_index,
+                            target.last_anchor(),
+                        )?;
+                        let insertion_index = changed_line_ranges.get(end_changed_line_index)?.end;
+
+                        (
+                            insertion_index,
+                            end_changed_line_index,
+                            Some((start_changed_line_index, end_changed_line_index)),
+                        )
+                    }
+                };
 
             Some((
                 insertion_index,
                 comment_index,
-                start_changed_line_index,
                 end_changed_line_index,
+                highlight_changed_line_bounds,
             ))
         })
         .collect::<Vec<_>>();
@@ -831,13 +856,13 @@ fn diff_line_comment_insertions(
         .map(
             |(
                 preceding_comment_count,
-                (insertion_index, comment, start_changed_line_index, end_changed_line_index),
+                (insertion_index, comment, end_changed_line_index, highlight_changed_line_bounds),
             )| DiffLineCommentInsertion {
                 comment,
                 display_row: insertion_index.saturating_add(preceding_comment_count),
                 end_changed_line_index,
+                highlight_changed_line_bounds,
                 source_end: insertion_index,
-                start_changed_line_index,
             },
         )
         .collect()
@@ -1087,7 +1112,7 @@ impl DiffLayoutCache {
 
 /// Renders the current session's git diff in a scrollable page.
 pub struct DiffPage<'a> {
-    /// Whether this session may collect inline comments for a reply.
+    /// Whether this session may collect diff comments for a reply.
     pub can_comment: bool,
     /// Raw unified diff currently shown by the page.
     pub diff: &'a str,
@@ -1097,7 +1122,7 @@ pub struct DiffPage<'a> {
     pub file_explorer_selected_index: usize,
     /// Panel currently receiving changed-file navigation input.
     pub focus: DiffFocus,
-    /// Inline changed-line comments accumulated for the next turn.
+    /// File and inline comments accumulated for the next turn.
     pub line_comments: &'a DiffLineComments,
     /// Shared cache for rendered markdown preview rows.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
@@ -1119,7 +1144,7 @@ pub struct DiffPage<'a> {
 /// Borrowed inputs required to construct a [`DiffPage`] for one frame.
 #[derive(Clone, Copy)]
 pub struct DiffPageInput<'a> {
-    /// Whether this session may collect inline comments for a reply.
+    /// Whether this session may collect diff comments for a reply.
     pub can_comment: bool,
     /// Raw unified diff currently shown by the page.
     pub diff: &'a str,
@@ -1129,7 +1154,7 @@ pub struct DiffPageInput<'a> {
     pub file_explorer_selected_index: usize,
     /// Panel currently receiving changed-file navigation input.
     pub focus: DiffFocus,
-    /// Inline changed-line comments accumulated for the next turn.
+    /// File and inline comments accumulated for the next turn.
     pub line_comments: &'a DiffLineComments,
     /// Shared cache for rendered markdown preview rows.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
@@ -1352,7 +1377,10 @@ impl<'a> DiffPage<'a> {
         prefix_width: usize,
         content_width: usize,
     ) -> Line<'static> {
-        let label = "comment: ";
+        let label = match &comment.target {
+            DiffCommentTarget::File { .. } => "file comment: ",
+            DiffCommentTarget::Lines(_) => "comment: ",
+        };
         let background = if is_editing {
             style::palette::surface_selection()
         } else {
@@ -1754,6 +1782,10 @@ impl Page for DiffPage<'_> {
             &help_action::diff_footer_actions(help_action::DiffFooterContext {
                 can_mark_selected,
                 can_submit,
+                file_comment: help_action::DiffFileCommentAvailability::from_bool(
+                    self.can_comment
+                        && content.selected_item_is_file(self.file_explorer_selected_index),
+                ),
                 focus: self.focus,
                 has_review_comments: self.review_comments.is_some(),
                 line_comment_state: if !self.can_comment {
@@ -1789,7 +1821,7 @@ fn preview_path_for_selection<'a>(
     Some(preview_path)
 }
 
-/// Inserts a visible cursor marker into one inline comment's text.
+/// Inserts a visible cursor marker into one diff comment's text.
 fn input_text_with_cursor(input: &crate::domain::input::InputState) -> String {
     let character_count = input.text().chars().count();
     let cursor = input.cursor.min(character_count);
@@ -2206,6 +2238,57 @@ mod tests {
     }
 
     #[test]
+    fn test_diff_page_renders_file_comment_above_selected_file_patch() {
+        // Arrange
+        let diff = concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -0,0 +1 @@\n",
+            "+fn main() {}\n",
+        );
+        let mut comments = DiffLineComments::default();
+        comments.start_editing_target(DiffCommentTarget::file("src/main.rs"));
+        comments
+            .editing_input_mut()
+            .expect("file comment should be editable")
+            .insert_text("Review the complete file");
+        let session = session_fixture();
+        let diff_layout_cache = DiffLayoutCache::default();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let mut page = DiffPage::new(DiffPageInput {
+            can_comment: true,
+            diff,
+            diff_layout_cache: &diff_layout_cache,
+            file_explorer_selected_index: 1,
+            focus: DiffFocus::Content,
+            line_comments: &comments,
+            markdown_render_cache: &markdown_render_cache,
+            preview: test_diff_preview(),
+            review_comments: None,
+            scroll_offset: 0,
+            selected_diff_line_index: 0,
+            session: &session,
+            sidebar_focus: DiffSidebarFocus::Files,
+        });
+        let backend = ratatui::backend::TestBackend::new(100, 14);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| page.render(frame, frame.area()))
+            .expect("failed to render diff page");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        let comment_index = text
+            .find("file comment: Review the complete file|")
+            .expect("file editor should be visible");
+        let source_index = text
+            .find("fn main() {}")
+            .expect("selected file patch should be visible");
+        assert!(comment_index < source_index);
+    }
+
+    #[test]
     fn test_diff_page_distinguishes_cursor_inside_commented_range() {
         // Arrange
         let diff = concat!(
@@ -2342,7 +2425,8 @@ mod tests {
                 line: 1,
                 path: "src/main.rs".to_string(),
                 side: DiffLineSide::New,
-            }),
+            })
+            .into(),
         };
 
         // Act
@@ -2667,13 +2751,19 @@ mod tests {
                 .insert_text("Explain this");
             line_comments.finish_editing();
         }
+        line_comments.start_editing_target(DiffCommentTarget::file("other.rs"));
+        line_comments
+            .editing_input_mut()
+            .expect("stale file comment should remain editable")
+            .insert_text("Review the other file");
+        line_comments.finish_editing();
 
         // Act
         let insertions =
             diff_line_comment_insertions(&content, 0, &changed_line_ranges, &line_comments);
 
         // Assert
-        assert_eq!(line_comments.comments.len(), 2);
+        assert_eq!(line_comments.comments.len(), 3);
         assert_eq!(insertions, []);
     }
 
