@@ -237,6 +237,12 @@ dynamic model identity are omitted.
 `chat {model}` and `execute_tool {tool_name}` children. It propagates operation context
 to nested instrumentation and exports only standard, metadata-only GenAI attributes.
 
+The OTLP/HTTP contract test decodes the exported protobuf for all six histograms and the
+complete turn, model, and executed-tool span hierarchy. It covers successful,
+provider-failed, invalid-output, policy-denied, tool-execution-failed, and cancelled
+turns; verifies batching, explicit flush, shutdown, bounded attributes, and exact
+request counts; and rejects sensitive fixture content at the wire boundary.
+
 The provider registry contains one standard value and two documented custom values:
 
 | Provider | `gen_ai.provider.name` | Registry status                                                            |
@@ -330,7 +336,7 @@ best cost and performance:
   from lifecycle facts without double-counting model-client metrics.
 - [x] **Lifecycle trace projection.** Represent a turn as a parent span with correlated
   model and tool children, including correct completion, failure, and cancellation.
-- [ ] **OTLP contract coverage.** Decode exported test payloads and verify signal names,
+- [x] **OTLP contract coverage.** Decode exported test payloads and verify signal names,
   relationships, attributes, batching and shutdown, and the absence of fixture secrets.
 - [ ] **Durable host journal.** Define a versioned host-owned event envelope, delivery
   and checkpoint policy, retention, corruption recovery, and compatibility behavior.
