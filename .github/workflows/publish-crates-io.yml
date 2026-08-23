@@ -49,6 +49,11 @@ jobs:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish -p testty --token "$CRATES_IO_TOKEN"
 
+      - name: Publish `ag-harness-cli` to crates.io
+        env:
+          CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p ag-harness-cli --token "$CRATES_IO_TOKEN"
+
       - name: Publish `ag-protocol` to crates.io
         env:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}

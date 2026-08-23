@@ -36,6 +36,8 @@ jobs:
             hook: test-ag-git-src
           - member: ag-harness
             hook: test-ag-harness-src
+          - member: ag-harness-cli
+            hook: test-ag-harness-cli-src
           - member: ag-protocol
             hook: test-ag-protocol-src
           - member: ag-session

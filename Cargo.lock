@@ -70,9 +70,7 @@ dependencies = [
 name = "ag-harness"
 version = "0.15.5"
 dependencies = [
- "assert_cmd",
  "async-trait",
- "clap",
  "jsonschema",
  "mockall",
  "opentelemetry",
@@ -83,6 +81,21 @@ dependencies = [
  "reqwest",
  "rustix",
  "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
+name = "ag-harness-cli"
+version = "0.15.5"
+dependencies = [
+ "ag-harness",
+ "assert_cmd",
+ "async-trait",
+ "clap",
  "serde_json",
  "tempfile",
  "testty",

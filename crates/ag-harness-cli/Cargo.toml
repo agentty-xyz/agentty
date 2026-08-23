@@ -1,0 +1,31 @@
+[package]
+name = "ag-harness-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+
+[[bin]]
+name = "ag-harness"
+path = "src/main.rs"
+
+[dependencies]
+ag-harness.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
+
+[dev-dependencies]
+assert_cmd.workspace = true
+async-trait.workspace = true
+tempfile.workspace = true
+testty.workspace = true
+wiremock.workspace = true
+
+[lints]
+workspace = true

@@ -50,15 +50,17 @@ flowchart LR
 agentty/
 ├── crates/
 │   ├── ag-harness            # facade
+│   ├── ag-harness-cli        # interactive command-line application
 │   ├── ag-harness-protocol   # Op, Event, Diff, Usage
 │   ├── ag-harness-core       # loop, tools, sessions, context, storage
 ```
 
 ### Model boundary
 
-The current foundation lives entirely in `ag-harness`. The object-safe `Model` trait
-lets applications store supported clients behind `dyn Model`. `ModelClient` implements
-that boundary, owns request-duration telemetry, and validates every response against the
+The current runtime foundation lives in the `ag-harness` library, while `ag-harness-cli`
+owns the interactive command-line application. The object-safe `Model` trait lets
+applications store supported clients behind `dyn Model`. `ModelClient` implements that
+boundary, owns request-duration telemetry, and validates every response against the
 request's `OutputSchema`. Provider request execution remains private so applications
 cannot bypass this lifecycle. `ModelClient` validates and retains the provider and model
 identity during construction, before any request starts.
@@ -99,8 +101,9 @@ The current tool foundation includes:
 - Descriptor-relative file access without symlink traversal.
 - One-file unified-diff writes with stale-safe atomic replacement and typed failures.
 
-The `ag-harness` CLI starts an in-memory chat with Muse, Kimi, or Qwen. Reads are scoped
-to `--read-dir`; writes require `--allow-write`.
+The `ag-harness-cli` package ships the `ag-harness` command, which starts an in-memory
+chat with Muse, Kimi, or Qwen. Reads are scoped to `--read-dir`; writes require
+`--allow-write`.
 
 ## Session management
 
