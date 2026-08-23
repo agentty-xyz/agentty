@@ -971,8 +971,19 @@ fn seed_session_personality(env: &BuilderEnv) -> Result<(), Box<dyn std::error::
 /// Seeds a review-ready transcript and delays its Git rebase long enough to
 /// inspect the in-progress session output ordering.
 fn seed_rebase_transcript_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_rebase_transcript_session_with_delay(env, 5)
+}
+
+/// Seeds the rebase transcript fixture with a configurable pre-rebase delay.
+fn seed_rebase_transcript_session_with_delay(
+    env: &BuilderEnv,
+    delay_seconds: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
-    seed_review_worktree_with_diff(env)?;
+    seed_linked_review_worktree_with_diff(env)?;
+    std::fs::write(env.workdir.join("base-update.txt"), "new base commit\n")?;
+    run_git(&env.workdir, &["add", "base-update.txt"])?;
+    run_git(&env.workdir, &["commit", "-m", "advance base branch"])?;
 
     let runtime = common::seed_runtime()?;
     runtime.block_on(async {
@@ -1002,14 +1013,11 @@ fn seed_rebase_transcript_session(env: &BuilderEnv) -> Result<(), Box<dyn std::e
             .await
     })?;
 
-    let pre_rebase_hook = env
-        .agentty_root
-        .join("wt")
-        .join("review-s")
-        .join(".git")
-        .join("hooks")
-        .join("pre-rebase");
-    std::fs::write(&pre_rebase_hook, "#!/bin/sh\nsleep 5\n")?;
+    let pre_rebase_hook = env.workdir.join(".git").join("hooks").join("pre-rebase");
+    std::fs::write(
+        &pre_rebase_hook,
+        format!("#!/bin/sh\nsleep {delay_seconds}\n"),
+    )?;
     #[cfg(unix)]
     std::fs::set_permissions(&pre_rebase_hook, std::fs::Permissions::from_mode(0o755))?;
 
@@ -2300,6 +2308,8 @@ case "$*" in
   *"auth status"*)
     exit 0
     ;;
+esac
+case "$*" in
   *"api"*"/pulls"*)
     if [ -f "$marker_path" ]; then
       printf '%s\n' '[{"number":42}]'
@@ -4341,9 +4351,8 @@ fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
     Ok(())
 }
 
-/// Verify `Enter` opens the composer while a session is `Rebasing` and the
-/// submitted follow-up renders below existing workflow notices as queued work
-/// without replacing the active rebase status.
+/// Verify a `Rebasing` session exposes review-request publishing and still
+/// queues submitted follow-up messages behind the active sync.
 #[test]
 fn session_queue_chat_message_during_rebase() -> E2eResult {
     // Arrange, Act, Assert
@@ -4358,6 +4367,7 @@ fn session_queue_chat_message_during_rebase() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("Rebasing...", 5000)
                     .wait_for_text("Enter: queue message", 5000)
+                    .wait_for_text("p: PR", 5000)
                     .press_key("Enter")
                     .wait_for_text("Type your message", 5000)
                     .write_text("follow up after sync")
@@ -4373,6 +4383,7 @@ fn session_queue_chat_message_during_rebase() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Rebasing...", &full);
+                assertion::assert_text_in_region(frame, "p: PR", &full);
                 assertion::assert_text_in_region(frame, "[Commit] No changes to commit.", &full);
                 assertion::assert_text_in_region(
                     frame,
@@ -4402,6 +4413,80 @@ fn session_queue_chat_message_during_rebase() -> E2eResult {
 
                 assert_eq!(sync_assist_row, commit_row + 2);
                 assert_eq!(queued_message_row, sync_assist_row + 2);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify review-request creation submitted during a live rebase stays queued
+/// until sync completes, then publishes on the same session worker.
+#[test]
+fn review_request_creation_queues_during_rebase() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_queued_during_rebase")
+        .with_git()
+        .setup(|env| {
+            seed_rebase_transcript_session_with_delay(env, 10)?;
+            install_queued_review_request_stubs(env)
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("Completed answer before rebase summary.", 5000)
+                    .wait_for_text("r: sync", 5000)
+                    .press_key("r")
+                    .wait_for_text("Rebasing...", 5000)
+                    .wait_for_text("p: PR", 5000)
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("≡ review request — publish after this turn", 5000)
+                    .capture_labeled(
+                        "review_request_queued_during_rebase",
+                        "Review-request creation queued behind the active session sync",
+                    )
+                    .wait_for_text("[Sync] Successfully synced", 20000)
+                    .wait_for_text("Publishing review request...", 5000)
+                    .capture_labeled(
+                        "review_request_started_after_rebase",
+                        "Review-request creation starts after session sync completes",
+                    )
+                    .wait_for_text("[Review Request] Created PR", 15000)
+            },
+            |frame, report| {
+                let queued_frame = common::frame_from_capture(&report.captures[0]);
+                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                assertion::assert_text_in_region(&queued_frame, "Rebasing...", &queued_full);
+                assertion::assert_text_in_region(
+                    &queued_frame,
+                    "≡ review request — publish after this turn",
+                    &queued_full,
+                );
+                assertion::assert_not_visible(&queued_frame, "Publishing review request...");
+
+                let started_frame = common::frame_from_capture(&report.captures[1]);
+                let started_full = Region::full(started_frame.cols(), started_frame.rows());
+                assertion::assert_text_in_region(
+                    &started_frame,
+                    "[Sync] Successfully synced",
+                    &started_full,
+                );
+                assertion::assert_text_in_region(
+                    &started_frame,
+                    "Publishing review request...",
+                    &started_full,
+                );
+                assertion::assert_not_visible(&started_frame, "Rebasing...");
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42",
+                    &full,
+                );
             },
         )?;
 

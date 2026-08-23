@@ -1673,7 +1673,7 @@ async fn review_request_enqueue_does_not_wait_for_existing_branch_operation() {
 }
 
 #[tokio::test]
-async fn running_review_request_action_queues_on_existing_worker() {
+async fn rebasing_review_request_action_queues_on_existing_worker() {
     // Arrange
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
     let session_id = app
@@ -1698,7 +1698,7 @@ async fn running_review_request_action_queues_on_existing_worker() {
         None,
     )
     .await;
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Rebasing);
 
     // Act
     app.start_publish_branch_action(

@@ -310,13 +310,13 @@ flowchart LR
    `session_operation` and enqueues it on the per-session worker.
 1. The worker marks the operation `running`, checks cancel flags, verifies worktree
    isolation, and delegates to `workflow/turn.rs`, queued session sync, or queued
-   review-request creation. An **InProgress** branch action can enqueue only through the
-   sender already owned by that worker; it cannot lazily create another worker. The same
-   in-memory chat queue accepts follow-up prompts while the worker is **InProgress** or
-   **Rebasing**. Follow-up prompts and queued branch actions reserve one shared
-   submission sequence, so after the active operation the worker always selects the
-   earliest item across both queues. A command received during a queued chat turn waits
-   for that turn, then runs before only the messages submitted after it.
+   review-request creation. An **InProgress** or **Rebasing** branch action can enqueue
+   only through the sender already owned by that worker; it cannot lazily create another
+   worker. The same in-memory chat queue accepts follow-up prompts while the worker is
+   **InProgress** or **Rebasing**. Follow-up prompts and queued branch actions reserve
+   one shared submission sequence, so after the active operation the worker always
+   selects the earliest item across both queues. A command received during a queued chat
+   turn waits for that turn, then runs before only the messages submitted after it.
 1. Immediately before a chat turn, the worker resolves the persisted personality ID
    through `PersonalityCatalogClient`. The catalog scans only the session worktree's
    `.agents/agents` directory. The worker compares the resolved prompt fingerprint with

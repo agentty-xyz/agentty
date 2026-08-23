@@ -290,6 +290,10 @@ another branch operation already owns that lock, the handler queues immediately 
 waiting and the worker serializes review-request creation behind the operation in
 progress.
 
+Pressing `p` while the session is **Rebasing** queues review-request creation on the
+same worker instead of starting another branch executor. The active sync finishes first,
+then publishing runs when the request reaches the front of the shared queue.
+
 Session output keeps workflow feedback in execution order. Commit feedback appears
 before its sync result, post-sync auto-push progress appears after that result, and
 focused-review progress remains at the tail while those branch operations finish. If a

@@ -1205,8 +1205,8 @@ impl SessionWorkerService {
     /// Publishes one review request inside the serialized session worker.
     ///
     /// The live status is applied at execution time so an action accepted
-    /// during `InProgress` observes the completed turn's review-ready state
-    /// instead of the enqueue-time snapshot.
+    /// during `InProgress` or `Rebasing` observes the completed work's
+    /// review-ready state instead of the enqueue-time snapshot.
     async fn run_create_review_request_command(
         context: &SessionWorkerContext,
         mut branch_publish_session: BranchPublishTaskSession,
@@ -1428,9 +1428,9 @@ impl SessionManager {
 
     /// Persists and queues review-request creation on one session worker.
     ///
-    /// Running sessions must already own a worker so stale status cannot
-    /// create a concurrent executor. Review-ready sessions lazily create a
-    /// worker and execute the action immediately.
+    /// Active turn and rebase sessions must already own a worker so stale
+    /// status cannot create a concurrent executor. Review-ready sessions
+    /// lazily create a worker and execute the action immediately.
     ///
     /// # Errors
     /// Returns an error when operation persistence or worker delivery fails.
@@ -1450,7 +1450,7 @@ impl SessionManager {
             remote_branch_name,
             response: response.clone(),
         };
-        let result = if status == Status::InProgress {
+        let result = if matches!(status, Status::InProgress | Status::Rebasing) {
             self.worker_service_mut()
                 .enqueue_existing_session_command(services, &session_id, command)
                 .await
@@ -5520,16 +5520,43 @@ mod tests {
     }
 
     /// Seeds one rebasing session with existing provider conversation ids.
-    async fn seed_existing_session_rebase_metadata(db: &AppRepositories) {
+    async fn seed_existing_session_rebase_metadata(
+        db: &AppRepositories,
+        parent_session_id: Option<&str>,
+    ) {
         let project_id = db
             .projects()
             .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.sessions()
-            .insert_session("sess1", "gpt-5.6-sol", "main", "Rebasing", project_id)
-            .await
-            .expect("failed to insert session");
+        if let Some(parent_session_id) = parent_session_id {
+            db.sessions()
+                .insert_session(
+                    parent_session_id,
+                    "gpt-5.6-sol",
+                    "main",
+                    "Review",
+                    project_id,
+                )
+                .await
+                .expect("failed to insert parent session");
+            db.sessions()
+                .insert_stacked_draft_session(
+                    "sess1",
+                    "gpt-5.6-sol",
+                    "main",
+                    "Rebasing",
+                    parent_session_id,
+                    project_id,
+                )
+                .await
+                .expect("failed to insert stacked session");
+        } else {
+            db.sessions()
+                .insert_session("sess1", "gpt-5.6-sol", "main", "Rebasing", project_id)
+                .await
+                .expect("failed to insert session");
+        }
         db.sessions()
             .update_session_provider_conversation_id("sess1", Some("thread-before".to_string()))
             .await
@@ -5664,10 +5691,59 @@ mod tests {
         mock_git_client
     }
 
+    /// Extends the successful rebase mock with a controllable stack-metadata
+    /// boundary and a terminal review-request push failure.
+    fn blocking_stack_metadata_git_client(
+        main_checkout_root: PathBuf,
+        metadata_persistence_started: Arc<tokio::sync::Notify>,
+        release_metadata_persistence: Arc<tokio::sync::Notify>,
+    ) -> MockGitClient {
+        let mut git_client = mock_successful_conflict_rebase_git_client(main_checkout_root);
+        git_client
+            .expect_ref_hash()
+            .once()
+            .withf(|_, reference| reference == "main")
+            .returning(move |_, _| {
+                let metadata_persistence_started = Arc::clone(&metadata_persistence_started);
+                let release_metadata_persistence = Arc::clone(&release_metadata_persistence);
+
+                Box::pin(async move {
+                    metadata_persistence_started.notify_one();
+                    release_metadata_persistence.notified().await;
+
+                    Ok("parent-tip".to_string())
+                })
+            });
+        git_client
+            .expect_in_progress_operation()
+            .once()
+            .returning(|_| Box::pin(async { Ok(Some(ag_git::InProgressGitOperation::Rebase)) }));
+
+        git_client
+    }
+
+    /// Builds the review-request command queued behind the controlled rebase.
+    fn queued_review_request_command(folder: PathBuf) -> SessionCommand {
+        SessionCommand::CreateReviewRequest {
+            branch_publish_session: BranchPublishTaskSession {
+                base_branch: "main".to_string(),
+                folder,
+                id: "sess1".into(),
+                published_upstream_ref: None,
+                review_request: None,
+                status: Status::Rebasing,
+            },
+            operation_id: "op-review-request".to_string(),
+            remote_branch_name: None,
+            response: None,
+        }
+    }
+
     /// Builds one worker harness for session rebase command tests.
     fn rebase_assist_worker_harness(
         base_dir: PathBuf,
         db: AppRepositories,
+        build_git_client: impl FnOnce(PathBuf) -> MockGitClient,
     ) -> RebaseAssistWorkerHarness {
         let main_checkout_root = base_dir.join("main-checkout");
         std::fs::create_dir_all(&main_checkout_root).expect("failed to create main checkout");
@@ -5691,9 +5767,7 @@ mod tests {
             db: db.clone(),
             folder: base_dir,
             fs_client: Arc::new(fs::RealFsClient),
-            git_client: Arc::new(mock_successful_conflict_rebase_git_client(
-                main_checkout_root,
-            )),
+            git_client: Arc::new(build_git_client(main_checkout_root)),
             transcript: empty_transcript(),
             personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
@@ -5723,12 +5797,16 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         write_rebase_conflict_file(base_dir.path());
         let db = AppRepositories::in_memory().await.expect("db should open");
-        seed_existing_session_rebase_metadata(&db).await;
+        seed_existing_session_rebase_metadata(&db, None).await;
         db.sessions()
             .update_session_permission_mode("sess1", PermissionMode::ReadOnly)
             .await
             .expect("failed to set chat permission mode");
-        let harness = rebase_assist_worker_harness(base_dir.path().to_path_buf(), db);
+        let harness = rebase_assist_worker_harness(
+            base_dir.path().to_path_buf(),
+            db,
+            mock_successful_conflict_rebase_git_client,
+        );
 
         // Act
         SessionWorkerService::run_rebase_command(
@@ -5764,6 +5842,107 @@ mod tests {
         assert!(output_text.contains("- src/lib.rs"));
         assert!(output_text.contains("Resolved conflicts inside existing session."));
         assert!(output_text.contains("[Sync] Successfully synced wt/sess1 onto main"));
+    }
+
+    #[tokio::test]
+    /// Verifies a review request queued behind rebase cannot begin after the
+    /// raw Git command but before metadata persistence and finalization end.
+    async fn test_queued_review_request_waits_for_full_rebase_finalization() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        write_rebase_conflict_file(base_dir.path());
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        seed_existing_session_rebase_metadata(&db, Some("parent-session")).await;
+        db.operations()
+            .insert_session_operation("op-rebase", "sess1", REBASE_OPERATION_KIND)
+            .await
+            .expect("failed to insert rebase operation");
+        db.operations()
+            .insert_session_operation(
+                "op-review-request",
+                "sess1",
+                CREATE_REVIEW_REQUEST_OPERATION_KIND,
+            )
+            .await
+            .expect("failed to insert review-request operation");
+
+        let metadata_persistence_started = Arc::new(tokio::sync::Notify::new());
+        let release_metadata_persistence = Arc::new(tokio::sync::Notify::new());
+        let mut harness =
+            rebase_assist_worker_harness(base_dir.path().to_path_buf(), db.clone(), {
+                let metadata_persistence_started = Arc::clone(&metadata_persistence_started);
+                let release_metadata_persistence = Arc::clone(&release_metadata_persistence);
+
+                move |main_checkout_root| {
+                    blocking_stack_metadata_git_client(
+                        main_checkout_root,
+                        metadata_persistence_started,
+                        release_metadata_persistence,
+                    )
+                }
+            });
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        harness.context.app_event_tx = app_event_tx;
+        let transcript = Arc::clone(&harness.context.transcript);
+        let status = Arc::clone(&harness.status);
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        SessionWorkerService::spawn_session_worker(
+            harness.context,
+            auto_commit_one_shot_client(),
+            command_rx,
+        );
+        command_tx
+            .send(ScheduledSessionCommand::immediate(SessionCommand::Rebase {
+                base_branch: "main".to_string(),
+                operation_id: "op-rebase".to_string(),
+            }))
+            .expect("failed to queue rebase");
+        command_tx
+            .send(ScheduledSessionCommand::queued(
+                queued_review_request_command(base_dir.path().to_path_buf()),
+                0,
+            ))
+            .expect("failed to queue review request");
+
+        // Act
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            metadata_persistence_started.notified(),
+        )
+        .await
+        .expect("rebase should reach metadata persistence");
+        let events_before_release =
+            std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+        release_metadata_persistence.notify_one();
+        let publish_started = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let event = app_event_rx.recv().await.expect("missing app event");
+                if matches!(event, AppEvent::BranchPublishActionStarted { .. }) {
+                    break;
+                }
+            }
+        })
+        .await;
+
+        // Assert
+        assert!(
+            events_before_release
+                .iter()
+                .all(|event| !matches!(event, AppEvent::BranchPublishActionStarted { .. }))
+        );
+        assert_eq!(*status.lock().expect("status lock"), Status::Review);
+        assert!(
+            transcript_text(&transcript).contains("[Sync] Successfully synced wt/sess1 onto main")
+        );
+        publish_started.expect("review request should start after rebase finalization");
+        assert_eq!(
+            db.sessions()
+                .get_session_stack_base_commit_hash("sess1")
+                .await
+                .expect("failed to load stack-base hash")
+                .as_deref(),
+            Some("parent-tip")
+        );
     }
 
     #[tokio::test]
