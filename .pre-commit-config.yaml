@@ -103,6 +103,14 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: test-ag-harness-cli-src
+        name: cargo nextest ag-harness-cli src
+        description: Source tests for `crates/ag-harness-cli/src`.
+        entry: cargo nextest run --locked --profile ci -p ag-harness-cli --bin ag-harness
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: test-ag-protocol-src
         name: cargo nextest ag-protocol src
         description: Source tests for `crates/ag-protocol/src`.

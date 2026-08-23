@@ -1,4 +1,4 @@
-//! Interactive command-line chat for the `ag-harness` model runtime.
+//! Interactive command-line chat powered by the `ag-harness` model runtime.
 
 use std::borrow::Cow;
 #[cfg(not(test))]

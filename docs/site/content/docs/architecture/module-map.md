@@ -35,6 +35,9 @@ For file-level detail, read the module docstrings directly.
   modes, backend-neutral request-duration telemetry, and a deny-by-default `Harness`
   loop that executes bounded repository reads and stale-safe patch writes through an
   injectable `FileSystem`. Application binaries own telemetry setup.
+- `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
+  process-level tests. It composes the `ag-harness` library with provider configuration,
+  bounded repository permissions, terminal-safe output, and in-memory chat handling.
 - `crates/ag-protocol/`: Shared structured response protocol library crate with
   transport-neutral response models, schema generation, parser diagnostics, protocol
   prompt envelopes, repair prompts, review-comment outcomes, and turn prompt payload

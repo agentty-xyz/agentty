@@ -2,23 +2,6 @@
 
 Run a model with bounded repository tools and validated structured output.
 
-## Command line
-
-Set the provider credentials, then start a chat:
-
-```sh
-MODEL_API_KEY=your-key cargo run -p ag-harness -- run muse-spark-1.2
-```
-
-The current directory is readable by the model by default. Use `--read-dir <DIR>` to
-choose another root; files read beneath it are sent to the configured provider. Use
-`--provider <muse|kimi|qwen>` to select a provider. Muse uses `MODEL_API_KEY` and the
-optional `MODEL_API_BASE_URL`; Kimi uses `KIMI_API_KEY` and `KIMI_BASE_URL`; Qwen uses
-`DASHSCOPE_API_KEY` and `DASHSCOPE_BASE_URL`. `--base-url` overrides the corresponding
-URL variable.
-
-Run `cargo run -p ag-harness -- --help` for commands.
-
 ## Library
 
 ```rust
@@ -75,3 +58,6 @@ HTTP-client, and tool instrumentation becomes a child of the projected span. Mis
 usage is not estimated, sensitive content is excluded, and the application owns export
 and shutdown. The emitted signals follow the pinned OpenTelemetry GenAI
 semantic-convention contract documented in the architecture guide.
+
+The companion `ag-harness-cli` package provides an interactive command-line chat powered
+by this library.
