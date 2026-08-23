@@ -9,7 +9,10 @@ const READ_DESCRIPTION: &str =
 const READ_NAME: &str = "read";
 const MAX_PATCH_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
-const WRITE_DESCRIPTION: &str = "Apply one unified diff to one repository-relative text file.";
+const WRITE_DESCRIPTION: &str = concat!(
+    "Apply one unified diff to one repository-relative text file. To create an empty file, use ",
+    "only `--- /dev/null` and `+++ b/<path>` headers."
+);
 const WRITE_NAME: &str = "write";
 
 /// Built-in tool that can be enabled for a harness run.
@@ -461,7 +464,10 @@ mod tests {
         assert_eq!(definition.name(), "write");
         assert_eq!(
             definition.description(),
-            "Apply one unified diff to one repository-relative text file."
+            concat!(
+                "Apply one unified diff to one repository-relative text file. To create an empty ",
+                "file, use only `--- /dev/null` and `+++ b/<path>` headers."
+            )
         );
         assert!(validator.is_valid(&json!({
             "path": "src/lib.rs",

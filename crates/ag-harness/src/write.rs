@@ -495,10 +495,6 @@ fn parse_unified_diff(patch: &str) -> Result<UnifiedDiff, WriteError> {
             old_start,
         });
     }
-    if hunks.is_empty() {
-        return Err(patch_error("patch must contain at least one hunk"));
-    }
-
     Ok(UnifiedDiff {
         hunks,
         modified_path,
@@ -774,16 +770,20 @@ mod tests {
         // Arrange
         let update = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n one\n-two\n+three\n";
         let create = "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+hello\n+world\n";
+        let empty_patch = "--- /dev/null\n+++ b/empty.txt\n";
 
         // Act
         let updated = apply_unified_diff("src/lib.rs", Some(b"one\ntwo\n"), update)
             .expect("update patch should apply");
         let created =
             apply_unified_diff("new.txt", None, create).expect("create patch should apply");
+        let empty_file = apply_unified_diff("empty.txt", None, empty_patch)
+            .expect("empty create patch should apply");
 
         // Assert
         assert_eq!(updated, b"one\nthree\n");
         assert_eq!(created, b"hello\nworld\n");
+        assert_eq!(empty_file, b"");
     }
 
     #[test]
@@ -881,7 +881,6 @@ mod tests {
             "--- a/file\n",
             "bad\n+++ b/file\n@@ -0,0 +1 @@\n+x\n",
             "--- \n+++ b/file\n@@ -0,0 +1 @@\n+x\n",
-            "--- a/file\n+++ b/file\n",
             "--- a/file\n+++ b/file\nnot-a-hunk\n",
             "--- a/file\n+++ b/file\n@@ -1 1 @@\n x\n",
             "--- a/file\n+++ b/file\n@@ -x +1 @@\n x\n",

@@ -13,8 +13,12 @@ use crate::{model, schema_contract, tool};
 
 pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
 const JSON_STRING_MAX_EXPANSION: usize = 6;
+const MAX_RATE_LIMIT_RETRIES: usize = 2;
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
+const MAX_TRANSPORT_RETRIES: usize = 1;
 pub(crate) const RESPONSE_ENVELOPE_LIMIT_BYTES: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_mins(1);
+const RETRY_DELAY: Duration = Duration::from_secs(1);
 pub(crate) const SUCCESS_BODY_LIMIT_BYTES: usize = schema_contract::RESPONSE_CONTENT_LIMIT_BYTES
     * JSON_STRING_MAX_EXPANSION
     + RESPONSE_ENVELOPE_LIMIT_BYTES;
@@ -59,6 +63,7 @@ impl StructuredOutputMode {
 #[derive(Clone, Copy)]
 pub(crate) struct ChatCompletionProviderPolicy {
     pub(crate) display_name: &'static str,
+    pub(crate) response_format_with_tools: bool,
     pub(crate) structured_output: StructuredOutputMode,
     pub(crate) telemetry_name: &'static str,
     pub(crate) unsupported_schema_reason: &'static str,
@@ -122,15 +127,18 @@ impl ChatCompletionBackend {
                 reason: self.policy.unsupported_schema_reason.to_string(),
             });
         }
+        let tools: Vec<_> = request
+            .tools()
+            .iter()
+            .map(ChatCompletionTool::from)
+            .collect();
+        let response_format = (tools.is_empty() || self.policy.response_format_with_tools)
+            .then(|| self.response_format(request.schema()));
         let payload = ChatCompletionPayload {
             messages: self.messages(request)?,
             model: &self.model,
-            response_format: self.response_format(request.schema()),
-            tools: request
-                .tools()
-                .iter()
-                .map(ChatCompletionTool::from)
-                .collect(),
+            response_format,
+            tools,
         };
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
         let completion = self
@@ -211,6 +219,18 @@ impl ChatCompletionBackend {
         }
         for message in request.messages() {
             match message {
+                model::ModelMessage::Assistant(content) => {
+                    messages.push(ChatCompletionMessagePayload::Text {
+                        content: content.clone(),
+                        role: "assistant",
+                    });
+                }
+                model::ModelMessage::System(content) => {
+                    messages.push(ChatCompletionMessagePayload::Text {
+                        content: content.clone(),
+                        role: "system",
+                    });
+                }
                 model::ModelMessage::User(content) => {
                     messages.push(ChatCompletionMessagePayload::Text {
                         content: content.clone(),
@@ -460,26 +480,51 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
         request: ChatCompletionRequest<'_>,
     ) -> Result<Option<ChatCompletion>, ChatCompletionError> {
         let (api_key, endpoint, payload) = request.into_parts();
-        let mut response = self
-            .client
-            .post(endpoint)
-            .bearer_auth(api_key)
-            .timeout(REQUEST_TIMEOUT)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(ChatCompletionError::transport)?;
+        let mut rate_limit_retries = 0_usize;
+        let mut transport_retries = 0_usize;
+        let mut response = loop {
+            let response = self
+                .client
+                .post(&endpoint)
+                .bearer_auth(api_key)
+                .timeout(REQUEST_TIMEOUT)
+                .json(&payload)
+                .send()
+                .await;
+            let mut response = match response {
+                Ok(response) => response,
+                Err(_) if transport_retries < MAX_TRANSPORT_RETRIES => {
+                    transport_retries += 1;
+                    tokio::time::sleep(RETRY_DELAY).await;
 
-        if let Err(source) = response.error_for_status_ref() {
-            let status = response.status();
-            let body = error_body_summary(&mut response).await;
+                    continue;
+                }
+                Err(error) => return Err(ChatCompletionError::transport(error)),
+            };
 
-            return Err(ChatCompletionError::Http {
-                body,
-                source,
-                status,
-            });
-        }
+            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                && rate_limit_retries < MAX_RATE_LIMIT_RETRIES
+            {
+                let delay = rate_limit_retry_delay(response.headers(), rate_limit_retries);
+                rate_limit_retries += 1;
+                drop(response);
+                tokio::time::sleep(delay).await;
+
+                continue;
+            }
+            if let Err(source) = response.error_for_status_ref() {
+                let status = response.status();
+                let body = error_body_summary(&mut response).await;
+
+                return Err(ChatCompletionError::Http {
+                    body,
+                    source,
+                    status,
+                });
+            }
+
+            break response;
+        };
 
         let body = success_body(&mut response).await?;
         let response = serde_json::from_slice::<ChatCompletionResponse>(&body)
@@ -494,6 +539,18 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
             completion
         }))
     }
+}
+
+fn rate_limit_retry_delay(headers: &reqwest::header::HeaderMap, retry: usize) -> Duration {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map_or_else(
+            || RETRY_DELAY.saturating_mul(1_u32 << retry.min(31)),
+            Duration::from_secs,
+        )
+        .min(MAX_RETRY_DELAY)
 }
 
 async fn error_body_summary(response: &mut reqwest::Response) -> String {
@@ -595,7 +652,8 @@ impl ChatCompletionError {
 struct ChatCompletionPayload<'a> {
     messages: Vec<ChatCompletionMessagePayload>,
     model: &'a str,
-    response_format: ResponseFormat<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormat<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<ChatCompletionTool<'a>>,
 }
@@ -830,6 +888,7 @@ mod tests {
             "native-schema-model".to_string(),
             ChatCompletionProviderPolicy {
                 display_name: "Native schema provider",
+                response_format_with_tools: true,
                 structured_output: StructuredOutputMode::JsonSchema,
                 telemetry_name: "native_schema",
                 unsupported_schema_reason: "object schema required",
@@ -880,6 +939,55 @@ mod tests {
                     "role": "tool",
                     "tool_call_id": "call_read"
                 }
+            ])
+        );
+    }
+
+    #[test]
+    fn serializes_conversation_history() {
+        // Arrange
+        let backend = ChatCompletionBackend::with_client(
+            "test-key".to_string(),
+            "https://example.com/v1".to_string(),
+            "native-schema-model".to_string(),
+            ChatCompletionProviderPolicy {
+                display_name: "Native schema provider",
+                response_format_with_tools: true,
+                structured_output: StructuredOutputMode::JsonSchema,
+                telemetry_name: "native_schema",
+                unsupported_schema_reason: "object schema required",
+            },
+            default_client(),
+        );
+        let schema = schema_contract::OutputSchema::new(serde_json::json!({
+            "type": "object"
+        }))
+        .expect("schema should be valid");
+        let mut request = model::ModelRequest::new("first question", schema.clone());
+        request.record_output(&serde_json::json!({"message": "first answer"}));
+        let mut messages = request.into_messages();
+        messages.insert(
+            0,
+            model::ModelMessage::System("read-only instructions".to_string()),
+        );
+        let request = model::ModelRequest::with_history(messages, "second question", schema);
+
+        // Act
+        let messages = serde_json::to_value(
+            backend
+                .messages(&request)
+                .expect("conversation history should serialize"),
+        )
+        .expect("messages should encode as JSON");
+
+        // Assert
+        assert_eq!(
+            messages,
+            serde_json::json!([
+                {"content": "read-only instructions", "role": "system"},
+                {"content": "first question", "role": "user"},
+                {"content": r#"{"message":"first answer"}"#, "role": "assistant"},
+                {"content": "second question", "role": "user"}
             ])
         );
     }
@@ -1122,6 +1230,7 @@ mod tests {
             "model".to_string(),
             ChatCompletionProviderPolicy {
                 display_name: "Provider",
+                response_format_with_tools: true,
                 structured_output: StructuredOutputMode::JsonSchema,
                 telemetry_name: "provider",
                 unsupported_schema_reason: "object schema required",
@@ -1142,6 +1251,146 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rate_limit_retry_delay_uses_bounded_headers_and_backoff() {
+        // Arrange
+        let mut headers = reqwest::header::HeaderMap::new();
+
+        // Act and Assert
+        assert_eq!(rate_limit_retry_delay(&headers, 0), Duration::from_secs(1));
+        assert_eq!(rate_limit_retry_delay(&headers, 1), Duration::from_secs(2));
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            "99".parse().expect("valid header"),
+        );
+        assert_eq!(rate_limit_retry_delay(&headers, 0), MAX_RETRY_DELAY);
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            reqwest::header::HeaderValue::from_bytes(b"invalid").expect("valid header bytes"),
+        );
+        assert_eq!(rate_limit_retry_delay(&headers, 0), RETRY_DELAY);
+    }
+
+    #[tokio::test]
+    async fn retries_rate_limit_response_before_decoding_success() {
+        // Arrange
+        let listener = TcpListener::bind("127.0.0.1:0").expect("retry listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("retry listener should have an address");
+        let success_body = r#"{"choices":[{"finish_reason":"stop","message":{"content":"{\"message\":\"ok\"}"}}]}"#;
+        let server = tokio::task::spawn_blocking(move || {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener
+                    .accept()
+                    .expect("retry listener should accept a request");
+                let mut request = [0; 2_048];
+                assert!(
+                    stream.read(&mut request).expect("request should be read") > 0,
+                    "retry request should not be empty"
+                );
+                if attempt == 0 {
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 429 Too Many Requests\r\n\
+                              Content-Length: 0\r\n\
+                              Retry-After: 0\r\n\
+                              Connection: close\r\n\r\n",
+                        )
+                        .expect("rate-limit response should be written");
+                } else {
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        success_body.len(),
+                        success_body
+                    )
+                    .expect("success response should be written");
+                }
+            }
+        });
+        let client = ReqwestChatCompletionClient {
+            client: reqwest::Client::new(),
+        };
+        let request = ChatCompletionRequest::new(
+            "test-key",
+            format!("http://{address}"),
+            serde_json::json!({}),
+        );
+
+        // Act
+        let completion = client
+            .complete(request)
+            .await
+            .expect("retry should recover")
+            .expect("response should contain one choice");
+        server.await.expect("retry server should finish");
+
+        // Assert
+        assert_eq!(completion.content.as_deref(), Some(r#"{"message":"ok"}"#));
+    }
+
+    #[tokio::test]
+    async fn retries_transport_failure_before_decoding_success() {
+        // Arrange
+        let listener = TcpListener::bind("127.0.0.1:0").expect("retry listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("retry listener should have an address");
+        let success_body = r#"{"choices":[{"finish_reason":"stop","message":{"content":"{\"message\":\"ok\"}"}}]}"#;
+        let server = tokio::task::spawn_blocking(move || {
+            let (mut failed_stream, _) = listener
+                .accept()
+                .expect("retry listener should accept the failed request");
+            let mut request = [0; 2_048];
+            assert!(
+                failed_stream
+                    .read(&mut request)
+                    .expect("failed request should be read")
+                    > 0,
+                "failed request should not be empty"
+            );
+            drop(failed_stream);
+
+            let (mut stream, _) = listener
+                .accept()
+                .expect("retry listener should accept the successful request");
+            assert!(
+                stream
+                    .read(&mut request)
+                    .expect("successful request should be read")
+                    > 0,
+                "successful request should not be empty"
+            );
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                success_body.len(),
+                success_body
+            )
+            .expect("success response should be written");
+        });
+        let client = ReqwestChatCompletionClient {
+            client: reqwest::Client::new(),
+        };
+        let request = ChatCompletionRequest::new(
+            "test-key",
+            format!("http://{address}"),
+            serde_json::json!({}),
+        );
+
+        // Act
+        let completion = client
+            .complete(request)
+            .await
+            .expect("transport retry should recover")
+            .expect("response should contain one choice");
+        server.await.expect("retry server should finish");
+
+        // Assert
+        assert_eq!(completion.content.as_deref(), Some(r#"{"message":"ok"}"#));
+    }
+
     #[tokio::test]
     async fn retains_http_status_when_error_body_read_fails() {
         // Arrange
@@ -1151,25 +1400,28 @@ mod tests {
             .local_addr()
             .expect("truncated-response listener should have an address");
         let server = tokio::task::spawn_blocking(move || {
-            let (mut stream, _) = listener
-                .accept()
-                .expect("truncated-response listener should accept a request");
-            let mut request = [0; 2_048];
-            let bytes_read = stream
-                .read(&mut request)
-                .expect("truncated-response server should read the request");
-            assert!(
-                bytes_read > 0,
-                "truncated-response request should not be empty"
-            );
-            stream
-                .write_all(
-                    b"HTTP/1.1 429 Too Many Requests\r\n\
-                      Content-Length: 64\r\n\
-                      Connection: close\r\n\r\n\
-                      partial error body",
-                )
-                .expect("truncated-response server should write the response");
+            for _ in 0..=MAX_RATE_LIMIT_RETRIES {
+                let (mut stream, _) = listener
+                    .accept()
+                    .expect("truncated-response listener should accept a request");
+                let mut request = [0; 2_048];
+                let bytes_read = stream
+                    .read(&mut request)
+                    .expect("truncated-response server should read the request");
+                assert!(
+                    bytes_read > 0,
+                    "truncated-response request should not be empty"
+                );
+                stream
+                    .write_all(
+                        b"HTTP/1.1 429 Too Many Requests\r\n\
+                          Content-Length: 64\r\n\
+                          Retry-After: 0\r\n\
+                          Connection: close\r\n\r\n\
+                          partial error body",
+                    )
+                    .expect("truncated-response server should write the response");
+            }
         });
         let client = ReqwestChatCompletionClient {
             client: reqwest::Client::new(),

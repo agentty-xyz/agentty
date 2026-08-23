@@ -3,6 +3,7 @@ use crate::{chat_completion, telemetry};
 pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
     chat_completion::ChatCompletionProviderPolicy {
         display_name: "Kimi",
+        response_format_with_tools: false,
         structured_output: chat_completion::StructuredOutputMode::JsonObject {
             assistant_reasoning_content: true,
             tool_result_name: true,
@@ -175,7 +176,6 @@ mod tests {
                     {"content": prompt, "role": "user"}
                 ],
                 "model": "kimi-k2.6",
-                "response_format": {"type": "json_object"},
                 "tools": [read_tool_wire()]
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -333,7 +333,6 @@ mod tests {
                     }
                 ],
                 "model": "kimi-k2.6",
-                "response_format": {"type": "json_object"},
                 "tools": [read_tool_wire()]
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({

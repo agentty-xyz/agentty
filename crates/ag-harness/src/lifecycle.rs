@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::fmt;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
@@ -168,6 +169,15 @@ pub enum ModelResponseType {
     Output,
     /// An intermediate native tool request.
     ToolCall,
+}
+
+impl fmt::Display for ModelResponseType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Output => formatter.write_str("output"),
+            Self::ToolCall => formatter.write_str("tool call"),
+        }
+    }
 }
 
 /// Stable, low-cardinality reason that a harness turn failed.
@@ -807,6 +817,18 @@ mod tests {
                 )
                 .expect("tool should be observed"),
         );
+    }
+
+    #[test]
+    fn model_response_types_have_stable_display_names() {
+        // Arrange
+        let response_types = [ModelResponseType::Output, ModelResponseType::ToolCall];
+
+        // Act
+        let display_names = response_types.map(|response_type| response_type.to_string());
+
+        // Assert
+        assert_eq!(display_names, ["output", "tool call"]);
     }
 
     fn recording_emitter() -> (LifecycleEmitter, Arc<Mutex<Vec<LifecycleEvent>>>) {

@@ -910,9 +910,20 @@ fn assert_agent_metric_contract(
         inference_calls.data_points[0].sum,
         Some(f64::from(expected_model_calls))
     );
+    let two_call_turns = expected_model_calls - expected_turns;
     assert_eq!(
         inference_calls.data_points[0].bucket_counts,
-        [u64::from(expected_turns - 1), 1, 0, 0, 0, 0, 0, 0, 0,]
+        [
+            u64::from(expected_turns - two_call_turns),
+            u64::from(two_call_turns),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ]
     );
 
     let tool_calls = assert_metric_definition(
@@ -1076,9 +1087,10 @@ fn expected_initial_trace_signatures() -> BTreeSet<TurnTraceSignature<'static>> 
         TurnTraceSignature {
             children: vec![
                 expected_model_child(None, Some("tool_calls"), Some("response-6")),
+                expected_model_child(None, Some("stop"), Some("response-7")),
                 expected_tool_child(Some("tool_execution_error"), None),
             ],
-            error_type: Some("tool_execution_error"),
+            error_type: None,
         },
         TurnTraceSignature {
             children: vec![expected_model_child(Some("cancelled"), None, None)],
@@ -1588,16 +1600,21 @@ fn lifecycle_responses() -> Vec<ResponseTemplate> {
         lifecycle_response(
             "response-7",
             "stop",
+            &json!({"content": r#"{"summary":"recovered-response"}"#}),
+        ),
+        lifecycle_response(
+            "response-8",
+            "stop",
             &json!({"content": r#"{"summary":"cancelled-response"}"#}),
         )
         .set_delay(Duration::from_secs(10)),
         lifecycle_response(
-            "response-8",
+            "response-9",
             "stop",
             &json!({"content": r#"{"summary":"shutdown-response"}"#}),
         ),
         lifecycle_response(
-            "response-9",
+            "response-10",
             "stop",
             &json!({"content": r#"{"summary":"post-shutdown-response"}"#}),
         ),
@@ -1631,11 +1648,11 @@ async fn mount_lifecycle_responses(server: &MockServer, pending_started: Arc<Not
         .and(path("/chat/completions"))
         .respond_with(SequenceResponder {
             next_response: Arc::new(AtomicUsize::new(0)),
-            pending_response: 6,
+            pending_response: 7,
             pending_started,
             responses: lifecycle_responses().into(),
         })
-        .expect(9)
+        .expect(10)
         .mount(server)
         .await;
 }
@@ -1680,10 +1697,11 @@ async fn exercise_lifecycle_outcomes(harness: &Arc<Harness>, pending_started: &N
         .expect_err("denied tool should fail the turn");
     assert_eq!(denial.to_string(), "tool `write` is denied by policy");
 
-    harness
+    let recovered = harness
         .run("failed tool", lifecycle_schema())
         .await
-        .expect_err("missing file should fail the tool");
+        .expect("the model should recover from the rejected read path");
+    assert_eq!(recovered, json!({"summary": "recovered-response"}));
 
     let harness = Arc::clone(harness);
     let mut cancelled_turn = tokio::spawn(async move {
@@ -1710,7 +1728,7 @@ fn signal_requests(requests: &[OtlpRequest]) -> (Vec<&OtlpRequest>, Vec<&OtlpReq
 }
 
 fn assert_initial_lifecycle_metrics(request: &OtlpRequest) {
-    assert_lifecycle_metric_request(request, 7, 5, 6);
+    assert_lifecycle_metric_request(request, 8, 6, 6);
     let OtlpPayload::Metrics(payload) = &request.payload else {
         unreachable!("initial lifecycle metrics should be present");
     };
@@ -1722,7 +1740,7 @@ fn assert_initial_lifecycle_metrics(request: &OtlpRequest) {
     assert_eq!(
         point_error_counts(proto_histogram(metrics["gen_ai.client.operation.duration"])),
         [
-            (None, 4),
+            (None, 5),
             (Some("503"), 1),
             (Some("cancelled"), 1),
             (Some("invalid_output"), 1),
@@ -1733,12 +1751,11 @@ fn assert_initial_lifecycle_metrics(request: &OtlpRequest) {
     assert_eq!(
         point_error_counts(proto_histogram(metrics["gen_ai.invoke_agent.duration"])),
         [
-            (None, 1),
+            (None, 2),
             (Some("cancelled"), 1),
             (Some("invalid_output"), 1),
             (Some("tool_denied"), 1),
             (Some("provider_error"), 1),
-            (Some("tool_execution_error"), 1),
         ]
         .into_iter()
         .collect()
@@ -1746,8 +1763,8 @@ fn assert_initial_lifecycle_metrics(request: &OtlpRequest) {
 }
 
 fn assert_initial_lifecycle_traces(request: &OtlpRequest) {
-    let spans = assert_lifecycle_trace_request(request, 6, 7);
-    assert_eq!(spans.len(), 15);
+    let spans = assert_lifecycle_trace_request(request, 6, 8);
+    assert_eq!(spans.len(), 16);
     assert_eq!(
         turn_trace_signatures(&spans),
         expected_initial_trace_signatures()
@@ -1760,12 +1777,11 @@ fn assert_initial_lifecycle_traces(request: &OtlpRequest) {
                 .filter(|span| span.name == "invoke_agent")
         ),
         [
-            (None, 1),
+            (None, 2),
             (Some("cancelled"), 1),
             (Some("invalid_output"), 1),
             (Some("tool_denied"), 1),
             (Some("provider_error"), 1),
-            (Some("tool_execution_error"), 1),
         ]
         .into_iter()
         .collect()
@@ -1778,7 +1794,7 @@ fn assert_initial_lifecycle_traces(request: &OtlpRequest) {
                 .filter(|span| span.name == format!("chat {OTLP_MODEL}"))
         ),
         [
-            (None, 4),
+            (None, 5),
             (Some("503"), 1),
             (Some("cancelled"), 1),
             (Some("invalid_output"), 1),
@@ -1945,7 +1961,7 @@ async fn run_otlp_lifecycle_contract_fixture() {
     let (metric_requests, trace_requests) = signal_requests(&shutdown_requests);
     assert_eq!(metric_requests.len(), 2);
     assert_eq!(trace_requests.len(), 2);
-    assert_lifecycle_metric_request(metric_requests[1], 8, 6, 7);
+    assert_lifecycle_metric_request(metric_requests[1], 9, 7, 7);
     let shutdown_spans = assert_lifecycle_trace_request(trace_requests[1], 1, 1);
     assert_eq!(shutdown_spans.len(), 2);
     for request in &shutdown_requests {

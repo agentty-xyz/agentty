@@ -353,6 +353,24 @@ impl ModelRequest {
         }
     }
 
+    pub(crate) fn with_history(
+        messages: Vec<ModelMessage>,
+        prompt: impl Into<String>,
+        schema: OutputSchema,
+    ) -> Self {
+        let prompt = prompt.into();
+        let mut messages = messages;
+        messages.push(ModelMessage::User(prompt.clone()));
+
+        Self {
+            lifecycle_observed: false,
+            messages,
+            prompt,
+            schema,
+            tools: Vec::new(),
+        }
+    }
+
     /// Advertises one native function tool for this request.
     #[must_use]
     pub fn with_tool(mut self, tool: tool::ToolDefinition) -> Self {
@@ -404,17 +422,55 @@ impl ModelRequest {
             name,
         });
     }
+
+    pub(crate) fn record_output(&mut self, output: &Value) {
+        self.messages
+            .push(ModelMessage::Assistant(output.to_string()));
+    }
+
+    pub(crate) fn into_messages(self) -> Vec<ModelMessage> {
+        self.messages
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ModelMessage {
-    User(String),
+    Assistant(String),
     AssistantToolCall(tool::ToolCall),
+    System(String),
     ToolResult {
         call_id: String,
         content: String,
         name: String,
     },
+    User(String),
+}
+
+impl ModelMessage {
+    pub(crate) fn retained_bytes(&self) -> usize {
+        match self {
+            Self::Assistant(content) | Self::System(content) | Self::User(content) => content.len(),
+            Self::AssistantToolCall(call) => {
+                let arguments = call
+                    .arguments_json()
+                    .map_or(usize::MAX, |arguments| arguments.len());
+
+                call.id()
+                    .len()
+                    .saturating_add(call.name().len())
+                    .saturating_add(arguments)
+                    .saturating_add(call.reasoning_content().map_or(0, str::len))
+            }
+            Self::ToolResult {
+                call_id,
+                content,
+                name,
+            } => call_id
+                .len()
+                .saturating_add(content.len())
+                .saturating_add(name.len()),
+        }
+    }
 }
 
 /// One model response paired with normalized provider completion metadata.
