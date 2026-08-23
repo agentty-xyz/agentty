@@ -195,102 +195,12 @@ unstructured text.
 
 ## Telemetry
 
-The shared `ModelClient` lifecycle records `gen_ai.client.operation.duration` for every
-backend request, including failures, invalid output, and cancellations. It also records
-provider-reported input and output counts in `gen_ai.client.token.usage`; absent usage
-produces no estimate. Metrics remain metadata-only, and applications own OpenTelemetry
-setup, export, and shutdown.
-
-Lifecycle telemetry emits typed, ordered, metadata-only turn, model, and tool events.
-Applications may observe and persist them independently from OpenTelemetry export; with
-neither configured, no lifecycle data is retained or sent externally. Applications own
-storage, retention, OpenTelemetry setup, export, and shutdown.
-
-`LifecycleObserverSet` composes projections over that one ordered stream. Observers run
-in registration order, and each callback has an independent panic boundary. Reentrant
-events wait behind the event currently being fanned out so every observer sees the same
-sequence order.
-
-Sensitive content is excluded. Any future content capture remains separate, explicit,
-bounded, redacted, and disabled by default.
-
-### OpenTelemetry semantic-convention contract
-
-`ag-harness` targets the OpenTelemetry GenAI semantic conventions at revision
-[`eaefa142a94cefe5d199d47e4a73727dfbd825df`](https://github.com/open-telemetry/semantic-conventions-genai/tree/eaefa142a94cefe5d199d47e4a73727dfbd825df).
-The conventions are Development status, so this immutable revision, rather than the
-repository's moving `main` branch, defines the compatibility contract.
-
-The current projections implement these standard histograms:
-
-| Instrument                            | Unit               | Explicit bucket boundaries                    |
-| ------------------------------------- | ------------------ | --------------------------------------------- |
-| `gen_ai.client.operation.duration`    | `s`                | `0.01` through `81.92`, doubling each step    |
-| `gen_ai.client.token.usage`           | `{token}`          | `1` through `67108864`, quadrupling each step |
-| `gen_ai.invoke_agent.duration`        | `s`                | `0.1` through `409.6`, doubling each step     |
-| `gen_ai.invoke_agent.inference_calls` | `{inference_call}` | `1` through `128`, doubling each step         |
-| `gen_ai.invoke_agent.tool_calls`      | `{tool_call}`      | `1` through `128`, doubling each step         |
-| `gen_ai.execute_tool.duration`        | `s`                | `0.01` through `81.92`, doubling each step    |
-
-Both model-client instruments record the required `gen_ai.operation.name` value `chat`,
-the provider identity, and the requested model when available. Token measurements also
-record the required `gen_ai.token.type` value `input` or `output`. Failed duration
-measurements record `error.type`. Instrument names, descriptions, units, boundaries,
-attribute names, and well-known values are centralized in the telemetry module.
-
-`LifecycleMetrics` counts started model requests and requested client-side tools once
-per turn, but records tool duration only after `ToolStarted`. Executions include
-`gen_ai.tool.name` and `gen_ai.tool.type=function`; unavailable agent identity and
-dynamic model identity are omitted.
-
-`LifecycleTraceObserver` projects each turn to an `invoke_agent` span with correlated
-`chat {model}` and `execute_tool {tool_name}` children. It propagates operation context
-to nested instrumentation and exports only standard, metadata-only GenAI attributes.
-
-The OTLP/HTTP contract test decodes the exported protobuf for all six histograms and the
-complete turn, model, and executed-tool span hierarchy. It covers successful,
-provider-failed, invalid-output, policy-denied, tool-execution-failed, and cancelled
-turns; verifies batching, explicit flush, shutdown, bounded attributes, and exact
-request counts; and rejects sensitive fixture content at the wire boundary.
-
-The provider registry contains one standard value and two documented custom values:
-
-| Provider | `gen_ai.provider.name` | Registry status                                                            |
-| -------- | ---------------------- | -------------------------------------------------------------------------- |
-| Kimi     | `moonshot_ai`          | OpenTelemetry well-known value                                             |
-| Muse     | `meta`                 | Custom value; no OpenTelemetry value identifies Meta Model API             |
-| Qwen     | `alibaba_cloud`        | Custom value; no OpenTelemetry value identifies Alibaba Cloud Model Studio |
-
-Model request failures use this bounded `error.type` vocabulary:
-
-| Value                       | Meaning                                                 |
-| --------------------------- | ------------------------------------------------------- |
-| HTTP status code            | Provider returned that valid HTTP error status          |
-| `cancelled`                 | The request future was dropped before completion        |
-| `request_error`             | Request construction or an unclassified client failure  |
-| `transport_error`           | Transport failed before a provider response was decoded |
-| `provider_error`            | Provider failure without an available HTTP status       |
-| `invalid_provider_response` | Provider response envelope was malformed                |
-| `invalid_response`          | Successful response was incomplete or unusable          |
-| `unsupported_output`        | Provider could not satisfy the output contract          |
-| `response_too_large`        | Response exceeded a configured safety bound             |
-| `invalid_output`            | Output failed JSON parsing or schema validation         |
-| `invalid_tool_call`         | Tool call was missing, malformed, or unsupported        |
-
-Turn and tool projections additionally use `cancelled`, `tool_execution_error`,
-`tool_denied`, `tool_call_limit`, and `repository_required`.
-
-Messages, prompts, system instructions, tool arguments, tool results, response bodies,
-repository content, and internal lifecycle identifiers are never projected to
-OpenTelemetry. Opt-in content attributes and events remain disabled even when the
-semantic conventions define them.
-
-Upgrading the pinned revision requires an explicit conformance change. That change must
-review the source models and generated metric, span, and event documents; update the
-pin, central constants, provider and error registries, contract tests, and this
-architecture page together; and preserve the metadata-only policy. When the pinned
-revision has no applicable convention, the fact remains an internal `LifecycleEvent`
-instead of being exported under an invented standard-looking name.
+- `ModelClient` records request duration and provider-reported input and output token
+  usage when the application installs an OpenTelemetry meter provider.
+- `with_lifecycle_observer()` emits lifecycle events, while `TurnOutcome::report()`
+  returns a successful turn summary.
+- Available telemetry includes request and tool durations, provider and model identity,
+  token and call counts, outcomes, and failures.
 
 ## Permissions
 
@@ -333,28 +243,7 @@ best cost and performance:
 
 ## Next iterations
 
-- [x] **Read tool round trip.** Complete a model-requested repository read.
-- [x] **Write tool round trip.** Complete a model-requested repository write.
-- [x] **Completion metadata foundation.** Normalize provider response identity, finish
-  outcome, optional token usage, and stable model failure classifications.
-- [x] **Lifecycle event foundation.** Emit ordered, correlated, metadata-only turn,
-  model, and tool events through an optional application observer.
-- [x] **Model-client metrics.** Record request duration, reported input and output token
-  usage, operation and model identity, and bounded failures without sensitive or
-  high-cardinality content.
-- [x] **Turn and tool metric projection.** Derive aggregate turn and tool measurements
-  from lifecycle facts without double-counting model-client metrics.
-- [x] **Lifecycle trace projection.** Represent a turn as a parent span with correlated
-  model and tool children, including correct completion, failure, and cancellation.
-- [x] **OTLP contract coverage.** Decode exported test payloads and verify signal names,
-  relationships, attributes, batching and shutdown, and the absence of fixture secrets.
-- [ ] **Durable host journal.** Define a versioned host-owned event envelope, delivery
-  and checkpoint policy, retention, corruption recovery, and compatibility behavior.
-- [ ] **Persisted session round trip.** Run sequential turns in one resumable session,
-  and persist model and tool history.
-- [x] **In-memory chat round trip.** Run sequential turns with user, assistant, and tool
-  history, plus sanitized per-turn activity reports.
-- [x] **Second provider.** Integrate Kimi through the structured-output contract.
+- [ ] **Benchmarks.** Measure task quality, latency, token and tool usage, and cost.
 
 ## Roadmap
 
