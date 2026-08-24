@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::error::Error;
 
 use async_trait::async_trait;
@@ -6,7 +7,7 @@ use thiserror::Error;
 
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, ModelResponseType};
 use crate::provider::{self, KimiConfig, MuseConfig, QwenConfig};
-use crate::schema_contract::{OutputSchema, OutputValidationError};
+use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
 use crate::{chat_completion, telemetry, tool};
 
 /// Object-safe boundary for provider-neutral model requests.
@@ -225,6 +226,13 @@ impl ModelClient {
                 )),
                 None,
             ),
+            Ok(chat_completion::GeneratedResponse::ToolCalls { calls, metadata }) => (
+                Ok(ModelCompletion::new(
+                    metadata,
+                    ModelResponse::tool_calls(calls),
+                )),
+                None,
+            ),
             Err(error) => (Err(error), None),
         };
 
@@ -423,6 +431,30 @@ impl ModelRequest {
         });
     }
 
+    pub(crate) fn record_tool_results(
+        &mut self,
+        calls: Vec<tool::ToolCall>,
+        contents: Vec<String>,
+    ) {
+        debug_assert_eq!(calls.len(), contents.len());
+        let results: Vec<_> = calls
+            .iter()
+            .zip(contents)
+            .map(|(call, content)| (call.id().to_string(), call.name().to_string(), content))
+            .collect();
+        self.messages.push(ModelMessage::AssistantToolCalls(calls));
+        self.messages
+            .extend(
+                results
+                    .into_iter()
+                    .map(|(call_id, name, content)| ModelMessage::ToolResult {
+                        call_id,
+                        content,
+                        name,
+                    }),
+            );
+    }
+
     pub(crate) fn record_output(&mut self, output: &Value) {
         self.messages
             .push(ModelMessage::Assistant(output.to_string()));
@@ -437,6 +469,7 @@ impl ModelRequest {
 pub(crate) enum ModelMessage {
     Assistant(String),
     AssistantToolCall(tool::ToolCall),
+    AssistantToolCalls(Vec<tool::ToolCall>),
     System(String),
     ToolResult {
         call_id: String,
@@ -461,6 +494,17 @@ impl ModelMessage {
                     .saturating_add(arguments)
                     .saturating_add(call.reasoning_content().map_or(0, str::len))
             }
+            Self::AssistantToolCalls(calls) => calls.iter().fold(0, |bytes, call| {
+                let arguments = call
+                    .arguments_json()
+                    .map_or(usize::MAX, |arguments| arguments.len());
+
+                bytes
+                    .saturating_add(call.id().len())
+                    .saturating_add(call.name().len())
+                    .saturating_add(arguments)
+                    .saturating_add(call.reasoning_content().map_or(0, str::len))
+            }),
             Self::ToolResult {
                 call_id,
                 content,
@@ -626,6 +670,10 @@ pub enum ModelResponse {
     Output(Value),
     /// One validated native function call requiring application handling.
     ToolCall(tool::ToolCall),
+    /// Multiple validated native function calls from one model response.
+    ///
+    /// The harness rejects an empty batch as a missing tool call.
+    ToolCalls(Vec<tool::ToolCall>),
 }
 
 impl ModelResponse {
@@ -633,15 +681,24 @@ impl ModelResponse {
     pub fn output(&self) -> Option<&Value> {
         match self {
             Self::Output(output) => Some(output),
-            Self::ToolCall(_) => None,
+            Self::ToolCall(_) | Self::ToolCalls(_) => None,
         }
     }
 
     /// Returns the intermediate native function call, when present.
     pub fn call(&self) -> Option<&tool::ToolCall> {
         match self {
-            Self::Output(_) => None,
             Self::ToolCall(call) => Some(call),
+            Self::Output(_) | Self::ToolCalls(_) => None,
+        }
+    }
+
+    /// Returns every intermediate native function call in this response.
+    pub fn calls(&self) -> &[tool::ToolCall] {
+        match self {
+            Self::Output(_) => &[],
+            Self::ToolCall(call) => std::slice::from_ref(call),
+            Self::ToolCalls(calls) => calls,
         }
     }
 
@@ -653,10 +710,14 @@ impl ModelResponse {
         Self::ToolCall(call)
     }
 
+    fn tool_calls(calls: Vec<tool::ToolCall>) -> Self {
+        Self::ToolCalls(calls)
+    }
+
     pub(crate) fn response_type(&self) -> ModelResponseType {
         match self {
             Self::Output(_) => ModelResponseType::Output,
-            Self::ToolCall(_) => ModelResponseType::ToolCall,
+            Self::ToolCall(_) | Self::ToolCalls(_) => ModelResponseType::ToolCall,
         }
     }
 }
@@ -709,6 +770,12 @@ pub enum ModelError {
     /// The provider returned more than the single supported call.
     #[error("model returned multiple tool calls")]
     MultipleToolCalls,
+    /// The provider returned multiple tool calls with the same identifier.
+    #[error("model returned duplicate tool call identifier: {id}")]
+    DuplicateToolCallId {
+        /// Bounded duplicate identifier returned by the provider.
+        id: String,
+    },
     /// A tool-call response also contained terminal assistant content.
     #[error("model tool call response contained terminal content")]
     ToolCallWithContent,
@@ -824,6 +891,7 @@ impl ModelError {
             }
             Self::MissingToolCall
             | Self::MultipleToolCalls
+            | Self::DuplicateToolCallId { .. }
             | Self::ToolCallWithContent
             | Self::TerminalResponseWithToolCalls
             | Self::UnsupportedToolType { .. }
@@ -863,6 +931,19 @@ impl ModelError {
     ) -> Self {
         Self::Request(Box::new(ClassifiedRequestError { error_type, source }))
     }
+}
+
+pub(crate) fn ensure_unique_tool_call_ids(calls: &[tool::ToolCall]) -> Result<(), ModelError> {
+    let mut call_ids = HashSet::with_capacity(calls.len());
+    for call in calls {
+        if !call_ids.insert(call.id()) {
+            return Err(ModelError::DuplicateToolCallId {
+                id: bounded_diagnostic(call.id()),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 impl From<OutputValidationError> for ModelError {
@@ -1058,6 +1139,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn client_returns_multiple_tool_calls() {
+        // Arrange
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_manifest",
+                                "type": "function",
+                                "function": {
+                                    "name": "read",
+                                    "arguments": r#"{"path":"Cargo.toml"}"#
+                                }
+                            },
+                            {
+                                "id": "call_readme",
+                                "type": "function",
+                                "function": {
+                                    "name": "read",
+                                    "arguments": r#"{"path":"README.md"}"#
+                                }
+                            }
+                        ]
+                    }
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = ModelClient::qwen(QwenConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.uri(),
+            model: "qwen-plus".to_string(),
+        })
+        .expect("fixture configuration should be valid");
+        let request = test_request().with_tool(tool::ToolDefinition::read());
+
+        // Act
+        let completion = client
+            .complete_with_metadata(request)
+            .await
+            .expect("batched tool response should complete");
+
+        // Assert
+        assert_eq!(completion.metadata().finish_reason(), "tool_calls");
+        assert_eq!(
+            completion
+                .response()
+                .calls()
+                .iter()
+                .map(tool::ToolCall::id)
+                .collect::<Vec<_>>(),
+            ["call_manifest", "call_readme"]
+        );
+    }
+
+    #[tokio::test]
     async fn client_observes_classified_failure() {
         // Arrange
         let server = MockServer::start().await;
@@ -1207,6 +1350,74 @@ mod tests {
         // Assert
         assert_eq!(response.output(), Some(&value));
         assert!(response.call().is_none());
+        assert_eq!(response.calls(), []);
+    }
+
+    #[test]
+    fn response_exposes_multiple_tool_calls() {
+        // Arrange
+        let calls = vec![
+            tool::ToolCall::read(
+                "call_one".to_string(),
+                serde_json::from_value(json!({"path": "Cargo.toml"}))
+                    .expect("read arguments should be valid"),
+                None,
+            ),
+            tool::ToolCall::read(
+                "call_two".to_string(),
+                serde_json::from_value(json!({"path": "README.md"}))
+                    .expect("read arguments should be valid"),
+                None,
+            ),
+        ];
+
+        // Act
+        let response = ModelResponse::tool_calls(calls);
+
+        // Assert
+        assert!(response.output().is_none());
+        assert!(response.call().is_none());
+        assert_eq!(
+            response
+                .calls()
+                .iter()
+                .map(tool::ToolCall::id)
+                .collect::<Vec<_>>(),
+            ["call_one", "call_two"]
+        );
+    }
+
+    #[test]
+    fn batched_tool_message_retained_bytes_sums_each_call() {
+        // Arrange
+        let calls = vec![
+            tool::ToolCall::read(
+                "call_manifest".to_string(),
+                serde_json::from_value(json!({"path": "Cargo.toml"}))
+                    .expect("read arguments should be valid"),
+                Some("reasoning".to_string()),
+            ),
+            tool::ToolCall::read(
+                "call_readme".to_string(),
+                serde_json::from_value(json!({"path": "README.md"}))
+                    .expect("read arguments should be valid"),
+                None,
+            ),
+        ];
+        let message = ModelMessage::AssistantToolCalls(calls);
+        let expected = "call_manifest".len()
+            + "read".len()
+            + r#"{"path":"Cargo.toml"}"#.len()
+            + "reasoning".len()
+            + "call_readme".len()
+            + "read".len()
+            + r#"{"path":"README.md"}"#.len();
+
+        // Act
+        let retained_bytes = message.retained_bytes();
+
+        // Assert
+        assert_eq!(retained_bytes, expected);
     }
 
     #[test]
@@ -1276,6 +1487,7 @@ mod tests {
         let debug_output = format!("{response:?}");
 
         // Assert
+        assert_eq!(response.calls()[0].id(), "call_read");
         assert!(debug_output.contains("call_read"));
         assert!(debug_output.contains("[REDACTED]"));
         assert!(!debug_output.contains(secret_reasoning));
@@ -1420,6 +1632,21 @@ mod tests {
             ModelErrorType::InvalidToolCall.as_str(),
             "invalid_tool_call"
         );
+    }
+
+    #[test]
+    fn classifies_duplicate_tool_call_id_as_invalid_tool_call() {
+        // Arrange
+        let error = ModelError::DuplicateToolCallId {
+            id: "duplicate_call".to_string(),
+        };
+
+        // Act
+        let error_type = error.error_type();
+
+        // Assert
+        assert_eq!(error_type, ModelErrorType::InvalidToolCall);
+        assert_eq!(error.http_status(), None);
     }
 
     #[test]

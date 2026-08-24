@@ -13,7 +13,7 @@ use crate::{model, schema_contract, tool};
 
 pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
 const JSON_STRING_MAX_EXPANSION: usize = 6;
-const MAX_RATE_LIMIT_RETRIES: usize = 2;
+const MAX_RATE_LIMIT_RETRIES: usize = 5;
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_TRANSPORT_RETRIES: usize = 1;
 pub(crate) const RESPONSE_ENVELOPE_LIMIT_BYTES: usize = 64 * 1024;
@@ -81,6 +81,10 @@ pub(crate) enum GeneratedResponse {
     },
     ToolCall {
         call: tool::ToolCall,
+        metadata: model::CompletionMetadata,
+    },
+    ToolCalls {
+        calls: Vec<tool::ToolCall>,
         metadata: model::CompletionMetadata,
     },
 }
@@ -167,7 +171,7 @@ impl ChatCompletionBackend {
                 self.policy
                     .structured_output
                     .assistant_reasoning_content()
-                    .then_some(reasoning_content)
+                    .then_some(reasoning_content.as_deref())
                     .flatten(),
                 tool_calls,
                 metadata,
@@ -238,26 +242,10 @@ impl ChatCompletionBackend {
                     });
                 }
                 model::ModelMessage::AssistantToolCall(call) => {
-                    messages.push(ChatCompletionMessagePayload::AssistantToolCall {
-                        content: None,
-                        reasoning_content: self
-                            .policy
-                            .structured_output
-                            .assistant_reasoning_content()
-                            .then(|| call.reasoning_content().map(str::to_string))
-                            .flatten(),
-                        role: "assistant",
-                        tool_calls: vec![ChatCompletionOutgoingToolCall {
-                            function: ChatCompletionOutgoingFunctionCall {
-                                arguments: call
-                                    .arguments_json()
-                                    .map_err(model::ModelError::request)?,
-                                name: call.name().to_string(),
-                            },
-                            id: call.id().to_string(),
-                            kind: "function",
-                        }],
-                    });
+                    messages.push(self.assistant_tool_call_message(std::slice::from_ref(call))?);
+                }
+                model::ModelMessage::AssistantToolCalls(calls) => {
+                    messages.push(self.assistant_tool_call_message(calls)?);
                 }
                 model::ModelMessage::ToolResult {
                     call_id,
@@ -279,6 +267,43 @@ impl ChatCompletionBackend {
         }
 
         Ok(messages)
+    }
+
+    fn assistant_tool_call_message(
+        &self,
+        calls: &[tool::ToolCall],
+    ) -> Result<ChatCompletionMessagePayload, model::ModelError> {
+        let reasoning_content = self
+            .policy
+            .structured_output
+            .assistant_reasoning_content()
+            .then(|| {
+                calls
+                    .first()
+                    .and_then(tool::ToolCall::reasoning_content)
+                    .map(str::to_string)
+            })
+            .flatten();
+        let tool_calls = calls
+            .iter()
+            .map(|call| {
+                Ok(ChatCompletionOutgoingToolCall {
+                    function: ChatCompletionOutgoingFunctionCall {
+                        arguments: call.arguments_json().map_err(model::ModelError::request)?,
+                        name: call.name().to_string(),
+                    },
+                    id: call.id().to_string(),
+                    kind: "function",
+                })
+            })
+            .collect::<Result<_, model::ModelError>>()?;
+
+        Ok(ChatCompletionMessagePayload::AssistantToolCall {
+            content: None,
+            reasoning_content,
+            role: "assistant",
+            tool_calls,
+        })
     }
 
     fn response_format<'a>(&self, schema: &'a schema_contract::OutputSchema) -> ResponseFormat<'a> {
@@ -323,12 +348,16 @@ impl ChatCompletionBackend {
     fn decode_tool_call(
         request: &model::ModelRequest,
         content: Option<&str>,
-        reasoning_content: Option<String>,
+        reasoning_content: Option<&str>,
         calls: Vec<ChatCompletionToolCall>,
         metadata: model::CompletionMetadata,
     ) -> GeneratedResponse {
         match Self::decode_tool_call_parts(request, content, reasoning_content, calls) {
-            Ok(call) => GeneratedResponse::ToolCall { call, metadata },
+            Ok(mut calls) if calls.len() == 1 => GeneratedResponse::ToolCall {
+                call: calls.remove(0),
+                metadata,
+            },
+            Ok(calls) => GeneratedResponse::ToolCalls { calls, metadata },
             Err(error) => GeneratedResponse::failed(error, metadata),
         }
     }
@@ -336,17 +365,33 @@ impl ChatCompletionBackend {
     fn decode_tool_call_parts(
         request: &model::ModelRequest,
         content: Option<&str>,
-        reasoning_content: Option<String>,
-        mut calls: Vec<ChatCompletionToolCall>,
-    ) -> Result<tool::ToolCall, model::ModelError> {
+        reasoning_content: Option<&str>,
+        calls: Vec<ChatCompletionToolCall>,
+    ) -> Result<Vec<tool::ToolCall>, model::ModelError> {
         if content.is_some_and(|content| !content.is_empty()) {
             return Err(model::ModelError::ToolCallWithContent);
         }
-        let call = match calls.len() {
-            0 => return Err(model::ModelError::MissingToolCall),
-            1 => calls.remove(0),
-            _ => return Err(model::ModelError::MultipleToolCalls),
-        };
+        if calls.is_empty() {
+            return Err(model::ModelError::MissingToolCall);
+        }
+        let mut decoded = Vec::with_capacity(calls.len());
+        for (index, call) in calls.into_iter().enumerate() {
+            decoded.push(Self::decode_one_tool_call(
+                request,
+                call,
+                (index == 0).then_some(reasoning_content).flatten(),
+            )?);
+        }
+        model::ensure_unique_tool_call_ids(&decoded)?;
+
+        Ok(decoded)
+    }
+
+    fn decode_one_tool_call(
+        request: &model::ModelRequest,
+        call: ChatCompletionToolCall,
+        reasoning_content: Option<&str>,
+    ) -> Result<tool::ToolCall, model::ModelError> {
         if call.kind != "function" {
             return Err(model::ModelError::UnsupportedToolType {
                 kind: schema_contract::bounded_diagnostic(call.kind),
@@ -363,7 +408,7 @@ impl ChatCompletionBackend {
         }
         schema_contract::ensure_content_size(&function.arguments)
             .map_err(model::ModelError::from)?;
-        if let Some(reasoning_content) = reasoning_content.as_deref() {
+        if let Some(reasoning_content) = reasoning_content {
             schema_contract::ensure_content_size(reasoning_content)
                 .map_err(model::ModelError::from)?;
         }
@@ -373,14 +418,14 @@ impl ChatCompletionBackend {
                     reason: schema_contract::bounded_diagnostic(error),
                 })?;
 
-            tool::ToolCall::write(call.id, arguments, reasoning_content)
+            tool::ToolCall::write(call.id, arguments, reasoning_content.map(str::to_string))
         } else {
             let arguments = serde_json::from_str::<tool::ReadArguments>(&function.arguments)
                 .map_err(|error| model::ModelError::InvalidToolArguments {
                     reason: schema_contract::bounded_diagnostic(error),
                 })?;
 
-            tool::ToolCall::read(call.id, arguments, reasoning_content)
+            tool::ToolCall::read(call.id, arguments, reasoning_content.map(str::to_string))
         };
 
         Ok(call)
@@ -542,15 +587,15 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
 }
 
 fn rate_limit_retry_delay(headers: &reqwest::header::HeaderMap, retry: usize) -> Duration {
-    headers
+    let provider_delay = headers
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
-        .map_or_else(
-            || RETRY_DELAY.saturating_mul(1_u32 << retry.min(31)),
-            Duration::from_secs,
-        )
-        .min(MAX_RETRY_DELAY)
+        .map(Duration::from_secs)
+        .unwrap_or_default();
+    let backoff = RETRY_DELAY.saturating_mul(1_u32 << retry.min(31));
+
+    provider_delay.max(backoff).min(MAX_RETRY_DELAY)
 }
 
 async fn error_body_summary(response: &mut reqwest::Response) -> String {
@@ -870,6 +915,22 @@ mod tests {
 
     use super::*;
 
+    fn native_schema_backend() -> ChatCompletionBackend {
+        ChatCompletionBackend::with_client(
+            "test-key".to_string(),
+            "https://example.com/v1".to_string(),
+            "native-schema-model".to_string(),
+            ChatCompletionProviderPolicy {
+                display_name: "Native schema provider",
+                response_format_with_tools: true,
+                structured_output: StructuredOutputMode::JsonSchema,
+                telemetry_name: "native_schema",
+                unsupported_schema_reason: "object schema required",
+            },
+            default_client(),
+        )
+    }
+
     #[test]
     fn builds_endpoint_from_base_url() {
         // Arrange and Act
@@ -882,19 +943,7 @@ mod tests {
     #[test]
     fn serializes_tool_history_for_native_json_schema_provider() {
         // Arrange
-        let backend = ChatCompletionBackend::with_client(
-            "test-key".to_string(),
-            "https://example.com/v1".to_string(),
-            "native-schema-model".to_string(),
-            ChatCompletionProviderPolicy {
-                display_name: "Native schema provider",
-                response_format_with_tools: true,
-                structured_output: StructuredOutputMode::JsonSchema,
-                telemetry_name: "native_schema",
-                unsupported_schema_reason: "object schema required",
-            },
-            default_client(),
-        );
+        let backend = native_schema_backend();
         let schema = schema_contract::OutputSchema::new(serde_json::json!({
             "type": "object"
         }))
@@ -944,21 +993,84 @@ mod tests {
     }
 
     #[test]
+    fn serializes_batched_tool_history_for_native_json_schema_provider() {
+        // Arrange
+        let backend = native_schema_backend();
+        let schema = schema_contract::OutputSchema::new(serde_json::json!({
+            "type": "object"
+        }))
+        .expect("schema should be valid");
+        let calls = [
+            ("call_manifest", "Cargo.toml"),
+            ("call_readme", "README.md"),
+        ]
+        .into_iter()
+        .map(|(id, path)| {
+            let arguments = serde_json::from_value(serde_json::json!({ "path": path }))
+                .expect("read arguments should be valid");
+
+            tool::ToolCall::read(id.to_string(), arguments, None)
+        })
+        .collect();
+        let mut request = model::ModelRequest::new("inspect both files", schema);
+        request.record_tool_results(
+            calls,
+            vec!["manifest result".to_string(), "readme result".to_string()],
+        );
+
+        // Act
+        let messages = serde_json::to_value(
+            backend
+                .messages(&request)
+                .expect("batched tool history should serialize"),
+        )
+        .expect("messages should encode as JSON");
+
+        // Assert
+        assert_eq!(
+            messages,
+            serde_json::json!([
+                {"content": "inspect both files", "role": "user"},
+                {
+                    "content": null,
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "arguments": r#"{"path":"Cargo.toml"}"#,
+                                "name": "read"
+                            },
+                            "id": "call_manifest",
+                            "type": "function"
+                        },
+                        {
+                            "function": {
+                                "arguments": r#"{"path":"README.md"}"#,
+                                "name": "read"
+                            },
+                            "id": "call_readme",
+                            "type": "function"
+                        }
+                    ]
+                },
+                {
+                    "content": "manifest result",
+                    "role": "tool",
+                    "tool_call_id": "call_manifest"
+                },
+                {
+                    "content": "readme result",
+                    "role": "tool",
+                    "tool_call_id": "call_readme"
+                }
+            ])
+        );
+    }
+
+    #[test]
     fn serializes_conversation_history() {
         // Arrange
-        let backend = ChatCompletionBackend::with_client(
-            "test-key".to_string(),
-            "https://example.com/v1".to_string(),
-            "native-schema-model".to_string(),
-            ChatCompletionProviderPolicy {
-                display_name: "Native schema provider",
-                response_format_with_tools: true,
-                structured_output: StructuredOutputMode::JsonSchema,
-                telemetry_name: "native_schema",
-                unsupported_schema_reason: "object schema required",
-            },
-            default_client(),
-        );
+        let backend = native_schema_backend();
         let schema = schema_contract::OutputSchema::new(serde_json::json!({
             "type": "object"
         }))
@@ -1188,6 +1300,92 @@ mod tests {
     }
 
     #[test]
+    fn decodes_multiple_advertised_tool_calls() {
+        // Arrange
+        let schema = schema_contract::OutputSchema::new(serde_json::json!({
+            "type": "object"
+        }))
+        .expect("schema should be valid");
+        let request =
+            model::ModelRequest::new("inspect", schema).with_tool(tool::ToolDefinition::read());
+        let calls = ["Cargo.toml", "README.md"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| ChatCompletionToolCall {
+                function: serde_json::json!({
+                    "name": "read",
+                    "arguments": serde_json::json!({"path": path}).to_string()
+                }),
+                id: format!("call_{index}"),
+                kind: "function".to_string(),
+            })
+            .collect();
+
+        // Act
+        let response = ChatCompletionBackend::decode_tool_call(
+            &request,
+            None,
+            Some("reasoning"),
+            calls,
+            model::CompletionMetadata::new("tool_calls".to_string(), None, None, None, None),
+        );
+
+        // Assert
+        assert!(matches!(
+            response,
+            GeneratedResponse::ToolCalls { calls, metadata }
+                if metadata.finish_reason() == "tool_calls"
+                    && calls.len() == 2
+                    && calls[0].read_arguments().is_some_and(|arguments| {
+                        arguments.path() == "Cargo.toml"
+                    })
+                    && calls[1].read_arguments().is_some_and(|arguments| {
+                        arguments.path() == "README.md"
+                    })
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_tool_call_ids() {
+        // Arrange
+        let schema = schema_contract::OutputSchema::new(serde_json::json!({
+            "type": "object"
+        }))
+        .expect("schema should be valid");
+        let request =
+            model::ModelRequest::new("inspect", schema).with_tool(tool::ToolDefinition::read());
+        let calls = ["Cargo.toml", "README.md"]
+            .into_iter()
+            .map(|path| ChatCompletionToolCall {
+                function: serde_json::json!({
+                    "name": "read",
+                    "arguments": serde_json::json!({"path": path}).to_string()
+                }),
+                id: "duplicate_call".to_string(),
+                kind: "function".to_string(),
+            })
+            .collect();
+
+        // Act
+        let response = ChatCompletionBackend::decode_tool_call(
+            &request,
+            None,
+            None,
+            calls,
+            model::CompletionMetadata::new("tool_calls".to_string(), None, None, None, None),
+        );
+
+        // Assert
+        assert!(matches!(
+            response,
+            GeneratedResponse::Failed {
+                error: model::ModelError::DuplicateToolCallId { id },
+                metadata,
+            } if id == "duplicate_call" && metadata.finish_reason() == "tool_calls"
+        ));
+    }
+
+    #[test]
     fn rejects_success_chunk_that_exceeds_remaining_capacity() {
         // Arrange
         let mut body = vec![0; SUCCESS_BODY_LIMIT_BYTES - 1];
@@ -1259,6 +1457,11 @@ mod tests {
         // Act and Assert
         assert_eq!(rate_limit_retry_delay(&headers, 0), Duration::from_secs(1));
         assert_eq!(rate_limit_retry_delay(&headers, 1), Duration::from_secs(2));
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            "1".parse().expect("valid header"),
+        );
+        assert_eq!(rate_limit_retry_delay(&headers, 2), Duration::from_secs(4));
         headers.insert(
             reqwest::header::RETRY_AFTER,
             "99".parse().expect("valid header"),

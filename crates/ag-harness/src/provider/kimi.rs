@@ -367,44 +367,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_missing_and_multiple_tool_calls() {
+    async fn rejects_missing_tool_call() {
         // Arrange
-        let messages = [
-            (json!({"content": null}), "model returned no tool call"),
-            (
-                json!({
-                    "content": null,
-                    "tool_calls": [
-                        {
-                            "id": "call_one",
-                            "type": "function",
-                            "function": {"name": "read", "arguments": r#"{"path":"Cargo.toml"}"#}
-                        },
-                        {
-                            "id": "call_two",
-                            "type": "function",
-                            "function": {"name": "read", "arguments": r#"{"path":"README.md"}"#}
-                        }
-                    ]
-                }),
-                "model returned multiple tool calls",
-            ),
-        ];
+        let server = MockServer::start().await;
+        mount_tool_response(&server, "inspect the manifest", json!({"content": null})).await;
+        let model = kimi(&server);
 
         // Act
-        let mut errors = Vec::new();
-        for (message, expected) in messages {
-            let server = MockServer::start().await;
-            mount_tool_response(&server, "inspect the manifest", message).await;
-            let error = kimi(&server)
-                .complete(read_request("inspect the manifest"))
-                .await
-                .expect_err("invalid tool-call count should fail");
-            errors.push((error.to_string(), expected));
-        }
+        let error = model
+            .complete(read_request("inspect the manifest"))
+            .await
+            .expect_err("missing tool call should fail");
 
         // Assert
-        assert!(errors.iter().all(|(error, expected)| error == expected));
+        assert_eq!(error.to_string(), "model returned no tool call");
     }
 
     #[tokio::test]

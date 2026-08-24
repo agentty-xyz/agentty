@@ -14,6 +14,7 @@ use crate::lifecycle::{
 };
 use crate::model::{
     CompletionMetadata, Model, ModelError, ModelMessage, ModelRequest, ModelResponse,
+    ensure_unique_tool_call_ids,
 };
 use crate::policy::Policy;
 use crate::read::{ReadError, ReadTool};
@@ -484,6 +485,33 @@ impl Harness {
                     request.record_tool_result(call, result);
                     tool_calls.push(activity);
                     completed_tool_calls += 1;
+                }
+                ModelResponse::ToolCalls(calls) => {
+                    if calls.is_empty() {
+                        return Err(ModelError::MissingToolCall.into());
+                    }
+                    ensure_unique_tool_call_ids(&calls)?;
+                    if calls.len() > self.max_tool_calls.saturating_sub(completed_tool_calls) {
+                        return Err(TurnError::ToolCallLimit {
+                            limit: self.max_tool_calls,
+                        });
+                    }
+                    let mut results = Vec::with_capacity(calls.len());
+                    for call in &calls {
+                        let (result, activity) = self
+                            .execute_tool_call(
+                                call,
+                                read_tool.as_ref(),
+                                write_tool.as_ref(),
+                                completed_tool_calls,
+                                turn_id,
+                            )
+                            .await?;
+                        results.push(result);
+                        tool_calls.push(activity);
+                        completed_tool_calls += 1;
+                    }
+                    request.record_tool_results(calls, results);
                 }
             }
         }
@@ -1036,6 +1064,75 @@ mod tests {
 
         // Assert
         assert_eq!(output, json!({ "summary": "workspace" }));
+    }
+
+    #[tokio::test]
+    async fn completes_multiple_read_tools_from_one_model_response() {
+        // Arrange
+        let mut model = model();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        model
+            .expect_complete_with_optional_metadata()
+            .times(2)
+            .returning(move |request| {
+                if call_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Ok(response_without_metadata(ModelResponse::ToolCalls(vec![
+                        read_call("call_one"),
+                        read_call("call_two"),
+                    ])));
+                }
+                assert!(matches!(
+                    &request.messages()[1],
+                    ModelMessage::AssistantToolCalls(calls)
+                        if calls.iter().map(ToolCall::id).collect::<Vec<_>>()
+                            == ["call_one", "call_two"]
+                ));
+                assert!(matches!(
+                    &request.messages()[2],
+                    ModelMessage::ToolResult { call_id, .. } if call_id == "call_one"
+                ));
+                assert!(matches!(
+                    &request.messages()[3],
+                    ModelMessage::ToolResult { call_id, .. } if call_id == "call_two"
+                ));
+
+                Ok(response_without_metadata(ModelResponse::Output(
+                    json!({ "summary": "workspace" }),
+                )))
+            });
+        let mut file_system = MockFileSystem::new();
+        file_system
+            .expect_canonicalize()
+            .times(4)
+            .returning(|path| {
+                if path == std::path::Path::new("repo") {
+                    Ok(PathBuf::from("/repo"))
+                } else {
+                    Ok(PathBuf::from("/repo/Cargo.toml"))
+                }
+            });
+        file_system
+            .expect_open_beneath()
+            .times(2)
+            .returning(|_, _| {
+                Ok(Box::new(Cursor::new(
+                    b"[workspace]\nmember = true\n".to_vec(),
+                )))
+            });
+        let harness = Harness::new(model)
+            .file_system(file_system)
+            .repository("repo")
+            .allow(Tool::Read);
+
+        // Act
+        let outcome = harness
+            .run_report("inspect two files", object_schema())
+            .await
+            .expect("parallel tool round trip should succeed");
+
+        // Assert
+        assert_eq!(outcome.output(), &json!({ "summary": "workspace" }));
+        assert_eq!(outcome.report().tool_calls().len(), 2);
     }
 
     #[tokio::test]
@@ -1845,6 +1942,154 @@ mod tests {
         // Assert
         assert!(matches!(&error, TurnError::ToolCallLimit { limit: 1 }));
         assert_eq!(error.error_type(), TurnErrorType::ToolCallLimit);
+    }
+
+    #[tokio::test]
+    async fn enforces_tool_call_limit_within_one_model_response() {
+        // Arrange
+        let mut model = model();
+        model
+            .expect_complete_with_optional_metadata()
+            .times(1)
+            .returning(|_| {
+                Ok(response_without_metadata(ModelResponse::ToolCalls(vec![
+                    read_call("call_one"),
+                    read_call("call_two"),
+                ])))
+            });
+        let mut file_system = MockFileSystem::new();
+        file_system.expect_canonicalize().times(0);
+        file_system.expect_open_beneath().times(0);
+        let harness = Harness::new(model)
+            .file_system(file_system)
+            .repository("repo")
+            .allow(Tool::Read)
+            .max_tool_calls(NonZeroUsize::new(1).expect("limit should be non-zero"));
+
+        // Act
+        let error = harness
+            .run("inspect", object_schema())
+            .await
+            .expect_err("second batched tool call should exceed the limit");
+
+        // Assert
+        assert!(matches!(error, TurnError::ToolCallLimit { limit: 1 }));
+    }
+
+    #[tokio::test]
+    async fn rejects_batched_writes_before_any_write_executes() {
+        // Arrange
+        let mut model = model();
+        model
+            .expect_complete_with_optional_metadata()
+            .times(1)
+            .returning(|_| {
+                Ok(response_without_metadata(ModelResponse::ToolCalls(vec![
+                    write_call(
+                        "call_one",
+                        "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+first\n",
+                    ),
+                    write_call(
+                        "call_two",
+                        "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+second\n",
+                    ),
+                ])))
+            });
+        let mut file_system = MockFileSystem::new();
+        file_system.expect_canonicalize().times(0);
+        file_system.expect_open_beneath().times(0);
+        file_system.expect_replace_beneath().times(0);
+        let harness = Harness::new(model)
+            .file_system(file_system)
+            .repository("repo")
+            .allow(Tool::Write)
+            .max_tool_calls(NonZeroUsize::new(1).expect("limit should be non-zero"));
+
+        // Act
+        let error = harness
+            .run("update twice", object_schema())
+            .await
+            .expect_err("oversized batch should fail before writing");
+
+        // Assert
+        assert!(matches!(&error, TurnError::ToolCallLimit { limit: 1 }));
+        assert_eq!(error.error_type(), TurnErrorType::ToolCallLimit);
+    }
+
+    #[tokio::test]
+    async fn rejects_duplicate_batched_call_ids_before_any_write_executes() {
+        // Arrange
+        let mut model = model();
+        model
+            .expect_complete_with_optional_metadata()
+            .times(1)
+            .returning(|_| {
+                Ok(response_without_metadata(ModelResponse::ToolCalls(vec![
+                    write_call(
+                        "duplicate_call",
+                        "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+first\n",
+                    ),
+                    write_call(
+                        "duplicate_call",
+                        "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+second\n",
+                    ),
+                ])))
+            });
+        let mut file_system = MockFileSystem::new();
+        file_system.expect_canonicalize().times(0);
+        file_system.expect_open_beneath().times(0);
+        file_system.expect_replace_beneath().times(0);
+        let harness = Harness::new(model)
+            .file_system(file_system)
+            .repository("repo")
+            .allow(Tool::Write);
+
+        // Act
+        let error = harness
+            .run("update twice", object_schema())
+            .await
+            .expect_err("duplicate call identifiers should fail before writing");
+
+        // Assert
+        assert!(matches!(
+            &error,
+            TurnError::Model(ModelError::DuplicateToolCallId { id }) if id == "duplicate_call"
+        ));
+        assert_eq!(
+            error.error_type(),
+            TurnErrorType::Model(crate::ModelErrorType::InvalidToolCall)
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_tool_call_batch() {
+        // Arrange
+        let mut model = model();
+        model
+            .expect_complete_with_optional_metadata()
+            .times(1)
+            .returning(|_| {
+                Ok(response_without_metadata(ModelResponse::ToolCalls(
+                    Vec::new(),
+                )))
+            });
+        let harness = Harness::new(model);
+
+        // Act
+        let error = harness
+            .run("inspect", object_schema())
+            .await
+            .expect_err("empty tool batch should fail immediately");
+
+        // Assert
+        assert!(matches!(
+            &error,
+            TurnError::Model(ModelError::MissingToolCall)
+        ));
+        assert_eq!(
+            error.error_type(),
+            TurnErrorType::Model(crate::ModelErrorType::InvalidToolCall)
+        );
     }
 
     #[tokio::test]

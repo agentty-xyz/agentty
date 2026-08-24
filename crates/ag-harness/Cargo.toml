@@ -15,6 +15,13 @@ path = "tests/e2e/main.rs"
 test = false
 bench = false
 
+[[test]]
+name = "benchmark"
+path = "tests/benchmark/main.rs"
+test = false
+bench = false
+harness = false
+
 [dependencies]
 async-trait.workspace = true
 jsonschema.workspace = true

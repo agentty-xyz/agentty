@@ -79,8 +79,10 @@ during native tool calls. Muse uses Meta Model API's native JSON Schema response
 instead. Every provider retains shared local schema validation before returning a
 successful response. Schemas without an explicit object root and unsupported
 configurations fail explicitly rather than falling back to unstructured output. The
-shared transport retries one failed send and up to two rate-limited requests, with
-provider retry delays capped at five seconds.
+shared transport retries one failed send and up to five rate-limited requests, with
+provider retry delays capped at five seconds. Rate-limit retries use the greater of a
+provider's whole-second `Retry-After` value and bounded exponential backoff, avoiding a
+tight retry loop when a provider understates its recovery interval.
 
 Muse intentionally omits Meta's optional `strict` flag, whose documented default is
 `false`. That keeps standard JSON Schema available while Meta enforces service limits,
@@ -95,6 +97,8 @@ training. The Muse example defaults to the standard model and accepts an explici
 The current tool foundation includes:
 
 - Shared, typed `read` and `write` calls across Qwen, Kimi, and Muse.
+- Validated multi-call responses, executed in provider order with every result retained
+  in one complete assistant/tool history group.
 - Explicit repository roots and deny-by-default permissions through `Harness::allow()`.
 - Bounded tool execution and continuation to schema-validated terminal output.
 - Model-correctable read and write rejections returned through the tool loop.
@@ -243,7 +247,8 @@ best cost and performance:
 
 ## Next iterations
 
-- [ ] **Benchmarks.** Measure task quality, latency, token and tool usage, and cost.
+- [x] **Compatibility benchmark.** Measure task quality, latency, token and tool usage
+  across the live supported providers.
 
 ## Roadmap
 
