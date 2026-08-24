@@ -407,11 +407,12 @@ mod tests {
         assert!(rendered_prompt.contains("For this one-shot utility prompt"));
         assert!(!rendered_prompt.contains("For this session turn:"));
         assert!(!rendered_prompt.contains("mermaid"));
-        assert!(rendered_prompt.contains(
-            r#"{"answer":"...","questions":[],"review_comment_outcomes":[],"summary":null}"#
-        ));
+        assert!(
+            rendered_prompt
+                .contains(r#"{"answer":"...","questions":[],"review_comment_outcomes":[]}"#)
+        );
         assert!(rendered_prompt.contains("\"review_comment_outcomes\""));
-        assert!(rendered_prompt.contains("\"summary\""));
+        assert!(!rendered_prompt.contains("\"summary\""));
         assert!(rendered_prompt.ends_with(prompt));
     }
 

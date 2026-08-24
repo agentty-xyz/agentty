@@ -403,14 +403,6 @@ async fn seed_showcase_sessions(
              authentication tests pass.",
         )
         .await?;
-    let review_summary = serde_json::json!({
-        "turn": "Implemented single-flight refresh coordination and regression-tested concurrent expiry.",
-        "session": "Updated token refresh retry and credential-clearing behavior; all authentication tests pass."
-    });
-    database
-        .sessions()
-        .update_session_summary("a1b2c3d4-0001", &review_summary.to_string())
-        .await?;
     database
         .sessions()
         .append_session_message(
@@ -503,11 +495,6 @@ async fn seed_database_populates_showcase_dashboard_and_timer() -> ShowcaseResul
         .sessions()
         .load_session_messages("a1b2c3d4-0001")
         .await?;
-    let review_summary = database
-        .sessions()
-        .load_session_summary("a1b2c3d4-0001")
-        .await?
-        .ok_or("missing review summary")?;
 
     // Assert
     assert_eq!(showcase_project.active_session_count, 4);
@@ -531,8 +518,6 @@ async fn seed_database_populates_showcase_dashboard_and_timer() -> ShowcaseResul
         SessionMessageKind::WorkflowNotice.as_str()
     );
     assert!(review_messages[2].content.contains("committed with hash"));
-    assert!(review_summary.contains("regression-tested concurrent expiry"));
-
     Ok(())
 }
 

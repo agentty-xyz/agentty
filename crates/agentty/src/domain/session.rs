@@ -17,8 +17,7 @@ use super::agent::{AgentSelection, ReasoningLevel};
 use super::session_message::SessionTranscript;
 use crate::domain::question::QuestionItem;
 use crate::domain::transient_message::{
-    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
-    TransientMessageSlot, TransientMessageStore,
+    TransientMessage, TransientMessageBody, TransientMessageSlot, TransientMessageStore,
 };
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 
@@ -300,12 +299,6 @@ pub struct Session {
     pub stats: SessionStats,
     /// Current lifecycle status.
     pub status: Status,
-    /// Optional persisted session summary text sourced from the raw agent
-    /// `summary` payload, applied immediately from reducer events during
-    /// review/question states and, once the session reaches `Done`,
-    /// formatted with `# Summary` and `# Commit` sections using the canonical
-    /// session commit message.
-    pub summary: Option<String>,
     /// Optional explicit session title.
     pub title: Option<String>,
     /// Typed transcript snapshot used by the UI when available.
@@ -328,40 +321,6 @@ impl Session {
             .find_map(|message| message.kind.is_prompt().then_some(message.position))
     }
 
-    /// Rebuilds the visible summary slot from the latest persisted summary.
-    pub(crate) fn hydrate_summary_transient(&mut self) {
-        if matches!(
-            self.status,
-            Status::Draft | Status::InProgress | Status::Queued | Status::Canceled
-        ) {
-            self.transient_messages
-                .retract(TransientMessageSlot::Summary);
-
-            return;
-        }
-
-        let Some(summary) = self
-            .summary
-            .as_deref()
-            .map(str::trim)
-            .filter(|summary| !summary.is_empty())
-            .map(ToString::to_string)
-        else {
-            self.transient_messages
-                .retract(TransientMessageSlot::Summary);
-
-            return;
-        };
-
-        self.transient_messages.upsert(TransientMessage {
-            anchor: TransientMessageAnchor::AfterCompletedTurn,
-            body: TransientMessageBody::Markdown(summary),
-            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
-            slot: TransientMessageSlot::Summary,
-            turn_position: self.latest_user_prompt_position(),
-        });
-    }
-
     /// Resolves turn-scoped messages when a snapshot leaves an active turn.
     pub(crate) fn reconcile_status_transition(&mut self, previous_status: Status) {
         if previous_status == Status::InProgress && self.status != Status::InProgress {
@@ -380,8 +339,6 @@ impl Session {
             self.transient_messages
                 .clear_for_new_turn(active_turn_position);
         }
-
-        self.hydrate_summary_transient();
     }
 
     /// Returns the display title for this session.
@@ -609,23 +566,12 @@ impl Session {
 
     /// Returns the best persisted context section for a continuation prompt.
     fn continuation_context(&self) -> Option<(&'static str, String)> {
-        self.non_empty_summary()
-            .map(|summary| ("Previous session summary", summary.to_string()))
-            .or_else(|| {
-                self.non_empty_transcript()
-                    .map(|transcript| ("Previous session transcript", transcript))
-            })
+        self.non_empty_transcript()
+            .map(|transcript| ("Previous session transcript", transcript))
             .or_else(|| {
                 self.non_empty_prompt()
                     .map(|prompt| ("Previous session prompt", prompt.to_string()))
             })
-    }
-
-    /// Returns the trimmed persisted summary text when it is non-empty.
-    fn non_empty_summary(&self) -> Option<&str> {
-        self.summary
-            .as_deref()
-            .and_then(Self::trimmed_non_empty_text)
     }
 
     /// Returns the formatted transcript text when it is non-empty.
@@ -633,6 +579,9 @@ impl Session {
         self.transcript
             .as_ref()
             .and_then(SessionTranscript::replay_text)
+            .and_then(|transcript| {
+                Self::trimmed_non_empty_text(&transcript).map(ToString::to_string)
+            })
     }
 
     /// Returns the trimmed persisted initial prompt when it is non-empty.
@@ -1058,7 +1007,9 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::domain::agent::AgentModel;
-    use crate::domain::transient_message::QueuedAction;
+    use crate::domain::transient_message::{
+        QueuedAction, TransientMessageAnchor, TransientMessageLifecycle,
+    };
     use crate::test_support::SessionFixtureBuilder;
 
     #[test]
@@ -1788,32 +1739,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_reconcile_transient_messages_retains_summary_during_branch_workflow() {
-        // Arrange
-        let statuses = [Status::Rebasing, Status::Merging];
-
-        // Act
-        let sessions = statuses.map(|status| {
-            let mut session = SessionFixtureBuilder::new()
-                .status(status)
-                .summary(Some("Completed summary".to_string()))
-                .build();
-            session.reconcile_transient_messages();
-
-            session
-        });
-
-        // Assert
-        for session in sessions {
-            let summary = session
-                .transient_messages
-                .get(TransientMessageSlot::Summary)
-                .expect("branch workflow should retain the completed summary");
-            assert_eq!(summary.body.text(), "Completed summary");
-        }
-    }
-
-    #[test]
     fn test_latest_user_prompt_position_tracks_generated_turn() {
         // Arrange
         let mut session = SessionFixtureBuilder::new().status(Status::Review).build();
@@ -2077,12 +2002,11 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
-    fn test_session_continuation_prompt_seed_prefers_summary_for_terminal_session() {
+    fn test_session_continuation_prompt_seed_uses_transcript_for_terminal_session() {
         // Arrange
         let session = SessionFixtureBuilder::new()
             .status(Status::Done)
             .project_name("project-alpha")
-            .summary(Some("# Summary\n\nShip it.".to_string()))
             .transcript("assistant transcript")
             .title(Some("Terminal session".to_string()))
             .build();
@@ -2097,17 +2021,17 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
         assert!(continuation_prompt_seed.contains("Previous session: Terminal session"));
         assert!(continuation_prompt_seed.contains("Project: project-alpha"));
         assert!(continuation_prompt_seed.contains("Status: Done"));
-        assert!(continuation_prompt_seed.contains("Previous session summary:\n# Summary"));
-        assert!(!continuation_prompt_seed.contains("assistant transcript"));
+        assert!(
+            continuation_prompt_seed.contains("Previous session transcript:\nassistant transcript")
+        );
     }
 
     #[test]
-    fn test_session_continuation_prompt_seed_uses_summary_for_canceled_session() {
+    fn test_session_continuation_prompt_seed_uses_transcript_for_canceled_session() {
         // Arrange
         let session = SessionFixtureBuilder::new()
             .status(Status::Canceled)
             .project_name("project-beta")
-            .summary(Some("# Summary\n\nResume the remaining work.".to_string()))
             .transcript("assistant transcript")
             .title(Some("Canceled session".to_string()))
             .build();
@@ -2123,19 +2047,14 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
         assert!(continuation_prompt_seed.contains("Project: project-beta"));
         assert!(continuation_prompt_seed.contains("Status: Canceled"));
         assert!(
-            continuation_prompt_seed
-                .contains("Previous session summary:\n# Summary\n\nResume the remaining work.")
+            continuation_prompt_seed.contains("Previous session transcript:\nassistant transcript")
         );
-        assert!(!continuation_prompt_seed.contains("assistant transcript"));
     }
 
     #[test]
     fn test_session_continuation_prompt_seed_rejects_non_terminal_session() {
         // Arrange
-        let session = SessionFixtureBuilder::new()
-            .status(Status::Review)
-            .summary(Some("summary".to_string()))
-            .build();
+        let session = SessionFixtureBuilder::new().status(Status::Review).build();
 
         // Act
         let continuation_prompt_seed = session.continuation_prompt_seed();
@@ -2245,7 +2164,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             speed_mode: SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::AgentReview,
-            summary: None,
             title: None,
             transcript: None,
             updated_at: 0,
@@ -2339,7 +2257,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             speed_mode: SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::Done,
-            summary: None,
             title: None,
             transcript: None,
             updated_at: 0,
@@ -2387,7 +2304,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             speed_mode: SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::InProgress,
-            summary: None,
             title: None,
             transcript: None,
             updated_at: 0,
@@ -2435,7 +2351,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             speed_mode: SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::InProgress,
-            summary: None,
             title: None,
             transcript: None,
             updated_at: 0,

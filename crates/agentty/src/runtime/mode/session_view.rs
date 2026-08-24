@@ -3116,7 +3116,6 @@ mod tests {
             .find(|session| session.id == source_session_id)
             .expect("expected source session in session list");
         source_session.status = Status::Done;
-        source_session.summary = Some("# Summary\n\nKeep going.".to_string());
         source_session.title = Some("Done source".to_string());
         app.mode = AppMode::View {
             session_id: source_session_id.clone().into(),

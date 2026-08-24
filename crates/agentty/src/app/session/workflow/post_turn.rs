@@ -192,7 +192,6 @@ impl TurnPersistence<'_> {
         output_tokens: u64,
         provider_conversation_id: Option<&str>,
     ) -> Result<TurnAppliedState, SessionError> {
-        let summary = persisted_session_summary_payload(assistant_message);
         let questions = assistant_message.question_items();
         let questions_json = if questions.is_empty() {
             String::new()
@@ -230,7 +229,6 @@ impl TurnPersistence<'_> {
                     provider_conversation_id: provider_conversation_id.map(str::to_string),
                     questions_json,
                     review_comment_resolutions: self.review_comment_resolutions.to_vec(),
-                    summary: summary.clone(),
                     token_usage_delta: token_usage_delta.clone(),
                 },
             )
@@ -239,7 +237,6 @@ impl TurnPersistence<'_> {
         Ok(TurnAppliedState {
             follow_up_tasks,
             questions,
-            summary: (!summary.is_empty()).then_some(summary),
             token_usage_delta,
         })
     }
@@ -255,12 +252,8 @@ impl TurnPersistence<'_> {
 /// joined question text so clarification prompts remain visible while
 /// thought-only responses are not persisted as assistant messages.
 ///
-/// The raw agent `summary` payload is stored only in the session row. The
-/// reducer receives a matching [`TurnAppliedState`] projection so the active UI
-/// can render the same summary and follow-up metadata without embedding a
-/// second markdown copy into the transcript message store. If canonical
-/// metadata persistence fails, the worker appends a recovery error, triggers
-/// `RefreshSessions`, and skips reducer projection emission.
+/// If canonical metadata persistence fails, the worker appends a recovery
+/// error, triggers `RefreshSessions`, and skips reducer projection emission.
 pub(super) async fn apply_turn_result(
     context: &PostTurnContext,
     turn_metadata: TurnMetadata,
@@ -536,18 +529,9 @@ async fn apply_successful_turn_result(
     } else {
         (true, None)
     };
-    let review_request_session_summary = assistant_message
-        .summary
-        .as_ref()
-        .map(|summary| summary.session.clone());
     if owns_branch_changes && can_auto_push {
-        start_published_branch_auto_push(
-            context,
-            turn_metadata,
-            review_request_commit_message,
-            review_request_session_summary,
-        )
-        .await;
+        start_published_branch_auto_push(context, turn_metadata, review_request_commit_message)
+            .await;
     }
     if target_status.allows_review_actions() && has_review_ready_stacked_children(context).await {
         let _ = context
@@ -849,7 +833,6 @@ async fn start_published_branch_auto_push(
     context: &PostTurnContext,
     turn_metadata: TurnMetadata,
     review_request_commit_message: Option<String>,
-    review_request_session_summary: Option<String>,
 ) {
     let Some(published_upstream_ref) = turn_metadata.published_upstream_ref else {
         return;
@@ -878,7 +861,6 @@ async fn start_published_branch_auto_push(
             review_request_commit_message,
             session_agent: turn_metadata.session_agent,
             session_id: context.session_id.clone(),
-            session_summary: review_request_session_summary,
             session_update_versions: context.session_update_versions.clone(),
             transcript: Arc::clone(&context.transcript),
         },
@@ -934,19 +916,6 @@ pub(super) fn build_assistant_message_content(assistant_message: &AgentResponse)
     }
 
     Some(format!("{question_text}\n\n"))
-}
-
-/// Serializes one assistant summary payload for session persistence.
-///
-/// Review-mode rendering uses the raw JSON object so it can display separate
-/// `Current Turn` and `Session Changes` sections without reparsing answer
-/// markdown.
-pub(super) fn persisted_session_summary_payload(assistant_message: &AgentResponse) -> String {
-    assistant_message
-        .summary
-        .as_ref()
-        .and_then(|summary| serde_json::to_string(summary).ok())
-        .unwrap_or_default()
 }
 
 /// Builds the reducer-facing follow-up-task projection for one assistant
@@ -1593,7 +1562,6 @@ mod tests {
                             AgentModel::Gemini37Flash,
                         ),
                     },
-                    None,
                     None,
                 )
                 .await;

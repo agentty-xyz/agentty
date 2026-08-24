@@ -46,15 +46,15 @@ pub(super) fn result_response(result: &Value) -> Option<String> {
     if let Some(structured_output) = result.get("structured_output")
         && !structured_output.is_null()
     {
-        return Some(normalize_response_value(structured_output.clone()).to_string());
+        return Some(structured_output.to_string());
     }
 
     let response = result.get("response").and_then(value_text)?;
-    let Ok(response_value) = serde_json::from_str(&response) else {
+    let Ok(response_value) = serde_json::from_str::<Value>(&response) else {
         return Some(response);
     };
 
-    Some(normalize_response_value(response_value).to_string())
+    Some(response_value.to_string())
 }
 
 /// Validates the terminal provider status.
@@ -123,19 +123,6 @@ fn value_text(value: &Value) -> Option<String> {
     }
 
     None
-}
-
-fn normalize_response_value(mut response: Value) -> Value {
-    if let Some(summary) = response.get_mut("summary")
-        && let Some(summary_text) = summary.as_str()
-    {
-        *summary = serde_json::json!({
-            "session": summary_text,
-            "turn": summary_text,
-        });
-    }
-
-    response
 }
 
 #[cfg(test)]
@@ -249,36 +236,6 @@ mod tests {
         assert_eq!(result_response(&array).as_deref(), Some("[\"ready\"]"));
         assert_eq!(result_response(&empty), None);
         assert_eq!(result_response(&number), None);
-    }
-
-    #[test]
-    fn result_response_normalizes_antigravity_string_summary() {
-        // Arrange
-        let structured = serde_json::json!({
-            "structured_output": {
-                "answer": "done",
-                "summary": "Completed the Antigravity turn.",
-            },
-        });
-        let serialized = serde_json::json!({
-            "response": "{\"answer\":\"done\",\"summary\":\"Completed the Antigravity turn.\"}",
-        });
-        let expected = serde_json::json!({
-            "answer": "done",
-            "summary": {
-                "session": "Completed the Antigravity turn.",
-                "turn": "Completed the Antigravity turn.",
-            },
-        })
-        .to_string();
-
-        // Act
-        let structured_response = result_response(&structured);
-        let serialized_response = result_response(&serialized);
-
-        // Assert
-        assert_eq!(structured_response.as_deref(), Some(expected.as_str()));
-        assert_eq!(serialized_response.as_deref(), Some(expected.as_str()));
     }
 
     #[test]

@@ -80,7 +80,6 @@ struct LoadedSessionInput {
     session_queued_actions: Vec<TransientMessage>,
     session_queued_messages: Vec<QueuedMessage>,
     session_questions: Vec<QuestionItem>,
-    session_summary: Option<String>,
     session_status: Status,
     session_transcript: Option<SessionTranscript>,
     size: SessionSize,
@@ -355,7 +354,6 @@ impl SessionManager {
             session_queued_actions,
             session_queued_messages,
             session_questions: questions,
-            session_summary: session_detail.and_then(|detail| detail.summary),
             session_status,
             session_transcript,
             size: persisted_size,
@@ -517,7 +515,6 @@ impl SessionManager {
                 output_tokens: input.row.output_tokens.cast_unsigned(),
             },
             status: input.session_status,
-            summary: input.session_summary,
             title: input.row.title,
             transcript: input.session_transcript,
             updated_at: input.row.updated_at,
@@ -526,8 +523,6 @@ impl SessionManager {
         for queued_action in input.session_queued_actions {
             session.transient_messages.upsert(queued_action);
         }
-        session.hydrate_summary_transient();
-
         session
     }
 
@@ -554,9 +549,7 @@ impl SessionManager {
         if let Some(questions) = detail.questions {
             session.questions = parse_questions_json(&questions).unwrap_or_default();
         }
-        session.summary = detail.summary;
         session.transcript = session_transcript;
-        session.hydrate_summary_transient();
     }
 }
 
@@ -1198,9 +1191,9 @@ mod tests {
         );
     }
 
-    /// Ensures reload reads the persisted summary for active sessions.
+    /// Ensures reload reads persisted detail for active sessions.
     #[tokio::test]
-    async fn test_load_sessions_reads_persisted_summary_for_active_session() {
+    async fn test_load_sessions_reads_persisted_detail_for_active_session() {
         // Arrange
         let db = AppRepositories::in_memory().await.expect("db should open");
         let project_id = db
@@ -1225,10 +1218,6 @@ mod tests {
             )
             .await
             .expect("failed to update session questions");
-        db.sessions()
-            .update_session_summary(session_id, "persisted summary")
-            .await
-            .expect("failed to update session summary");
         db.sessions()
             .append_session_message(
                 session_id,
@@ -1283,7 +1272,6 @@ mod tests {
                 text: "persisted question?".to_string(),
             }]
         );
-        assert_eq!(session.summary.as_deref(), Some("persisted summary"));
     }
 
     /// Ensures inactive session refresh skips transcript-scale fields.
@@ -1310,10 +1298,6 @@ mod tests {
             .update_session_questions(session_id, r#"["Need detail?"]"#)
             .await
             .expect("failed to update questions");
-        db.sessions()
-            .update_session_summary(session_id, "large summary")
-            .await
-            .expect("failed to update summary");
         db.sessions()
             .append_session_message(
                 session_id,
@@ -1351,8 +1335,6 @@ mod tests {
         assert_eq!(session_replay_text(session), "");
         assert_eq!(session.prompt, "");
         assert_eq!(session.questions, [] as [ag_protocol::QuestionItem; 0]);
-        assert!(session.summary.is_none());
-
         let handle = handles.get(session_id).expect("missing runtime handle");
         let handle_output = handle
             .transcript

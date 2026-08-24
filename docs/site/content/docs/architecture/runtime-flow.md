@@ -178,7 +178,7 @@ by `crates/agentty/src/ui/page/session_chat.rs` and
 ordered `session_message` rows (typed `UserPrompt`, `AssistantAnswer`, `WorkflowNotice`,
 rows). Replaceable output lives in the session's typed transient-message slots instead
 of render-time visibility predicates. Each slot has stable identity, typed content, an
-output anchor, and an explicit lifecycle. Reducer paths upsert or retract summary,
+output anchor, and an explicit lifecycle. Reducer paths upsert or retract
 focused-review, workflow-feedback, queued-sync, manual-branch-publish, and
 published-branch-sync slots; starting a later turn clears older turn-scoped slots in one
 place. Transient bodies distinguish calm `Queued` rows from animated `Loading` rows. The
@@ -273,8 +273,8 @@ reasoning, personality, and base-branch snapshot from another session in that pr
 without changing defaults for later ordinary sessions. The adapter deliberately contains
 no orchestrator policy. `app/orchestration.rs` owns that sequencing: it persists typed
 implementation or research task rows before approval, reads child status, report or
-summary, and token totals in one SQLite task snapshot during reconciliation, and uses
-the session API mailbox only for child creation, mutation, cleanup, and a durable
+final answer, and token totals in one SQLite task snapshot during reconciliation, and
+uses the session API mailbox only for child creation, mutation, cleanup, and a durable
 roll-up submission. The terminal runtime injects the reconciliation schedule, keeping
 direct timer APIs out of the coordinator. The database link from task to child makes
 restart re-linking independent of branch-name parsing. Session-list refreshes load
@@ -329,8 +329,8 @@ flowchart LR
    `InProgress`. Otherwise it calls `AgentChannel::run_turn()`, which streams
    `TurnEvent` values (loader updates) and returns a `TurnResult`.
 1. `workflow/post_turn.rs` appends the final assistant transcript output, then
-   `TurnPersistence::apply(...)` transactionally stores the summary payload, question
-   payload, token-usage deltas, and provider conversation markers.
+   `TurnPersistence::apply(...)` transactionally stores the question payload,
+   token-usage deltas, and provider conversation markers.
 1. `AppEvent::AgentResponseReceived` carries the reducer projection so the active
    session updates without a forced reload. If persistence fails, the worker appends a
    recovery error and falls back to a durable-state reload. Focused-review startup
@@ -380,8 +380,8 @@ flowchart LR
 1. Once every task settles, the campaign claims `Verifying`, increments its verification
    generation, and submits one hidden, idempotent coordinator operation keyed by that
    generation. Its structured envelope carries the campaign goal, criteria, branch,
-   summary, focused-review outcome, diffstat, token totals, integration order, and a
-   persisted comparison of expected and changed paths computed through
+   final result, focused-review outcome, diffstat, token totals, integration order, and
+   a persisted comparison of expected and changed paths computed through
    `GitClient::diff_changed_files()`. The comparison is review context rather than a
    pass/fail gate; tasks without area references persist an unchecked result even when
    their diff contains changed files. The controller emits typed per-task verdicts;
@@ -443,20 +443,19 @@ flowchart LR
    preventing a subsequent sync from starting until that publish finishes. After a
    successful push, linked review-request and commit metadata are resolved and
    refreshed. Agentty reads the current remote title and description after each
-   successful push and sends them, the cumulative session summary, and the generated
-   commit metadata through one semantic reconciliation prompt. The prompt keeps the
-   title byte-for-byte stable unless the primary objective changed materially and
-   updates the description while retaining intentional user additions such as issue
-   links, checklists, instructions, and context. No metadata baseline is persisted. A
-   proposed description that omits any substantive current line is rejected. Before
-   editing, the forge adapter reads the remote fields again and applies each changed
-   field only if it still matches the value used during reconciliation. This is
-   best-effort concurrent-edit protection: GitHub and GitLab metadata updates have no
-   atomic version precondition, so a manual edit made after the final read can still be
-   overwritten. Lookup or evaluation failures append the existing warning notice instead
-   of being discarded. The push result is persisted as a durable transcript notice and
-   atomically replaces the matching transient progress row when the reducer applies the
-   terminal sync event.
+   successful push and sends them with the generated commit metadata through one
+   semantic reconciliation prompt. The prompt keeps the title byte-for-byte stable
+   unless the primary objective changed materially and updates the description while
+   retaining intentional user additions such as issue links, checklists, instructions,
+   and context. No metadata baseline is persisted. A proposed description that omits any
+   substantive current line is rejected. Before editing, the forge adapter reads the
+   remote fields again and applies each changed field only if it still matches the value
+   used during reconciliation. This is best-effort concurrent-edit protection: GitHub
+   and GitLab metadata updates have no atomic version precondition, so a manual edit
+   made after the final read can still be overwritten. Lookup or evaluation failures
+   append the existing warning notice instead of being discarded. The push result is
+   persisted as a durable transcript notice and atomically replaces the matching
+   transient progress row when the reducer applies the terminal sync event.
 1. Completed stacked-parent turns fan out `SessionCommand::Rebase` to review-ready
    materialized children so child branches replay onto the latest parent branch.
 1. Diff metadata is refreshed before the final status becomes `Review` or `Question`
@@ -628,8 +627,8 @@ descendants it spawned.
 ## Agent Interaction Protocol Flow
 
 <a id="architecture-agent-interaction-protocol"></a> Provider output is normalized to
-one structured response protocol (`answer`, `questions`, `review_comment_outcomes`, and
-optional `summary`):
+one structured response protocol (`answer`, `questions`, `review_comment_outcomes`,
+`subtasks`, and `verification_verdicts`):
 
 1. Prompt builders in `crates/ag-agent/src/agent/` ask `crates/ag-protocol/src/` to
    prepend the shared protocol preamble with a self-descriptive JSON schema. Stateless
@@ -640,9 +639,9 @@ optional `summary`):
    changes made during the Agentty session unless the user explicitly says otherwise.
    `crates/ag-protocol/src/` owns the shared response model, schema, parser diagnostics,
    protocol prompt envelopes, repair prompts, and turn prompt payloads.
-1. Session-title generation bounds the persisted original request, current title,
-   session summary, and latest request independently at UTF-8 boundaries so utility
-   prompts remain focused even when the durable session transcript is large.
+1. Session-title generation bounds the persisted original request, current title, and
+   latest request independently at UTF-8 boundaries so utility prompts remain focused
+   even when the durable session transcript is large.
 1. Channels emit transient loader updates as `TurnEvent::ThoughtDelta` values while the
    turn runs; assistant transcript output is appended once from the final parsed result.
 1. Transports that enforce the schema natively receive it through
@@ -734,21 +733,20 @@ their triggers:
   `wl-paste`; missing or unsupported backends report an inline paste error.
 
 - **Session title generation** (provisional start or resume title): claims an ordered
-  candidate, loads the persisted original request, current title, session summary, and
-  latest request, then runs a one-shot title prompt over that stable session context.
-  The original request anchors the overall goal while later requests may establish or
-  clarify it without turning narrow follow-ups into the whole title. The one-shot uses
-  read-only permissions for every session role, including temporary orchestration
-  researchers. Provider submission failures are logged and retried once. Candidates
-  equivalent to persisted request text after case, punctuation, and line normalization
-  are rejected. Issued and accepted candidate generations are tracked separately: empty
-  responses leave older usable candidates eligible, newer accepted candidates supersede
-  older ones, and draft edits or commit-derived titles invalidate every outstanding
-  candidate. Session refreshes hydrate transcript-scale detail for the session
-  identified by the active application mode, independently of the session-list table
-  selection. Reply classification also requires `Draft` status before an empty prompt
-  can be treated as the first message, so lightweight list rows cannot replace an
-  existing title.
+  candidate, loads the persisted original request, current title, and latest request,
+  then runs a one-shot title prompt over that stable session context. The original
+  request anchors the overall goal while later requests may establish or clarify it
+  without turning narrow follow-ups into the whole title. The one-shot uses read-only
+  permissions for every session role, including temporary orchestration researchers.
+  Provider submission failures are logged and retried once. Candidates equivalent to
+  persisted request text after case, punctuation, and line normalization are rejected.
+  Issued and accepted candidate generations are tracked separately: empty responses
+  leave older usable candidates eligible, newer accepted candidates supersede older
+  ones, and draft edits or commit-derived titles invalidate every outstanding candidate.
+  Session refreshes hydrate transcript-scale detail for the session identified by the
+  active application mode, independently of the session-list table selection. Reply
+  classification also requires `Draft` status before an empty prompt can be treated as
+  the first message, so lightweight list rows cannot replace an existing title.
 
 - **At-mention file indexing** (`@` in prompt or question input): lists session files
   for the mention picker, falling back to the project root for unstarted drafts.

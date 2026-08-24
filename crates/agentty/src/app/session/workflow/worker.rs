@@ -14,8 +14,6 @@ use ag_agent::{
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_protocol::AgentResponse;
-#[cfg(test)]
-use ag_protocol::AgentResponseSummary;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -1558,14 +1556,12 @@ mod tests {
     use ag_git::{MockGitClient, RebaseStepResult};
     use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution, TurnPromptAttachment};
     use mockall::Sequence;
-    use serde_json;
     use tempfile::tempdir;
     use tracing::instrument::WithSubscriber;
 
     use super::super::post_turn::{
         PostTurnContext, TurnPersonalityPersistence, apply_turn_result,
-        build_assistant_message_content, persisted_session_summary_payload,
-        status_update_after_turn_result,
+        build_assistant_message_content, status_update_after_turn_result,
     };
     use super::super::turn::{
         consume_turn_events, resolve_turn_personality, run_channel_turn,
@@ -2185,7 +2181,6 @@ mod tests {
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
             verification_verdicts: Vec::new(),
-            summary: None,
         };
 
         // Act
@@ -2213,7 +2208,6 @@ mod tests {
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
             verification_verdicts: Vec::new(),
-            summary: None,
         };
 
         // Act
@@ -2235,7 +2229,6 @@ mod tests {
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
             verification_verdicts: Vec::new(),
-            summary: None,
         };
 
         // Act
@@ -2259,7 +2252,6 @@ mod tests {
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
             verification_verdicts: Vec::new(),
-            summary: None,
         };
 
         // Act
@@ -2282,7 +2274,6 @@ mod tests {
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
             verification_verdicts: Vec::new(),
-            summary: None,
         };
 
         // Act
@@ -2290,39 +2281,6 @@ mod tests {
 
         // Assert
         assert_eq!(message_content, None);
-    }
-
-    #[test]
-    /// Ensures persisted summaries keep the raw turn/session payload for
-    /// review-mode rendering.
-    fn test_persisted_session_summary_payload_serializes_structured_summary() {
-        // Arrange
-        let response = AgentResponse {
-            answer: "Implemented the fix.".to_string(),
-            questions: Vec::new(),
-            review_comment_outcomes: Vec::new(),
-            subtasks: Vec::new(),
-            verification_verdicts: Vec::new(),
-            summary: Some(AgentResponseSummary {
-                turn: "Updated the greeting flow.".to_string(),
-                session: "Session now greets users on startup.".to_string(),
-            }),
-        };
-
-        // Act
-        let persisted_summary = persisted_session_summary_payload(&response);
-
-        // Assert
-        let summary = serde_json::from_str::<AgentResponseSummary>(&persisted_summary)
-            .expect("summary should deserialize");
-
-        assert_eq!(
-            summary,
-            AgentResponseSummary {
-                session: "Session now greets users on startup.".to_string(),
-                turn: "Updated the greeting flow.".to_string(),
-            }
-        );
     }
 
     #[tokio::test]
@@ -2611,7 +2569,6 @@ mod tests {
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
                             verification_verdicts: Vec::new(),
-                            summary: None,
                         },
                         context_reset: false,
                         input_tokens: 0,
@@ -2701,7 +2658,6 @@ mod tests {
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
                             verification_verdicts: Vec::new(),
-                            summary: None,
                         },
                         context_reset: false,
                         input_tokens: 0,
@@ -2804,7 +2760,6 @@ mod tests {
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
                             verification_verdicts: Vec::new(),
-                            summary: None,
                         },
                         context_reset: false,
                         input_tokens: 0,
@@ -2910,7 +2865,6 @@ mod tests {
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
                             verification_verdicts: Vec::new(),
-                            summary: None,
                         },
                         context_reset: false,
                         input_tokens: 0,
@@ -3003,7 +2957,6 @@ mod tests {
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
                             verification_verdicts: Vec::new(),
-                            summary: None,
                         },
                         context_reset: false,
                         input_tokens: 0,
@@ -3307,7 +3260,6 @@ mod tests {
                     provider_conversation_id: None,
                     questions_json: "[]".to_string(),
                     review_comment_resolutions: Vec::new(),
-                    summary: String::new(),
                     token_usage_delta: SessionStats::default(),
                 },
             )
@@ -3639,118 +3591,6 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies turn summaries are persisted to the database when the agent
-    /// returns them.
-    async fn test_apply_turn_result_persists_summary_to_database() {
-        // Arrange
-        let base_dir = tempdir().expect("failed to create temp dir");
-        let db = AppRepositories::in_memory().await.expect("db should open");
-        let project_id = db
-            .projects()
-            .upsert_project("/tmp/project", Some("main".to_string()))
-            .await
-            .expect("failed to upsert project");
-        db.sessions()
-            .insert_session_with_agent(PersistedSessionCreation {
-                agent: "antigravity",
-                base_branch: "main",
-                id: "sess1",
-                is_draft: false,
-                model: "gemini-3.7-flash",
-                orchestration_task_id: None,
-                parent_session_id: None,
-                permission_mode: ag_agent::PermissionMode::AutoEdit,
-                personality_id: None,
-                project_id,
-                reasoning_level: ReasoningLevel::default(),
-                role: Some("Orchestrator"),
-                speed_mode: SpeedMode::Normal,
-                status: "InProgress",
-            })
-            .await
-            .expect("failed to insert session");
-
-        let mut mock_git_client = MockGitClient::new();
-        mock_git_client.expect_is_worktree_clean().never();
-        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash);
-        let context = SessionWorkerContext {
-            app_event_tx: mpsc::unbounded_channel().0,
-            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
-            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-            channel: Arc::new(MockAgentChannel::new()),
-            child_pid: Arc::new(Mutex::new(None)),
-            clock: Arc::new(crate::infra::clock::RealClock),
-            db: db.clone(),
-            folder: base_dir.path().to_path_buf(),
-            fs_client: Arc::new(fs::MockFsClient::new()),
-            git_client: Arc::new(mock_git_client),
-            transcript: empty_transcript(),
-            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
-            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
-            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
-
-            session_update_versions: Arc::default(),
-            session_id: "sess1".into(),
-            session_agent,
-            status: Arc::new(Mutex::new(Status::InProgress)),
-        };
-        let turn_result = Ok(TurnResult {
-            assistant_message: AgentResponse {
-                answer: "Implemented the change.".to_string(),
-                questions: Vec::new(),
-                review_comment_outcomes: Vec::new(),
-                subtasks: Vec::new(),
-                verification_verdicts: Vec::new(),
-                summary: Some(AgentResponseSummary {
-                    turn: "- Updated the worker flow.".to_string(),
-                    session: "- Active review now reloads summary from persistence.".to_string(),
-                }),
-            },
-            context_reset: false,
-            input_tokens: 0,
-            output_tokens: 0,
-            provider_conversation_id: None,
-        });
-
-        // Act
-        let turn_metadata = TurnMetadata {
-            published_upstream_ref: None,
-            review_comment_thread_ids: Vec::new(),
-            session_agent: AgentSelection::new(
-                crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini37Flash,
-            ),
-        };
-        let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
-            .await
-            .expect("turn result should succeed");
-        let sessions = db
-            .sessions()
-            .load_sessions()
-            .await
-            .expect("failed to load sessions");
-
-        // Assert
-        assert_eq!(status, Status::Review);
-        let summary = sessions[0].summary.as_deref().map(|raw| {
-            serde_json::from_str::<AgentResponseSummary>(raw)
-                .expect("stored summary should deserialize")
-        });
-        assert_eq!(
-            summary,
-            Some(AgentResponseSummary {
-                session: "- Active review now reloads summary from persistence.".to_string(),
-                turn: "- Updated the worker flow.".to_string(),
-            })
-        );
-        let output = transcript_text(&context.transcript);
-        assert!(output.starts_with("Implemented the change.\n\n"));
-        assert!(!output.contains("[Commit] No changes to commit."));
-        assert!(!output.contains("## Change Summary"));
-        assert!(!output.contains("Document the worker summary flow."));
-    }
-
-    #[tokio::test]
     /// Verifies completed turns keep a linked open PR/MR title and
     /// description aligned with the latest session commit message.
     async fn test_apply_turn_result_syncs_linked_review_request_metadata_after_commit() {
@@ -3789,11 +3629,7 @@ mod tests {
             ),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
-        let mut turn_result = successful_turn_result("Implemented the change.");
-        turn_result.assistant_message.summary = Some(AgentResponseSummary {
-            session: "The linked review request still represents the same goal.".to_string(),
-            turn: "Updated the implementation details.".to_string(),
-        });
+        let turn_result = successful_turn_result("Implemented the change.");
 
         // Act
         let status = apply_worker_turn_result(
@@ -4319,7 +4155,6 @@ mod tests {
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
                 verification_verdicts: Vec::new(),
-                summary: None,
             },
             context_reset: false,
             input_tokens: 0,
@@ -4341,7 +4176,6 @@ mod tests {
                 }],
                 subtasks: Vec::new(),
                 verification_verdicts: Vec::new(),
-                summary: None,
             },
             context_reset: false,
             input_tokens: 0,
@@ -4760,7 +4594,6 @@ mod tests {
                 }],
                 subtasks: Vec::new(),
                 verification_verdicts: Vec::new(),
-                summary: None,
             },
             context_reset: false,
             input_tokens: 0,
@@ -4857,7 +4690,6 @@ mod tests {
                 }],
                 subtasks: Vec::new(),
                 verification_verdicts: Vec::new(),
-                summary: None,
             },
             context_reset: false,
             input_tokens: 0,
@@ -4958,7 +4790,6 @@ mod tests {
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
                 verification_verdicts: Vec::new(),
-                summary: None,
             },
             context_reset: false,
             input_tokens: 0,
@@ -5056,7 +4887,6 @@ mod tests {
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
                 verification_verdicts: Vec::new(),
-                summary: None,
             },
             context_reset: false,
             input_tokens: 0,
@@ -5257,10 +5087,6 @@ mod tests {
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
                 verification_verdicts: Vec::new(),
-                summary: Some(AgentResponseSummary {
-                    turn: "- Attempted the update.".to_string(),
-                    session: "- Session state should not project without persistence.".to_string(),
-                }),
             },
             context_reset: false,
             input_tokens: 2,
@@ -5306,9 +5132,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies persisted assistant text stays unchanged when summaries are
-    /// stored only in structured session metadata.
-    async fn test_apply_turn_result_keeps_summary_out_of_assistant_messages() {
+    /// Verifies turn persistence appends only the protocol answer to assistant
+    /// transcript messages.
+    async fn test_apply_turn_result_persists_only_assistant_answer() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await.expect("db should open");
@@ -5366,10 +5192,6 @@ mod tests {
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
                 verification_verdicts: Vec::new(),
-                summary: Some(AgentResponseSummary {
-                    turn: "No changes".to_string(),
-                    session: "No changes".to_string(),
-                }),
             },
             context_reset: false,
             input_tokens: 0,
@@ -5455,7 +5277,6 @@ mod tests {
                 review_comment_outcomes: Vec::new(),
                 subtasks: Vec::new(),
                 verification_verdicts: Vec::new(),
-                summary: None,
             },
             context_reset: true,
             input_tokens: 0,
@@ -5599,7 +5420,6 @@ mod tests {
                             review_comment_outcomes: Vec::new(),
                             subtasks: Vec::new(),
                             verification_verdicts: Vec::new(),
-                            summary: None,
                         },
                         context_reset: false,
                         input_tokens: 11,

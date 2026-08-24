@@ -9,4 +9,4 @@ Requirements:
 - Git inspection is limited to read-only commands such as `git status`, `git diff`,
   `git log`, and `git show`. Never run mutating git commands or create commits.
 - After editing, return the required protocol JSON object. Briefly summarize the fix in
-  `answer`, leave `questions` empty, and set `summary` to null.
+  `answer` and leave `questions` empty.

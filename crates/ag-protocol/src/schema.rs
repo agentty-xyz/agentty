@@ -11,7 +11,7 @@ use super::model::{AgentResponse, questions_field_description, subtasks_field_de
 /// whose `properties` contain keys missing from `required`, so it needs every
 /// key listed. Validators that enforce `required` literally, such as Claude,
 /// must only demand `answer`; listing optional keys there rejects ordinary
-/// replies that omit `questions` or `summary`, even though the parser accepts
+/// replies that omit optional array fields, even though the parser accepts
 /// them through `#[serde(default)]`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SchemaRequiredPolicy {
@@ -126,8 +126,8 @@ fn inject_additional_properties_false(value: &mut Value) {
 /// Ensures the top-level `required` array includes `answer` so the prompt
 /// schema rejects `{}` the same way the parser does.
 ///
-/// The parser requires at least one recognized protocol key (`answer`,
-/// `questions`, or `summary`). The schema is intentionally stricter: it
+/// The parser requires at least one recognized protocol key. The schema is
+/// intentionally stricter: it
 /// requires `answer` specifically, because models should always include it.
 /// If a model omits `answer` but includes another recognized key, the
 /// parser still accepts the payload gracefully thanks to `#[serde(default)]`.
@@ -304,16 +304,10 @@ mod tests {
                 .iter()
                 .any(|value| value.as_str() == Some("subtasks"))
         );
-        assert!(
-            required_fields
-                .iter()
-                .any(|value| value.as_str() == Some("summary"))
-        );
         assert!(properties.contains_key("answer"));
         assert!(properties.contains_key("questions"));
         assert!(properties.contains_key("review_comment_outcomes"));
         assert!(properties.contains_key("subtasks"));
-        assert!(properties.contains_key("summary"));
     }
 
     #[test]
@@ -549,11 +543,6 @@ mod tests {
             .and_then(|value| value.get("ReviewCommentResolution"))
             .and_then(Value::as_object)
             .expect("review comment resolution definition should exist");
-        let summary_definition = schema
-            .get("$defs")
-            .and_then(|value| value.get("AgentResponseSummary"))
-            .and_then(Value::as_object)
-            .expect("summary definition should exist");
 
         // Assert
         assert_eq!(
@@ -572,10 +561,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ReviewCommentResolution")
         );
-        assert_eq!(
-            summary_definition.get("title").and_then(Value::as_str),
-            Some("AgentResponseSummary")
-        );
     }
 
     #[test]
@@ -590,7 +575,6 @@ mod tests {
         let question_properties = schema_definition_properties(&schema, "QuestionItem");
         let review_comment_outcome_properties =
             schema_definition_properties(&schema, "ReviewCommentOutcome");
-        let summary_properties = schema_definition_properties(&schema, "AgentResponseSummary");
         let expected_questions_description = questions_field_description();
 
         // Assert
@@ -618,13 +602,6 @@ mod tests {
              `thread_id` exactly from the prompt.",
         );
         assert_schema_property_title_and_description(
-            response_properties,
-            "summary",
-            "summary",
-            "Structured summary for session-discussion turns, kept outside `answer` markdown. Use \
-             `null` for one-shot prompts and legacy payloads.",
-        );
-        assert_schema_property_title_and_description(
             question_properties,
             "text",
             "text",
@@ -650,31 +627,14 @@ mod tests {
             "thread_id",
             "Opaque forge thread identifier copied exactly from the turn prompt.",
         );
-        assert_schema_property_title_and_description(
-            summary_properties,
-            "turn",
-            "turn",
-            "Concise summary of only the work completed in the current turn.",
-        );
-        assert_schema_property_title_and_description(
-            summary_properties,
-            "session",
-            "session",
-            "Cumulative summary of active changes on the current session branch.",
-        );
     }
 
     #[test]
     /// Preserves optional prompt fields in the raw schema instead of forcing
     /// transport-only requirements into prompt docs.
-    fn test_agent_response_json_schema_keeps_optional_summary_field() {
+    fn test_agent_response_json_schema_keeps_optional_question_options() {
         // Arrange / Act
         let schema = agent_response_json_schema();
-        let response_required_fields = schema
-            .get("required")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
         let question_definition = schema
             .get("$defs")
             .and_then(|value| value.get("QuestionItem"))
@@ -687,12 +647,6 @@ mod tests {
             .unwrap_or_default();
 
         // Assert
-        assert!(
-            response_required_fields
-                .iter()
-                .all(|field| field.as_str() != Some("summary")),
-            "raw prompt schema should keep optional summary fields optional"
-        );
         assert!(
             question_required_fields
                 .iter()

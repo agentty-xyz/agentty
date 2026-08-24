@@ -4,9 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use ag_protocol::AgentResponseSummary;
 use mockall::predicate::eq;
-use serde_json;
 use tempfile::tempdir;
 
 use super::{
@@ -51,7 +49,6 @@ use crate::runtime::mode::diff;
 fn test_turn_applied_state(
     questions: Vec<QuestionItem>,
     follow_up_tasks: Vec<&str>,
-    summary: Option<AgentResponseSummary>,
     token_usage_delta: SessionStats,
 ) -> TurnAppliedState {
     TurnAppliedState {
@@ -66,7 +63,6 @@ fn test_turn_applied_state(
             })
             .collect(),
         questions,
-        summary: summary.and_then(|summary| serde_json::to_string(&summary).ok()),
         token_usage_delta,
     }
 }
@@ -736,7 +732,6 @@ async fn test_switch_immediately_after_response_recovers_in_progress_review() {
         turn_applied_state: test_turn_applied_state(
             Vec::new(),
             Vec::new(),
-            None,
             SessionStats::default(),
         ),
     })
@@ -3114,10 +3109,6 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
             QuestionItem::new("Need tests?"),
         ],
         vec!["Document the batched reducer path."],
-        Some(AgentResponseSummary {
-            session: "Session summary".to_string(),
-            turn: "Latest turn summary".to_string(),
-        }),
         SessionStats {
             added_lines: 0,
             deleted_lines: 0,
@@ -3133,10 +3124,6 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
         turn_applied_state: test_turn_applied_state(
             vec![QuestionItem::new("Old question")],
             vec!["Old follow-up task"],
-            Some(AgentResponseSummary {
-                session: "Old session summary".to_string(),
-                turn: "Old turn summary".to_string(),
-            }),
             SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
@@ -3155,7 +3142,7 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
     let merged_turn = event_batch.applied_turns.get("session-1");
     assert_eq!(
         merged_turn.map(|turn| turn.questions.clone()),
-        Some(latest_turn.questions.clone())
+        Some(latest_turn.questions)
     );
     assert_eq!(
         merged_turn.map(|turn| {
@@ -3165,10 +3152,6 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
                 .collect::<Vec<_>>()
         }),
         Some(vec!["Document the batched reducer path.".to_string()])
-    );
-    assert_eq!(
-        merged_turn.and_then(|turn| turn.summary.as_deref()),
-        latest_turn.summary.as_deref()
     );
     assert_eq!(
         merged_turn.map(|turn| turn.token_usage_delta.input_tokens),
@@ -3290,7 +3273,6 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
         turn_applied_state: test_turn_applied_state(
             vec![QuestionItem::new("first question")],
             Vec::new(),
-            None,
             SessionStats::default(),
         ),
     });
@@ -3299,7 +3281,6 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
         turn_applied_state: test_turn_applied_state(
             vec![QuestionItem::new("second question")],
             Vec::new(),
-            None,
             SessionStats::default(),
         ),
     });
@@ -4024,7 +4005,6 @@ async fn apply_app_events_agent_response_switches_view_mode_to_question_mode() {
             ),
         ],
         Vec::new(),
-        None,
         SessionStats::default(),
     );
 
@@ -4201,7 +4181,6 @@ async fn apply_app_events_agent_response_clears_saved_question_progress() {
         turn_applied_state: test_turn_applied_state(
             vec![QuestionItem::new("New question?")],
             Vec::new(),
-            None,
             SessionStats::default(),
         ),
     })
@@ -4305,7 +4284,6 @@ async fn apply_app_events_agent_response_keeps_list_mode_when_not_viewing_sessio
         turn_applied_state: test_turn_applied_state(
             vec![QuestionItem::new("Need context?")],
             Vec::new(),
-            None,
             SessionStats::default(),
         ),
     })
@@ -4313,47 +4291,6 @@ async fn apply_app_events_agent_response_keeps_list_mode_when_not_viewing_sessio
 
     // Assert
     assert!(matches!(app.mode, AppMode::List));
-}
-
-#[tokio::test]
-/// Verifies reducer-applied turn projections update the cached session
-/// summary immediately.
-async fn apply_app_events_agent_response_updates_session_summary() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    app.sessions
-        .push_session(crate::test_support::session_fixture_with_folder(
-            PathBuf::from("/tmp/session-summary-view"),
-        ));
-    let expected_summary = serde_json::to_string(&AgentResponseSummary {
-        turn: "- Added structured protocol summary fields.".to_string(),
-        session: "- Session output now renders persisted summary separately.".to_string(),
-    })
-    .expect("summary should serialize");
-
-    // Act
-    app.apply_app_events(AppEvent::AgentResponseReceived {
-        session_id: "session-1".into(),
-        turn_applied_state: test_turn_applied_state(
-            Vec::new(),
-            Vec::new(),
-            Some(AgentResponseSummary {
-                turn: "- Added structured protocol summary fields.".to_string(),
-                session: "- Session output now renders persisted summary separately.".to_string(),
-            }),
-            SessionStats::default(),
-        ),
-    })
-    .await;
-
-    // Assert
-    assert_eq!(
-        app.sessions.sessions()[0].summary.as_deref(),
-        Some(expected_summary.as_str())
-    );
 }
 
 #[tokio::test]
@@ -4379,7 +4316,6 @@ async fn apply_app_events_agent_response_updates_session_follow_up_tasks() {
                 "Document the new shortcut.",
                 "Add a focused regression test.",
             ],
-            None,
             SessionStats::default(),
         ),
     })
@@ -4608,7 +4544,6 @@ async fn apply_app_events_agent_response_updates_questions_and_token_usage() {
         turn_applied_state: test_turn_applied_state(
             Vec::new(),
             Vec::new(),
-            None,
             SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
@@ -4752,7 +4687,6 @@ async fn apply_app_events_agent_response_starts_auto_review_from_synced_handle_s
         turn_applied_state: test_turn_applied_state(
             Vec::new(),
             Vec::new(),
-            None,
             SessionStats::default(),
         ),
     })
@@ -4839,7 +4773,6 @@ async fn apply_app_events_agent_response_supersedes_pending_auto_review_diff() {
         turn_applied_state: test_turn_applied_state(
             Vec::new(),
             Vec::new(),
-            None,
             SessionStats::default(),
         ),
     })
@@ -4889,7 +4822,6 @@ async fn apply_app_events_agent_response_batches_same_session_turns() {
     let first_turn = test_turn_applied_state(
         vec![QuestionItem::new("First question?")],
         Vec::new(),
-        None,
         SessionStats {
             added_lines: 0,
             deleted_lines: 0,
@@ -4901,7 +4833,6 @@ async fn apply_app_events_agent_response_batches_same_session_turns() {
     let second_turn = test_turn_applied_state(
         vec![QuestionItem::new("Latest question?")],
         vec!["Capture reducer batching coverage."],
-        None,
         SessionStats {
             added_lines: 0,
             deleted_lines: 0,
@@ -5770,8 +5701,8 @@ async fn test_continue_terminal_session_falls_back_to_persisted_context_without_
     let source_session = crate::test_support::SessionFixtureBuilder::new()
         .id("done-source")
         .status(Status::Done)
-        .summary(Some("# Summary\n\nUse the saved context.".to_string()))
         .title(Some("Done source".to_string()))
+        .transcript("Use the saved context.")
         .build();
     app.sessions.push_session(source_session);
     let mut mock_git_client = ag_git::MockGitClient::new();
@@ -5817,8 +5748,8 @@ async fn test_continue_terminal_session_falls_back_to_persisted_context_without_
     assert_eq!(
         continued_session.prompt,
         "Continue the work from this previous Agentty session.\n\nPrevious session: Done \
-         source\nProject: project\nStatus: Done\n\nPrevious session summary:\n# Summary\n\nUse \
-         the saved context.\n"
+         source\nProject: project\nStatus: Done\n\nPrevious session transcript:\nUse the saved \
+         context.\n"
     );
 }
 
@@ -5832,7 +5763,6 @@ async fn test_continue_terminal_session_rejects_non_terminal_source_session() {
     let source_session = crate::test_support::SessionFixtureBuilder::new()
         .id("review-source")
         .status(Status::Review)
-        .summary(Some("summary".to_string()))
         .build();
     app.sessions.push_session(source_session);
 
@@ -5887,8 +5817,8 @@ async fn test_continue_terminal_session_uses_persisted_context_for_canceled_sour
     let source_session = crate::test_support::SessionFixtureBuilder::new()
         .id("canceled-source")
         .status(Status::Canceled)
-        .summary(Some("# Summary\n\nResume the remaining work.".to_string()))
         .title(Some("Canceled source".to_string()))
+        .transcript("Resume the remaining work.")
         .build();
     app.sessions.push_session(source_session);
     let mut mock_git_client = ag_git::MockGitClient::new();
@@ -5927,8 +5857,8 @@ async fn test_continue_terminal_session_uses_persisted_context_for_canceled_sour
     assert_eq!(
         continued_session.prompt,
         "Continue the work from this previous Agentty session.\n\nPrevious session: Canceled \
-         source\nProject: project\nStatus: Canceled\n\nPrevious session summary:\n# \
-         Summary\n\nResume the remaining work.\n"
+         source\nProject: project\nStatus: Canceled\n\nPrevious session transcript:\nResume the \
+         remaining work.\n"
     );
     assert!(!continued_session.prompt.contains("stale-merged-hash"));
     assert!(matches!(
@@ -5951,7 +5881,6 @@ async fn test_continue_terminal_session_reports_legacy_session_without_project()
     let source_session = crate::test_support::SessionFixtureBuilder::new()
         .id("legacy-source")
         .status(Status::Done)
-        .summary(Some("summary".to_string()))
         .build();
     app.sessions.push_session(source_session);
 

@@ -351,7 +351,6 @@ fn wrapped_text_height(text: &str, width: u16) -> u16 {
 mod tests {
     use std::path::PathBuf;
 
-    use ag_protocol::AgentResponseSummary;
     use ratatui::style::{Modifier, Style};
     use ratatui::widgets::Borders;
 
@@ -392,14 +391,6 @@ mod tests {
             session_state: help_action::session_view_state(session),
         })
         .to_string()
-    }
-
-    fn summary_fixture() -> String {
-        serde_json::to_string(&AgentResponseSummary {
-            turn: "- Added the structured protocol summary.".to_string(),
-            session: "- Session output now renders persisted summary markdown.".to_string(),
-        })
-        .expect("summary fixture should serialize")
     }
 
     fn file_entries_fixture() -> Vec<FileEntry> {
@@ -1098,30 +1089,6 @@ mod tests {
 
         // Assert
         assert_eq!(max_visible, 3);
-    }
-
-    #[test]
-    fn test_session_output_summary_markdown_uses_plain_text_fallback() {
-        // Arrange / Act
-        let rendered_summary = session_output_summary_markdown("plain summary");
-
-        // Assert
-        assert_eq!(rendered_summary, "plain summary");
-    }
-
-    #[test]
-    fn test_session_output_summary_markdown_expands_protocol_payload() {
-        // Arrange
-        let summary_text = summary_fixture();
-
-        // Act
-        let rendered_summary = session_output_summary_markdown(&summary_text);
-
-        // Assert
-        assert!(rendered_summary.starts_with("## Change Summary\n\n### Current Turn\n"));
-        assert!(rendered_summary.contains("Current Turn"));
-        assert!(rendered_summary.contains("Session Changes"));
-        assert!(rendered_summary.contains("Added the structured protocol summary."));
     }
 
     #[test]

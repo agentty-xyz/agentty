@@ -1100,7 +1100,7 @@ mod tests {
         // Arrange
         let stdout = concat!(
             r#"{"type":"result","subtype":"success","result":"","structured_output":"#,
-            r#"{"answer":"Rendered response","questions":[],"summary":null},"#,
+            r#"{"answer":"Rendered response","questions":[]},"#,
             r#""usage":{"input_tokens":13,"output_tokens":9}}"#
         );
 
@@ -1110,7 +1110,7 @@ mod tests {
         // Assert
         assert_eq!(
             parsed.content,
-            r#"{"answer":"Rendered response","questions":[],"summary":null}"#
+            r#"{"answer":"Rendered response","questions":[]}"#
         );
         assert_eq!(parsed.stats.input_tokens, 13);
         assert_eq!(parsed.stats.output_tokens, 9);
@@ -1159,7 +1159,6 @@ mod tests {
             "answer": "Antigravity ok",
             "questions": [],
             "review_comment_outcomes": [],
-            "summary": null,
         });
         let stdout = serde_json::json!({
             "event": "result",
@@ -1242,7 +1241,6 @@ mod tests {
             "answer": "Array result",
             "questions": [],
             "review_comment_outcomes": [],
-            "summary": null,
         });
         let stdout = serde_json::json!([
             {"event": "response", "delta": "partial"},
@@ -1395,7 +1393,7 @@ mod tests {
     #[test]
     fn test_claude_parse_response_reads_result_from_json_array_payload() {
         // Arrange
-        let stdout = r#"[{"type":"system","subtype":"init"},{"type":"result","subtype":"success","result":"{\"answer\":\"Recovered payload\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":3}}]"#;
+        let stdout = r#"[{"type":"system","subtype":"init"},{"type":"result","subtype":"success","result":"{\"answer\":\"Recovered payload\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":3}}]"#;
 
         // Act
         let parsed = parse_claude_response_with_fallback(stdout, "");
@@ -1403,7 +1401,7 @@ mod tests {
         // Assert
         assert_eq!(
             parsed.content,
-            r#"{"answer":"Recovered payload","questions":[],"summary":null}"#
+            r#"{"answer":"Recovered payload","questions":[]}"#
         );
         assert_eq!(parsed.stats.input_tokens, 5);
         assert_eq!(parsed.stats.output_tokens, 3);
@@ -1415,7 +1413,7 @@ mod tests {
         let stdout = concat!(
             r#"[{"type":"system","subtype":"init"},"#,
             r#"{"type":"result","subtype":"success","result":"","structured_output":"#,
-            r#"{"answer":"Array response","questions":[],"summary":null},"#,
+            r#"{"answer":"Array response","questions":[]},"#,
             r#""usage":{"input_tokens":7,"output_tokens":4}}]"#
         );
 
@@ -1425,7 +1423,7 @@ mod tests {
         // Assert
         assert_eq!(
             parsed.content,
-            r#"{"answer":"Array response","questions":[],"summary":null}"#
+            r#"{"answer":"Array response","questions":[]}"#
         );
         assert_eq!(parsed.stats.input_tokens, 7);
         assert_eq!(parsed.stats.output_tokens, 4);

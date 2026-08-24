@@ -327,7 +327,6 @@ WHERE session_orchestration.id = ?
             provider_conversation_id: Some("conversation-a".to_string()),
             questions_json: "[]".to_string(),
             review_comment_resolutions: Vec::new(),
-            summary: "Persisted summary".to_string(),
             token_usage_delta: SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,

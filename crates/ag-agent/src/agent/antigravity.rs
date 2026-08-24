@@ -3,7 +3,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use ag_protocol::{SchemaRequiredPolicy, agent_response_output_schema};
-use serde_json::{Value, json};
 
 use super::availability;
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
@@ -89,36 +88,15 @@ impl AgentBackend for AntigravityBackend {
             .arg("--output-format")
             .arg("stream-json")
             .arg("--json-schema")
-            .arg(antigravity_response_output_schema().to_string())
+            .arg(
+                agent_response_output_schema(SchemaRequiredPolicy::MinimumProtocolKeys).to_string(),
+            )
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
         Ok(command)
     }
-}
-
-/// Returns Agentty's response schema with Antigravity's observed string
-/// fallback for the nullable `summary` field.
-///
-/// Antigravity can emit a string for this field even when the canonical schema
-/// permits only an object or `null`, causing its transport validator to abort
-/// the turn before Agentty sees the response. The runtime converts the accepted
-/// string back into the canonical summary object before strict parsing.
-fn antigravity_response_output_schema() -> Value {
-    let mut schema = agent_response_output_schema(SchemaRequiredPolicy::MinimumProtocolKeys);
-    if let Some(summary_variants) = schema
-        .pointer_mut("/properties/summary/anyOf")
-        .and_then(Value::as_array_mut)
-    {
-        summary_variants.push(json!({
-            "type": "string",
-            "description": "Antigravity compatibility fallback; Agentty converts this string to \
-                            the canonical summary object before parsing."
-        }));
-    }
-
-    schema
 }
 
 #[cfg(test)]
@@ -212,13 +190,7 @@ mod tests {
             serde_json::from_str(args.last().expect("schema argument should exist"))
                 .expect("schema should be JSON");
         assert_eq!(schema["required"], serde_json::json!(["answer"]));
-        assert!(
-            schema["properties"]["summary"]["anyOf"]
-                .as_array()
-                .is_some_and(|variants| variants.iter().any(|variant| {
-                    variant.get("type").and_then(Value::as_str) == Some("string")
-                }))
-        );
+        assert!(schema["properties"].get("summary").is_none());
         assert!(!args.iter().any(|argument| argument == "--print"));
     }
 

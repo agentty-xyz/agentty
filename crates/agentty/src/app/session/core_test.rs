@@ -162,7 +162,7 @@ fn create_mock_backend() -> MockAgentBackend {
     mock.expect_build_command().returning(|request| {
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
-            .arg("printf '{\"answer\":\"mock-start\",\"questions\":[],\"summary\":null}'")
+            .arg("printf '{\"answer\":\"mock-start\",\"questions\":[]}'")
             .current_dir(request.folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -753,7 +753,6 @@ fn add_manual_session_with_status(
         speed_mode: crate::domain::agent::SpeedMode::default(),
         stats: SessionStats::default(),
         status,
-        summary: None,
         title: Some(prompt.to_string()),
         transcript: None,
         updated_at: 0,
@@ -818,7 +817,6 @@ fn test_session_manager_with_clock(
             speed_mode: crate::domain::agent::SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::Review,
-            summary: None,
             title: Some("Title".to_string()),
             transcript: None,
             updated_at: 0,
@@ -1287,7 +1285,6 @@ async fn test_apply_turn_applied_state_clears_active_prompt_and_resolution_loade
         &TurnAppliedState {
             follow_up_tasks: Vec::new(),
             questions: Vec::new(),
-            summary: None,
             token_usage_delta: SessionStats::default(),
         },
     );
@@ -4741,10 +4738,7 @@ async fn test_reply_with_backend_replays_history_after_app_restart_for_review_se
 
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
-            .arg(
-                "printf '{\"answer\":\"replayed-after-restart\",\"questions\":[],\"summary\":\
-                 null}'",
-            )
+            .arg("printf '{\"answer\":\"replayed-after-restart\",\"questions\":[]}'")
             .current_dir(request.folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -4838,7 +4832,7 @@ async fn test_spawn_session_task_auto_commits_changes() {
         cmd.arg("-c")
             .arg(
                 "echo auto-content > auto-committed.txt; printf '{\"answer\":\"Auto commit \
-                 done\",\"questions\":[],\"summary\":null}'",
+                 done\",\"questions\":[]}'",
             )
             .current_dir(request.folder)
             .stdout(Stdio::piped())
@@ -5033,7 +5027,7 @@ async fn test_spawn_session_task_skips_commit_when_nothing_to_commit() {
     mock.expect_build_command().returning(|request| {
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
-            .arg("printf '{\"answer\":\"no-changes\",\"questions\":[],\"summary\":null}'")
+            .arg("printf '{\"answer\":\"no-changes\",\"questions\":[]}'")
             .current_dir(request.folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -6286,8 +6280,7 @@ async fn test_cancel_session_triggers_app_server_shutdown() {
         .returning(|_, _| {
             Box::pin(async {
                 Ok(AppServerTurnResponse {
-                    assistant_message: r#"{"answer":"ready","questions":[],"summary":null}"#
-                        .to_string(),
+                    assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
                     context_reset: false,
                     input_tokens: 0,
                     output_tokens: 0,
@@ -6360,8 +6353,7 @@ async fn test_done_status_triggers_app_server_shutdown() {
         .returning(|_, _| {
             Box::pin(async {
                 Ok(AppServerTurnResponse {
-                    assistant_message: r#"{"answer":"ready","questions":[],"summary":null}"#
-                        .to_string(),
+                    assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
                     context_reset: false,
                     input_tokens: 0,
                     output_tokens: 0,
@@ -6588,7 +6580,7 @@ async fn test_create_session_scoped_to_project() {
 #[test]
 fn test_parse_merge_commit_message_response_with_protocol_message() {
     // Arrange
-    let content = r#"{"answer":"Title\n\n- Detail","questions":[],"summary":null}"#;
+    let content = r#"{"answer":"Title\n\n- Detail","questions":[]}"#;
 
     // Act
     let parsed = parse_agent_response_strict(content)

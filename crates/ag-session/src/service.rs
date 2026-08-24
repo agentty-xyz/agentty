@@ -438,7 +438,6 @@ mod tests {
                 speed_mode: SpeedMode::Normal,
             },
             status: SessionStatus::Review,
-            summary: Some("Implemented it".to_string()),
             title: Some("Build it".to_string()),
             updated_at: 20,
         }

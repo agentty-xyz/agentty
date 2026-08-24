@@ -503,7 +503,7 @@ mod tests {
         let mut command = Command::new("sh");
         command.arg("-c").arg(
             "cat > \"$ONE_SHOT_CAPTURE_PATH\"; printf '%s' \
-             '{\"answer\":\"captured\",\"questions\":[],\"summary\":null}'",
+             '{\"answer\":\"captured\",\"questions\":[]}'",
         );
         command.env("ONE_SHOT_CAPTURE_PATH", capture_path);
         command.stdout(std::process::Stdio::piped());
@@ -612,7 +612,7 @@ mod tests {
             assert_eq!(request.prompt, "Generate title");
 
             Ok(mock_shell_command(
-                r#"{"answer":"Generated title","questions":[],"summary":null}"#,
+                r#"{"answer":"Generated title","questions":[]}"#,
                 "",
                 0,
             ))
@@ -755,7 +755,7 @@ mod tests {
                 Ok(mock_shell_command(
                     concat!(
                         "Now I have full context.\n",
-                        r#"{"answer":"Generated title","questions":[],"summary":null}"#
+                        r#"{"answer":"Generated title","questions":[]}"#
                     ),
                     "",
                     0,
@@ -806,7 +806,7 @@ mod tests {
                     Ok(mock_shell_command("plain text", "", 0))
                 } else {
                     Ok(mock_shell_command(
-                        r#"{"answer":"Repaired title","questions":[],"summary":null}"#,
+                        r#"{"answer":"Repaired title","questions":[]}"#,
                         "",
                         0,
                     ))
@@ -891,7 +891,7 @@ mod tests {
             let mut command = Command::new("sh");
             command.arg("-c").arg(
                 "printf 'warming up\\n' >&2; sleep 0.1; cat >/dev/null; printf '%s' \
-                 '{\"answer\":\"done\",\"questions\":[],\"summary\":null}'",
+                 '{\"answer\":\"done\",\"questions\":[]}'",
             );
             command.stdout(std::process::Stdio::piped());
             command.stderr(std::process::Stdio::piped());
@@ -1072,9 +1072,8 @@ mod tests {
 
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
-                        assistant_message:
-                            r#"{"answer":"Generated title","questions":[],"summary":null}"#
-                                .to_string(),
+                        assistant_message: r#"{"answer":"Generated title","questions":[]}"#
+                            .to_string(),
                         context_reset: false,
                         input_tokens: 11,
                         output_tokens: 7,

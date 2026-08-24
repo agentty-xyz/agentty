@@ -842,7 +842,6 @@ mod tests {
             .folder(PathBuf::from(format!("/tmp/{session_id}")))
             .prompt("Prompt")
             .status(Status::Review)
-            .summary(Some("Summary line for router test".to_string()))
             .title(Some("Router Session".to_string()))
             .build();
         session.transcript = Some(transcript);

@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex};
 use ag_agent::{self as agent, OneShotClient};
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
-use ag_protocol::AgentResponseSummary;
 use askama::Template;
 use tokio::sync::{OwnedMutexGuard, mpsc};
 use tracing::warn;
@@ -29,7 +28,7 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::db::{AppRepositories, DbError};
+use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
 
 const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
@@ -1380,8 +1379,6 @@ impl SessionManager {
                 app_event_tx,
             )
             .await;
-            Self::update_done_session_summary_from_commit_message(db, session_id, commit_message)
-                .await;
         }
         if let Some(merged_commit_hash) = merged_commit_hash {
             db.sessions()
@@ -2265,21 +2262,14 @@ impl SessionManager {
                 "failed to publish branch sync start because the app event receiver is closed"
             );
         }
-        let session_summary = Self::review_request_session_summary_after_rebase(
-            session_id,
-            db.sessions().load_session_summary(session_id).await,
-        );
-        let review_request_metadata_sync = session_summary.map(|session_summary| {
-            published_branch::ReviewRequestMetadataSyncInput {
-                clock: Arc::clone(clock),
-                commit_message: None,
-                evaluation: published_branch::ReviewRequestMetadataEvaluationInput {
-                    one_shot_client: Arc::clone(one_shot_client),
-                    session_agent,
-                    session_summary,
-                },
-                review_request_client: Arc::clone(review_request_client),
-            }
+        let review_request_metadata_sync = Some(published_branch::ReviewRequestMetadataSyncInput {
+            clock: Arc::clone(clock),
+            commit_message: None,
+            evaluation: published_branch::ReviewRequestMetadataEvaluationInput {
+                one_shot_client: Arc::clone(one_shot_client),
+                session_agent,
+            },
+            review_request_client: Arc::clone(review_request_client),
         });
 
         let app_event_tx = app_event_tx.clone();
@@ -2308,26 +2298,6 @@ impl SessionManager {
         });
     }
 
-    /// Converts a post-rebase summary query into evaluator context, skipping
-    /// semantic metadata reconciliation when the query fails.
-    fn review_request_session_summary_after_rebase(
-        session_id: &str,
-        session_summary: Result<Option<String>, DbError>,
-    ) -> Option<String> {
-        match session_summary {
-            Ok(session_summary) => Some(session_summary.unwrap_or_default()),
-            Err(error) => {
-                warn!(
-                    session_id = session_id,
-                    error = %error,
-                    "failed to load session summary for post-rebase review-request metadata sync"
-                );
-
-                None
-            }
-        }
-    }
-
     /// Updates the persisted session title from the canonical commit message.
     pub(crate) async fn update_session_title_from_commit_message(
         db: &AppRepositories,
@@ -2354,44 +2324,6 @@ impl SessionManager {
         }
     }
 
-    /// Updates the persisted done-session summary by formatting the latest
-    /// persisted agent session-summary text, extracting `summary.session`
-    /// from raw JSON payloads when needed, and canonical commit message into
-    /// markdown sections.
-    async fn update_done_session_summary_from_commit_message(
-        db: &AppRepositories,
-        session_id: &str,
-        commit_message: &str,
-    ) {
-        let summary = Self::session_summary_with_commit_message(
-            Self::persisted_session_summary(db, session_id)
-                .await
-                .as_deref(),
-            commit_message,
-        );
-
-        if let Err(error) = db
-            .sessions()
-            .update_session_summary(session_id, &summary)
-            .await
-        {
-            warn!(
-                session_id = session_id,
-                error = %error,
-                "failed to persist done-session summary from commit message"
-            );
-        }
-    }
-
-    /// Loads the currently persisted session summary text for one session.
-    async fn persisted_session_summary(db: &AppRepositories, session_id: &str) -> Option<String> {
-        db.sessions()
-            .load_session_summary(session_id)
-            .await
-            .ok()
-            .flatten()
-    }
-
     /// Extracts the first non-empty line from one session commit message for
     /// use as the session title.
     fn session_title_from_commit_message(commit_message: &str) -> String {
@@ -2406,26 +2338,6 @@ impl SessionManager {
             .find(|line| !line.is_empty())
             .unwrap_or("Apply session updates")
             .to_string()
-    }
-
-    /// Builds the persisted done-session summary with markdown sections.
-    ///
-    /// Includes `# Summary` from the final agent session-summary text,
-    /// extracting `summary.session` from persisted JSON payloads when needed,
-    /// and `# Commit` from the canonical session commit message.
-    fn session_summary_with_commit_message(
-        session_summary: Option<&str>,
-        commit_message: &str,
-    ) -> String {
-        let trimmed_summary = session_summary.map(str::trim).unwrap_or_default();
-        let summary_text = serde_json::from_str::<AgentResponseSummary>(trimmed_summary)
-            .map_or_else(
-                |_| trimmed_summary.to_string(),
-                |summary_payload| summary_payload.session,
-            );
-        let trimmed_commit_message = commit_message.trim();
-
-        format!("# Summary\n\n{summary_text}\n\n# Commit\n\n{trimmed_commit_message}")
     }
 
     /// Runs a bounded rebase-assistance loop until conflicts are resolved.
@@ -3632,63 +3544,8 @@ mod tests {
         assert_eq!(title, "Apply session updates");
     }
 
-    #[test]
-    fn test_session_summary_with_commit_message_builds_markdown_sections() {
-        // Arrange
-        let session_summary = Some("- Session branch now handles refresh races.");
-        let commit_message = "Refine session summary\n\n- Append commit context";
-
-        // Act
-        let summary =
-            SessionManager::session_summary_with_commit_message(session_summary, commit_message);
-
-        // Assert
-        assert_eq!(
-            summary,
-            "# Summary\n\n- Session branch now handles refresh races.\n\n# Commit\n\nRefine \
-             session summary\n\n- Append commit context"
-        );
-    }
-
-    #[test]
-    fn test_session_summary_with_commit_message_formats_empty_summary_section() {
-        // Arrange
-        let session_summary = Some("   ");
-        let commit_message = "Refine session summary";
-
-        // Act
-        let summary =
-            SessionManager::session_summary_with_commit_message(session_summary, commit_message);
-
-        // Assert
-        assert_eq!(
-            summary,
-            "# Summary\n\n\n\n# Commit\n\nRefine session summary"
-        );
-    }
-
-    #[test]
-    fn test_session_summary_with_commit_message_extracts_session_text_from_json_payload() {
-        // Arrange
-        let session_summary = Some(
-            r#"{"turn":"Updated the greeting flow.","session":"Session now greets users on startup."}"#,
-        );
-        let commit_message = "Refine session summary";
-
-        // Act
-        let summary =
-            SessionManager::session_summary_with_commit_message(session_summary, commit_message);
-
-        // Assert
-        assert_eq!(
-            summary,
-            "# Summary\n\nSession now greets users on startup.\n\n# Commit\n\nRefine session \
-             summary"
-        );
-    }
-
     #[tokio::test]
-    async fn test_update_session_title_from_commit_message_preserves_existing_summary() {
+    async fn test_update_session_title_from_commit_message_persists_title() {
         // Arrange
         let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
@@ -3707,12 +3564,6 @@ mod tests {
             )
             .await
             .expect("failed to insert session");
-        let existing_summary = "- Session branch updates README.";
-        database
-            .sessions()
-            .update_session_summary("session-id", existing_summary)
-            .await
-            .expect("failed to persist existing summary");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let commit_message = "Refine session commit message\n\n- Keep title in sync";
 
@@ -3735,61 +3586,9 @@ mod tests {
             sessions[0].title.as_deref(),
             Some("Refine session commit message")
         );
-        assert_eq!(sessions[0].summary.as_deref(), Some(existing_summary));
         assert_eq!(
             app_event_rx.try_recv().ok(),
             Some(AppEvent::RefreshSessions)
-        );
-    }
-
-    #[tokio::test]
-    async fn test_update_done_session_summary_from_commit_message_appends_commit_message() {
-        // Arrange
-        let database = AppRepositories::in_memory().await.expect("db should open");
-        let project_id = database
-            .projects()
-            .upsert_project("/tmp/project", Some("main".to_string()))
-            .await
-            .expect("failed to upsert project");
-        database
-            .sessions()
-            .insert_session(
-                "session-id",
-                AgentModel::ClaudeSonnet5.as_str(),
-                "main",
-                "Review",
-                project_id,
-            )
-            .await
-            .expect("failed to insert session");
-        let existing_summary = "- Session branch updates README.";
-        let commit_message = "Refine session commit message\n\n- Keep title in sync";
-        database
-            .sessions()
-            .update_session_summary("session-id", existing_summary)
-            .await
-            .expect("failed to persist existing summary");
-
-        // Act
-        SessionManager::update_done_session_summary_from_commit_message(
-            &database,
-            "session-id",
-            commit_message,
-        )
-        .await;
-        let sessions = database
-            .sessions()
-            .load_sessions()
-            .await
-            .expect("failed to load sessions");
-
-        // Assert
-        assert_eq!(
-            sessions[0].summary.as_deref(),
-            Some(
-                "# Summary\n\n- Session branch updates README.\n\n# Commit\n\nRefine session \
-                 commit message\n\n- Keep title in sync"
-            )
         );
     }
 
@@ -5311,10 +5110,6 @@ mod tests {
             .update_session_review_request("sess-rebase", Some(linked_github_review_request()))
             .await
             .expect("failed to persist review request");
-        db.sessions()
-            .update_session_summary("sess-rebase", "The rebase preserves the existing goal.")
-            .await
-            .expect("failed to persist session summary");
     }
 
     /// Returns one linked GitHub review request fixture for metadata-sync
@@ -5531,21 +5326,6 @@ mod tests {
             ]
         );
         assert_eq!(review_request.title, "Old title");
-    }
-
-    #[test]
-    fn test_review_request_session_summary_after_rebase_skips_database_errors() {
-        // Arrange
-        let session_summary = Err(DbError::Query(sqlx::Error::PoolClosed));
-
-        // Act
-        let summary = SessionManager::review_request_session_summary_after_rebase(
-            "sess-rebase",
-            session_summary,
-        );
-
-        // Assert
-        assert_eq!(summary, None);
     }
 
     #[tokio::test]

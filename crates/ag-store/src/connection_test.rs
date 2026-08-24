@@ -230,6 +230,25 @@ async fn test_open_creates_missing_parent_directory() {
     assert!(!database.pool().is_closed());
 }
 
+/// Verifies the current schema no longer persists agent session summaries.
+#[tokio::test]
+async fn test_session_schema_omits_summary_column() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("database should open");
+
+    // Act
+    let column_names =
+        sqlx::query_scalar::<_, String>("SELECT name FROM pragma_table_info('session')")
+            .fetch_all(database.pool())
+            .await
+            .expect("session columns should load");
+
+    // Assert
+    assert!(!column_names.iter().any(|name| name == "summary"));
+}
+
 /// Verifies `load_sessions()` maps persisted joined session fields.
 #[tokio::test]
 async fn test_load_sessions_maps_joined_session_fields() {
@@ -258,10 +277,6 @@ async fn test_load_sessions_maps_joined_session_fields() {
     assert_eq!(session_row.output_tokens, 29);
     assert_eq!(session_row.parent_session_id, None);
     assert_eq!(session_row.size, "L");
-    assert_eq!(
-        session_row.summary.as_deref(),
-        Some("Implemented the requested feature")
-    );
     assert_eq!(session_row.questions.as_deref(), Some("[\"Need logs?\"]"));
     assert_eq!(session_row.title.as_deref(), Some("Feature work"));
     assert_eq!(
@@ -528,12 +543,6 @@ async fn test_load_session_detail_reads_message_transcript() {
         .update_session_prompt("session-a", "Do something")
         .await
         .expect("failed to update prompt");
-    database
-        .sessions()
-        .update_session_summary("session-a", "migrated summary")
-        .await
-        .expect("failed to update summary");
-
     // Act
     let detail = database
         .sessions()
@@ -544,7 +553,6 @@ async fn test_load_session_detail_reads_message_transcript() {
 
     // Assert
     assert_eq!(detail.prompt, "Do something");
-    assert_eq!(detail.summary.as_deref(), Some("migrated summary"));
 }
 
 /// Builds an in-memory database with one session covering joined fields
@@ -599,11 +607,6 @@ async fn persist_joined_session_metadata(database: &Database, review_request: &R
         .update_session_title("session-a", "Feature work")
         .await
         .expect("failed to update session title");
-    database
-        .sessions()
-        .update_session_summary("session-a", "Implemented the requested feature")
-        .await
-        .expect("failed to update session summary");
     database
         .sessions()
         .update_session_stats(
@@ -2731,7 +2734,6 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
                 review_comment_resolutions: Vec::new(),
-                summary: String::new(),
                 token_usage_delta: SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
@@ -2760,7 +2762,6 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
                 review_comment_resolutions: Vec::new(),
-                summary: String::new(),
                 token_usage_delta: SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
@@ -2842,39 +2843,6 @@ async fn test_load_session_project_id_returns_associated_project() {
 
     // Assert
     assert_eq!(loaded_project_id, Some(project_id));
-}
-
-#[tokio::test]
-async fn test_load_session_summary_returns_persisted_summary() {
-    // Arrange
-    let database = Database::open_in_memory()
-        .await
-        .expect("failed to open in-memory db");
-    let project_id = database
-        .projects()
-        .upsert_project("/tmp/project", Some("main".to_string()))
-        .await
-        .expect("failed to insert project");
-    database
-        .sessions()
-        .insert_session("session-a", "gpt-5.6-sol", "main", "Done", project_id)
-        .await
-        .expect("failed to insert session");
-    database
-        .sessions()
-        .update_session_summary("session-a", "persisted summary")
-        .await
-        .expect("failed to update session summary");
-
-    // Act
-    let loaded_summary = database
-        .sessions()
-        .load_session_summary("session-a")
-        .await
-        .expect("failed to load session summary");
-
-    // Assert
-    assert_eq!(loaded_summary.as_deref(), Some("persisted summary"));
 }
 
 #[tokio::test]
@@ -3065,11 +3033,6 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
         .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
-    database
-        .sessions()
-        .update_session_summary("session-a", "persisted summary")
-        .await
-        .expect("failed to seed summary");
     sqlx::query!("DROP TABLE session_usage")
         .execute(database.pool())
         .await
@@ -3088,8 +3051,6 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
                 provider_conversation_id: Some("thread-123".to_string()),
                 questions_json: r#"[{"text":"Need tests?"}]"#.to_string(),
                 review_comment_resolutions: Vec::new(),
-                summary: r#"{"turn":"Updated the worker.","session":"Session state changed."}"#
-                    .to_string(),
                 token_usage_delta: SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
@@ -3116,7 +3077,6 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
 
     // Assert
     assert!(matches!(result, Err(DbError::Query(_))));
-    assert_eq!(session.summary.as_deref(), Some("persisted summary"));
     assert_eq!(session.questions.as_deref(), None);
     assert_eq!(session.input_tokens, 0);
     assert_eq!(session.output_tokens, 0);
@@ -3158,7 +3118,6 @@ async fn test_persist_session_turn_metadata_and_review_operation_are_restart_ato
             review_request_display_id: "#42".to_string(),
             thread_id: "thread-1".to_string(),
         }],
-        summary: "Completed turn".to_string(),
         token_usage_delta: SessionStats::default(),
     };
 
@@ -3185,7 +3144,6 @@ async fn test_persist_session_turn_metadata_and_review_operation_are_restart_ato
 
     // Assert
     assert!(matches!(result, Err(DbError::Query(_))));
-    assert_eq!(session.summary, None);
     assert_eq!(session.questions, None);
     assert_eq!(provider_conversation_id, None);
     assert_eq!(operations, Vec::new());
@@ -3213,7 +3171,6 @@ async fn test_persist_session_turn_metadata_and_review_operation_are_restart_ato
         .expect("failed to load provider conversation id");
 
     // Assert
-    assert_eq!(session.summary.as_deref(), Some("Completed turn"));
     assert_eq!(
         session.questions.as_deref(),
         Some(r#"[{"text":"Need tests?"}]"#)

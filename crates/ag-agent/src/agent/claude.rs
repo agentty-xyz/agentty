@@ -589,13 +589,13 @@ mod tests {
         // Assert
         assert!(prompt.contains("repository-root-relative POSIX paths"));
         assert!(prompt.contains("`path:line:column`"));
-        assert!(prompt.contains("summary"));
+        assert!(!prompt.contains("summary"));
     }
 
     #[test]
     /// Verifies one-shot Claude prompts keep protocol JSON guidance while
     /// native schema enforcement carries the full response schema.
-    fn test_claude_one_shot_command_enforces_json_schema_without_summary_prose() {
+    fn test_claude_one_shot_command_enforces_json_schema() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = ClaudeBackend;
@@ -643,7 +643,7 @@ mod tests {
 
         // Assert
         assert!(prompt.contains("Structured response protocol:"));
-        assert!(prompt.contains("summary"));
+        assert!(!prompt.contains("summary"));
         assert!(!prompt.contains("Authoritative JSON Schema:"));
         assert!(debug_command.contains("--output-format"));
         assert!(debug_command.contains("stream-json"));
@@ -704,7 +704,7 @@ mod tests {
         assert!(debug_command.contains("--json-schema"));
         assert!(debug_command.contains("AgentResponse"));
         assert!(prompt.contains("Structured response protocol:"));
-        assert!(prompt.contains("summary"));
+        assert!(!prompt.contains("summary"));
         assert!(!prompt.contains("Authoritative JSON Schema:"));
     }
 }

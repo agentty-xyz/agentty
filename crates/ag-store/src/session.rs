@@ -45,8 +45,6 @@ pub struct SessionTurnMetadata {
     pub questions_json: String,
     /// Review-comment operations committed with this completed turn.
     pub review_comment_resolutions: Vec<NewSessionReviewCommentResolution>,
-    /// Serialized structured summary payload stored on the session row.
-    pub summary: String,
     /// Token-usage delta attributed to the completed turn.
     pub token_usage_delta: SessionStats,
 }
@@ -154,8 +152,6 @@ pub struct SessionRow {
     pub speed_mode: String,
     /// Persisted lifecycle status string.
     pub status: String,
-    /// Persisted structured summary text, when present.
-    pub summary: Option<String>,
     /// Optional display title.
     pub title: Option<String>,
     /// Last update timestamp in Unix seconds.
@@ -164,7 +160,7 @@ pub struct SessionRow {
 
 /// Lightweight row returned when loading session-list metadata.
 ///
-/// Omits transcript-scale fields (`prompt`, `questions`, and `summary`) so
+/// Omits transcript-scale fields (`prompt` and `questions`) so
 /// list refreshes scale with visible metadata instead of the cumulative size
 /// of every saved conversation.
 pub struct SessionListRow {
@@ -242,8 +238,6 @@ pub struct SessionDetailRow {
     pub prompt: String,
     /// Serialized clarification-question payload, when present.
     pub questions: Option<String>,
-    /// Persisted structured summary text, when present.
-    pub summary: Option<String>,
 }
 
 /// Row returned when loading one persisted `session_message`.
@@ -472,9 +466,6 @@ pub trait SessionRepository: Send + Sync {
     /// Loads the persisted session response-speed preference.
     async fn load_session_speed_mode(&self, session_id: &str) -> Result<SpeedMode, DbError>;
 
-    /// Loads the persisted summary text associated with one session.
-    async fn load_session_summary(&self, session_id: &str) -> Result<Option<String>, DbError>;
-
     /// Returns `(created_at, updated_at)` timestamps for a session.
     async fn load_session_timestamps(
         &self,
@@ -619,9 +610,6 @@ pub trait SessionRepository: Send + Sync {
         status: &str,
         timestamp_seconds: i64,
     ) -> Result<(), DbError>;
-
-    /// Updates the persisted session summary text for a session row.
-    async fn update_session_summary(&self, id: &str, summary: &str) -> Result<(), DbError>;
 
     /// Updates or clears the persisted focused-review cache for a session.
     async fn update_session_focused_review(
@@ -770,7 +758,6 @@ impl SessionRowMetadata {
         self,
         prompt: String,
         questions: Option<String>,
-        summary: Option<String>,
         review_request: Option<SessionReviewRequestRow>,
     ) -> SessionRow {
         SessionRow {
@@ -800,7 +787,6 @@ impl SessionRowMetadata {
             size: self.size,
             speed_mode: self.speed_mode,
             status: self.status,
-            summary,
             title: self.title,
             updated_at: self.updated_at,
         }
@@ -880,7 +866,6 @@ struct SessionJoinRow {
     size: String,
     speed_mode: String,
     status: String,
-    summary: Option<String>,
     title: Option<String>,
     updated_at: i64,
 }
@@ -908,12 +893,7 @@ impl SessionJoinRow {
     fn into_session_row(self) -> SessionRow {
         let (metadata, detail, review_request) = self.into_parts();
 
-        metadata.into_session_row(
-            detail.prompt,
-            detail.questions,
-            detail.summary,
-            review_request,
-        )
+        metadata.into_session_row(detail.prompt, detail.questions, review_request)
     }
 
     /// Converts placeholder-detail query rows into a lightweight
@@ -968,7 +948,6 @@ impl SessionJoinRow {
             size,
             speed_mode,
             status,
-            summary,
             title,
             updated_at,
         } = self;
@@ -1000,11 +979,7 @@ impl SessionJoinRow {
             title,
             updated_at,
         };
-        let detail = SessionDetailRow {
-            prompt,
-            questions,
-            summary,
-        };
+        let detail = SessionDetailRow { prompt, questions };
         let review_request = SessionReviewRequestJoinRow {
             display_id: review_request_display_id,
             forge_kind: review_request_forge_kind,
@@ -1432,7 +1407,6 @@ SELECT session.base_branch AS base_branch,
        session.role,
        session.size AS size,
        session.status AS status,
-       session.summary,
        session.title,
        session.updated_at AS updated_at
 FROM session
@@ -1510,7 +1484,6 @@ SELECT session.base_branch AS base_branch,
        session.role,
        session.size AS size,
        session.status AS status,
-       session.summary,
        session.title,
        session.updated_at AS updated_at
 FROM session
@@ -1572,7 +1545,6 @@ SELECT session.base_branch AS base_branch,
        session.role,
        session.size AS size,
        session.status AS status,
-       NULL AS "summary: String",
        session.title,
        session.updated_at AS updated_at
 FROM session
@@ -1603,8 +1575,7 @@ ORDER BY session.updated_at DESC, session.created_at DESC, session.id
             SessionDetailRow,
             r"
 SELECT prompt,
-       questions,
-       summary
+       questions
 FROM session
 WHERE id = ?
 ",
@@ -1907,21 +1878,6 @@ WHERE parent_session_id = ?
         Ok(materialized_child_ids)
     }
 
-    async fn load_session_summary(&self, session_id: &str) -> Result<Option<String>, DbError> {
-        let row = sqlx::query_scalar!(
-            r"
-SELECT summary
-FROM session
-WHERE id = ?
-",
-            session_id
-        )
-        .fetch_optional(&self.0)
-        .await?;
-
-        Ok(row.flatten())
-    }
-
     async fn load_session_timestamps(
         &self,
         session_id: &str,
@@ -1953,7 +1909,6 @@ WHERE id = ?
             r"
 UPDATE session
 SET questions = ?,
-    summary = ?,
     provider_conversation_id = ?,
     app_server_instruction_provider_conversation_id = ?,
     applied_personality_id = ?,
@@ -1962,7 +1917,6 @@ SET questions = ?,
 WHERE id = ?
 ",
             turn_metadata.questions_json.as_str(),
-            turn_metadata.summary.as_str(),
             turn_metadata.provider_conversation_id.as_deref(),
             turn_metadata.instruction_conversation_id.as_deref(),
             turn_metadata.applied_personality_id.as_deref(),
@@ -2528,26 +2482,6 @@ WHERE id = ?
         Ok(())
     }
 
-    async fn update_session_summary(&self, id: &str, summary: &str) -> Result<(), DbError> {
-        let now = self.now();
-
-        sqlx::query!(
-            r"
-UPDATE session
-SET summary = ?,
-    updated_at = ?
-WHERE id = ?
-",
-            summary,
-            now,
-            id
-        )
-        .execute(&self.0)
-        .await?;
-
-        Ok(())
-    }
-
     async fn update_session_focused_review(
         &self,
         id: &str,
@@ -2954,7 +2888,6 @@ mod tests {
                 size: "M".to_string(),
                 speed_mode: "normal".to_string(),
                 status: "Review".to_string(),
-                summary: Some("Summary text".to_string()),
                 title: Some("Review session".to_string()),
                 updated_at: 200,
             }
@@ -3087,7 +3020,6 @@ WHERE id = ?
                     provider_conversation_id: None,
                     questions_json: "[]".to_string(),
                     review_comment_resolutions: Vec::new(),
-                    summary: String::new(),
                     token_usage_delta: SessionStats::default(),
                 },
             )
@@ -3627,7 +3559,6 @@ WHERE id IN ('a-older', 'z-newer')
             Some("origin/session-a")
         );
         assert_eq!(session_row.questions.as_deref(), Some("Question text"));
-        assert_eq!(session_row.summary.as_deref(), Some("Summary text"));
         assert_eq!(session_row.title.as_deref(), Some("Review session"));
         assert_eq!(
             session_row.review_request,

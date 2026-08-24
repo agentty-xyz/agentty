@@ -7,8 +7,6 @@ use rustc_hash::FxHasher;
 /// Stable identity for one replaceable session-output message.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum TransientMessageSlot {
-    /// Published session summary for the latest completed turn.
-    Summary,
     /// Focused review loading, result, or failure output.
     Review,
     /// Active agent turn resolving selected forge review comments.
@@ -278,14 +276,14 @@ mod tests {
         // Arrange
         let mut store = TransientMessageStore::default();
         store.upsert(message(TransientMessageSlot::Review, "review", 1));
-        store.upsert(message(TransientMessageSlot::Summary, "summary", 1));
+        store.upsert(message(TransientMessageSlot::WorkflowNotice, "notice", 1));
 
         // Act
         store.upsert(message(TransientMessageSlot::Review, "new review", 1));
 
         // Assert
         assert_eq!(store.messages[0].body.text(), "new review");
-        assert_eq!(store.messages[1].slot, TransientMessageSlot::Summary);
+        assert_eq!(store.messages[1].slot, TransientMessageSlot::WorkflowNotice);
         assert_eq!(store.version(), 3);
     }
 
@@ -293,7 +291,11 @@ mod tests {
     fn clear_for_new_turn_only_retracts_older_turn_scoped_messages() {
         // Arrange
         let mut store = TransientMessageStore::default();
-        store.upsert(message(TransientMessageSlot::Summary, "old", 2));
+        store.upsert(message(
+            TransientMessageSlot::ReviewCommentResolution,
+            "old",
+            2,
+        ));
         store.upsert(message(TransientMessageSlot::Review, "current", 3));
         store.upsert(TransientMessage {
             anchor: TransientMessageAnchor::AfterCompletedTurn,
@@ -314,7 +316,11 @@ mod tests {
         store.clear_for_new_turn(3);
 
         // Assert
-        assert!(store.get(TransientMessageSlot::Summary).is_none());
+        assert!(
+            store
+                .get(TransientMessageSlot::ReviewCommentResolution)
+                .is_none()
+        );
         assert!(store.get(TransientMessageSlot::Review).is_some());
         assert!(store.get(TransientMessageSlot::WorkflowNotice).is_none());
         assert!(store.get(TransientMessageSlot::BranchPublish).is_some());

@@ -62,8 +62,6 @@ pub(super) struct PublishedBranchAutoPushStartInput {
     pub(super) session_agent: AgentSelection,
     /// Session id whose branch is being pushed.
     pub(super) session_id: SessionId,
-    /// Cumulative session summary used to reconcile review-request metadata.
-    pub(super) session_summary: Option<String>,
     /// Per-app session update versions shared with the main runtime.
     pub(super) session_update_versions: crate::app::service::SessionUpdateVersionMap,
     /// Shared typed transcript snapshot mirrored to the render layer.
@@ -84,7 +82,6 @@ pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushSta
                 evaluation: ReviewRequestMetadataEvaluationInput {
                     one_shot_client: Arc::clone(&input.one_shot_client),
                     session_agent: input.session_agent,
-                    session_summary: input.session_summary.unwrap_or_default(),
                 },
                 review_request_client: Arc::clone(&input.review_request_client),
             });
@@ -161,8 +158,6 @@ pub(super) struct ReviewRequestMetadataEvaluationInput {
     pub(super) one_shot_client: Arc<dyn OneShotClient>,
     /// Agent/model selection used for semantic reconciliation.
     pub(super) session_agent: AgentSelection,
-    /// Cumulative session summary used to evaluate material metadata changes.
-    pub(super) session_summary: String,
 }
 
 /// Runs one detached auto-push for a previously published session branch and
@@ -947,7 +942,6 @@ async fn sync_review_request_metadata(
         &generated_metadata.title,
         evaluation.one_shot_client.as_ref(),
         evaluation.session_agent,
-        &evaluation.session_summary,
     )
     .await?;
     let update_input = forge::UpdateReviewRequestInput {
@@ -1111,7 +1105,6 @@ mod tests {
                     crate::domain::agent::AgentKind::Codex,
                     crate::domain::agent::AgentModel::Gpt56Sol,
                 ),
-                session_summary: "The same goal now includes the completed body.".to_string(),
             },
             review_request_client: Arc::new(review_request_client),
         };
@@ -2121,7 +2114,6 @@ mod tests {
                     crate::domain::agent::AgentKind::Codex,
                     crate::domain::agent::AgentModel::Gpt56Sol,
                 ),
-                session_summary: "Session summary".to_string(),
             },
             review_request_client: Arc::new(review_request_client),
         }

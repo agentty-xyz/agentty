@@ -125,7 +125,7 @@ pub(crate) struct SessionRenderParts<'a> {
 /// Reducer-facing snapshot derived from one persisted turn result.
 ///
 /// The worker computes this projection immediately after writing canonical turn
-/// metadata so the reducer can apply the same summary, clarification-question,
+/// metadata so the reducer can apply the same clarification-question,
 /// follow-up-task, and token-usage updates without waiting for a full reload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TurnAppliedState {
@@ -133,8 +133,6 @@ pub(crate) struct TurnAppliedState {
     pub(crate) follow_up_tasks: Vec<SessionFollowUpTask>,
     /// Persisted clarification questions for the latest completed turn.
     pub(crate) questions: Vec<QuestionItem>,
-    /// Raw persisted summary payload, if the turn produced one.
-    pub(crate) summary: Option<String>,
     /// Token-usage delta reported for the completed turn.
     pub(crate) token_usage_delta: SessionStats,
 }
@@ -142,14 +140,13 @@ pub(crate) struct TurnAppliedState {
 impl TurnAppliedState {
     /// Merges one newer reducer projection into this batched state.
     ///
-    /// Latest-turn fields (`follow_up_tasks`, `questions`, `summary`) replace
+    /// Latest-turn fields (`follow_up_tasks` and `questions`) replace
     /// the previous projection, while `token_usage_delta` accumulates so
     /// multiple completed turns queued in one reducer tick do not undercount
     /// session usage.
     pub(crate) fn merge_newer(&mut self, newer_turn_applied_state: Self) {
         self.follow_up_tasks = newer_turn_applied_state.follow_up_tasks;
         self.questions = newer_turn_applied_state.questions;
-        self.summary = newer_turn_applied_state.summary;
         self.token_usage_delta.input_tokens = self
             .token_usage_delta
             .input_tokens
@@ -893,8 +890,6 @@ impl SessionManager {
             .follow_up_tasks
             .clone_from(&turn_applied_state.follow_up_tasks);
         session.questions.clone_from(&turn_applied_state.questions);
-        session.summary.clone_from(&turn_applied_state.summary);
-        session.hydrate_summary_transient();
         session
             .transient_messages
             .retract(TransientMessageSlot::ReviewCommentResolution);

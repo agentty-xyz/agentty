@@ -461,8 +461,6 @@ pub struct Session {
     pub settings: SessionSettings,
     /// Current lifecycle status.
     pub status: SessionStatus,
-    /// Latest persisted structured summary.
-    pub summary: Option<String>,
     /// Optional user-visible session title.
     pub title: Option<String>,
     /// Last update timestamp in Unix seconds.
