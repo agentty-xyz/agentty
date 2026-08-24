@@ -32,6 +32,11 @@ Chat history retains complete recent turns within a 256 KiB payload budget; use
 
 Use `ModelWithMetadata::complete_with_metadata()` for normalized completion metadata.
 
+Use `ModelProvider` and `ModelConfiguration` to discover built-in providers and
+construct a provider client from its standard environment variables. The catalog owns
+known model identifiers, credential variables, endpoint variables, and provider defaults
+so applications do not need provider-specific construction branches.
+
 Attach `with_lifecycle_observer()` to receive ordered metadata-only lifecycle events.
 After installing an OpenTelemetry meter provider, attach `LifecycleMetrics::new()` to
 project standard agent and client-side tool metrics. Use `LifecycleObserverSet` to send

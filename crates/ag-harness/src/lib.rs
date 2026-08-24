@@ -33,7 +33,9 @@ pub use model::{
     ModelWithMetadata,
 };
 pub use provider::{
-    KimiConfig, MUSE_SPARK_1_2, MUSE_SPARK_1_2_CONTRIBUTOR, Muse, MuseConfig, MuseError, QwenConfig,
+    KIMI_K2_6, KimiConfig, MUSE_SPARK_1_2, MUSE_SPARK_1_2_CONTRIBUTOR, ModelConfiguration,
+    ModelConfigurationError, ModelProvider, ModelProviderParseError, Muse, MuseConfig, QWEN_PLUS,
+    QwenConfig,
 };
 pub use read::{ReadError, ReadOutput};
 pub use schema_contract::{OutputSchema, OutputSchemaError};

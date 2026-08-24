@@ -15,4 +15,9 @@ provider. Muse uses `MODEL_API_KEY` and the optional `MODEL_API_BASE_URL`; Kimi 
 `KIMI_API_KEY` and `KIMI_BASE_URL`; Qwen uses `DASHSCOPE_API_KEY` and
 `DASHSCOPE_BASE_URL`. `--base-url` overrides the corresponding URL variable.
 
+Provider names, known model identifiers, credential variables, and endpoint defaults
+come from `ag-harness`. The CLI owns argument parsing, application prompts, terminal
+interaction, and output formatting, so extending the library catalog does not require a
+matching CLI provider branch.
+
 Run `cargo run -p ag-harness-cli -- --help` for commands.

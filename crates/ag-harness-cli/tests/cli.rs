@@ -5,6 +5,7 @@ use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use ag_harness::ModelProvider;
 use assert_cmd::cargo::cargo_bin;
 use serde_json::json;
 use testty::session::PtySessionBuilder;
@@ -26,8 +27,7 @@ const READ_WRITE_SYSTEM_PROMPT: &str = concat!(
     "before answering. When a user asks to create or modify a file, call the write tool ",
     "immediately in the same response. Never narrate, promise, or defer a future tool call. Only ",
     "claim that a file was created or modified after the write tool succeeds. File deletion and ",
-    "command execution are unavailable. To create an empty file, pass a write patch containing ",
-    "only `--- /dev/null` and `+++ b/<path>` headers with no hunk."
+    "command execution are unavailable."
 );
 
 fn chat_schema() -> serde_json::Value {
@@ -114,13 +114,16 @@ fn help_describes_the_chat_interface() {
     assert!(stdout.contains("Commands:"));
     assert!(stdout.contains("Starts an in-memory chat"));
     assert!(stdout.contains("Supported models"));
-    assert!(stdout.contains("muse-spark-1.2, muse-spark-1.2-contributor"));
-    assert!(stdout.contains("kimi-k2.6"));
-    assert!(stdout.contains("qwen-plus"));
+    for provider in ModelProvider::all() {
+        assert!(stdout.contains(provider.as_str()));
+        for model in provider.known_models() {
+            assert!(stdout.contains(model));
+        }
+    }
     assert!(stdout.contains("Credentials:"));
-    assert!(stdout.contains("MODEL_API_KEY"));
-    assert!(stdout.contains("KIMI_API_KEY"));
-    assert!(stdout.contains("DASHSCOPE_API_KEY"));
+    for provider in ModelProvider::all() {
+        assert!(stdout.contains(provider.api_key_environment()));
+    }
     assert!(!stdout.contains("Get started:"));
     assert!(!stdout.contains("Examples:"));
 }
@@ -142,16 +145,21 @@ fn run_help_describes_optional_initial_prompt() {
     assert!(stdout.contains("Usage: ag-harness run [OPTIONS] <MODEL> [PROMPT]"));
     assert!(stdout.contains("Optional first prompt"));
     assert!(stdout.contains("--base-url <URL>"));
-    assert!(stdout.contains("MODEL_API_BASE_URL"));
-    assert!(stdout.contains("KIMI_BASE_URL"));
-    assert!(stdout.contains("DASHSCOPE_BASE_URL"));
+    for provider in ModelProvider::all() {
+        assert!(stdout.contains(provider.base_url_environment()));
+    }
     assert!(stdout.contains("Credentials:"));
-    assert!(stdout.contains("MODEL_API_KEY"));
-    assert!(stdout.contains("KIMI_API_KEY"));
-    assert!(stdout.contains("DASHSCOPE_API_KEY"));
+    for provider in ModelProvider::all() {
+        assert!(stdout.contains(provider.api_key_environment()));
+    }
     assert!(stdout.contains("--provider <PROVIDER>"));
     assert!(stdout.contains("[default: muse]"));
-    assert!(stdout.contains("[possible values: muse, kimi, qwen]"));
+    let provider_values = ModelProvider::all()
+        .iter()
+        .map(|provider| provider.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(stdout.contains(&format!("[possible values: {provider_values}]")));
     assert!(stdout.contains("--read-dir <DIR>"));
     assert!(stdout.contains("Repository directory available to enabled tools"));
     assert!(stdout.contains("[default: .]"));
@@ -164,15 +172,8 @@ fn run_help_describes_optional_initial_prompt() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provider_flags_select_kimi_and_qwen_wire_formats() {
     // Arrange and Act
-    for (provider, model, api_key_environment, base_url_environment) in [
-        ("kimi", "kimi-k2.6", "KIMI_API_KEY", "KIMI_BASE_URL"),
-        (
-            "qwen",
-            "qwen-plus",
-            "DASHSCOPE_API_KEY",
-            "DASHSCOPE_BASE_URL",
-        ),
-    ] {
+    for provider in [ModelProvider::Kimi, ModelProvider::Qwen] {
+        let model = provider.known_models()[0];
         let server = MockServer::start().await;
         let expected_request = json!({
             "messages": [
@@ -192,9 +193,9 @@ async fn provider_flags_select_kimi_and_qwen_wire_formats() {
             .await;
         let mut command = Command::new(cargo_bin!("ag-harness"));
         let output = command
-            .args(["run", model, "Hello", "--provider", provider])
-            .env(api_key_environment, "test-key")
-            .env(base_url_environment, server.uri())
+            .args(["run", model, "Hello", "--provider", provider.as_str()])
+            .env(provider.api_key_environment(), "test-key")
+            .env(provider.base_url_environment(), server.uri())
             .output()
             .expect("provider request should run");
 

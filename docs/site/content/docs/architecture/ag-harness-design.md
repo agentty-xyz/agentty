@@ -72,6 +72,12 @@ Provider-owned adapters and compatibility rules live under the private `provider
 module. API-family clients remain separate so multiple providers can reuse a wire
 protocol without sharing provider policy.
 
+The public `ModelProvider` catalog and `ModelConfiguration` builder are the single
+source of truth for built-in provider identifiers, representative model IDs, credential
+and endpoint environment variables, endpoint defaults, and client construction.
+Applications consume that catalog generically instead of matching on each provider.
+Application-owned prompts remain outside the catalog and model runtime.
+
 Qwen, Kimi, and Muse share Chat Completions request execution and bounded response
 decoding. Qwen and Kimi include the requested `OutputSchema` in the system instruction;
 they request JSON Object output when no tools are active and omit that provider mode
@@ -107,7 +113,9 @@ The current tool foundation includes:
 
 The `ag-harness-cli` package ships the `ag-harness` command, which starts an in-memory
 chat with Muse, Kimi, or Qwen. Reads are scoped to `--read-dir`; writes require
-`--allow-write`.
+`--allow-write`. It derives provider parsing and help text from the library catalog
+while retaining command-line defaults, application prompts, terminal interaction, and
+output formatting.
 
 ## Session management
 

@@ -30,14 +30,16 @@ For file-level detail, read the module docstrings directly.
   metadata, commit/diff/push/pull sync, merge-conflict preflights, rebase/conflict
   handling, and squash-merge workflows behind the `GitClient` boundary.
 - `crates/ag-harness/`: Application-facing LLM harness crate with the provider-neutral
-  object-safe `Model` boundary, its `ModelClient` implementation, private Qwen, Kimi,
-  and Muse policies, a shared Chat Completions backend with JSON Object and JSON Schema
-  modes, backend-neutral request-duration telemetry, and a deny-by-default `Harness`
-  loop that executes bounded repository reads and stale-safe patch writes through an
-  injectable `FileSystem`. Application binaries own telemetry setup.
+  object-safe `Model` boundary, its `ModelClient` implementation, the built-in provider
+  catalog and environment-backed configuration, private Qwen, Kimi, and Muse policies, a
+  shared Chat Completions backend with JSON Object and JSON Schema modes,
+  backend-neutral request-duration telemetry, and a deny-by-default `Harness` loop that
+  executes bounded repository reads and stale-safe patch writes through an injectable
+  `FileSystem`. Application binaries own prompts and telemetry setup.
 - `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
-  process-level tests. It composes the `ag-harness` library with provider configuration,
-  bounded repository permissions, terminal-safe output, and in-memory chat handling.
+  process-level tests. It derives provider parsing and help from `ag-harness`, then owns
+  command-line defaults, application prompts, bounded repository permission selection,
+  terminal-safe output, and in-memory chat input handling.
 - `crates/ag-protocol/`: Shared structured response protocol library crate with
   transport-neutral response models, schema generation, parser diagnostics, protocol
   prompt envelopes, repair prompts, review-comment outcomes, and turn prompt payload

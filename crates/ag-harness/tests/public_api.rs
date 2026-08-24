@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use ag_harness::{
     CompletionMetadata, CompletionUsage, Harness, LifecycleEventKind, LifecycleMetrics,
-    LifecycleObserverSet, LifecycleTraceObserver, Model, ModelCompletion, ModelError,
-    ModelMetadata, ModelRequest, ModelResponse, ModelWithMetadata, OutputSchema, OutputSchemaError,
+    LifecycleObserverSet, LifecycleTraceObserver, Model, ModelCompletion, ModelConfiguration,
+    ModelError, ModelMetadata, ModelProvider, ModelRequest, ModelResponse, ModelWithMetadata,
+    OutputSchema, OutputSchemaError,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -49,6 +50,26 @@ impl ModelWithMetadata for ExternalMetadataModel {
 }
 
 fn assert_observer<Observer: ag_harness::LifecycleObserver>(_observer: Observer) {}
+
+#[test]
+fn external_consumer_configures_every_catalog_provider() {
+    // Arrange and Act
+    let clients = ModelProvider::all()
+        .iter()
+        .map(|provider| {
+            ModelConfiguration::new(*provider, provider.known_models()[0])
+                .base_url("https://models.example/v1")
+                .client_from_environment(|_| Ok("test-key".to_string()))
+                .expect("catalog provider should construct a client")
+        })
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(clients.len(), ModelProvider::all().len());
+    for (client, provider) in clients.iter().zip(ModelProvider::all()) {
+        assert_eq!(client.metadata().model(), provider.known_models()[0]);
+    }
+}
 
 #[test]
 fn external_consumer_constructs_lifecycle_trace_observer() {

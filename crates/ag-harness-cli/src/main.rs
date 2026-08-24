@@ -8,10 +8,11 @@ use std::process::ExitCode;
 use std::{env, io};
 
 use ag_harness::{
-    ChatSession, Harness, KimiConfig, ModelClient, MuseConfig, OutputSchema, QwenConfig, Tool,
-    TurnOutcome,
+    ChatSession, Harness, ModelConfiguration, ModelConfigurationError, ModelProvider, OutputSchema,
+    Tool, TurnOutcome,
 };
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::builder::{PossibleValuesParser, TypedValueParser};
+use clap::{Args, Parser, Subcommand};
 use serde_json::{Map, Value};
 use thiserror::Error;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader};
@@ -31,26 +32,8 @@ const READ_WRITE_SYSTEM_PROMPT: &str = concat!(
     "before answering. When a user asks to create or modify a file, call the write tool ",
     "immediately in the same response. Never narrate, promise, or defer a future tool call. Only ",
     "claim that a file was created or modified after the write tool succeeds. File deletion and ",
-    "command execution are unavailable. To create an empty file, pass a write patch containing ",
-    "only `--- /dev/null` and `+++ b/<path>` headers with no hunk."
+    "command execution are unavailable."
 );
-const KIMI_API_KEY_ENV: &str = "KIMI_API_KEY";
-const KIMI_BASE_URL_ENV: &str = "KIMI_BASE_URL";
-const MUSE_DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
-const MUSE_API_KEY_ENV: &str = "MODEL_API_KEY";
-const MUSE_BASE_URL_ENV: &str = "MODEL_API_BASE_URL";
-const QWEN_API_KEY_ENV: &str = "DASHSCOPE_API_KEY";
-const QWEN_BASE_URL_ENV: &str = "DASHSCOPE_BASE_URL";
-const PROVIDER_HELP: &str = "\
-Supported models (other endpoint-supported model IDs also work):
-  muse: muse-spark-1.2, muse-spark-1.2-contributor
-  kimi: kimi-k2.6
-  qwen: qwen-plus
-
-Credentials:
-  muse: MODEL_API_KEY (MODEL_API_BASE_URL optional)
-  kimi: KIMI_API_KEY, KIMI_BASE_URL
-  qwen: DASHSCOPE_API_KEY, DASHSCOPE_BASE_URL";
 
 /// Chats with models through a bounded repository harness.
 #[derive(Debug, Parser)]
@@ -58,7 +41,7 @@ Credentials:
     name = "ag-harness",
     version,
     about = "Chats with models through a repository harness",
-    after_help = PROVIDER_HELP
+    after_help = provider_help()
 )]
 struct Cli {
     #[command(subcommand)]
@@ -74,93 +57,69 @@ enum Command {
 
 /// Arguments for an in-memory model chat.
 #[derive(Debug, Args)]
-#[command(after_help = PROVIDER_HELP)]
+#[command(after_help = provider_help())]
 struct RunArgs {
     /// Model identifier sent to the provider.
     model: String,
     /// Optional first prompt. Further prompts are read from standard input.
     #[arg(value_parser = parse_prompt)]
     prompt: Option<String>,
-    /// API base URL, overriding `MODEL_API_BASE_URL`, `KIMI_BASE_URL`, or
-    /// `DASHSCOPE_BASE_URL`.
+    /// API base URL, overriding the provider-specific environment variable.
     #[arg(long, value_name = "URL")]
     base_url: Option<String>,
     /// Enables repository writes through the write tool.
     #[arg(long)]
     allow_write: bool,
     /// Model provider.
-    #[arg(long, value_enum, default_value_t = Provider::Muse)]
-    provider: Provider,
+    #[arg(
+        long,
+        default_value_t = ModelProvider::Muse,
+        value_parser = model_provider_parser()
+    )]
+    provider: ModelProvider,
     /// Repository directory available to enabled tools.
     #[arg(long, value_name = "DIR", default_value = ".")]
     read_dir: PathBuf,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum Provider {
-    Muse,
-    Kimi,
-    Qwen,
+fn model_provider_parser() -> impl TypedValueParser<Value = ModelProvider> {
+    PossibleValuesParser::new(
+        ModelProvider::all()
+            .iter()
+            .map(|provider| provider.as_str()),
+    )
+    .try_map(|provider| provider.parse::<ModelProvider>())
 }
 
-impl Provider {
-    fn api_key_environment(self) -> &'static str {
-        match self {
-            Self::Muse => MUSE_API_KEY_ENV,
-            Self::Kimi => KIMI_API_KEY_ENV,
-            Self::Qwen => QWEN_API_KEY_ENV,
-        }
+fn provider_help() -> String {
+    let mut help =
+        String::from("Supported models (other endpoint-supported model IDs also work):\n");
+    for provider in ModelProvider::all() {
+        help.push_str("  ");
+        help.push_str(provider.as_str());
+        help.push_str(": ");
+        help.push_str(&provider.known_models().join(", "));
+        help.push('\n');
     }
-
-    fn base_url_environment(self) -> &'static str {
-        match self {
-            Self::Muse => MUSE_BASE_URL_ENV,
-            Self::Kimi => KIMI_BASE_URL_ENV,
-            Self::Qwen => QWEN_BASE_URL_ENV,
+    help.push_str("\nCredentials:\n");
+    for provider in ModelProvider::all() {
+        help.push_str("  ");
+        help.push_str(provider.as_str());
+        help.push_str(": ");
+        help.push_str(provider.api_key_environment());
+        if provider.default_base_url().is_some() {
+            help.push_str(" (");
+            help.push_str(provider.base_url_environment());
+            help.push_str(" optional)");
+        } else {
+            help.push_str(", ");
+            help.push_str(provider.base_url_environment());
         }
+        help.push('\n');
     }
+    help.pop();
 
-    fn default_base_url(self) -> Option<&'static str> {
-        match self {
-            Self::Muse => Some(MUSE_DEFAULT_BASE_URL),
-            Self::Kimi | Self::Qwen => None,
-        }
-    }
-
-    fn model_client(
-        self,
-        configuration: ModelConfiguration,
-    ) -> Result<ModelClient, ag_harness::ModelMetadataError> {
-        let ModelConfiguration {
-            api_key,
-            base_url,
-            model,
-        } = configuration;
-
-        match self {
-            Self::Muse => ModelClient::muse(MuseConfig {
-                api_key,
-                base_url,
-                model,
-            }),
-            Self::Kimi => ModelClient::kimi(KimiConfig {
-                api_key,
-                base_url,
-                model,
-            }),
-            Self::Qwen => ModelClient::qwen(QwenConfig {
-                api_key,
-                base_url,
-                model,
-            }),
-        }
-    }
-}
-
-struct ModelConfiguration {
-    api_key: String,
-    base_url: String,
-    model: String,
+    help
 }
 
 fn parse_prompt(prompt: &str) -> Result<String, String> {
@@ -233,7 +192,11 @@ where
     Output: AsyncWrite + Unpin,
 {
     let Command::Run(args) = cli.command;
-    let client = model_client(&args, environment)?;
+    let mut configuration = ModelConfiguration::new(args.provider, args.model.clone());
+    if let Some(base_url) = &args.base_url {
+        configuration = configuration.base_url(base_url.clone());
+    }
+    let client = configuration.client_from_environment(environment)?;
     let mut harness = Harness::new(client)
         .repository(args.read_dir.clone())
         .allow(Tool::Read);
@@ -488,75 +451,31 @@ fn chat_schema() -> Result<OutputSchema, CliError> {
     OutputSchema::new(schema).map_err(CliError::from)
 }
 
-fn model_client(
-    args: &RunArgs,
-    environment: impl FnMut(&str) -> Result<String, env::VarError>,
-) -> Result<ModelClient, CliError> {
-    let configuration = model_config(args, environment)?;
-
-    Ok(args.provider.model_client(configuration)?)
-}
-
-fn model_config(
-    args: &RunArgs,
-    mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
-) -> Result<ModelConfiguration, CliError> {
-    let api_key_environment = args.provider.api_key_environment();
-    let api_key = environment(api_key_environment).map_err(|_| CliError::ApiKeyUnavailable {
-        name: api_key_environment,
-    })?;
-    let base_url_environment = args.provider.base_url_environment();
-    let base_url = if let Some(base_url) = &args.base_url {
-        base_url.clone()
-    } else {
-        match environment(base_url_environment) {
-            Ok(base_url) => base_url,
-            Err(env::VarError::NotPresent) => {
-                args.provider.default_base_url().map(str::to_string).ok_or(
-                    CliError::BaseUrlRequired {
-                        name: base_url_environment,
-                    },
-                )?
-            }
-            Err(source) => {
-                return Err(CliError::Environment {
-                    name: base_url_environment,
-                    source,
-                });
-            }
-        }
-    };
-
-    Ok(ModelConfiguration {
-        api_key,
-        base_url,
-        model: args.model.clone(),
-    })
-}
-
 #[derive(Debug, Error)]
 enum CliError {
-    #[error("{name} is unavailable")]
-    ApiKeyUnavailable { name: &'static str },
     #[error("--base-url or {name} is required")]
     BaseUrlRequired { name: &'static str },
     #[error("one or more chat turns failed")]
     ChatTurnsFailed,
-    #[error("{name} is unavailable: {source}")]
-    Environment {
-        name: &'static str,
-        source: env::VarError,
-    },
     #[error("model output did not contain a message")]
     MissingMessage,
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
-    ModelConfiguration(#[from] ag_harness::ModelMetadataError),
+    ModelConfiguration(ModelConfigurationError),
     #[error(transparent)]
     OutputSchema(#[from] ag_harness::OutputSchemaError),
     #[error(transparent)]
     Turn(#[from] ag_harness::TurnError),
+}
+
+impl From<ModelConfigurationError> for CliError {
+    fn from(error: ModelConfigurationError) -> Self {
+        match error {
+            ModelConfigurationError::BaseUrl { name } => Self::BaseUrlRequired { name },
+            error => Self::ModelConfiguration(error),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -602,21 +521,6 @@ mod tests {
         }
     }
 
-    fn run_args() -> RunArgs {
-        RunArgs {
-            allow_write: false,
-            base_url: None,
-            model: "muse-model".to_string(),
-            prompt: None,
-            provider: Provider::Muse,
-            read_dir: PathBuf::from("."),
-        }
-    }
-
-    fn missing_environment(_: &str) -> Result<String, env::VarError> {
-        Err(env::VarError::NotPresent)
-    }
-
     fn provider_response(message: &str) -> ResponseTemplate {
         ResponseTemplate::new(200).set_body_json(json!({
             "choices": [{
@@ -655,12 +559,12 @@ mod tests {
         let Command::Run(without_prompt) = without_prompt.command;
         assert_eq!(without_prompt.prompt, None);
         assert!(!without_prompt.allow_write);
-        assert_eq!(without_prompt.provider, Provider::Muse);
+        assert_eq!(without_prompt.provider, ModelProvider::Muse);
         assert_eq!(without_prompt.read_dir, PathBuf::from("."));
         let Command::Run(with_prompt) = with_prompt.command;
         assert_eq!(with_prompt.model, "muse-custom");
         assert_eq!(with_prompt.prompt.as_deref(), Some("Summarize this change"));
-        assert_eq!(with_prompt.provider, Provider::Qwen);
+        assert_eq!(with_prompt.provider, ModelProvider::Qwen);
         assert_eq!(
             with_prompt.base_url.as_deref(),
             Some("https://models.example/v1")
@@ -677,6 +581,30 @@ mod tests {
                 .to_string()
                 .contains("invalid value 'unknown'")
         );
+    }
+
+    #[test]
+    fn cli_accepts_every_catalog_provider() {
+        // Arrange and Act
+        let providers = ModelProvider::all()
+            .iter()
+            .map(|provider| {
+                Cli::try_parse_from([
+                    "ag-harness",
+                    "run",
+                    "model-id",
+                    "--provider",
+                    provider.as_str(),
+                ])
+                .expect("catalog provider should parse")
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        for (cli, expected) in providers.into_iter().zip(ModelProvider::all()) {
+            let Command::Run(args) = cli.command;
+            assert_eq!(args.provider, *expected);
+        }
     }
 
     #[test]
@@ -888,200 +816,25 @@ mod tests {
     }
 
     #[test]
-    fn model_configuration_uses_environment_defaults() {
+    fn cli_configuration_errors_preserve_cli_specific_guidance() {
         // Arrange
-        let args = run_args();
+        let base_url = ModelConfigurationError::BaseUrl {
+            name: "KIMI_BASE_URL",
+        };
+        let api_key = ModelConfigurationError::ApiKey {
+            name: "MODEL_API_KEY",
+        };
 
         // Act
-        let config = model_config(&args, |name| match name {
-            MUSE_API_KEY_ENV => Ok("test-key".to_string()),
-            _ => Err(env::VarError::NotPresent),
-        })
-        .expect("default model configuration should be valid");
+        let base_url = CliError::from(base_url);
+        let api_key = CliError::from(api_key);
 
         // Assert
-        assert_eq!(config.api_key, "test-key");
-        assert_eq!(config.base_url, MUSE_DEFAULT_BASE_URL);
-        assert_eq!(config.model, "muse-model");
-    }
-
-    #[test]
-    fn model_configuration_uses_provider_environment() {
-        // Arrange
-        let providers = [
-            (Provider::Muse, MUSE_API_KEY_ENV, MUSE_BASE_URL_ENV),
-            (Provider::Kimi, KIMI_API_KEY_ENV, KIMI_BASE_URL_ENV),
-            (Provider::Qwen, QWEN_API_KEY_ENV, QWEN_BASE_URL_ENV),
-        ];
-
-        // Act and Assert
-        for (provider, api_key_environment, base_url_environment) in providers {
-            let mut args = run_args();
-            args.provider = provider;
-            let mut requested_environment = Vec::new();
-            let config = model_config(&args, |name| {
-                requested_environment.push(name.to_string());
-                if name == api_key_environment {
-                    Ok("provider-key".to_string())
-                } else {
-                    assert_eq!(name, base_url_environment);
-
-                    Ok("https://provider.example/v1".to_string())
-                }
-            })
-            .expect("provider environment should produce a valid configuration");
-
-            assert_eq!(
-                requested_environment,
-                [
-                    api_key_environment.to_string(),
-                    base_url_environment.to_string()
-                ]
-            );
-            assert_eq!(config.api_key, "provider-key");
-            assert_eq!(config.base_url, "https://provider.example/v1");
-        }
-    }
-
-    #[test]
-    fn model_clients_select_every_supported_provider() {
-        // Arrange
-        let providers = [
-            (Provider::Muse, "meta"),
-            (Provider::Kimi, "moonshot_ai"),
-            (Provider::Qwen, "alibaba_cloud"),
-        ];
-
-        // Act
-        let identities = providers.map(|(provider, expected_provider)| {
-            let mut args = run_args();
-            args.base_url = Some("https://models.example/v1".to_string());
-            args.provider = provider;
-            let client = model_client(&args, |_| Ok("test-key".to_string()))
-                .expect("supported provider configuration should be valid");
-
-            (client.metadata().provider().to_string(), expected_provider)
-        });
-
-        // Assert
-        for (provider, expected_provider) in identities {
-            assert_eq!(provider, expected_provider);
-        }
-    }
-
-    #[test]
-    fn model_configuration_uses_environment_base_url() {
-        // Arrange
-        let args = run_args();
-
-        // Act
-        let config = model_config(&args, |name| {
-            if name == MUSE_BASE_URL_ENV {
-                Ok("https://environment.example/v1".to_string())
-            } else {
-                Ok("test-key".to_string())
-            }
-        })
-        .expect("environment model configuration should be valid");
-
-        // Assert
-        assert_eq!(config.api_key, "test-key");
-        assert_eq!(config.base_url, "https://environment.example/v1");
-    }
-
-    #[test]
-    fn model_configuration_prefers_base_url_flag() {
-        // Arrange
-        let mut args = run_args();
-        args.base_url = Some("https://cli.example/v1".to_string());
-
-        // Act
-        let config = model_config(&args, |_| Ok("test-key".to_string()))
-            .expect("CLI overrides should produce valid configuration");
-
-        // Assert
-        assert_eq!(config.base_url, "https://cli.example/v1");
-    }
-
-    #[test]
-    fn non_muse_configuration_requires_a_base_url() {
-        // Arrange
-        let mut args = run_args();
-        args.provider = Provider::Kimi;
-
-        // Act
-        let error = model_config(&args, |name| {
-            if name == KIMI_API_KEY_ENV {
-                Ok("test-key".to_string())
-            } else {
-                Err(env::VarError::NotPresent)
-            }
-        })
-        .err()
-        .expect("Kimi without an endpoint should be rejected");
-
-        // Assert
-        assert_eq!(error.to_string(), "--base-url or KIMI_BASE_URL is required");
-    }
-
-    #[test]
-    fn model_configuration_reports_missing_api_key() {
-        // Arrange
-        let args = run_args();
-
-        // Act
-        let error = model_config(&args, missing_environment)
-            .err()
-            .expect("a missing API key should be rejected");
-
-        // Assert
-        assert_eq!(error.to_string(), "MODEL_API_KEY is unavailable");
-    }
-
-    #[test]
-    fn api_key_errors_redact_non_unicode_values_from_output() {
-        // Arrange
-        let args = run_args();
-        let secret = "visible-secret-material";
-        let error = model_config(&args, |_| {
-            Err(env::VarError::NotUnicode(std::ffi::OsString::from(secret)))
-        })
-        .err()
-        .expect("a non-Unicode API key should be rejected");
-        let mut error_output = Vec::new();
-
-        // Act
-        let exit = report_exit(Err(error), &mut error_output);
-
-        // Assert
-        assert_eq!(exit, ExitCode::FAILURE);
-        let error_output = String::from_utf8(error_output).expect("error output should be UTF-8");
-        assert_eq!(error_output, "MODEL_API_KEY is unavailable\n");
-        assert!(!error_output.contains(secret));
-    }
-
-    #[test]
-    fn model_configuration_reports_non_unicode_optional_environment() {
-        // Arrange
-        let args = run_args();
-
-        // Act
-        let error = model_config(&args, |name| {
-            if name == MUSE_BASE_URL_ENV {
-                Err(env::VarError::NotUnicode("invalid".into()))
-            } else {
-                Ok("test-key".to_string())
-            }
-        })
-        .err()
-        .expect("non-Unicode configuration should be rejected");
-
-        // Assert
-        assert!(
-            error
-                .to_string()
-                .starts_with("MODEL_API_BASE_URL is unavailable:")
+        assert_eq!(
+            base_url.to_string(),
+            "--base-url or KIMI_BASE_URL is required"
         );
+        assert_eq!(api_key.to_string(), "MODEL_API_KEY is unavailable");
     }
 
     #[test]
