@@ -300,7 +300,6 @@ mod tests {
             .id(session_id)
             .folder(PathBuf::from(folder))
             .prompt("prompt")
-            .summary(Some("summary".to_string()))
             .title(Some("title".to_string()))
             .build()
     }

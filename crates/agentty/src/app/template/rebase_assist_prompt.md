@@ -18,5 +18,5 @@ Requirements:
 - Run the repository-defined quality checks for the resolved files and their affected
   dependencies or dependents. If targeted coverage is unclear, run the full repository
   test/check suite.
-- Return the required protocol JSON object. Briefly summarize the resolution in
-  `answer`, leave `questions` empty, and set `summary` to null.
+- Return the required protocol JSON object. Briefly summarize the resolution in `answer`
+  and leave `questions` empty.

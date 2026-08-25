@@ -5,8 +5,6 @@
 
 use std::sync::Arc;
 
-#[cfg(test)]
-use ag_protocol::AgentResponseSummary;
 use ag_protocol::{AgentResponse, TurnPrompt, build_protocol_repair_prompt};
 use tokio::sync::mpsc;
 
@@ -366,10 +364,9 @@ mod tests {
 
     fn stdin_capture_command(capture_path: &std::path::Path) -> std::process::Command {
         let mut command = std::process::Command::new("sh");
-        command.arg("-c").arg(
-            "cat > \"$CLI_CAPTURE_PATH\"; printf '%s' \
-             '{\"answer\":\"ok\",\"questions\":[],\"summary\":null}'",
-        );
+        command
+            .arg("-c")
+            .arg("cat > \"$CLI_CAPTURE_PATH\"; printf '%s' '{\"answer\":\"ok\",\"questions\":[]}'");
         command.env("CLI_CAPTURE_PATH", capture_path);
 
         command
@@ -660,7 +657,7 @@ mod tests {
             let mut command = std::process::Command::new("sh");
             command
                 .arg("-c")
-                .arg("printf '{\"answer\":\"ok\",\"questions\":[],\"summary\":null}'");
+                .arg("printf '{\"answer\":\"ok\",\"questions\":[]}'");
 
             Ok(command)
         });
@@ -690,7 +687,7 @@ mod tests {
             let mut command = std::process::Command::new("sh");
             command.arg("-c").arg(concat!(
                 "printf '%s\\n' 'Now I have the full context.';",
-                "printf '%s' '{\"answer\":\"ok\",\"questions\":[],\"summary\":null}'",
+                "printf '%s' '{\"answer\":\"ok\",\"questions\":[]}'",
             ));
 
             Ok(command)
@@ -713,44 +710,6 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies session-turn Claude responses synthesize an empty summary when
-    /// the provider returns `summary: null`.
-    async fn test_run_turn_fills_missing_summary_for_session_turn() {
-        // Arrange
-        let dir = tempdir().expect("failed to create temp dir");
-        let mut mock_backend = MockAgentBackend::new();
-        mock_backend.expect_build_command().returning(|_| {
-            let mut command = std::process::Command::new("sh");
-            command
-                .arg("-c")
-                .arg("printf '{\"answer\":\"ok\",\"questions\":[],\"summary\":null}'");
-
-            Ok(command)
-        });
-        let channel = CliAgentChannel {
-            backend: Arc::new(mock_backend),
-            kind: AgentKind::Claude,
-        };
-        let (events_tx, _events_rx) = mpsc::unbounded_channel();
-        let req = make_turn_request(dir.path().to_path_buf());
-
-        // Act
-        let result = channel
-            .run_turn("sess-1".to_string(), req, events_tx)
-            .await
-            .expect("turn should succeed");
-
-        // Assert
-        assert_eq!(
-            result.assistant_message.summary,
-            Some(AgentResponseSummary {
-                turn: String::new(),
-                session: String::new(),
-            })
-        );
-    }
-
-    #[tokio::test]
     /// Verifies Claude CLI turns avoid deadlock when the child emits stderr
     /// before it starts reading a large stdin prompt.
     async fn test_run_turn_writes_large_stdin_concurrently_for_claude() {
@@ -761,7 +720,7 @@ mod tests {
             let mut command = std::process::Command::new("sh");
             command.arg("-c").arg(
                 "printf 'warming up\\n' >&2; sleep 0.1; cat >/dev/null; printf '%s' \
-                 '{\"answer\":\"ok\",\"questions\":[],\"summary\":null}'",
+                 '{\"answer\":\"ok\",\"questions\":[]}'",
             );
 
             Ok(command)
@@ -929,9 +888,9 @@ mod tests {
                 if call_number == 0 {
                     command.arg("-c").arg("printf 'plain non-json response'");
                 } else {
-                    command.arg("-c").arg(
-                        r#"printf '{"answer":"Repaired response","questions":[],"summary":null}'"#,
-                    );
+                    command
+                        .arg("-c")
+                        .arg(r#"printf '{"answer":"Repaired response","questions":[]}'"#);
                 }
 
                 Ok(command)
@@ -1043,7 +1002,7 @@ mod tests {
             command.arg("-c").arg(concat!(
                 r#"echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash"}]}}';"#,
                 r#"echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"streamed fragment"}]}}';"#,
-                r#"echo '{"result":"{\"answer\":\"final answer\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":3}}'"#,
+                r#"echo '{"result":"{\"answer\":\"final answer\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":3}}'"#,
             ));
 
             Ok(command)

@@ -1,6 +1,5 @@
 //! Session header, footer, and transcript display formatting.
 
-use ag_protocol::AgentResponseSummary;
 use ag_tui_text::text_util;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -17,7 +16,6 @@ const REVIEW_PROJECT_IMPACT_HEADER: &str = "### Project Impact";
 const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
 const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str =
     "### Suggestions (type \"/apply\" to verify and apply)";
-const SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT: &str = "No changes";
 
 /// Formats the session title and metadata lines rendered above the output
 /// panel.
@@ -214,32 +212,6 @@ pub(crate) fn session_view_footer_line(view_help_state: ViewHelpState) -> Line<'
     crate::ui::help_format::footer_line(&help_action::view_footer_actions(view_help_state))
 }
 
-/// Renders persisted summary payloads into display markdown.
-///
-/// Structured JSON summaries are expanded into `Current Turn` and `Session
-/// Changes` sections with a blank line after the section headers. Plain text
-/// falls back unchanged, and empty content uses the shared `No changes`
-/// placeholder for both sections.
-pub(crate) fn session_output_summary_markdown(summary_text: &str) -> String {
-    let trimmed_summary = summary_text.trim();
-    if let Ok(summary_payload) = serde_json::from_str::<AgentResponseSummary>(trimmed_summary) {
-        return format!(
-            "## Change Summary\n\n### Current Turn\n{}\n\n### Session Changes\n{}",
-            summary_section_text(&summary_payload.turn),
-            summary_section_text(&summary_payload.session)
-        );
-    }
-
-    if !trimmed_summary.is_empty() {
-        return trimmed_summary.to_string();
-    }
-
-    format!(
-        "## Change Summary\n\n### Current Turn\n{SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT}\n\n### \
-         Session Changes\n{SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT}"
-    )
-}
-
 /// Formats focused-review section headings with compact spacing and adds the
 /// verification-gated `/apply` hint when suggestions are actionable.
 pub(crate) fn format_review_markdown(review_markdown: &str) -> String {
@@ -400,16 +372,6 @@ pub(crate) fn session_output_queued_lines(
             Line::styled(rendered_text, queued_style)
         })
         .collect()
-}
-
-/// Returns one rendered summary section or the shared empty placeholder.
-fn summary_section_text(summary_text: &str) -> &str {
-    let trimmed_summary = summary_text.trim();
-    if trimmed_summary.is_empty() {
-        return SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT;
-    }
-
-    trimmed_summary
 }
 
 /// Returns the loader label for active session states.

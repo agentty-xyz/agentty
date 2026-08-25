@@ -2,11 +2,9 @@
 
 use std::sync::Arc;
 
-#[cfg(test)]
-use ag_protocol::AgentResponseSummary;
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, ProtocolSchemaInstructionMode,
-    format_protocol_parse_debug_details, normalize_turn_response, parse_agent_response_strict,
+    format_protocol_parse_debug_details, parse_agent_response_strict,
 };
 
 use super::backend::{
@@ -85,15 +83,13 @@ pub(crate) fn parse_turn_response(
     response_text: &str,
     protocol_profile: ProtocolRequestProfile,
 ) -> Result<AgentResponse, String> {
-    let response = parse_agent_response_strict(response_text).map_err(|error| {
+    parse_agent_response_strict(response_text).map_err(|error| {
         format!(
             "Agent output did not match the required JSON schema from {kind}: \
              {error}\nprotocol_profile: {protocol_profile:?}\ndebug_details:\n{}",
             format_protocol_parse_debug_details(response_text)
         )
-    })?;
-
-    Ok(normalize_turn_response(response, protocol_profile))
+    })
 }
 
 /// Returns whether one app-server assistant chunk should be treated as
@@ -313,32 +309,6 @@ mod tests {
             assert!(error.contains("first_non_whitespace_char: 'p'"));
             assert!(error.contains("direct_json_error_location: line 1, column 1"));
         }
-    }
-
-    #[test]
-    /// Ensures valid session-turn payloads still gain an empty summary when
-    /// the response omits it.
-    fn test_parse_turn_response_fills_missing_summary_for_session_turn() {
-        // Arrange
-        let raw_response = r#"{"answer":"done","questions":[],"summary":null}"#;
-
-        // Act
-        let result = parse_turn_response(
-            AgentKind::Codex,
-            raw_response,
-            ProtocolRequestProfile::SessionTurn,
-        )
-        .expect("valid protocol response should parse");
-
-        // Assert
-        assert_eq!(result.answer, "done");
-        assert_eq!(
-            result.summary,
-            Some(AgentResponseSummary {
-                session: String::new(),
-                turn: String::new(),
-            })
-        );
     }
 
     #[test]

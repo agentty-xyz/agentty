@@ -1353,7 +1353,7 @@ impl OrchestrationCoordinator {
         let next = OrchestrationTaskStatus::from_child_status(child_status);
         self.update_task_status(task, next, None).await?;
         if next == OrchestrationTaskStatus::Ready {
-            let summary = bounded_summary(task.child_summary.as_deref().unwrap_or("Completed"));
+            let summary = bounded_summary(task.child_answer.as_deref().unwrap_or("Completed"));
             if task.result_summary.as_deref() != Some(summary.as_str()) {
                 self.repository
                     .update_orchestration_task_result_summary(task.id, &summary)
@@ -1424,7 +1424,6 @@ impl OrchestrationCoordinator {
         let report = task
             .child_answer
             .as_deref()
-            .or(task.child_summary.as_deref())
             .map(bounded_research_report)
             .filter(|report| !report.is_empty())
             .unwrap_or_else(|| "Research child completed without a report.".to_string());
@@ -1591,7 +1590,7 @@ impl OrchestrationCoordinator {
     ) -> Result<(), String> {
         self.update_task_status(task, OrchestrationTaskStatus::Ready, None)
             .await?;
-        let summary = bounded_summary(task.child_summary.as_deref().unwrap_or("Completed"));
+        let summary = bounded_summary(task.child_answer.as_deref().unwrap_or("Completed"));
         if task.result_summary.as_deref() != Some(summary.as_str()) {
             self.repository
                 .update_orchestration_task_result_summary(task.id, &summary)
@@ -1661,7 +1660,7 @@ impl OrchestrationCoordinator {
                     _ => return Ok(()),
                 };
                 let summary = (next == OrchestrationTaskStatus::Ready)
-                    .then(|| task.child_summary.as_deref().map(bounded_summary))
+                    .then(|| task.child_answer.as_deref().map(bounded_summary))
                     .flatten();
                 self.repository
                     .update_orchestration_task_status(task.id, &next.to_string(), None)
@@ -1674,7 +1673,7 @@ impl OrchestrationCoordinator {
                         .map_err(|error| error.to_string())?;
                 }
                 task.status = next.to_string();
-                task.result_summary.clone_from(&task.child_summary);
+                task.result_summary.clone_from(&summary);
             }
             Some(status) => {
                 return Err(format!(
@@ -2757,7 +2756,6 @@ mod tests {
             child_questions: None,
             child_session_id: child_session_id.map(str::to_string),
             child_status: child_status.map(|status| status.to_string()),
-            child_summary: None,
             continuation_generation: 0,
             continuation_prompt: None,
             id,
@@ -2781,10 +2779,10 @@ mod tests {
     fn with_child_observation(
         mut task: SessionOrchestrationTaskRow,
         status: SessionStatus,
-        summary: Option<&str>,
+        answer: Option<&str>,
     ) -> SessionOrchestrationTaskRow {
         task.child_status = Some(status.to_string());
-        task.child_summary = summary.map(str::to_string);
+        task.child_answer = answer.map(str::to_string);
 
         task
     }
@@ -3194,7 +3192,7 @@ mod tests {
             "non-exclusive planning hints",
             "stay focused and preserve unrelated work",
             "repository-defined checks required",
-            "`summary.turn` within 800 characters",
+            "keep `answer` concise",
             "result, checks, and any blocker",
             "uses it for fan-in",
         ];
@@ -4478,7 +4476,7 @@ mod tests {
             FocusedReviewStatus::Failed,
             None,
         );
-        failed.child_summary = Some("Review failed, task complete".to_string());
+        failed.child_answer = Some("Review failed, task complete".to_string());
         let mut empty = focused_review_task(
             3,
             "empty",
@@ -4493,7 +4491,7 @@ mod tests {
             Some("child-no-diff"),
         );
         no_diff.child_has_diff = Some(false);
-        no_diff.child_summary = Some("No changes needed".to_string());
+        no_diff.child_answer = Some("No changes needed".to_string());
         let mut invalid = task(
             5,
             "invalid",
@@ -5134,7 +5132,7 @@ mod tests {
             call.starts_with("send:child-1:")
                 && call.contains("You are one worker in an orchestration.")
                 && call.contains("Task key: protocol")
-                && call.contains("within 800 characters")
+                && call.contains("keep `answer` concise")
         }));
     }
 
@@ -5251,7 +5249,6 @@ mod tests {
         research.kind = OrchestrationTaskKind::Research.to_string();
         research.child_status = Some(SessionStatus::Review.to_string());
         research.child_answer = Some("Deep architecture report".to_string());
-        research.child_summary = Some("Short summary".to_string());
         research.child_has_diff = Some(true);
 
         // Act
@@ -5959,7 +5956,7 @@ mod tests {
             OrchestrationTaskStatus::Ready,
             Some("child-ready"),
         );
-        ready_task.child_summary = Some("Completed".to_string());
+        ready_task.child_answer = Some("Completed".to_string());
         ready_task.result_summary = Some("Completed".to_string());
         let task_snapshots = Arc::new(Mutex::new(VecDeque::from([
             vec![ready_task.clone()],

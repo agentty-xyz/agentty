@@ -264,7 +264,6 @@ impl SessionFixtureBuilder {
                 speed_mode: crate::domain::agent::SpeedMode::default(),
                 stats: SessionStats::default(),
                 status: Status::Review,
-                summary: None,
                 title: None,
                 transcript: None,
                 updated_at: 0,
@@ -374,13 +373,6 @@ impl SessionFixtureBuilder {
         self
     }
 
-    /// Overrides the optional persisted session summary text.
-    pub(crate) fn summary(mut self, summary: Option<String>) -> Self {
-        self.session.summary = summary;
-
-        self
-    }
-
     /// Overrides the optional explicit session title.
     pub(crate) fn title(mut self, title: Option<String>) -> Self {
         self.session.title = title;
@@ -389,9 +381,7 @@ impl SessionFixtureBuilder {
     }
 
     /// Consumes the builder and returns the fully populated fixture.
-    pub(crate) fn build(mut self) -> Session {
-        self.session.hydrate_summary_transient();
-
+    pub(crate) fn build(self) -> Session {
         self.session
     }
 }

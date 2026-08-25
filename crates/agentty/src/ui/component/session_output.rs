@@ -825,11 +825,9 @@ impl Component for SessionOutput<'_> {
 mod tests {
     use std::borrow::Cow;
 
-    use ag_protocol::AgentResponseSummary;
     use ratatui::layout::Alignment;
     use ratatui::style::{Color, Style};
     use ratatui::text::Span;
-    use serde_json;
 
     use super::*;
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -863,14 +861,6 @@ mod tests {
             slot: TransientMessageSlot::Review,
             turn_position: session.latest_user_prompt_position(),
         });
-    }
-
-    fn summary_fixture() -> String {
-        serde_json::to_string(&AgentResponseSummary {
-            turn: "- Added the structured protocol summary.".to_string(),
-            session: "- Session output now renders persisted summary markdown.".to_string(),
-        })
-        .expect("summary fixture should serialize")
     }
 
     fn session_fixture() -> Session {
@@ -1189,7 +1179,7 @@ mod tests {
     }
 
     /// Verifies workflow-only status changes reuse the stable transcript body
-    /// and keep completed output ahead of its summary during a rebase.
+    /// while a rebase adds progress output.
     #[test]
     fn test_output_layout_cache_reuses_completed_body_during_rebase() {
         // Arrange
@@ -1205,7 +1195,6 @@ mod tests {
             ],
         );
         session.status = Status::Review;
-        session.summary = Some(summary_fixture());
         session.reconcile_transient_messages();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
@@ -1238,18 +1227,11 @@ mod tests {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        let answer_index = rebase_text
-            .find("Completed answer stays stable.")
-            .expect("completed answer should remain visible");
-        let summary_index = rebase_text
-            .find("Change Summary")
-            .expect("completed summary should remain visible");
-
         // Assert
         assert!(!Arc::ptr_eq(&review_layout.lines, &rebase_layout.lines));
         assert_eq!(output_layout_cache.body_entries.borrow().len(), 1);
         assert_eq!(output_layout_cache.entries.borrow().len(), 2);
-        assert!(answer_index < summary_index);
+        assert!(rebase_text.contains("Completed answer stays stable."));
         assert!(rebase_text.contains("Rebasing..."));
     }
 
@@ -1805,28 +1787,6 @@ mod tests {
     }
 
     #[test]
-    fn test_output_lines_done_summary_mode_keeps_transcript_with_summary() {
-        // Arrange
-        let mut session = session_fixture();
-        set_assistant_transcript(&mut session, "streamed output");
-        session.summary = Some(summary_fixture());
-        session.status = Status::Done;
-        session.reconcile_transient_messages();
-        // Act
-        let lines = output_lines(&session, Rect::new(0, 0, 80, 5), line_context(), None);
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Added the structured protocol summary."));
-        assert!(text.contains("Session output now renders persisted summary markdown."));
-        assert!(text.contains("streamed output"));
-    }
-
-    #[test]
     fn test_output_lines_render_staged_draft_preview_for_new_session() {
         // Arrange
         let mut session = session_fixture();
@@ -1940,7 +1900,7 @@ mod tests {
     }
 
     #[test]
-    fn test_output_lines_done_output_mode_appends_structured_summary() {
+    fn test_output_lines_done_output_keeps_workflow_notice_after_answer() {
         // Arrange
         let mut session = session_fixture();
         set_conversation_transcript(
@@ -1953,7 +1913,6 @@ mod tests {
                 ),
             ],
         );
-        session.summary = Some(summary_fixture());
         session.status = Status::Done;
         session.reconcile_transient_messages();
         // Act
@@ -1966,25 +1925,18 @@ mod tests {
         let output_index = text
             .find("streamed output")
             .expect("streamed output should be rendered");
-        let summary_index = text
-            .find("Change Summary")
-            .expect("structured summary should be rendered");
         let commit_index = text
             .find("[Commit] No changes to commit.")
             .expect("commit footer should be rendered");
 
         // Assert
-        assert!(text.contains("streamed output"));
-        assert!(text.contains("Added the structured protocol summary."));
-        assert!(text.contains("Session output now renders persisted summary markdown."));
-        assert!(output_index < summary_index);
-        assert!(summary_index < commit_index);
+        assert!(output_index < commit_index);
+        assert!(!text.contains("Change Summary"));
     }
 
-    /// Verifies later workflow notices stay below the summary that belongs to
-    /// the completed agent turn.
+    /// Verifies later workflow notices retain their transcript order.
     #[test]
-    fn test_output_lines_places_summary_before_trailing_workflow_notices() {
+    fn test_output_lines_orders_trailing_workflow_notices() {
         // Arrange
         let mut session = session_fixture();
         set_conversation_transcript(
@@ -2002,7 +1954,6 @@ mod tests {
                 ),
             ],
         );
-        session.summary = Some(summary_fixture());
         session.status = Status::Review;
         session.reconcile_transient_messages();
         // Act
@@ -2015,9 +1966,6 @@ mod tests {
         let output_index = text
             .find("streamed output")
             .expect("streamed output should be rendered");
-        let summary_index = text
-            .find("Change Summary")
-            .expect("structured summary should be rendered");
         let commit_index = text
             .find("[Commit] No changes to commit.")
             .expect("commit notice should be rendered");
@@ -2026,16 +1974,14 @@ mod tests {
             .expect("sync notice should be rendered");
 
         // Assert
-        assert!(output_index < summary_index);
-        assert!(summary_index < commit_index);
+        assert!(output_index < commit_index);
         assert!(commit_index < sync_index);
     }
 
     /// Verifies typed assistant answers that begin with a workflow-notice
-    /// prefix remain grouped with assistant output instead of being moved
-    /// below the summary.
+    /// prefix remain grouped with assistant output.
     #[test]
-    fn test_output_lines_typed_assistant_notice_prefix_stays_before_summary() {
+    fn test_output_lines_typed_assistant_notice_prefix_stays_in_answer() {
         // Arrange
         let transcript = SessionTranscript::new(vec![
             SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "summarize merge"),
@@ -2046,7 +1992,6 @@ mod tests {
             ),
         ]);
         let mut session = session_fixture();
-        session.summary = Some(summary_fixture());
         session.transcript = Some(transcript);
         session.status = Status::Review;
         session.reconcile_transient_messages();
@@ -2057,15 +2002,8 @@ mod tests {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        let assistant_notice_index = text
-            .find("[Merge] this is literal assistant text.")
-            .expect("assistant notice-looking line should be rendered");
-        let summary_index = text
-            .find("Change Summary")
-            .expect("structured summary should be rendered");
-
         // Assert
-        assert!(assistant_notice_index < summary_index);
+        assert!(text.contains("Assistant output.\n[Merge] this is literal assistant text."));
     }
 
     /// Verifies active-turn splitting uses typed user-prompt rows instead of
@@ -2103,8 +2041,7 @@ mod tests {
         assert!(active_turn.starts_with(" › actual prompt"));
     }
 
-    /// Verifies merge failures render after focused review content, so the
-    /// review summary remains visually grouped with the completed turn.
+    /// Verifies merge failures render after focused review content.
     #[test]
     fn test_output_lines_places_review_before_trailing_workflow_notices() {
         // Arrange
@@ -2126,7 +2063,6 @@ mod tests {
             &mut session,
             TransientMessageBody::Markdown(review_text.to_string()),
         );
-        session.summary = Some(summary_fixture());
         session.reconcile_transient_messages();
 
         // Act
@@ -2139,17 +2075,13 @@ mod tests {
         let output_index = text
             .find("implemented fix")
             .expect("completed output should be rendered");
-        let summary_index = text
-            .find("Change Summary")
-            .expect("structured summary should be rendered");
         let review_index = text.find("Review").expect("review should be rendered");
         let merge_error_index = text
             .find("[Merge Error] Cannot merge branch")
             .expect("merge error should be rendered");
 
         // Assert
-        assert!(output_index < summary_index);
-        assert!(summary_index < review_index);
+        assert!(output_index < review_index);
         assert!(review_index < merge_error_index);
         assert!(text.contains("Project Impact\n- Documentation-only change."));
         assert!(text.contains("Suggestions\n- None."));
@@ -2565,63 +2497,9 @@ mod tests {
         assert!(text.contains(review_status_message));
     }
 
+    /// Verifies a reply prompt follows earlier workflow notices.
     #[test]
-    fn test_output_lines_review_session_appends_structured_summary() {
-        // Arrange
-        let mut session = session_fixture();
-        set_assistant_transcript(&mut session, "implemented the feature");
-        session.summary = Some(summary_fixture());
-        session.status = Status::Review;
-        session.reconcile_transient_messages();
-        // Act
-        let lines = output_lines(&session, Rect::new(0, 0, 80, 5), line_context(), None);
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("implemented the feature"));
-        assert!(text.contains("Added the structured protocol summary."));
-        assert!(text.contains("Session output now renders persisted summary markdown."));
-    }
-
-    /// Verifies structured summaries render a blank row after their top-level
-    /// `Change Summary` heading just like focused-review output.
-    #[test]
-    fn test_output_lines_structured_summary_spaces_change_summary_header() {
-        // Arrange
-        let mut session = session_fixture();
-        session.summary = Some(summary_fixture());
-        session.status = Status::Review;
-        session.reconcile_transient_messages();
-        // Act
-        let lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
-        let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
-        let summary_header_index = rendered_lines
-            .iter()
-            .position(|line| line == "Change Summary")
-            .expect("structured summary header should be rendered");
-
-        // Assert
-        assert_eq!(
-            rendered_lines
-                .get(summary_header_index + 1)
-                .map(String::as_str),
-            Some("")
-        );
-        assert_eq!(
-            rendered_lines
-                .get(summary_header_index + 2)
-                .map(String::as_str),
-            Some("Current Turn")
-        );
-    }
-
-    /// Verifies old summaries are hidden once a reply prompt is running.
-    #[test]
-    fn test_output_lines_in_progress_session_hides_summary_before_active_prompt() {
+    fn test_output_lines_in_progress_session_places_active_prompt_last() {
         // Arrange
         let mut session = session_fixture();
         set_conversation_transcript(
@@ -2635,7 +2513,6 @@ mod tests {
                 (SessionMessageKind::UserPrompt, "add hello world"),
             ],
         );
-        session.summary = Some(summary_fixture());
         session.status = Status::InProgress;
 
         // Act
@@ -2665,8 +2542,7 @@ mod tests {
         assert!(commit_index < prompt_index);
     }
 
-    /// Verifies queued follow-up messages render after the active turn while
-    /// keeping stale completed-turn summaries hidden.
+    /// Verifies queued follow-up messages render after the active turn.
     #[test]
     fn test_output_lines_in_progress_session_shows_queued_messages_after_active_turn() {
         // Arrange
@@ -2684,7 +2560,6 @@ mod tests {
             ],
         );
         session.queued_messages = vec![queued_message(0, "follow up\nwith context")];
-        session.summary = Some(summary_fixture());
         session.status = Status::InProgress;
 
         // Act
@@ -2814,10 +2689,10 @@ mod tests {
         assert!(sync_assist_index < queued_message_index);
     }
 
-    /// Verifies an active prompt at the start of the transcript hides stale
-    /// summary content.
+    /// Verifies an active prompt at the start of the transcript retains its
+    /// assistant answer.
     #[test]
-    fn test_output_lines_in_progress_single_prompt_hides_summary() {
+    fn test_output_lines_in_progress_single_prompt_keeps_answer() {
         // Arrange
         let mut session = session_fixture();
         set_conversation_transcript(
@@ -2830,7 +2705,6 @@ mod tests {
                 ),
             ],
         );
-        session.summary = Some(summary_fixture());
         session.status = Status::InProgress;
 
         // Act
@@ -2863,7 +2737,7 @@ mod tests {
     /// Verifies the latest user prompt is detected when the exact active
     /// prompt capture is unavailable.
     #[test]
-    fn test_output_lines_in_progress_without_active_capture_hides_summary_before_last_prompt() {
+    fn test_output_lines_in_progress_without_active_capture_finds_last_prompt() {
         // Arrange
         let mut session = session_fixture();
         set_conversation_transcript(
@@ -2878,7 +2752,6 @@ mod tests {
                 (SessionMessageKind::UserPrompt, "review project"),
             ],
         );
-        session.summary = Some(summary_fixture());
         session.status = Status::InProgress;
 
         // Act
@@ -2918,7 +2791,6 @@ mod tests {
                 ),
             ],
         );
-        session.summary = Some(summary_fixture());
         session.status = Status::InProgress;
 
         // Act
@@ -2949,7 +2821,7 @@ mod tests {
     }
 
     #[test]
-    fn test_output_lines_review_session_without_summary_keeps_transcript_only() {
+    fn test_output_lines_review_session_keeps_transcript_only() {
         // Arrange
         let mut session = session_fixture();
         set_assistant_transcript(&mut session, "implemented the feature");
@@ -3462,47 +3334,6 @@ mod tests {
         assert!(!text.contains("flowchart LR"));
     }
 
-    /// Verifies the done-summary transition renders the rewritten summary
-    /// payload while preserving the completed transcript.
-    #[test]
-    fn test_output_lines_done_summary_transition_preserves_transcript() {
-        // Arrange
-        let mut session = session_fixture();
-        set_assistant_transcript(&mut session, "streamed output");
-        session.summary = Some(summary_fixture());
-        session.status = Status::Review;
-        session.reconcile_transient_messages();
-        let review_lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
-        let review_text = review_lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        session.summary = Some(
-            "# Summary\n\nSession now greets users on startup.\n\n# Commit\n\nRefine session \
-             summary"
-                .to_string(),
-        );
-        session.status = Status::Done;
-        session.reconcile_transient_messages();
-        // Act
-        let done_lines = output_lines(&session, Rect::new(0, 0, 80, 8), line_context(), None);
-        let done_text = done_lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(review_text.contains("Change Summary"));
-        assert!(review_text.contains("Added the structured protocol summary."));
-        assert!(done_text.contains("Summary"));
-        assert!(done_text.contains("Session now greets users on startup."));
-        assert!(done_text.contains("Commit"));
-        assert!(done_text.contains("Refine session summary"));
-        assert!(done_text.contains("streamed output"));
-    }
-
     #[test]
     fn test_output_lines_agent_review_mode_shows_assisted_text() {
         // Arrange
@@ -3532,7 +3363,6 @@ mod tests {
         // Arrange
         let mut session = session_fixture();
         set_assistant_transcript(&mut session, "streamed output");
-        session.summary = Some(summary_fixture());
         session.status = Status::Canceled;
         session.reconcile_transient_messages();
         // Act
@@ -3544,7 +3374,7 @@ mod tests {
             .join("\n");
 
         // Assert
-        assert!(!text.contains("Added the structured protocol summary."));
+        assert!(!text.contains("Change Summary"));
         assert!(text.contains("streamed output"));
     }
 

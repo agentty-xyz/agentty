@@ -1,8 +1,8 @@
 For this session turn:
 
-- Put user-facing content in `answer`, clarification prompts in `questions`, and a
-  delivered-work report in `summary`. Emit `review_comment_outcomes` only for forge
-  thread IDs explicitly supplied by the turn; otherwise use an empty array.
+- Put user-facing content in `answer` and clarification prompts in `questions`. Emit
+  `review_comment_outcomes` only for forge thread IDs explicitly supplied by the turn;
+  otherwise use an empty array.
 - Do not create commits; do not suggest creating them at turn end.
 - Leave `subtasks` empty unless the turn explicitly requests a child-session
   decomposition.

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT prompt,\n       questions,\n       summary\nFROM session\nWHERE id = ?\n",
+  "query": "\nSELECT prompt,\n       questions\nFROM session\nWHERE id = ?\n",
   "describe": {
     "columns": [
       {
@@ -24,17 +24,6 @@
             "name": "questions"
           }
         }
-      },
-      {
-        "name": "summary",
-        "ordinal": 2,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "session",
-            "name": "summary"
-          }
-        }
       }
     ],
     "parameters": {
@@ -42,9 +31,8 @@
     },
     "nullable": [
       false,
-      true,
       true
     ]
   },
-  "hash": "7c488e9ac233735c59348a86c44609013773ec2764ee048550390c1b85974052"
+  "hash": "0561d3d09640a0ae001ac38a88c7735562b01b801a0be50c8b92c55b6bed99c5"
 }

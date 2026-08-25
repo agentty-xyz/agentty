@@ -205,7 +205,7 @@ cat > /dev/null 2>&1
 printf 'pending change\n' > generated.txt
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Created pending worktree change"}]}}'
-printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Created pending worktree change\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Created pending worktree change\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}'
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
@@ -533,14 +533,7 @@ fn seed_session_with_typed_marker_collision(
             .append_session_message(
                 session_id,
                 SessionMessageKind::AssistantAnswer,
-                "Assistant output before summary.\n[Merge] this is literal assistant text.",
-            )
-            .await?;
-        database
-            .sessions()
-            .update_session_summary(
-                session_id,
-                r#"{"turn":"Kept marker-looking output in the assistant answer.","session":"Typed transcript rows preserve render grouping."}"#,
+                "Assistant output before marker.\n[Merge] this is literal assistant text.",
             )
             .await
     })?;
@@ -588,7 +581,7 @@ case "$prompt" in
     ;;
 esac
 printf '%s\n' '{"type":"system","subtype":"init"}'
-printf '{"type":"result","subtype":"success","result":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[],\\"summary\\":null}","usage":{"input_tokens":5,"output_tokens":9}}\n' "$answer"
+printf '{"type":"result","subtype":"success","result":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[]}","usage":{"input_tokens":5,"output_tokens":9}}\n' "$answer"
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
@@ -656,7 +649,7 @@ case "$prompt" in
     ;;
 esac
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
-printf '{{"type":"result","subtype":"success","result":"{{\\"answer\\":\\"## Review\\\\n\\\\n### Project Impact\\\\n\\\\n- %s\\\\n\\\\n### Suggestions\\\\n\\\\n- None\\",\\"questions\\":[],\\"summary\\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n' "$answer"
+printf '{{"type":"result","subtype":"success","result":"{{\\"answer\\":\\"## Review\\\\n\\\\n### Project Impact\\\\n\\\\n- %s\\\\n\\\\n### Suggestions\\\\n\\\\n- None\\",\\"questions\\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n' "$answer"
 "###,
     );
     std::fs::write(&claude_path, script)?;
@@ -704,7 +697,7 @@ while IFS= read -r request; do
             printf '{"id":"%s","result":{"turn":{"id":"review-turn"}}}\n' "$request_id"
             printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"review-turn"}}}'
             printf '%s\n' '{"method":"item/completed","params":{"threadId":"review-thread","turnId":"review-turn","item":{"type":"agentMessage","id":"commentary-item","text":"I will inspect the current code.","phase":"commentary"}}}'
-            printf '%s\n' '{"method":"item/completed","params":{"threadId":"review-thread","turnId":"review-turn","item":{"type":"agentMessage","id":"final-item","text":"{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Final focused review result.\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[],\"summary\":null}","phase":"final_answer"}}}'
+            printf '%s\n' '{"method":"item/completed","params":{"threadId":"review-thread","turnId":"review-turn","item":{"type":"agentMessage","id":"final-item","text":"{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Final focused review result.\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[]}","phase":"final_answer"}}}'
             printf '%s\n' '{"method":"turn/completed","params":{"threadId":"review-thread","turn":{"id":"review-turn","status":"completed","items":[{"type":"agentMessage","id":"blank-final-item","text":"   ","phase":"final_answer"}]}}}'
             ;;
     esac
@@ -757,7 +750,7 @@ while IFS= read -r request; do
             ;;
         *'"method":"session/prompt"'*)
             request_id=$(extract_id "$request")
-            printf '{{"jsonrpc":"2.0","id":"%s","result":{{"response":"{{\\"answer\\":\\"## Review\\n\\n### Project Impact\\n\\n- %s\\n\\n### Suggestions\\n\\n- None.\\",\\"questions\\":[],\\"summary\\":null}}","usage":{{"inputTokens":5,"outputTokens":9}}}}}}\n' "$request_id" "$answer"
+            printf '{{"jsonrpc":"2.0","id":"%s","result":{{"response":"{{\\"answer\\":\\"## Review\\n\\n### Project Impact\\n\\n- %s\\n\\n### Suggestions\\n\\n- None.\\",\\"questions\\":[]}}","usage":{{"inputTokens":5,"outputTokens":9}}}}}}\n' "$request_id" "$answer"
             ;;
     esac
 done
@@ -822,7 +815,7 @@ while IFS= read -r request; do
             request_id=$(extract_id "$request")
             printf '{"id":"%s","result":{"turn":{"id":"policy-turn"}}}\n' "$request_id"
             printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"policy-turn"}}}'
-            printf '{"method":"item/completed","params":{"threadId":"policy-thread","turnId":"policy-turn","item":{"type":"agentMessage","id":"policy-answer","text":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[],\\"subtasks\\":[],\\"summary\\":null,\\"verification_verdicts\\":[]}","phase":"final_answer"}}}\n' "$answer"
+            printf '{"method":"item/completed","params":{"threadId":"policy-thread","turnId":"policy-turn","item":{"type":"agentMessage","id":"policy-answer","text":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[],\\"subtasks\\":[],\\"verification_verdicts\\":[]}","phase":"final_answer"}}}\n' "$answer"
             printf '%s\n' '{"method":"turn/completed","params":{"threadId":"policy-thread","turn":{"id":"policy-turn","status":"completed","items":[]}}}'
             ;;
     esac
@@ -1001,14 +994,7 @@ fn seed_rebase_transcript_session_with_delay(
             .append_session_message(
                 "review-shortcut-0001",
                 SessionMessageKind::AssistantAnswer,
-                "Completed answer before rebase summary.",
-            )
-            .await?;
-        database
-            .sessions()
-            .update_session_summary(
-                "review-shortcut-0001",
-                r#"{"turn":"Preserved transcript ordering.","session":"Rebase keeps completed output stable."}"#,
+                "Completed answer before rebase.",
             )
             .await
     })?;
@@ -1545,7 +1531,7 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","name":"StructuredOutput","input":{{"answer":"{CLAUDE_STRUCTURED_RESPONSE_TEXT}"}}}}]}}}}'
-printf '%s\n' '{{"type":"result","subtype":"success","result":"","structured_output":{{"answer":"{CLAUDE_STRUCTURED_RESPONSE_TEXT}","questions":[],"summary":null}},"usage":{{"input_tokens":8,"output_tokens":6}}}}'
+printf '%s\n' '{{"type":"result","subtype":"success","result":"","structured_output":{{"answer":"{CLAUDE_STRUCTURED_RESPONSE_TEXT}","questions":[]}},"usage":{{"input_tokens":8,"output_tokens":6}}}}'
 "#
     );
     std::fs::write(&claude_path, script)?;
@@ -1680,7 +1666,7 @@ while IFS= read -r prompt_event; do
   cumulative_input=$((turn * 7))
   cumulative_output=$((turn * 6))
   printf '{"event":"step_update","step_update":{"conversation_id":"stub-conversation","step_index":%s,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":7,"output_tokens":6}}}\n' "$turn"
-  printf '{"event":"result","result":{"conversation_id":"stub-conversation","status":"SUCCESS","response":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[],\\"summary\\":\\"Antigravity summary fallback.\\"}","structured_output":{"answer":"%s","questions":[],"review_comment_outcomes":[],"summary":"Antigravity summary fallback."},"error":"","duration_seconds":0.1,"num_turns":%s,"usage":{"input_tokens":%s,"output_tokens":%s,"thinking_tokens":1,"cache_read_tokens":2,"total_tokens":16}}}\n' "$answer" "$answer" "$turn" "$cumulative_input" "$cumulative_output"
+  printf '{"event":"result","result":{"conversation_id":"stub-conversation","status":"SUCCESS","response":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[]}","structured_output":{"answer":"%s","questions":[],"review_comment_outcomes":[]},"error":"","duration_seconds":0.1,"num_turns":%s,"usage":{"input_tokens":%s,"output_tokens":%s,"thinking_tokens":1,"cache_read_tokens":2,"total_tokens":16}}}\n' "$answer" "$answer" "$turn" "$cumulative_input" "$cumulative_output"
 done
 "#;
     std::fs::write(&stub_agent_path, script)?;
@@ -1813,13 +1799,7 @@ fn seed_review_ready_session_with_persisted_focused_review(
                 ),
             )
             .await?;
-        database
-            .sessions()
-            .update_session_summary(
-                "review-shortcut-0001",
-                r#"{"turn":"Persisted the focused review.","session":"Review output survives session reloads."}"#,
-            )
-            .await
+        Ok::<(), ag_store::DbError>(())
     })?;
 
     Ok(())
@@ -1959,13 +1939,13 @@ input=$(cat)
 case "$input" in
   *"Generate a concise, commit-style title"*)
     sleep 2
-    result='{{\"answer\":\"{QUESTION_REFRESH_TITLE}\",\"questions\":[],\"review_comment_outcomes\":[],\"summary\":null}}'
+    result='{{\"answer\":\"{QUESTION_REFRESH_TITLE}\",\"questions\":[],\"review_comment_outcomes\":[]}}'
     ;;
   *"Clarifications:"*)
-    result='{{\"answer\":\"{QUESTION_REFRESH_FINAL_ANSWER}\",\"questions\":[],\"review_comment_outcomes\":[],\"summary\":null}}'
+    result='{{\"answer\":\"{QUESTION_REFRESH_FINAL_ANSWER}\",\"questions\":[],\"review_comment_outcomes\":[]}}'
     ;;
   *)
-    result='{{\"answer\":\"Need two clarifications.\",\"questions\":[{{\"text\":\"{FIRST_QUESTION_TEXT}\",\"options\":[\"Yes\",\"No\"]}},{{\"text\":\"{SECOND_QUESTION_TEXT}\",\"options\":[\"Unit\",\"Integration\"]}}],\"review_comment_outcomes\":[],\"summary\":null}}'
+    result='{{\"answer\":\"Need two clarifications.\",\"questions\":[{{\"text\":\"{FIRST_QUESTION_TEXT}\",\"options\":[\"Yes\",\"No\"]}},{{\"text\":\"{SECOND_QUESTION_TEXT}\",\"options\":[\"Unit\",\"Integration\"]}}],\"review_comment_outcomes\":[]}}'
     ;;
 esac
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
@@ -2054,7 +2034,7 @@ printf '%s\n' '{{"type":"system","subtype":"init"}}'
 sleep 2
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"Need one clarification."}}]}}}}'
 sleep 1
-printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Need one clarification.\",\"questions\":[{{\"text\":\"{RECONCILE_QUESTION_TEXT}\",\"options\":[\"Yes\",\"No\"]}}],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Need one clarification.\",\"questions\":[{{\"text\":\"{RECONCILE_QUESTION_TEXT}\",\"options\":[\"Yes\",\"No\"]}}]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
 "#
     );
 
@@ -2075,38 +2055,38 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 input=$(cat)
 case "$input" in
   *"Generate a concise, commit-style title"*)
-    result='{\"answer\":\"Coordinate parallel work\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":null}'
+    result='{\"answer\":\"Coordinate parallel work\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[]}'
     ;;
   *"The user or coordinator message follows:"*"Implement the protocol review suggestions"*)
-    result='{\"answer\":\"I will continue the protocol worker with the review findings.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol findings on the same worker branch.\",\"touched_areas\":[\"crates/ag-protocol/\"],\"acceptance_criteria\":[\"Protocol review findings are implemented and checked\"]}],\"summary\":null}'
+    result='{\"answer\":\"I will continue the protocol worker with the review findings.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol findings on the same worker branch.\",\"touched_areas\":[\"crates/ag-protocol/\"],\"acceptance_criteria\":[\"Protocol review findings are implemented and checked\"]}]}'
     ;;
   *"Orchestration verification gate"*)
-    result='{\"answer\":\"All workers finished. Review and merge protocol before UI.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Orchestration finished.\",\"turn\":\"Rolled up both worker results.\"},\"verification_verdicts\":[{\"reason\":\"Protocol criteria pass\",\"task_key\":\"protocol\",\"verdict\":\"pass\"},{\"reason\":\"UI criteria pass\",\"task_key\":\"ui\",\"verdict\":\"pass\"}]}'
+    result='{\"answer\":\"All workers finished. Review and merge protocol before UI.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"verification_verdicts\":[{\"reason\":\"Protocol criteria pass\",\"task_key\":\"protocol\",\"verdict\":\"pass\"},{\"reason\":\"UI criteria pass\",\"task_key\":\"ui\",\"verdict\":\"pass\"}]}'
     ;;
   *"The user or coordinator message follows:"*"Continue protocol beyond its expected areas"*)
-    result='{\"answer\":\"I will route that feedback to the existing worker.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Continue protocol beyond its expected areas.\",\"touched_areas\":[\"docs/\"],\"acceptance_criteria\":[\"Apply the requested feedback\"]}],\"summary\":null}'
+    result='{\"answer\":\"I will route that feedback to the existing worker.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Continue protocol beyond its expected areas.\",\"touched_areas\":[\"docs/\"],\"acceptance_criteria\":[\"Apply the requested feedback\"]}]}'
     ;;
   *"The user or coordinator message follows:"*"Build protocol and UI in parallel"*)
-    result='{\"answer\":\"I propose independent protocol and UI workers, merged in that order.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol slice.\",\"touched_areas\":[\"crates/shared/\"],\"acceptance_criteria\":[\"Protocol worker completes\"]},{\"task_key\":\"ui\",\"title\":\"UI worker\",\"prompt\":\"Implement the UI slice.\",\"touched_areas\":[\"crates/shared/\"],\"acceptance_criteria\":[\"UI worker completes\"]}],\"summary\":null}'
+    result='{\"answer\":\"I propose independent protocol and UI workers, merged in that order.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol slice.\",\"touched_areas\":[\"crates/shared/\"],\"acceptance_criteria\":[\"Protocol worker completes\"]},{\"task_key\":\"ui\",\"title\":\"UI worker\",\"prompt\":\"Implement the UI slice.\",\"touched_areas\":[\"crates/shared/\"],\"acceptance_criteria\":[\"UI worker completes\"]}]}'
     ;;
   *"Implement the protocol findings on the same worker branch"*)
     sleep 4
-    result='{\"answer\":\"Protocol review suggestions implemented.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Protocol review suggestions implemented.\",\"turn\":\"Continued the existing worker and checked the findings.\"}}'
+    result='{\"answer\":\"Protocol review suggestions implemented. Continued the existing worker and checked the findings.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[]}'
     ;;
   *"Continue protocol beyond its expected areas"*"Expected touched areas (planning references): [\"docs/\"]"*)
     sleep 4
-    result='{\"answer\":\"Protocol feedback implemented beyond the expected areas.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Protocol feedback implemented.\",\"turn\":\"Continued the existing worker beyond its planning references.\"}}'
+    result='{\"answer\":\"Protocol feedback implemented beyond the expected areas and planning references.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[]}'
     ;;
   *"Task key: protocol"*)
     sleep 4
-    result='{\"answer\":\"Protocol worker completed.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"Protocol worker completed.\",\"turn\":\"Implemented and checked the protocol slice.\"}}'
+    result='{\"answer\":\"Protocol worker completed. Implemented and checked the protocol slice.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[]}'
     ;;
   *"Task key: ui"*)
     sleep 4
-    result='{\"answer\":\"UI worker completed.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":{\"session\":\"UI worker completed.\",\"turn\":\"Implemented and checked the UI slice.\"}}'
+    result='{\"answer\":\"UI worker completed. Implemented and checked the UI slice.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[]}'
     ;;
   *)
-    result='{\"answer\":\"Ready\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":null}'
+    result='{\"answer\":\"Ready\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[]}'
     ;;
 esac
 printf '%s\n' '{"type":"system","subtype":"init"}'
@@ -2150,18 +2130,18 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 prompt=$(cat)
 case "$prompt" in
   *"Review the Git diff for display in a terminal UI."*)
-    result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- {DEFERRED_PROJECT_REVIEW_TEXT}\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[],\"summary\":null}}'
+    result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- {DEFERRED_PROJECT_REVIEW_TEXT}\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[]}}'
     ;;
   *"Generate a concise, commit-style title"*)
-    result='{{\"answer\":\"Cross-project focused review\",\"questions\":[],\"summary\":null}}'
+    result='{{\"answer\":\"Cross-project focused review\",\"questions\":[]}}'
     ;;
   *"Generate the canonical session commit message"*)
-    result='{{\"answer\":\"test: exercise cross-project review\",\"questions\":[],\"summary\":null}}'
+    result='{{\"answer\":\"test: exercise cross-project review\",\"questions\":[]}}'
     ;;
   *)
     sleep 3
     printf 'review me\n' > deferred-project-review.txt
-    result='{{\"answer\":\"Completed work while another project was active.\",\"questions\":[],\"summary\":null}}'
+    result='{{\"answer\":\"Completed work while another project was active.\",\"questions\":[]}}'
     ;;
 esac
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
@@ -2208,7 +2188,7 @@ cat > /dev/null 2>&1
 sleep {delay_seconds}
 {mark_validation_failure}printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_SYNC_TURN_ANSWER}"}}]}}}}'
-printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_SYNC_TURN_ANSWER}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_SYNC_TURN_ANSWER}\",\"questions\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
 "#
     );
 
@@ -2273,7 +2253,7 @@ cat > /dev/null 2>&1
 sleep 8
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}"}}]}}}}'
-printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}\",\"questions\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
 "#
     );
     std::fs::write(&claude_path, claude_script)?;
@@ -2375,7 +2355,7 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 emit_answer() {{
   printf '%s\n' '{{"type":"system","subtype":"init"}}'
   printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"'"$1"'"}}]}}}}'
-  printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"'"$1"'\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+  printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"'"$1"'\",\"questions\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
 }}
 input=$(cat)
 case "$input" in
@@ -2419,8 +2399,8 @@ case " $* " in
   *) answer='Claude web tools missing' ;;
 esac
 printf '%s\n' '{"type":"system","subtype":"init"}'
-printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"summary\\":null}"}]}}\n' "$answer"
-printf '{"type":"result","subtype":"success","result":"{\"answer\":\"%s\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}\n' "$answer"
+printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"{\\"answer\\":\\"%s\\",\\"questions\\":[]}"}]}}\n' "$answer"
+printf '{"type":"result","subtype":"success","result":"{\"answer\":\"%s\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}\n' "$answer"
 "#;
 
     std::fs::write(&claude_path, script)?;
@@ -2497,7 +2477,7 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{BARE_LAYOUT_ANSWER_TEXT}"}}]}}}}\n'
-printf '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{BARE_LAYOUT_ANSWER_TEXT}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n'
+printf '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{BARE_LAYOUT_ANSWER_TEXT}\",\"questions\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n'
 "#
     );
 
@@ -2609,7 +2589,7 @@ while IFS= read -r request; do
             printf '{"id":"%s","result":{"turn":{"id":"line-comment-turn"}}}\n' "$request_id"
             printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"line-comment-turn"}}}'
             sleep 1
-            printf '%s\n' '{"method":"item/completed","params":{"threadId":"line-comment-thread","turnId":"line-comment-turn","item":{"type":"agentMessage","id":"line-comment-answer","text":"{\"answer\":\"Line comment received.\",\"questions\":[],\"summary\":null}","phase":"final_answer"}}}'
+            printf '%s\n' '{"method":"item/completed","params":{"threadId":"line-comment-thread","turnId":"line-comment-turn","item":{"type":"agentMessage","id":"line-comment-answer","text":"{\"answer\":\"Line comment received.\",\"questions\":[]}","phase":"final_answer"}}}'
             printf '%s\n' '{"method":"turn/completed","params":{"threadId":"line-comment-thread","turn":{"id":"line-comment-turn","status":"completed","items":[]}}}'
             ;;
     esac
@@ -2631,7 +2611,7 @@ if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 printf '%s\n' '{"type":"system","subtype":"init"}'
-printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"No review findings.\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"No review findings.\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}'
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
@@ -3015,7 +2995,7 @@ cat > /dev/null 2>&1
 sleep 10
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Processed the selected review threads."}]}}'
-printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Processed the selected review threads.\",\"questions\":[],\"review_comment_outcomes\":[{\"reply\":\"Added the explanation.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-inline\"},{\"reply\":\"The whole-file change is not needed because the scoped update covers the request.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-file\"}],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Processed the selected review threads.\",\"questions\":[],\"review_comment_outcomes\":[{\"reply\":\"Added the explanation.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-inline\"},{\"reply\":\"The whole-file change is not needed because the scoped update covers the request.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-file\"}]}","usage":{"input_tokens":5,"output_tokens":9}}'
 "#,
     )?;
     #[cfg(unix)]
@@ -3040,7 +3020,7 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Processed only one selected review thread."}]}}'
-printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Processed only one selected review thread.\",\"questions\":[],\"review_comment_outcomes\":[{\"reply\":\"Added the explanation.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-inline\"}],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Processed only one selected review thread.\",\"questions\":[],\"review_comment_outcomes\":[{\"reply\":\"Added the explanation.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-inline\"}]}","usage":{"input_tokens":5,"output_tokens":9}}'
 "#,
     )?;
     #[cfg(unix)]
@@ -3281,7 +3261,7 @@ fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn st
     Ok(())
 }
 
-/// Seeds one canceled session whose saved summary can drive the continuation
+/// Seeds one canceled session whose transcript can drive the continuation
 /// draft flow.
 fn seed_canceled_session_for_continuation(
     env: &BuilderEnv,
@@ -3298,9 +3278,10 @@ fn seed_canceled_session_for_continuation(
         let database = common::open_database(env).await?;
         database
             .sessions()
-            .update_session_summary(
+            .append_session_message(
                 "canceled-continue-0001",
-                "# Summary\n\nResume the remaining work.",
+                SessionMessageKind::UserPrompt,
+                "Resume the remaining work.",
             )
             .await?;
 
@@ -4221,19 +4202,12 @@ fn session_view_preserves_typed_assistant_marker_lines() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 let view_text = frame.text_in_region(&full);
-                let assistant_notice_index = view_text
-                    .find("[Merge] this is literal assistant text.")
-                    .expect("assistant marker line should render");
-                let summary_index = view_text
-                    .find("Change Summary")
-                    .expect("summary should render");
-
                 assertion::assert_text_in_region(
                     frame,
                     "[Merge] this is literal assistant text.",
                     &full,
                 );
-                assert!(assistant_notice_index < summary_index);
+                assert!(!view_text.contains("Change Summary"));
             },
         )?;
 
@@ -4436,7 +4410,7 @@ fn review_request_creation_queues_during_rebase() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
-                    .wait_for_text("Completed answer before rebase summary.", 5000)
+                    .wait_for_text("Completed answer before rebase.", 5000)
                     .wait_for_text("r: sync", 5000)
                     .press_key("r")
                     .wait_for_text("Rebasing...", 5000)
@@ -5091,10 +5065,10 @@ fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResult {
     Ok(())
 }
 
-/// Verify a manual rebase keeps the completed answer ahead of its summary
-/// while only the workflow status tail animates.
+/// Verify a manual rebase keeps the completed answer stable while only the
+/// workflow status tail animates.
 #[test]
-fn session_rebase_keeps_completed_transcript_before_summary() -> E2eResult {
+fn session_rebase_keeps_completed_transcript_stable() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_rebase_transcript_stability")
         .with_git()
@@ -5105,8 +5079,7 @@ fn session_rebase_keeps_completed_transcript_before_summary() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("Completed answer before rebase summary.", 5000)
-                    .wait_for_text("Change Summary", 5000)
+                    .wait_for_text("Completed answer before rebase.", 5000)
                     .press_key("r")
                     .wait_for_text("Rebasing...", 5000)
                     .capture_labeled(
@@ -5116,27 +5089,9 @@ fn session_rebase_keeps_completed_transcript_before_summary() -> E2eResult {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "Completed answer before rebase summary.",
-                    &full,
-                );
-                assertion::assert_text_in_region(frame, "Change Summary", &full);
+                assertion::assert_text_in_region(frame, "Completed answer before rebase.", &full);
+                assertion::assert_not_visible(frame, "Change Summary");
                 assertion::assert_text_in_region(frame, "Rebasing...", &full);
-
-                let answer_row = frame
-                    .find_text("Completed answer before rebase summary.")
-                    .first()
-                    .expect("missing completed answer")
-                    .rect
-                    .row;
-                let summary_row = frame
-                    .find_text("Change Summary")
-                    .first()
-                    .expect("missing change summary")
-                    .rect
-                    .row;
-                assert!(answer_row < summary_row);
             },
         )?;
 
@@ -5965,10 +5920,13 @@ fn build_orchestration_scenario(scenario: Scenario) -> Scenario {
         .press_key("j")
         .wait_for_stable_frame(300, 5000)
         .press_key("Enter")
-        .wait_for_text("Rolled up both worker results.", 5000)
+        .wait_for_text(
+            "All workers finished. Review and merge protocol before UI.",
+            5000,
+        )
         .capture_labeled(
             "orchestration_rollup",
-            "Review worker summaries and merge order",
+            "Review worker results and merge order",
         )
         .press_key("a")
         .wait_for_text("Integration Approach", 5000)
@@ -6010,7 +5968,7 @@ fn assert_orchestration_rollup_and_references(frame: &TerminalFrame, report: &Pr
     assertion::assert_text_in_region(&rollup_frame, "Phase: AwaitingIntegration", &rollup_full);
     assertion::assert_text_in_region(
         &rollup_frame,
-        "Rolled up both worker results.",
+        "All workers finished. Review and merge protocol before UI.",
         &rollup_full,
     );
     assertion::assert_text_in_region(
@@ -7050,7 +7008,8 @@ fn canceled_session_continue_opens_seeded_prompt() -> E2eResult {
         .setup(seed_canceled_session_for_continuation)
         .zola(
             "Continue canceled session",
-            "Continue a canceled session in a new draft with its saved summary staged as context.",
+            "Continue a canceled session in a new draft with its saved transcript staged as \
+             context.",
             46,
         )
         .run(
@@ -7094,7 +7053,7 @@ fn canceled_session_continue_opens_seeded_prompt() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
                 assertion::assert_text_in_region(frame, "Status: Canceled", &full);
-                assertion::assert_text_in_region(frame, "Previous session summary:", &full);
+                assertion::assert_text_in_region(frame, "Previous session transcript:", &full);
                 assertion::assert_text_in_region(frame, "Resume the remaining work.", &full);
                 assertion::assert_text_in_region(frame, "Type your message", &full);
             },
@@ -8705,11 +8664,6 @@ fn persisted_focused_review_survives_reload() -> E2eResult {
                     .into_iter()
                     .next()
                     .expect("project impact header should render");
-                let summary_header = frame
-                    .find_text("Change Summary")
-                    .into_iter()
-                    .next()
-                    .expect("change summary header should render");
                 let impact_finding = frame
                     .find_text("Persisted focused review finding.")
                     .into_iter()
@@ -8726,9 +8680,9 @@ fn persisted_focused_review_survives_reload() -> E2eResult {
                     .next()
                     .expect("empty suggestion should render");
 
-                assert!(summary_header.rect.row < impact_header.rect.row);
                 assert_eq!(impact_finding.rect.row, impact_header.rect.row + 1);
                 assert_eq!(empty_suggestion.rect.row, suggestions_header.rect.row + 1);
+                assertion::assert_not_visible(frame, "Change Summary");
                 assertion::assert_not_visible(frame, "type \"/apply\" to verify and apply");
             },
         )?;

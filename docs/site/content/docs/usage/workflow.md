@@ -312,7 +312,6 @@ mode, question mode, session switching, project switching, and background sessio
 metadata refreshes, and is cleared when you submit the next prompt. If a turn finishes
 while another project is active, returning to the session's project resumes its
 automatic focused review, including after Agentty restarts. Deleted sessions do not
-retain pending reviews. When both are visible, `Change Summary` appears before `Review`.
 Focused review includes the saved user and agent chat history for context. It uses
 inspection-only context: it may read files, search, inspect git history, and browse when
 needed, but it recommends verification commands instead of running checks itself. The
@@ -419,8 +418,8 @@ first and rebase onto the remote base ref, unpublished sessions rebase onto the 
 local base branch. In **InProgress**, the sync request is queued behind the running turn
 before the session enters **Rebasing**. If the rebase stops on conflicts, Agentty asks
 the existing agent session to resolve only the conflicted files, then stages the edits
-and continues the rebase itself. The completed conversation and summary remain in their
-existing order while the rebase or merge status animates below them.
+and continues the rebase itself. The completed conversation remains in place while the
+rebase or merge status animates below it.
 
 During normal turns, the agent prompt names the session worktree as the only writable
 root. After a turn, if Agentty detects that the main checkout's tracked-file status
@@ -435,8 +434,8 @@ is skipped there.
 Pressing `c` on a **Done** or **Canceled** session opens a confirmation, then creates a
 brand-new draft session. **Done** sessions stage a continuation message from the merged
 commit hash, or from saved context when the hash is unavailable. **Canceled** sessions
-stage the saved summary, transcript, or original prompt. The source session remains
-terminal and unchanged.
+stage the saved transcript or original prompt. The source session remains terminal and
+unchanged.
 
 ## Session Types
 
@@ -539,7 +538,7 @@ independent pieces of implementation work:
    restart, Agentty regenerates only an interrupted review; a queued remediation or
    controller-requested continuation resumes before the updated diff is reviewed.
 1. After every task settles, Agentty sends one hidden, durable verification envelope to
-   the controller. It contains each task's acceptance criteria, branch, bounded summary,
+   the controller. It contains each task's acceptance criteria, branch, bounded result,
    campaign goal, focused-review outcome, diffstat, token totals, merge order, and a
    mechanical comparison between expected and changed paths. Additional paths appear on
    the campaign monitor and in the envelope as review context, not an automatic
@@ -620,7 +619,7 @@ can retry without reporting a false terminal cancellation.
 - After the first publish, later completed turns push the same remote branch
   automatically in the background when no chat message or sync is already queued. After
   each successful push, Agentty reads the current remote title and description and
-  reconciles them with the cumulative session summary. The title stays exactly as it is
+  reconciles them with the generated commit metadata. The title stays exactly as it is
   unless the primary objective changed materially; implementation refinements, tests,
   documentation, and review fixes keep it stable.
 - Description updates retain the intent of user-added content, including issue links,
@@ -824,13 +823,13 @@ it and the transcript reports the fallback.
 it as a provisional title and generates a refined title in the background using the
 project's `Default Fast Model`. Title refinement runs for every session role, including
 managed read-only research sessions, and the isolated title prompt is itself read-only.
-Title generation uses the persisted original request, current title, session summary,
-and latest request as one stable context snapshot. The original request anchors the
-overall goal; later requests can establish a goal after context-only text or clarify the
-existing goal, but a narrow follow-up or clarification answer does not replace broader
-session intent. Each context field is shortened at a valid text boundary when necessary,
-so unusually large sessions retain every context category without exceeding a model's
-prompt transport limit. Draft sessions regenerate the title as more drafts are staged.
+Title generation uses the persisted original request, current title, and latest request
+as one stable context snapshot. The original request anchors the overall goal; later
+requests can establish a goal after context-only text or clarify the existing goal, but
+a narrow follow-up or clarification answer does not replace broader session intent. Each
+context field is shortened at a valid text boundary when necessary, so unusually large
+sessions retain every context category without exceeding a model's prompt transport
+limit. Draft sessions regenerate the title as more drafts are staged.
 
 Provider failures are logged and retried once. If both attempts fail, or the model finds
 no actionable goal, Agentty keeps the provisional title so a later substantive request

@@ -69,8 +69,6 @@ pub struct SessionOrchestrationTaskRow {
     pub child_session_id: Option<String>,
     /// Persisted lifecycle status observed on the linked child session.
     pub child_status: Option<String>,
-    /// Cumulative summary observed on the linked child session.
-    pub child_summary: Option<String>,
     /// Monotonic identity for durable feedback delivery attempts.
     pub continuation_generation: i64,
     /// Feedback prompt waiting to resume the existing managed child.
@@ -780,7 +778,6 @@ SELECT task.id AS "id!: i64",
        task.child_session_id,
        child.status AS child_status,
        child.questions AS child_questions,
-       child.summary AS child_summary,
        task.continuation_generation,
        task.continuation_prompt,
        task.infrastructure_retry_count,
@@ -2339,7 +2336,6 @@ mod tests {
         assert_eq!(task.result_summary.as_deref(), Some("Added the parser"));
         assert_eq!(task.status, OrchestrationTaskStatus::Running.to_string());
         assert_eq!(task.child_status.as_deref(), Some("Draft"));
-        assert_eq!(task.child_summary, None);
         assert_eq!(task.child_input_tokens, 0);
         assert_eq!(task.child_output_tokens, 0);
     }

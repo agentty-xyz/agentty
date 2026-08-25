@@ -698,7 +698,6 @@ mod tests {
             speed_mode: crate::domain::agent::SpeedMode::default(),
             stats: SessionStats::default(),
             status: Status::Draft,
-            summary: None,
             title: None,
             transcript: None,
             updated_at: 0,

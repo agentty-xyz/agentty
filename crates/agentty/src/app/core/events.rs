@@ -1555,8 +1555,8 @@ impl App {
     /// Routes one persisted turn projection to the currently focused session
     /// UI.
     ///
-    /// The session worker persists the canonical summary, clarification
-    /// questions, summary, and token-usage delta before sending this
+    /// The session worker persists clarification questions and the token-usage
+    /// delta before sending this
     /// event, so the reducer can apply the exact same projection in memory
     /// without waiting for a forced reload.
     fn apply_agent_response_received(
@@ -3117,7 +3117,6 @@ mod tests {
         let turn_applied_state = TurnAppliedState {
             follow_up_tasks: Vec::new(),
             questions: Vec::new(),
-            summary: None,
             token_usage_delta: crate::domain::session::SessionStats::default(),
         };
 
@@ -3178,7 +3177,6 @@ mod tests {
         let turn_applied_state = TurnAppliedState {
             follow_up_tasks: Vec::new(),
             questions: Vec::new(),
-            summary: None,
             token_usage_delta: crate::domain::session::SessionStats::default(),
         };
 
@@ -3210,7 +3208,6 @@ mod tests {
         let turn_applied_state = TurnAppliedState {
             follow_up_tasks: Vec::new(),
             questions: vec![crate::domain::question::QuestionItem::new("Which project?")],
-            summary: None,
             token_usage_delta: crate::domain::session::SessionStats::default(),
         };
 

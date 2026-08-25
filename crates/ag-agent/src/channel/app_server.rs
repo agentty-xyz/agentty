@@ -5,8 +5,6 @@
 
 use std::sync::Arc;
 
-#[cfg(test)]
-use ag_protocol::AgentResponseSummary;
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, build_protocol_repair_prompt};
 use tokio::sync::mpsc;
 
@@ -336,7 +334,7 @@ mod tests {
 
                 Box::pin(async {
                     Ok(make_ok_response(
-                        r#"{"answer":"Hello world","questions":[],"summary":null}"#,
+                        r#"{"answer":"Hello world","questions":[]}"#,
                     ))
                 })
             });
@@ -377,7 +375,7 @@ mod tests {
 
                 Box::pin(async {
                     Ok(make_ok_response(
-                        r#"{"answer":"Full paragraph","questions":[],"summary":null}"#,
+                        r#"{"answer":"Full paragraph","questions":[]}"#,
                     ))
                 })
             });
@@ -411,14 +409,14 @@ mod tests {
             .expect_run_turn()
             .returning(|_request, stream_tx| {
                 let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
-                    message: r#"{"answer":"Done.","questions":[{"text":"Need clarification.","options":[]}],"summary":null}"#.to_string(),
+                    message: r#"{"answer":"Done.","questions":[{"text":"Need clarification.","options":[]}]}"#.to_string(),
                     phase: None,
                     is_delta: false,
                 });
 
                 Box::pin(async {
                     Ok(make_ok_response(
-                        r#"{"answer":"Done.","questions":[{"text":"Need clarification.","options":[]}],"summary":null}"#,
+                        r#"{"answer":"Done.","questions":[{"text":"Need clarification.","options":[]}]}"#,
                     ))
                 })
             });
@@ -456,11 +454,7 @@ mod tests {
                     is_delta: true,
                 });
 
-                Box::pin(async {
-                    Ok(make_ok_response(
-                        r#"{"answer":"Done.","questions":[],"summary":null}"#,
-                    ))
-                })
+                Box::pin(async { Ok(make_ok_response(r#"{"answer":"Done.","questions":[]}"#)) })
             });
         let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -494,11 +488,7 @@ mod tests {
                     is_delta: true,
                 });
 
-                Box::pin(async {
-                    Ok(make_ok_response(
-                        r#"{"answer":"Done.","questions":[],"summary":null}"#,
-                    ))
-                })
+                Box::pin(async { Ok(make_ok_response(r#"{"answer":"Done.","questions":[]}"#)) })
             });
         let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -529,11 +519,7 @@ mod tests {
                     "Running tool".to_string(),
                 ));
 
-                Box::pin(async {
-                    Ok(make_ok_response(
-                        r#"{"answer":"","questions":[],"summary":null}"#,
-                    ))
-                })
+                Box::pin(async { Ok(make_ok_response(r#"{"answer":"","questions":[]}"#)) })
             });
         let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -552,40 +538,6 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies strict session-turn responses synthesize an empty summary when
-    /// the provider returns `summary: null`.
-    async fn test_run_turn_fills_missing_summary_for_session_turn() {
-        // Arrange
-        let mut mock_client = MockAppServerClient::new();
-        mock_client
-            .expect_run_turn()
-            .returning(|_request, _stream_tx| {
-                Box::pin(async {
-                    Ok(make_ok_response(
-                        r#"{"answer":"Done.","questions":[],"summary":null}"#,
-                    ))
-                })
-            });
-        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Antigravity);
-        let (events_tx, _events_rx) = mpsc::unbounded_channel();
-
-        // Act
-        let result = channel
-            .run_turn("sess-1".to_string(), make_turn_request(), events_tx)
-            .await
-            .expect("turn should succeed");
-
-        // Assert
-        assert_eq!(
-            result.assistant_message.summary,
-            Some(AgentResponseSummary {
-                turn: String::new(),
-                session: String::new(),
-            })
-        );
-    }
-
-    #[tokio::test]
     /// Verifies whitespace-only `AssistantMessage` does not emit a thinking
     /// update.
     async fn test_run_turn_skips_whitespace_only_assistant_messages() {
@@ -600,11 +552,7 @@ mod tests {
                     is_delta: true,
                 });
 
-                Box::pin(async {
-                    Ok(make_ok_response(
-                        r#"{"answer":"","questions":[],"summary":null}"#,
-                    ))
-                })
+                Box::pin(async { Ok(make_ok_response(r#"{"answer":"","questions":[]}"#)) })
             });
         let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -641,7 +589,7 @@ mod tests {
 
                 Box::pin(async {
                     Ok(make_ok_response(
-                        r#"{"answer":"Final answer.","questions":[],"summary":null}"#,
+                        r#"{"answer":"Final answer.","questions":[]}"#,
                     ))
                 })
             });
@@ -681,7 +629,7 @@ mod tests {
 
                 Box::pin(async {
                     Ok(make_ok_response(
-                        r#"{"answer":"Final structured output.","questions":[],"summary":null}"#,
+                        r#"{"answer":"Final structured output.","questions":[]}"#,
                     ))
                 })
             });
@@ -754,7 +702,7 @@ mod tests {
                 } else {
                     Box::pin(async {
                         Ok(make_ok_response(
-                            r#"{"answer":"Repaired response","questions":[],"summary":null}"#,
+                            r#"{"answer":"Repaired response","questions":[]}"#,
                         ))
                     })
                 }
@@ -788,11 +736,7 @@ mod tests {
             .returning(|request, _stream_tx| {
                 assert_eq!(request.prompt.attachments.len(), 1);
 
-                Box::pin(async {
-                    Ok(make_ok_response(
-                        r#"{"answer":"codex ok","questions":[],"summary":null}"#,
-                    ))
-                })
+                Box::pin(async { Ok(make_ok_response(r#"{"answer":"codex ok","questions":[]}"#)) })
             });
         let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -879,8 +823,7 @@ mod tests {
             .returning(|_request, _stream_tx| {
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
-                        assistant_message: r#"{"answer":"Result","questions":[],"summary":null}"#
-                            .to_string(),
+                        assistant_message: r#"{"answer":"Result","questions":[]}"#.to_string(),
                         context_reset: true,
                         input_tokens: 100,
                         output_tokens: 50,
@@ -928,8 +871,7 @@ mod tests {
 
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
-                        assistant_message: r#"{"answer":"ok","questions":[],"summary":null}"#
-                            .to_string(),
+                        assistant_message: r#"{"answer":"ok","questions":[]}"#.to_string(),
                         context_reset: false,
                         input_tokens: 1,
                         output_tokens: 1,

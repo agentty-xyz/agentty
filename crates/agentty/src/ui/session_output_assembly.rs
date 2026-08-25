@@ -292,21 +292,11 @@ impl SessionOutputAssembly<'_> {
 
     fn append_transient_messages(&mut self, anchor: TransientMessageAnchor) {
         let transient_messages = &self.session.transient_messages;
-        let summary = if anchor == TransientMessageAnchor::AfterCompletedTurn {
-            transient_messages
-                .get(TransientMessageSlot::Summary)
-                .filter(|message| message.anchor == anchor)
-        } else {
-            None
-        };
         let remaining_messages = transient_messages.messages().iter().filter(|message| {
-            message.anchor == anchor
-                && !(anchor == TransientMessageAnchor::AfterCompletedTurn
-                    && message.slot == TransientMessageSlot::Summary)
-                && !matches!(&message.body, TransientMessageBody::Queued(_))
+            message.anchor == anchor && !matches!(&message.body, TransientMessageBody::Queued(_))
         });
 
-        for message in summary.into_iter().chain(remaining_messages) {
+        for message in remaining_messages {
             if let Some(loader_line_index) = append_transient_message(
                 &mut self.lines,
                 message,
@@ -454,9 +444,6 @@ fn append_transient_message(
     match &message.body {
         TransientMessageBody::Markdown(markdown) => {
             let markdown = match message.slot {
-                TransientMessageSlot::Summary => {
-                    session_format::session_output_summary_markdown(markdown)
-                }
                 TransientMessageSlot::Review => session_format::format_review_markdown(markdown),
                 _ => markdown.clone(),
             };

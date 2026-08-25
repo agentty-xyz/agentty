@@ -564,7 +564,7 @@ mod tests {
         let mut transport = MockCodexRuntimeTransport::new();
         let mut sequence = Sequence::new();
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
-        let final_response = r#"{"answer":"Final focused review.","questions":[],"summary":null}"#;
+        let final_response = r#"{"answer":"Final focused review.","questions":[]}"#;
 
         expect_commentary_then_completed_final_turn(
             &mut transport,

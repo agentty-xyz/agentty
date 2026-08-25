@@ -1103,7 +1103,6 @@ fn build_api_session(
             speed_mode,
         },
         status,
-        summary: row.summary,
         title: row.title,
         updated_at: row.updated_at,
     })
@@ -1480,7 +1479,7 @@ mod tests {
                 if request_kind == AgentRequestKind::UtilityPrompt {
                     return Box::pin(async {
                         Ok(app_server_response(
-                            r#"{"answer":"Initial prompt","questions":[],"summary":null}"#,
+                            r#"{"answer":"Initial prompt","questions":[]}"#,
                             None,
                         ))
                     });
@@ -1495,13 +1494,13 @@ mod tests {
                         first_turn_release.notified().await;
 
                         return Ok(app_server_response(
-                            r#"{"answer":"Need detail","questions":[{"text":"Current question?","options":[]}],"summary":null}"#,
+                            r#"{"answer":"Need detail","questions":[{"text":"Current question?","options":[]}]}"#,
                             Some("conversation-1"),
                         ));
                     }
 
                     Ok(app_server_response(
-                        r#"{"answer":"ready","questions":[],"summary":null}"#,
+                        r#"{"answer":"ready","questions":[]}"#,
                         Some("conversation-1"),
                     ))
                 })
@@ -1589,7 +1588,6 @@ mod tests {
             size: "S".to_string(),
             speed_mode: "normal".to_string(),
             status: "Draft".to_string(),
-            summary: Some("Summary".to_string()),
             title: Some("Build feature".to_string()),
             updated_at: 20,
         }
@@ -2933,8 +2931,7 @@ mod tests {
                     let _ = turn_started_tx.send(());
 
                     Ok(AppServerTurnResponse {
-                        assistant_message: r#"{"answer":"ready","questions":[],"summary":null}"#
-                            .to_string(),
+                        assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
                         context_reset: false,
                         input_tokens: 0,
                         output_tokens: 0,
@@ -3022,8 +3019,7 @@ mod tests {
                 let _ = turn_started_tx.send(());
 
                 Ok(AppServerTurnResponse {
-                    assistant_message: r#"{"answer":"ready","questions":[],"summary":null}"#
-                        .to_string(),
+                    assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
                     context_reset: false,
                     input_tokens: 0,
                     output_tokens: 0,

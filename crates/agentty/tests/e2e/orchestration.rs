@@ -245,10 +245,10 @@ input=$(cat)
 case "$input" in
   *"Review the Git diff for display in a terminal UI."*)
     sleep 30
-    result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Managed worker review completed.\\n\\n### Suggestions\\n\\n- None\",\"questions\":[],\"summary\":null}}'
+    result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Managed worker review completed.\\n\\n### Suggestions\\n\\n- None\",\"questions\":[]}}'
     ;;
   *)
-    result='{{\"answer\":\"{CONTROLLER_REVISION_RESPONSE}\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"summary\":null,\"verification_verdicts\":[]}}'
+    result='{{\"answer\":\"{CONTROLLER_REVISION_RESPONSE}\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"verification_verdicts\":[]}}'
     ;;
 esac
 printf '%s\n' '{{"type":"system","subtype":"init"}}'

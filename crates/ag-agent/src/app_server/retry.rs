@@ -449,7 +449,7 @@ mod tests {
 
         // Assert
         assert!(turn_prompt.contains("repository-root-relative POSIX paths"));
-        assert!(turn_prompt.contains("summary"));
+        assert!(!turn_prompt.contains("summary"));
         assert!(turn_prompt.ends_with(prompt));
     }
 
@@ -498,7 +498,7 @@ mod tests {
         .expect("turn prompt should render");
 
         // Assert
-        assert!(turn_prompt.contains("summary"));
+        assert!(!turn_prompt.contains("summary"));
         assert!(turn_prompt.ends_with(prompt));
     }
 

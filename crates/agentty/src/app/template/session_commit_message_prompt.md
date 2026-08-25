@@ -1,6 +1,6 @@
 Generate the canonical session commit message using the cumulative session diff below.
 Return the full response as the required protocol JSON object. Put the plain-text commit
-message in `answer`, leave `questions` empty, and set `summary` to null.
+message in `answer` and leave `questions` empty.
 
 First inspect applicable repository commit-message guidance in agent instruction files
 (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) and relevant skills under shared or

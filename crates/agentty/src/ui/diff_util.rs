@@ -1,4 +1,3 @@
-use ag_protocol::AgentResponseSummary;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 
@@ -506,8 +505,7 @@ fn diff_header_matches_item(header_line: &str, item: &FileTreeItem) -> bool {
     }
 }
 
-const DEFAULT_REVIEW_COMMENT: &str = "Agent summary unavailable; review the highlighted changes.";
-const MAX_AGENT_COMMENT_COUNT: usize = 4;
+const DEFAULT_REVIEW_COMMENT: &str = "Review the highlighted changes.";
 const MAX_REVIEW_HIGHLIGHT_COUNT: usize = 8;
 const MAX_REVIEW_FALLBACK_COUNT: usize = 5;
 const MAX_REVIEW_SNIPPET_WIDTH: usize = 96;
@@ -523,10 +521,8 @@ struct ReviewHighlight {
     snippet: String,
 }
 
-/// Builds review markdown using concise agent comments and critical
-/// diff highlights.
-pub fn build_review_text(diff: &str, summary: Option<&str>) -> String {
-    let agent_comments = review_agent_comments(summary);
+/// Builds review markdown using critical diff highlights.
+pub fn build_review_text(diff: &str) -> String {
     let highlights = review_highlights(diff);
 
     let mut lines = vec![
@@ -535,11 +531,7 @@ pub fn build_review_text(diff: &str, summary: Option<&str>) -> String {
         "### Agent Comments".to_string(),
     ];
 
-    lines.extend(
-        agent_comments
-            .into_iter()
-            .map(|comment| format!("- {comment}")),
-    );
+    lines.push(format!("- {DEFAULT_REVIEW_COMMENT}"));
 
     lines.push(String::new());
     lines.push("### Critical Diff Highlights".to_string());
@@ -554,70 +546,6 @@ pub fn build_review_text(diff: &str, summary: Option<&str>) -> String {
     lines.push("Press `d` for the full diff.".to_string());
 
     lines.join("\n")
-}
-
-/// Extracts concise one-line agent comments from session summary text.
-///
-/// Protocol summary headings are removed, but the content that follows those
-/// headings is retained so user-facing notes such as canonical commit text
-/// still appear in the focused review. The returned list is capped at
-/// `MAX_AGENT_COMMENT_COUNT` entries to keep the focused review compact.
-fn review_agent_comments(summary: Option<&str>) -> Vec<String> {
-    let summary_text = summary.unwrap_or_default().trim();
-    let structured_summary_lines = serde_json::from_str::<AgentResponseSummary>(summary_text)
-        .ok()
-        .into_iter()
-        .flat_map(|summary_payload| [summary_payload.turn, summary_payload.session])
-        .collect::<Vec<_>>();
-    let summary_lines = if structured_summary_lines.is_empty() {
-        summary_text
-            .lines()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-    } else {
-        structured_summary_lines
-    };
-    let mut comments = Vec::new();
-
-    for summary_line in summary_lines
-        .into_iter()
-        .flat_map(|line| line.lines().map(ToString::to_string).collect::<Vec<_>>())
-    {
-        let trimmed_line = summary_line.trim();
-
-        if trimmed_line.is_empty() {
-            continue;
-        }
-
-        let list_stripped = strip_markdown_list_prefix(trimmed_line);
-        let heading_stripped = strip_markdown_heading_prefix(list_stripped).to_string();
-
-        if is_protocol_summary_heading(&heading_stripped) {
-            continue;
-        }
-
-        if !heading_stripped.is_empty() {
-            comments.push(heading_stripped);
-        }
-
-        if comments.len() >= MAX_AGENT_COMMENT_COUNT {
-            break;
-        }
-    }
-
-    if comments.is_empty() {
-        comments.push(DEFAULT_REVIEW_COMMENT.to_string());
-    }
-
-    comments
-}
-
-/// Returns whether one normalized summary line is a protocol summary heading.
-fn is_protocol_summary_heading(line: &str) -> bool {
-    matches!(
-        line,
-        "Change Summary" | "Current Turn" | "Session Changes" | "Summary" | "Commit"
-    )
 }
 
 /// Returns scored review highlights from unified diff text.
@@ -1006,18 +934,6 @@ fn review_snippet(content: &str) -> String {
 /// Returns whether `text` contains any token from `needles`.
 fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
-}
-
-/// Removes common markdown bullet prefixes from a summary line.
-fn strip_markdown_list_prefix(line: &str) -> &str {
-    line.trim_start_matches("- ")
-        .trim_start_matches("* ")
-        .trim_start_matches("+ ")
-}
-
-/// Removes leading markdown heading markers from a summary line.
-fn strip_markdown_heading_prefix(line: &str) -> &str {
-    line.trim_start_matches('#').trim_start()
 }
 
 fn parse_range(range: &str) -> Option<(u32, u32)> {
@@ -1505,7 +1421,7 @@ index abc..def 100644
     }
 
     #[test]
-    fn test_build_review_text_includes_summary_and_critical_highlights() {
+    fn test_build_review_text_includes_critical_highlights() {
         // Arrange
         let diff = "\
 diff --git a/src/auth.rs b/src/auth.rs
@@ -1515,14 +1431,12 @@ diff --git a/src/auth.rs b/src/auth.rs
 @@ -20,1 +20,1 @@
 -let value = maybe_value.unwrap();
 +let value = maybe_value.expect(\"missing value\");";
-        let summary = Some("Tighten merge access\n- Add role guard");
-
         // Act
-        let review = build_review_text(diff, summary);
+        let review = build_review_text(diff);
 
         // Assert
         assert!(review.contains("## Review"));
-        assert!(review.contains("- Tighten merge access"));
+        assert!(review.contains(DEFAULT_REVIEW_COMMENT));
         assert!(review.contains("Authorization or security-sensitive logic changed."));
         assert!(review.contains("Runtime safety or error handling changed."));
         assert!(review.contains("src/auth.rs"));
@@ -1538,7 +1452,7 @@ diff --git a/container/e2e.Containerfile b/container/e2e.Containerfile
 +FROM debian";
 
         // Act
-        let review = build_review_text(diff, None);
+        let review = build_review_text(diff);
 
         // Assert
         assert!(review.contains("container/e2e.Containerfile"));
@@ -1546,7 +1460,7 @@ diff --git a/container/e2e.Containerfile b/container/e2e.Containerfile
     }
 
     #[test]
-    fn test_build_review_text_uses_fallback_when_summary_and_critical_hits_missing() {
+    fn test_build_review_text_uses_fallback_when_critical_hits_missing() {
         // Arrange
         let diff = "\
 diff --git a/src/main.rs b/src/main.rs
@@ -1555,7 +1469,7 @@ diff --git a/src/main.rs b/src/main.rs
 +let new_value = 2;";
 
         // Act
-        let review = build_review_text(diff, None);
+        let review = build_review_text(diff);
 
         // Assert
         assert!(review.contains(DEFAULT_REVIEW_COMMENT));
@@ -1564,75 +1478,15 @@ diff --git a/src/main.rs b/src/main.rs
     }
 
     #[test]
-    fn test_build_review_text_skips_protocol_summary_headings() {
-        // Arrange
-        let summary = Some(
-            "## Change Summary\n### Current Turn\n- Added protocol summary fields.\n\n### Session \
-             Changes\n- Session output renders summary markdown separately.\n\n# Summary\n- Final \
-             session summary line\n\n# Commit\n- Canonical commit note",
-        );
-
-        // Act
-        let review = build_review_text("", summary);
-
-        // Assert
-        assert!(review.contains("- Added protocol summary fields."));
-        assert!(review.contains("- Session output renders summary markdown separately."));
-        assert!(review.contains("- Final session summary line"));
-        assert!(review.contains("- Canonical commit note"));
-        assert!(!review.contains("- Change Summary"));
-        assert!(!review.contains("- Current Turn"));
-        assert!(!review.contains("- Session Changes"));
-        assert!(!review.contains("- Summary"));
-        assert!(!review.contains("- Commit"));
-    }
-
-    #[test]
-    fn test_build_review_text_truncates_comments_at_max_count() {
-        // Arrange — 5 content lines exceed `MAX_AGENT_COMMENT_COUNT` (4),
-        // verify only the first 4 survive and the rest are dropped.
-        let summary = Some(
-            "- First comment\n- Second comment\n- Third comment\n- Fourth comment\n- Fifth comment",
-        );
-
-        // Act
-        let review = build_review_text("", summary);
-
-        // Assert — first four kept in order
-        assert!(review.contains("- First comment"));
-        assert!(review.contains("- Second comment"));
-        assert!(review.contains("- Third comment"));
-        assert!(review.contains("- Fourth comment"));
-        // fifth truncated
-        assert!(!review.contains("Fifth comment"));
-    }
-
-    #[test]
-    fn test_build_review_text_parses_structured_summary_json() {
-        // Arrange
-        let summary = Some(
-            "{\"turn\":\"- Added protocol summary fields.\",\"session\":\"- Session output \
-             renders summary markdown separately.\"}",
-        );
-
-        // Act
-        let review = build_review_text("", summary);
-
-        // Assert
-        assert!(review.contains("- Added protocol summary fields."));
-        assert!(review.contains("- Session output renders summary markdown separately."));
-    }
-
-    #[test]
     fn test_build_review_text_handles_empty_diff() {
         // Arrange
-        let summary = Some("Keep behavior stable");
+        let diff = "";
 
         // Act
-        let review = build_review_text("", summary);
+        let review = build_review_text(diff);
 
         // Assert
-        assert!(review.contains("- Keep behavior stable"));
+        assert!(review.contains(DEFAULT_REVIEW_COMMENT));
         assert!(review.contains("No changes found in the current diff."));
     }
 }

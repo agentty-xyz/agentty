@@ -17,38 +17,16 @@ pub(super) struct ExtractedAgentMessage {
 /// Returns the completed assistant message that should back the final turn
 /// result.
 ///
-/// Preference order is:
-/// 1. Latest valid protocol payload that includes `summary`
-/// 2. Latest valid protocol payload without `summary`
-/// 3. Latest non-empty plain-text assistant message
+/// Preference order is the latest non-empty protocol payload, followed by the
+/// latest non-empty plain-text assistant message.
 pub(super) fn preferred_completed_assistant_message(assistant_messages: &[String]) -> String {
-    if let Some(protocol_with_summary) = assistant_messages.iter().rev().find_map(|message| {
-        let trimmed_message = message.trim();
-        if trimmed_message.is_empty() {
-            return None;
-        }
-
-        let response = parse_agent_response_strict(trimmed_message).ok()?;
-        response.summary.as_ref()?;
-
-        Some(trimmed_message.to_string())
-    }) {
-        return protocol_with_summary;
-    }
-
     if let Some(protocol_payload) = assistant_messages.iter().rev().find_map(|message| {
         let trimmed_message = message.trim();
         if trimmed_message.is_empty() {
             return None;
         }
 
-        let response = parse_agent_response_strict(trimmed_message).ok()?;
-        if response.answer.trim().is_empty()
-            && response.questions.is_empty()
-            && response.summary.is_none()
-        {
-            return None;
-        }
+        parse_agent_response_strict(trimmed_message).ok()?;
 
         Some(trimmed_message.to_string())
     }) {
@@ -508,13 +486,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preferred_completed_assistant_message_prefers_latest_protocol_with_summary() {
+    fn preferred_completed_assistant_message_prefers_latest_protocol() {
         // Arrange
         let assistant_messages = vec![
             "plain answer".to_string(),
-            r#"{"answer":"without summary","questions":[],"summary":null}"#.to_string(),
-            r#"{"answer":"with summary","questions":[],"summary":{"session":"done","turn":"now"}}"#
-                .to_string(),
+            r#"{"answer":"first protocol answer","questions":[]}"#.to_string(),
+            r#"{"answer":"latest protocol answer","questions":[]}"#.to_string(),
         ];
 
         // Act
@@ -523,7 +500,7 @@ mod tests {
         // Assert
         assert_eq!(
             preferred,
-            r#"{"answer":"with summary","questions":[],"summary":{"session":"done","turn":"now"}}"#
+            r#"{"answer":"latest protocol answer","questions":[]}"#
         );
     }
 
@@ -532,7 +509,7 @@ mod tests {
         // Arrange
         let protocol_messages = vec![
             "plain answer".to_string(),
-            r#"{"answer":"protocol answer","questions":[],"summary":null}"#.to_string(),
+            r#"{"answer":"protocol answer","questions":[]}"#.to_string(),
         ];
         let plain_messages = vec!["  ".to_string(), " plain answer ".to_string()];
 
@@ -543,9 +520,24 @@ mod tests {
         // Assert
         assert_eq!(
             protocol_preferred,
-            r#"{"answer":"protocol answer","questions":[],"summary":null}"#
+            r#"{"answer":"protocol answer","questions":[]}"#
         );
         assert_eq!(plain_preferred, "plain answer");
+    }
+
+    #[test]
+    fn preferred_completed_assistant_message_accepts_any_recognized_protocol_payload() {
+        // Arrange
+        let assistant_messages = vec![
+            "plain answer".to_string(),
+            r#"{"verification_verdicts":[]}"#.to_string(),
+        ];
+
+        // Act
+        let preferred = preferred_completed_assistant_message(&assistant_messages);
+
+        // Assert
+        assert_eq!(preferred, r#"{"verification_verdicts":[]}"#);
     }
 
     #[test]

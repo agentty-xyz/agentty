@@ -2,9 +2,7 @@
 
 use serde_json::Value;
 
-use super::model::{
-    AgentResponse, AgentResponseParseError, AgentResponseSummary, ProtocolRequestProfile,
-};
+use super::model::{AgentResponse, AgentResponseParseError};
 
 /// Top-level keys the protocol recognizes in a structured response payload.
 const PROTOCOL_KEYS: &[&str] = &[
@@ -12,36 +10,14 @@ const PROTOCOL_KEYS: &[&str] = &[
     "questions",
     "review_comment_outcomes",
     "subtasks",
-    "summary",
+    "verification_verdicts",
 ];
-
-/// Normalizes one parsed turn response according to the request profile.
-///
-/// Interactive session turns expect a summary block on every response so the
-/// worker can persist and render a `Change Summary` section even when no
-/// change text exists. Some providers still emit `summary: null` for compliant
-/// session-turn JSON, so this fills in an empty summary object that downstream
-/// rendering already maps to `No changes`.
-pub fn normalize_turn_response(
-    mut response: AgentResponse,
-    protocol_profile: ProtocolRequestProfile,
-) -> AgentResponse {
-    if matches!(protocol_profile, ProtocolRequestProfile::SessionTurn) && response.summary.is_none()
-    {
-        response.summary = Some(AgentResponseSummary {
-            session: String::new(),
-            turn: String::new(),
-        });
-    }
-
-    response
-}
 
 /// Parses one raw assistant message strictly as protocol payload.
 ///
 /// The final assistant payload must match [`AgentResponse`] and contain at
 /// least one recognized protocol key (`answer`, `questions`,
-/// `review_comment_outcomes`, `subtasks`, or `summary`).
+/// `review_comment_outcomes`, `subtasks`, or `verification_verdicts`).
 ///
 /// When a provider prepends stray prose before the final schema object, this
 /// still recovers the trailing protocol payload as long as nothing except
@@ -372,42 +348,10 @@ mod tests {
     use crate::{ReviewCommentOutcome, ReviewCommentResolution};
 
     #[test]
-    /// Fills in empty summaries for session turns.
-    fn test_normalize_turn_response_fills_missing_summary_for_session_turn() {
-        // Arrange
-        let response = AgentResponse::plain("done");
-
-        // Act
-        let normalized = normalize_turn_response(response, ProtocolRequestProfile::SessionTurn);
-
-        // Assert
-        assert_eq!(
-            normalized.summary,
-            Some(AgentResponseSummary {
-                session: String::new(),
-                turn: String::new(),
-            })
-        );
-    }
-
-    #[test]
-    /// Leaves one-shot prompt summaries unset.
-    fn test_normalize_turn_response_keeps_missing_summary_for_utility_prompt() {
-        // Arrange
-        let response = AgentResponse::plain("done");
-
-        // Act
-        let normalized = normalize_turn_response(response, ProtocolRequestProfile::UtilityPrompt);
-
-        // Assert
-        assert_eq!(normalized.summary, None);
-    }
-
-    #[test]
     /// Strict parsing accepts a complete schema payload.
     fn test_parse_agent_response_strict_structured_json_payload() {
         // Arrange
-        let raw = r#"{"answer":"Here is my analysis.","questions":[],"summary":null}"#;
+        let raw = r#"{"answer":"Here is my analysis.","questions":[]}"#;
 
         // Act
         let response = parse_agent_response_strict(raw);
@@ -420,33 +364,13 @@ mod tests {
     }
 
     #[test]
-    /// Strict parsing accepts summary-only payloads that still match the
-    /// protocol shape.
-    fn test_parse_agent_response_strict_summary_only_payload() {
-        // Arrange
-        let raw = r#"{"summary":{"session":"Current diff summary","turn":"Turn summary"}}"#;
-
-        // Act
-        let response = parse_agent_response_strict(raw);
-
-        // Assert
-        assert_eq!(
-            response.expect("response should parse").summary,
-            Some(AgentResponseSummary {
-                session: "Current diff summary".to_string(),
-                turn: "Turn summary".to_string(),
-            })
-        );
-    }
-
-    #[test]
     /// Strict parsing recovers a trailing protocol payload when a provider
     /// prepends extra prose before the final JSON object.
     fn test_parse_agent_response_strict_recovers_wrapped_text() {
         // Arrange
         let raw = concat!(
             "Some wrapper text\n",
-            r#"{"answer":"Recovered payload","questions":[],"summary":null}"#
+            r#"{"answer":"Recovered payload","questions":[]}"#
         );
 
         // Act
@@ -520,7 +444,7 @@ mod tests {
         // Arrange
         let raw = concat!(
             "```json\n",
-            r#"{"answer":"Need details.","questions":[],"summary":null}"#,
+            r#"{"answer":"Need details.","questions":[]}"#,
             "\n```"
         );
 
@@ -541,7 +465,7 @@ mod tests {
         // Arrange
         let raw = concat!(
             "\n\n```json\n",
-            r#"{"answer":"Recovered.","questions":[],"summary":null}"#,
+            r#"{"answer":"Recovered.","questions":[]}"#,
             "\n```\n"
         );
 
@@ -561,7 +485,7 @@ mod tests {
         // Arrange
         let raw = concat!(
             "```\n",
-            r#"{"answer":"Plain fence.","questions":[],"summary":null}"#,
+            r#"{"answer":"Plain fence.","questions":[]}"#,
             "\n```"
         );
 
@@ -580,8 +504,7 @@ mod tests {
     /// beyond the protocol schema.
     fn test_parse_agent_response_strict_tolerates_extra_top_level_fields() {
         // Arrange
-        let raw =
-            r#"{"answer":"Hello.","questions":[],"summary":null,"reasoning":"internal thought"}"#;
+        let raw = r#"{"answer":"Hello.","questions":[],"reasoning":"internal thought"}"#;
 
         // Act
         let response = parse_agent_response_strict(raw);
@@ -591,31 +514,10 @@ mod tests {
     }
 
     #[test]
-    /// Strict parsing tolerates extra fields inside nested summary objects.
-    fn test_parse_agent_response_strict_tolerates_extra_summary_fields() {
-        // Arrange
-        let raw = r#"{"answer":"Done.","questions":[],"summary":{"turn":"Fixed bug","session":"Bug fix session","confidence":"high"}}"#;
-
-        // Act
-        let response = parse_agent_response_strict(raw);
-
-        // Assert
-        let response = response.expect("response should parse");
-        assert_eq!(response.answer, "Done.");
-        assert_eq!(
-            response.summary,
-            Some(AgentResponseSummary {
-                session: "Bug fix session".to_string(),
-                turn: "Fixed bug".to_string(),
-            })
-        );
-    }
-
-    #[test]
     /// Strict parsing tolerates extra fields inside nested question objects.
     fn test_parse_agent_response_strict_tolerates_extra_question_fields() {
         // Arrange
-        let raw = r#"{"answer":"","questions":[{"text":"Which approach?","options":["A","B"],"priority":"high"}],"summary":null}"#;
+        let raw = r#"{"answer":"","questions":[{"text":"Which approach?","options":["A","B"],"priority":"high"}]}"#;
 
         // Act
         let response = parse_agent_response_strict(raw);
@@ -670,30 +572,6 @@ mod tests {
     }
 
     #[test]
-    /// Parser accepts a payload with `summary` but no `answer` key,
-    /// exercising the documented asymmetry where the parser is lenient
-    /// (any recognized key suffices) while the prompt schema requires
-    /// `answer`.
-    fn test_parse_agent_response_strict_accepts_summary_without_answer() {
-        // Arrange
-        let raw = r#"{"summary":{"turn":"Fixed bug","session":"Bug fix session"}}"#;
-
-        // Act
-        let response = parse_agent_response_strict(raw);
-
-        // Assert
-        let response = response.expect("parser should accept summary-only payload");
-        assert_eq!(response.answer, "");
-        assert_eq!(
-            response.summary,
-            Some(AgentResponseSummary {
-                session: "Bug fix session".to_string(),
-                turn: "Fixed bug".to_string(),
-            })
-        );
-    }
-
-    #[test]
     /// Recovery path skips non-protocol JSON objects embedded in prose when
     /// they contain no recognized protocol keys.
     fn test_parse_agent_response_strict_rejects_wrapped_non_protocol_json() {
@@ -717,7 +595,7 @@ mod tests {
         // Arrange
         let raw = concat!(
             "Some wrapper text\n",
-            r#"{"answer":"Recovered payload","questions":[],"summary":null}"#,
+            r#"{"answer":"Recovered payload","questions":[]}"#,
             "\ntrailing wrapper text"
         );
 
@@ -736,7 +614,7 @@ mod tests {
         let raw = concat!(
             "The commit message looks good. Let me refine it.\n\n",
             "```json\n",
-            r#"{"answer":"Refined commit message","questions":[],"summary":null}"#,
+            r#"{"answer":"Refined commit message","questions":[]}"#,
             "\n```"
         );
 
@@ -801,7 +679,7 @@ mod tests {
         assert!(details.contains("direct_json_recognized_protocol_keys: (none)"));
         assert!(details.contains(
             "direct_json_missing_protocol_keys: answer, questions, review_comment_outcomes, \
-             subtasks, summary"
+             subtasks, verification_verdicts"
         ));
     }
 }

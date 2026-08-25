@@ -20,12 +20,10 @@ pub use envelope::{
     prepend_protocol_refresh_reminder,
 };
 pub use model::{
-    AgentResponse, AgentResponseParseError, AgentResponseSummary, ProtocolRequestProfile,
-    ReviewCommentOutcome, ReviewCommentResolution,
+    AgentResponse, AgentResponseParseError, ProtocolRequestProfile, ReviewCommentOutcome,
+    ReviewCommentResolution,
 };
-pub use parse::{
-    format_protocol_parse_debug_details, normalize_turn_response, parse_agent_response_strict,
-};
+pub use parse::{format_protocol_parse_debug_details, parse_agent_response_strict};
 pub use prompt::{
     TurnPrompt, TurnPromptAttachment, TurnPromptContentPart, TurnPromptTextSource,
     render_prompt_text_for_agent, split_turn_prompt_content,

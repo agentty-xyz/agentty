@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT task.id AS \"id!: i64\",\n       task.acceptance_criteria,\n       task.area_violations,\n       task.areas_compliant AS \"areas_compliant?: bool\",\n       task.attempt_count,\n       COALESCE(child.added_lines, 0) AS \"child_added_lines!: i64\",\n       (\n           SELECT message.content\n           FROM session_message AS message\n           WHERE message.session_id = task.child_session_id\n             AND message.kind = 'assistant_answer'\n           ORDER BY message.position DESC\n           LIMIT 1\n       ) AS child_answer,\n       COALESCE(child.deleted_lines, 0) AS \"child_deleted_lines!: i64\",\n       child.focused_review_status AS child_focused_review_status,\n       child.focused_review_text AS child_focused_review_text,\n       child.has_diff AS \"child_has_diff?: bool\",\n       COALESCE(child.input_tokens, 0) AS \"child_input_tokens!: i64\",\n       COALESCE(child.output_tokens, 0) AS \"child_output_tokens!: i64\",\n       task.child_session_id,\n       child.status AS child_status,\n       child.questions AS child_questions,\n       child.summary AS child_summary,\n       task.continuation_generation,\n       task.continuation_prompt,\n       task.infrastructure_retry_count,\n       task.kind,\n       task.last_error,\n       task.merge_position,\n       task.prompt,\n       task.research_report,\n       task.result_summary,\n       task.review_iteration,\n       task.status,\n       task.task_key,\n       task.touched_areas,\n       task.title,\n       task.verification_reason,\n       task.verification_verdict\nFROM session_orchestration_task AS task\nLEFT JOIN session AS child\nON child.id = task.child_session_id\nWHERE task.session_orchestration_id = ?\nORDER BY task.merge_position, task.id\n",
+  "query": "\nSELECT task.id AS \"id!: i64\",\n       task.acceptance_criteria,\n       task.area_violations,\n       task.areas_compliant AS \"areas_compliant?: bool\",\n       task.attempt_count,\n       COALESCE(child.added_lines, 0) AS \"child_added_lines!: i64\",\n       (\n           SELECT message.content\n           FROM session_message AS message\n           WHERE message.session_id = task.child_session_id\n             AND message.kind = 'assistant_answer'\n           ORDER BY message.position DESC\n           LIMIT 1\n       ) AS child_answer,\n       COALESCE(child.deleted_lines, 0) AS \"child_deleted_lines!: i64\",\n       child.focused_review_status AS child_focused_review_status,\n       child.focused_review_text AS child_focused_review_text,\n       child.has_diff AS \"child_has_diff?: bool\",\n       COALESCE(child.input_tokens, 0) AS \"child_input_tokens!: i64\",\n       COALESCE(child.output_tokens, 0) AS \"child_output_tokens!: i64\",\n       task.child_session_id,\n       child.status AS child_status,\n       child.questions AS child_questions,\n       task.continuation_generation,\n       task.continuation_prompt,\n       task.infrastructure_retry_count,\n       task.kind,\n       task.last_error,\n       task.merge_position,\n       task.prompt,\n       task.research_report,\n       task.result_summary,\n       task.review_iteration,\n       task.status,\n       task.task_key,\n       task.touched_areas,\n       task.title,\n       task.verification_reason,\n       task.verification_verdict\nFROM session_orchestration_task AS task\nLEFT JOIN session AS child\nON child.id = task.child_session_id\nWHERE task.session_orchestration_id = ?\nORDER BY task.merge_position, task.id\n",
   "describe": {
     "columns": [
       {
@@ -160,19 +160,8 @@
         }
       },
       {
-        "name": "child_summary",
-        "ordinal": 16,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "session",
-            "name": "summary"
-          }
-        }
-      },
-      {
         "name": "continuation_generation",
-        "ordinal": 17,
+        "ordinal": 16,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -183,7 +172,7 @@
       },
       {
         "name": "continuation_prompt",
-        "ordinal": 18,
+        "ordinal": 17,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -194,7 +183,7 @@
       },
       {
         "name": "infrastructure_retry_count",
-        "ordinal": 19,
+        "ordinal": 18,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -205,7 +194,7 @@
       },
       {
         "name": "kind",
-        "ordinal": 20,
+        "ordinal": 19,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -216,7 +205,7 @@
       },
       {
         "name": "last_error",
-        "ordinal": 21,
+        "ordinal": 20,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -227,7 +216,7 @@
       },
       {
         "name": "merge_position",
-        "ordinal": 22,
+        "ordinal": 21,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -238,7 +227,7 @@
       },
       {
         "name": "prompt",
-        "ordinal": 23,
+        "ordinal": 22,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -249,7 +238,7 @@
       },
       {
         "name": "research_report",
-        "ordinal": 24,
+        "ordinal": 23,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -260,7 +249,7 @@
       },
       {
         "name": "result_summary",
-        "ordinal": 25,
+        "ordinal": 24,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -271,7 +260,7 @@
       },
       {
         "name": "review_iteration",
-        "ordinal": 26,
+        "ordinal": 25,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -282,7 +271,7 @@
       },
       {
         "name": "status",
-        "ordinal": 27,
+        "ordinal": 26,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -293,7 +282,7 @@
       },
       {
         "name": "task_key",
-        "ordinal": 28,
+        "ordinal": 27,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -304,7 +293,7 @@
       },
       {
         "name": "touched_areas",
-        "ordinal": 29,
+        "ordinal": 28,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -315,7 +304,7 @@
       },
       {
         "name": "title",
-        "ordinal": 30,
+        "ordinal": 29,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -326,7 +315,7 @@
       },
       {
         "name": "verification_reason",
-        "ordinal": 31,
+        "ordinal": 30,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -337,7 +326,7 @@
       },
       {
         "name": "verification_verdict",
-        "ordinal": 32,
+        "ordinal": 31,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -367,7 +356,6 @@
       true,
       true,
       true,
-      true,
       false,
       true,
       false,
@@ -386,5 +374,5 @@
       true
     ]
   },
-  "hash": "e80b1658b65fd06e3be8081d00e746848c997b88ecf4c6275f8b1a09773d5611"
+  "hash": "e4c60ba62b1ead3d8ed323fe0c8d642a85bb8ea57f145691f9b4cf838d729577"
 }

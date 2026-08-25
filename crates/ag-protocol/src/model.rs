@@ -94,8 +94,7 @@ fn collapse_whitespace(text: &str) -> String {
 /// Session discussion turns and isolated utility prompts share the same
 /// top-level [`AgentResponse`] schema. Agentty still carries the request
 /// family through transport boundaries so call sites can keep one consistent
-/// protocol contract even when some callers ignore parts of the response, such
-/// as the optional top-level `summary`.
+/// protocol contract even when some callers ignore parts of the response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProtocolRequestProfile {
@@ -103,33 +102,6 @@ pub enum ProtocolRequestProfile {
     SessionTurn,
     /// Isolated utility prompt.
     UtilityPrompt,
-}
-
-/// Structured session summary block emitted alongside protocol messages.
-///
-/// Session-discussion turns use this object instead of embedding the change
-/// summary inside `answer` message text. One-shot prompts set the top-level
-/// `summary` field to `null`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[schemars(
-    title = "AgentResponseSummary",
-    description = "Structured session summary block emitted alongside protocol messages instead \
-                   of embedding the change summary inside `answer` markdown on session-discussion \
-                   turns."
-)]
-pub struct AgentResponseSummary {
-    /// Cumulative summary of active changes on the current session branch.
-    #[schemars(
-        title = "session",
-        description = "Cumulative summary of active changes on the current session branch."
-    )]
-    pub session: String,
-    /// Concise summary of only the work completed in the current turn.
-    #[schemars(
-        title = "turn",
-        description = "Concise summary of only the work completed in the current turn."
-    )]
-    pub turn: String,
 }
 
 /// Agent-reported disposition for one forge review thread.
@@ -231,15 +203,6 @@ pub struct AgentResponse {
     #[serde(default)]
     #[schemars(title = "subtasks")]
     pub subtasks: Vec<SubtaskItem>,
-    /// Structured summary for session-discussion turns, or `None` for legacy
-    /// payloads and one-shot prompts.
-    #[serde(default)]
-    #[schemars(
-        title = "summary",
-        description = "Structured summary for session-discussion turns, kept outside `answer` \
-                       markdown. Use `null` for one-shot prompts and legacy payloads."
-    )]
-    pub summary: Option<AgentResponseSummary>,
     /// Per-task decisions emitted for an orchestration verification turn.
     ///
     /// Ordinary turns leave this empty. The controller must copy task keys
@@ -263,7 +226,6 @@ impl AgentResponse {
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
-            summary: None,
             verification_verdicts: Vec::new(),
         }
     }
@@ -400,7 +362,6 @@ mod tests {
             questions: vec![QuestionItem::new("Need one clarification.")],
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
-            summary: None,
             verification_verdicts: Vec::new(),
         };
 
@@ -425,7 +386,6 @@ mod tests {
             }],
             subtasks: Vec::new(),
             verification_verdicts: Vec::new(),
-            summary: None,
         };
 
         // Act
@@ -450,7 +410,6 @@ mod tests {
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
             verification_verdicts: Vec::new(),
-            summary: None,
         };
 
         // Act
@@ -471,7 +430,6 @@ mod tests {
             review_comment_outcomes: Vec::new(),
             subtasks: (0..=MAX_SUBTASKS).map(test_subtask).collect(),
             verification_verdicts: Vec::new(),
-            summary: None,
         };
 
         // Act
@@ -493,7 +451,6 @@ mod tests {
             review_comment_outcomes: Vec::new(),
             subtasks: vec![test_subtask(1)],
             verification_verdicts: Vec::new(),
-            summary: None,
         };
 
         // Act
@@ -520,7 +477,6 @@ mod tests {
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
             subtasks: Vec::new(),
-            summary: None,
             verification_verdicts: (0..=MAX_SUBTASKS)
                 .map(|index| VerificationVerdictItem {
                     reason: format!("Evidence {index}"),
