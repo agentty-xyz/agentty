@@ -7,6 +7,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.7] - 2026-08-24
+
+### Changed
+
+- ag-harness-cli: publish the command-line application through crates.io while excluding
+  it from `cargo-dist` archives and installers.
+- deps: update `uuid` and `taiki-e/install-action`.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.7`.
+
+### Contributors
+
+- @dependabot
+- @minev-dev
+
 ## [v0.15.6] - 2026-08-24
 
 ### Added
