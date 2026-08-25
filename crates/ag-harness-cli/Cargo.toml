@@ -9,6 +9,10 @@ repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
 
+[package.metadata.dist]
+# Publish this package only through the crates.io workflow.
+dist = false
+
 [[bin]]
 name = "ag-harness"
 path = "src/main.rs"
