@@ -7,6 +7,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.6] - 2026-08-24
+
+### Added
+
+- ag-harness: export lifecycle events as OpenTelemetry GenAI spans with contract
+  coverage for metric and trace payloads, hierarchy, outcomes, and shutdown behavior.
+- ag-harness-cli: run interactive Muse, Kimi, and Qwen chats with bounded repository
+  access, retained conversation history, and sanitized activity summaries.
+- agentty: support whole-file Diff comments alongside line and range comments.
+
+### Changed
+
+- agentty: submit completed Diff comments with `s` from either pane.
+- agentty: queue review requests during rebases and publish them after synchronization
+  finalizes.
+- ag-harness: move the command-line application into the dedicated `ag-harness-cli`
+  crate and register live provider checks as opt-in end-to-end tests.
+- agentty: remove persisted session summaries from the protocol, storage, rendering, and
+  orchestration flows in favor of assistant answers and session transcripts.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.6`.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.15.5] - 2026-08-22
 
 ### Added
