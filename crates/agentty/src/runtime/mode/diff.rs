@@ -268,18 +268,12 @@ fn handle_navigation_key(
 
 /// Returns whether `s` requests submission of all completed diff comments.
 pub(crate) fn should_submit_line_comments(app: &App, key: KeyEvent) -> bool {
-    let AppMode::Diff {
-        focus,
-        line_comments,
-        ..
-    } = &app.mode
-    else {
+    let AppMode::Diff { line_comments, .. } = &app.mode else {
         return false;
     };
 
     can_reply_with_line_comments(app)
         && is_plain_char_key(key, 's')
-        && *focus == DiffFocus::Content
         && !line_comments.is_editing()
         && !line_comments.is_selecting()
         && !line_comments.comments.is_empty()

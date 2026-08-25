@@ -2416,6 +2416,55 @@ mod tests {
     }
 
     #[test]
+    fn test_diff_page_shows_comment_submission_in_file_window() {
+        // Arrange
+        let diff = "diff --git a/main.rs b/main.rs\n@@ -0,0 +1 @@\n+review();";
+        let mut line_comments = DiffLineComments::default();
+        line_comments.start_editing_target(DiffLineCommentTarget::single(DiffLineCommentAnchor {
+            content: "review();".to_string(),
+            line: 1,
+            path: "main.rs".to_string(),
+            side: DiffLineSide::New,
+        }));
+        line_comments
+            .editing_input_mut()
+            .expect("line comment should be editable")
+            .insert_text("Explain this call");
+        line_comments.finish_editing();
+        let session = session_fixture();
+        let diff_layout_cache = DiffLayoutCache::default();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let mut page = DiffPage::new(DiffPageInput {
+            can_comment: true,
+            diff,
+            diff_layout_cache: &diff_layout_cache,
+            file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
+            line_comments: &line_comments,
+            markdown_render_cache: &markdown_render_cache,
+            preview: test_diff_preview(),
+            review_comments: None,
+            scroll_offset: 0,
+            selected_diff_line_index: 0,
+            session: &session,
+            sidebar_focus: DiffSidebarFocus::Files,
+        });
+        let backend = ratatui::backend::TestBackend::new(100, 14);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| page.render(frame, frame.area()))
+            .expect("failed to render diff page");
+
+        // Assert
+        assert!(
+            buffer_text(terminal.backend().buffer()).contains("s: submit comments"),
+            "completed comments should be submittable while Files owns focus"
+        );
+    }
+
+    #[test]
     fn test_inline_comment_highlighting_distinguishes_active_and_completed_rows() {
         // Arrange
         let comment = DiffLineComment {

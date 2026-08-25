@@ -869,6 +869,13 @@ pub(crate) enum DiffLineCommentFooterState {
     },
 }
 
+impl DiffLineCommentFooterState {
+    /// Returns whether completed diff comments are ready for submission.
+    fn can_submit(self) -> bool {
+        matches!(self, Self::Ready { comment_count } if comment_count > 0)
+    }
+}
+
 /// Returns compact diff footer actions for the page-level hint line.
 pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction> {
     if matches!(
@@ -893,7 +900,14 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
         ];
     }
 
+    let can_submit_line_comments = context.line_comment_state.can_submit();
     let mut actions = vec![HelpAction::new("back", "q/Esc", "Back to session")];
+    if can_submit_line_comments
+        && !(context.sidebar_focus == DiffSidebarFocus::Files
+            && context.focus == DiffFocus::Content)
+    {
+        actions.push(diff_comment_submit_action());
+    }
     match context.sidebar_focus {
         DiffSidebarFocus::Files if context.focus == DiffFocus::Files => {
             actions.push(HelpAction::new("select file", "j/k", "Select file"));
@@ -932,15 +946,8 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
                     "Edit the selected line's or inline comment's feedback",
                 ));
             }
-            if matches!(
-                context.line_comment_state,
-                DiffLineCommentFooterState::Ready { comment_count } if comment_count > 0
-            ) {
-                actions.push(HelpAction::new(
-                    "submit comments",
-                    "s",
-                    "Submit all diff comments",
-                ));
+            if can_submit_line_comments {
+                actions.push(diff_comment_submit_action());
             }
         }
         DiffSidebarFocus::Comments => {
@@ -973,6 +980,11 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
     actions.push(HelpAction::new("help", "?", "Help"));
 
     actions
+}
+
+/// Builds the shared diff-comment submission action for every Diff pane.
+fn diff_comment_submit_action() -> HelpAction {
+    HelpAction::new("submit comments", "s", "Submit all diff comments")
 }
 
 /// Returns list-mode actions shared by all tabs.
@@ -2263,6 +2275,29 @@ mod tests {
     }
 
     #[test]
+    fn test_diff_file_footer_exposes_completed_comment_submission() {
+        // Arrange, Act
+        let file_footer_keys = diff_footer_actions(DiffFooterContext {
+            file_comment: DiffFileCommentAvailability::Available,
+            can_mark_selected: false,
+            can_submit: false,
+            focus: DiffFocus::Files,
+            has_review_comments: true,
+            line_comment_state: DiffLineCommentFooterState::Ready { comment_count: 2 },
+            sidebar_focus: DiffSidebarFocus::Files,
+        })
+        .iter()
+        .map(|action| action.key)
+        .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            file_footer_keys,
+            ["q/Esc", "s", "j/k", "Enter/l", "p", "Shift+C", "c", "?"]
+        );
+    }
+
+    #[test]
     fn test_read_only_diff_hides_inline_comment_actions() {
         // Arrange, Act
         let help_labels = diff_actions(false)
@@ -2339,7 +2374,7 @@ mod tests {
             can_submit: true,
             focus: DiffFocus::Files,
             has_review_comments: true,
-            line_comment_state: DiffLineCommentFooterState::Ready { comment_count: 0 },
+            line_comment_state: DiffLineCommentFooterState::Ready { comment_count: 2 },
             sidebar_focus: DiffSidebarFocus::Comments,
         });
         let comment_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
@@ -2347,7 +2382,7 @@ mod tests {
         // Assert
         assert_eq!(
             comment_keys,
-            ["q", "j/k", "Space", "Enter", "f/Esc", "Up/Down", "?"]
+            ["q", "s", "j/k", "Space", "Enter", "f/Esc", "Up/Down", "?"]
         );
     }
 }

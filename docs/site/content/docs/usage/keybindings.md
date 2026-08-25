@@ -284,7 +284,7 @@ visible. `Esc`, `Left`, `h`, or `f` returns focus to the file tree when no visua
 selection is active. Linked review requests add a Comments section below Files; `c`
 focuses Comments while the file tree is focused, and `f` returns to Files. The Comments
 section keeps its own `Enter` action for submitting marked review threads. Press `s` to
-submit every file, line, and range comment together in the next turn.
+submit every file, line, and range comment together in the next turn from any Diff pane.
 
 | Key                   | Action                                         |
 | --------------------- | ---------------------------------------------- |
