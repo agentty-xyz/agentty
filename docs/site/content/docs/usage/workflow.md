@@ -238,25 +238,25 @@ Finishing empty text removes the comment and its source highlight. Completed com
 keep a distinct inset background, and the active editor uses the stronger selection
 highlight. The linked review-request Comments section retains its separate `Enter`
 action for submitting marked review threads. Press `s` to submit every finished file,
-line, or range comment together as the next session turn. The submitted prompt uses one
-compact row per comment: file feedback carries its repository-relative path, while
-inline feedback also carries its old or new side and line or range. The batch keeps
-draft instructions or image attachments that were present before opening the diff.
-Selected deleted rows also include their captured pre-change source text because that
-context is absent from the current worktree. Diff comment editing and submission are
-available only when the session can accept a reply. Read-only diffs such as `Merged`
-sessions keep line navigation but omit the comment actions from the footer and help
-overlay. With no visual selection active, press `Esc`, `Left`, `h`, or `f` to return to
-the file tree. Select a changed markdown file and press `p` to render its complete
-post-change worktree content, including supported Mermaid diagrams. Preview remains
-active across file navigation; non-markdown selections keep showing raw diff lines, and
-files that are deleted, binary, too large, or unreadable show a concise notice. Press
-`p` again to restore the patch view. Pressing `q` returns to the sessions list and saves
-the complete composer; reopening the session restores the typed draft with input focus.
-Pressing `Tab` again returns focus to the composer. The same focus toggle, `d` diff
-preview, and `q` preservation flow are available while answering clarification
-questions. Long transcripts show a slim scrollbar on the right side of the output panel
-to indicate the current position.
+line, or range comment together as the next session turn from any Diff pane. The
+submitted prompt uses one compact row per comment: file feedback carries its
+repository-relative path, while inline feedback also carries its old or new side and
+line or range. The batch keeps draft instructions or image attachments that were present
+before opening the diff. Selected deleted rows also include their captured pre-change
+source text because that context is absent from the current worktree. Diff comment
+editing and submission are available only when the session can accept a reply. Read-only
+diffs such as `Merged` sessions keep line navigation but omit the comment actions from
+the footer and help overlay. With no visual selection active, press `Esc`, `Left`, `h`,
+or `f` to return to the file tree. Select a changed markdown file and press `p` to
+render its complete post-change worktree content, including supported Mermaid diagrams.
+Preview remains active across file navigation; non-markdown selections keep showing raw
+diff lines, and files that are deleted, binary, too large, or unreadable show a concise
+notice. Press `p` again to restore the patch view. Pressing `q` returns to the sessions
+list and saves the complete composer; reopening the session restores the typed draft
+with input focus. Pressing `Tab` again returns focus to the composer. The same focus
+toggle, `d` diff preview, and `q` preservation flow are available while answering
+clarification questions. Long transcripts show a slim scrollbar on the right side of the
+output panel to indicate the current position.
 
 Pressing `r` during a running turn queues session sync on the same session worker. The
 session stays **InProgress** while the active turn runs, then moves to **Rebasing** when

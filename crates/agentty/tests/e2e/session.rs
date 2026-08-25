@@ -7856,6 +7856,8 @@ fn test_diff_line_comments() -> E2eResult {
                         "Multiple comments remain visible inside the diff",
                     )
                     .viewing_pause_ms(1500)
+                    .press_key("Esc")
+                    .wait_for_text("s: submit comments", 3000)
                     .press_key("s")
                     .wait_for_text("File comments:", 5000)
                     .wait_for_text("src/main.rs: Review the whole file.", 5000)

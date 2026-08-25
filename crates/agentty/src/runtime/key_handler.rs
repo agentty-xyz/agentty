@@ -90,6 +90,7 @@ where
                 review_comments: Some(review_comments),
                 ..
             } if review_comments.sidebar_focus == DiffSidebarFocus::Comments
+                && !mode::diff::should_submit_line_comments(app, key)
                 && !matches!(key.code, KeyCode::Char('?' | 'q')) =>
             {
                 handle_review_comment_key(app, presentation, terminal, key).await
@@ -935,7 +936,7 @@ mod tests {
     use crate::presentation::app_mode::{
         ConfirmationViewMode, DiffFocus, DiffLineCommentAnchor, DiffLineCommentTarget,
         DiffLineComments, DiffLineSide, DiffPreview, DiffRestoreTarget, DiffReviewComments,
-        PromptModeSnapshot,
+        DiffSidebarFocus, PromptModeSnapshot,
     };
     use crate::presentation::prompt::{
         PromptAttachmentState, PromptHistoryState, PromptSlashState,
@@ -1827,11 +1828,14 @@ mod tests {
         app.mode = AppMode::Diff {
             diff: "diff --git a/src/main.rs b/src/main.rs\n+review();\n".to_string(),
             file_explorer_selected_index: 1,
-            focus: DiffFocus::Content,
+            focus: DiffFocus::Files,
             line_comments,
             selected_diff_line_index: 0,
             preview: DiffPreview::default(),
-            review_comments: None,
+            review_comments: Some(DiffReviewComments {
+                sidebar_focus: DiffSidebarFocus::Comments,
+                ..DiffReviewComments::loading(1)
+            }),
             restore: Some(Box::new(DiffRestoreTarget::Prompt(PromptModeSnapshot {
                 at_mention_state: None,
                 attachment_state: PromptAttachmentState::default(),
