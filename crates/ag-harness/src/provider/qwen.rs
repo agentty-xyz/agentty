@@ -1,5 +1,11 @@
 use crate::{chat_completion, telemetry};
 
+pub(crate) const DASHSCOPE_API_KEY_ENV: &str = "DASHSCOPE_API_KEY";
+pub(crate) const DASHSCOPE_BASE_URL_ENV: &str = "DASHSCOPE_BASE_URL";
+
+/// Qwen Plus model identifier.
+pub const QWEN_PLUS: &str = "qwen-plus";
+
 pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
     chat_completion::ChatCompletionProviderPolicy {
         display_name: "Qwen",

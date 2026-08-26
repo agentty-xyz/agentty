@@ -1,18 +1,17 @@
 use std::env;
 
 use async_trait::async_trait;
-use thiserror::Error;
 
+use super::catalog::{ModelConfiguration, ModelConfigurationError, ModelProvider};
 use crate::lifecycle::LifecycleObserver;
 use crate::model::{
-    ModelClient, ModelCompletion, ModelError, ModelMetadata, ModelMetadataError, ModelRequest,
-    ModelWithMetadata,
+    ModelClient, ModelCompletion, ModelError, ModelMetadata, ModelRequest, ModelWithMetadata,
 };
 use crate::{chat_completion, telemetry};
 
-const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
-const MODEL_API_BASE_URL_ENV: &str = "MODEL_API_BASE_URL";
-const MODEL_API_KEY_ENV: &str = "MODEL_API_KEY";
+pub(crate) const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
+pub(crate) const MODEL_API_BASE_URL_ENV: &str = "MODEL_API_BASE_URL";
+pub(crate) const MODEL_API_KEY_ENV: &str = "MODEL_API_KEY";
 
 /// Standard Muse Spark 1.2 model whose prompts and completions are not used
 /// to train Meta models.
@@ -42,9 +41,9 @@ impl Muse {
     ///
     /// # Errors
     ///
-    /// Returns [`MuseError`] when `MODEL_API_KEY` is unavailable or `model` is
-    /// empty.
-    pub fn from_env(model: impl Into<String>) -> Result<Self, MuseError> {
+    /// Returns [`ModelConfigurationError`] when the provider environment or
+    /// model identifier is invalid.
+    pub fn from_env(model: impl Into<String>) -> Result<Self, ModelConfigurationError> {
         Self::from_environment(model, |name| env::var(name))
     }
 
@@ -58,16 +57,10 @@ impl Muse {
 
     fn from_environment(
         model: impl Into<String>,
-        mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
-    ) -> Result<Self, MuseError> {
-        let api_key = environment(MODEL_API_KEY_ENV).map_err(MuseError::ApiKey)?;
-        let base_url =
-            environment(MODEL_API_BASE_URL_ENV).unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
-        let client = ModelClient::muse(MuseConfig {
-            api_key,
-            base_url,
-            model: model.into(),
-        })?;
+        environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    ) -> Result<Self, ModelConfigurationError> {
+        let client = ModelConfiguration::new(ModelProvider::Muse, model)
+            .client_from_environment(environment)?;
 
         Ok(Self { client })
     }
@@ -87,17 +80,6 @@ impl ModelWithMetadata for Muse {
     }
 }
 
-/// Failure returned while configuring Muse from the environment.
-#[derive(Debug, Error)]
-pub enum MuseError {
-    /// `MODEL_API_KEY` is missing or is not valid Unicode.
-    #[error("MODEL_API_KEY is unavailable: {0}")]
-    ApiKey(#[source] env::VarError),
-    /// The selected model identifier is invalid.
-    #[error(transparent)]
-    Metadata(#[from] ModelMetadataError),
-}
-
 /// Configuration for a Muse model served through Meta's Model API.
 pub struct MuseConfig {
     /// API key sent as a bearer token.
@@ -110,6 +92,8 @@ pub struct MuseConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use serde_json::{Value, json};
     use wiremock::matchers::{bearer_token, body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -206,6 +190,45 @@ mod tests {
     }
 
     #[test]
+    fn environment_configuration_from_env_runs_in_isolated_process() {
+        // Arrange
+        let test_executable = env::current_exe().expect("test executable should be available");
+
+        // Act
+        let output = Command::new(test_executable)
+            .args([
+                "--ignored",
+                "--exact",
+                "provider::muse::tests::environment_configuration_from_env_subprocess",
+            ])
+            .env(MODEL_API_KEY_ENV, "test-key")
+            .env(MODEL_API_BASE_URL_ENV, "https://models.example/v1")
+            .output()
+            .expect("isolated environment test should run");
+        let standard_error = String::from_utf8_lossy(&output.stderr);
+
+        // Assert
+        assert!(
+            output.status.success(),
+            "isolated environment test failed: {standard_error}"
+        );
+    }
+
+    #[test]
+    #[ignore = "run by environment_configuration_from_env_runs_in_isolated_process"]
+    fn environment_configuration_from_env_subprocess() {
+        // Arrange and Act
+        let muse = Muse::from_env(MUSE_SPARK_1_2)
+            .expect("isolated process environment should configure Muse");
+        let metadata = ModelWithMetadata::metadata(&muse)
+            .expect("Muse should expose its configured model identity");
+
+        // Assert
+        assert_eq!(metadata.provider(), "meta");
+        assert_eq!(metadata.model(), MUSE_SPARK_1_2);
+    }
+
+    #[test]
     fn environment_configuration_requires_api_key() {
         // Arrange and Act
         let error = Muse::from_environment(MUSE_SPARK_1_2, |_| Err(env::VarError::NotPresent))
@@ -215,7 +238,32 @@ mod tests {
         // Assert
         assert!(matches!(
             error,
-            MuseError::ApiKey(env::VarError::NotPresent)
+            ModelConfigurationError::ApiKey {
+                name: MODEL_API_KEY_ENV
+            }
+        ));
+    }
+
+    #[test]
+    fn environment_configuration_rejects_non_unicode_base_url() {
+        // Arrange and Act
+        let error = Muse::from_environment(MUSE_SPARK_1_2, |name| {
+            if name == MODEL_API_KEY_ENV {
+                Ok("test-key".to_string())
+            } else {
+                Err(env::VarError::NotUnicode("invalid".into()))
+            }
+        })
+        .err()
+        .expect("invalid base URL environment should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            ModelConfigurationError::Environment {
+                name: MODEL_API_BASE_URL_ENV,
+                source: env::VarError::NotUnicode(_)
+            }
         ));
     }
 
@@ -229,7 +277,7 @@ mod tests {
         // Assert
         assert!(matches!(
             error,
-            MuseError::Metadata(ModelMetadataError::EmptyModel)
+            ModelConfigurationError::Metadata(model::ModelMetadataError::EmptyModel)
         ));
     }
 

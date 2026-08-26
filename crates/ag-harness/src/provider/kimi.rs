@@ -1,5 +1,11 @@
 use crate::{chat_completion, telemetry};
 
+pub(crate) const KIMI_API_KEY_ENV: &str = "KIMI_API_KEY";
+pub(crate) const KIMI_BASE_URL_ENV: &str = "KIMI_BASE_URL";
+
+/// Kimi K2.6 model identifier.
+pub const KIMI_K2_6: &str = "kimi-k2.6";
+
 pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
     chat_completion::ChatCompletionProviderPolicy {
         display_name: "Kimi",

@@ -1,12 +1,16 @@
 //! Provider-specific model adapters.
 
+mod catalog;
 mod kimi;
 mod muse;
 mod qwen;
 
-pub use kimi::KimiConfig;
+pub use catalog::{
+    ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
+};
 pub(crate) use kimi::POLICY as KIMI_POLICY;
+pub use kimi::{KIMI_K2_6, KimiConfig};
 pub(crate) use muse::POLICY as MUSE_POLICY;
-pub use muse::{MUSE_SPARK_1_2, MUSE_SPARK_1_2_CONTRIBUTOR, Muse, MuseConfig, MuseError};
+pub use muse::{MUSE_SPARK_1_2, MUSE_SPARK_1_2_CONTRIBUTOR, Muse, MuseConfig};
 pub(crate) use qwen::POLICY as QWEN_POLICY;
-pub use qwen::QwenConfig;
+pub use qwen::{QWEN_PLUS, QwenConfig};
