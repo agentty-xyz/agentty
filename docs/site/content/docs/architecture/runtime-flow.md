@@ -813,9 +813,12 @@ orchestration paths:
   the existing session channel so the provider keeps conversation context while Agentty
   owns staging and `git rebase --continue`.
 - Review-request publish: push with `--force-with-lease`, then create or refresh the
-  forge review request through `ReviewRequestClient`; only open same-branch requests are
-  reused. The task does not own the active app mode, so its completion cannot interrupt
-  later navigation. It holds the same branch-operation lock as post-turn auto-push, so
+  forge review request through `ReviewRequestClient`; a first publish to a custom branch
+  rejects a currently existing remote ref. When the ref is absent, the push supplies an
+  explicit empty lease so a stale local remote-tracking ref cannot block recreation and
+  a concurrent remote creation still wins. Only open same-branch requests are reused.
+  The task does not own the active app mode, so its completion cannot interrupt later
+  navigation. It holds the same branch-operation lock as post-turn auto-push, so
   overlapping requests queue rather than running concurrent force-pushes.
 - Background review-request sync: review-ready sessions with a published branch or
   linked request are polled; merged requests persist the reviewed session-head hash and

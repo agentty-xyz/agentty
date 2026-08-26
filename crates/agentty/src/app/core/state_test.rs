@@ -1949,7 +1949,7 @@ async fn push_session_branch_uses_custom_remote_branch_name_when_provided() {
         .once()
         .returning(|_| Box::pin(async { Some(session::session_branch("session-1")) }));
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_new_remote_branch()
         .with(
             mockall::predicate::eq(PathBuf::from("/tmp/review-session")),
             mockall::predicate::eq("review/custom-branch".to_string()),

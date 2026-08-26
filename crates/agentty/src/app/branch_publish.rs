@@ -465,8 +465,10 @@ async fn publish_pull_request(
 /// resulting upstream reference.
 ///
 /// When `remote_branch_name` is supplied and the session has no prior
-/// `published_upstream_ref`, a pre-flight `git ls-remote` check blocks
-/// the push if the remote branch already exists. Without a caller-supplied
+/// `published_upstream_ref`, a pre-flight remote lookup blocks the push when
+/// that branch currently exists. When it does not exist, an explicit empty
+/// lease allows recreation despite stale local remote-tracking refs while
+/// still refusing a concurrent remote creation. Without a caller-supplied
 /// branch name, the default session branch name is still pushed explicitly so
 /// Git does not reuse an inherited base-branch upstream such as `origin/main`.
 pub(crate) async fn push_session_branch_to_remote(
@@ -527,28 +529,30 @@ pub(crate) async fn push_session_branch_to_remote(
         }
     }
 
-    let upstream_reference = git_client
-        .push_current_branch_to_remote_branch(folder, target_branch)
-        .await
-        .map_err(|error| {
-            let detail = error.to_string();
-            let normalized = detail.to_ascii_lowercase();
+    let push = if remote_branch_name.is_some() && published_upstream_ref.is_none() {
+        git_client.push_current_branch_to_new_remote_branch(folder, target_branch)
+    } else {
+        git_client.push_current_branch_to_remote_branch(folder, target_branch)
+    };
+    let upstream_reference = push.await.map_err(|error| {
+        let detail = error.to_string();
+        let normalized = detail.to_ascii_lowercase();
 
-            if has_authentication_error_keywords(&normalized) {
-                BranchPublishTaskFailure::blocked(
-                    publish_branch_action,
-                    git_push_authentication_message(
-                        detected_forge_kind_from_git_push_error(&detail),
-                        retry_text,
-                    ),
-                )
-            } else {
-                BranchPublishTaskFailure::failed(
-                    publish_branch_action,
-                    format!("Failed to publish session branch: {error}"),
-                )
-            }
-        })?;
+        if has_authentication_error_keywords(&normalized) {
+            BranchPublishTaskFailure::blocked(
+                publish_branch_action,
+                git_push_authentication_message(
+                    detected_forge_kind_from_git_push_error(&detail),
+                    retry_text,
+                ),
+            )
+        } else {
+            BranchPublishTaskFailure::failed(
+                publish_branch_action,
+                format!("Failed to publish session branch: {error}"),
+            )
+        }
+    })?;
 
     db.sessions()
         .update_session_published_upstream_ref(session_id, Some(upstream_reference.clone()))
@@ -1043,7 +1047,7 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(false) }));
         expect_safe_session_branch_push(&mut mock_git_client, "session-id");
         mock_git_client
-            .expect_push_current_branch_to_remote_branch()
+            .expect_push_current_branch_to_new_remote_branch()
             .once()
             .withf(move |folder, remote_branch_name| {
                 folder == &expected_session_folder && remote_branch_name == "wt/session-id"
@@ -1266,7 +1270,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn push_skips_existence_check_when_upstream_ref_already_set() {
+    async fn push_uses_tracked_lease_when_upstream_ref_is_already_set() {
         // Arrange
         let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
@@ -1307,7 +1311,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn push_skips_existence_check_when_no_custom_branch_name() {
+    async fn push_uses_tracked_lease_for_default_session_branch_name() {
         // Arrange
         let database = AppRepositories::in_memory().await.expect("db should open");
         let project_id = database
@@ -1378,6 +1382,9 @@ mod tests {
         mock_git_client.expect_remote_branch_exists().times(0);
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
+            .times(0);
+        mock_git_client
+            .expect_push_current_branch_to_new_remote_branch()
             .times(0);
 
         // Act
