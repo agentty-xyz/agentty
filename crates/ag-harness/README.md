@@ -21,7 +21,10 @@ Provide `MODEL_API_KEY`, a repository root, explicitly allowed tools, a prompt, 
 Tools are denied by default and repository tools require an explicit root. `read`
 returns bounded file content; `write` applies one bounded unified diff to one text file.
 Both use the injected `FileSystem` boundary without shell commands, and the model may
-continue calling allowed tools until it returns schema-valid JSON.
+continue calling allowed tools until it returns schema-valid JSON. When a provider
+returns multiple tool calls in one response, the harness validates the complete batch,
+executes it in provider order, and records one assistant message followed by every tool
+result.
 
 Use `Harness::chat()` for sequential in-memory turns and sanitized activity reports.
 Chat history retains complete recent turns within a 256 KiB payload budget; use
@@ -60,4 +63,5 @@ and shutdown. The emitted signals follow the pinned OpenTelemetry GenAI
 semantic-convention contract documented in the architecture guide.
 
 The companion `ag-harness-cli` package provides an interactive command-line chat powered
-by this library.
+by this library. The manual real-model compatibility benchmark and its latest recorded
+results live in `tests/benchmark/README.md`.

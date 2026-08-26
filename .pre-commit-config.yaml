@@ -62,12 +62,26 @@ repos:
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
+      - id: cargo-check-ag-harness-benchmark
+        name: cargo check ag-harness benchmark
+        description: Compile-check the manual ag-harness live benchmark without executing it.
+        entry: cargo check -q --locked -p ag-harness --test benchmark
+        language: system
+        files: (^|/)(Cargo\.toml|Cargo\.lock|crates/ag-harness/(src/.*\.rs|tests/benchmark/.*\.rs))$
+        pass_filenames: false
       - id: clippy
         name: clippy
         description: Run strict clippy across all Rust targets and features, failing on warnings.
         entry: cargo clippy -q --locked --all-targets --all-features -- -D warnings
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
+        pass_filenames: false
+      - id: clippy-ag-harness-benchmark
+        name: clippy ag-harness benchmark
+        description: Lint the manual ag-harness live benchmark without executing it.
+        entry: cargo clippy -q --locked -p ag-harness --test benchmark -- -D warnings
+        language: system
+        files: (^|/)(Cargo\.toml|Cargo\.lock|crates/ag-harness/(src/.*\.rs|tests/benchmark/.*\.rs))$
         pass_filenames: false
       - id: test-workspace
         name: cargo nextest workspace
