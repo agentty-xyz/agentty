@@ -851,6 +851,12 @@ impl DiffFileCommentAvailability {
     fn is_available(self) -> bool {
         matches!(self, Self::Available)
     }
+
+    /// Returns the whole-file comment action when the selected row supports it.
+    fn help_action(self, footer_label: &'static str) -> Option<HelpAction> {
+        self.is_available()
+            .then(|| HelpAction::new(footer_label, "Shift+C", "Comment on the selected file"))
+    }
 }
 
 /// Inline-comment state that changes the compact Diff footer actions.
@@ -892,12 +898,15 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
         context.line_comment_state,
         DiffLineCommentFooterState::Selecting
     ) {
-        return vec![
+        let mut actions = vec![
             HelpAction::new("back", "q", "Back to session"),
             HelpAction::new("cancel", "Esc", "Cancel row selection"),
             HelpAction::new("extend", "j/k", "Extend row selection"),
             HelpAction::new("comment", "Enter", "Comment on selected rows"),
         ];
+        actions.extend(context.file_comment.help_action("comment file"));
+
+        return actions;
     }
 
     let can_submit_line_comments = context.line_comment_state.can_submit();
@@ -917,13 +926,7 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
                 "Focus the selected file's changed lines",
             ));
             actions.push(HelpAction::new("preview", "p", "Toggle markdown preview"));
-            if context.file_comment.is_available() {
-                actions.push(HelpAction::new(
-                    "comment",
-                    "Shift+C",
-                    "Comment on the selected file",
-                ));
-            }
+            actions.extend(context.file_comment.help_action("comment"));
             if context.has_review_comments {
                 actions.push(HelpAction::new("comments", "c", "Focus review comments"));
             }
@@ -2349,7 +2352,7 @@ mod tests {
     fn test_diff_content_footer_exposes_visual_row_selection_actions() {
         // Arrange, Act
         let selecting_keys = diff_footer_actions(DiffFooterContext {
-            file_comment: DiffFileCommentAvailability::Unavailable,
+            file_comment: DiffFileCommentAvailability::Available,
             can_mark_selected: false,
             can_submit: false,
             focus: DiffFocus::Content,
@@ -2362,7 +2365,7 @@ mod tests {
         .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(selecting_keys, ["q", "Esc", "j/k", "Enter"]);
+        assert_eq!(selecting_keys, ["q", "Esc", "j/k", "Enter", "Shift+C"]);
     }
 
     #[test]
