@@ -1991,33 +1991,26 @@ async fn test_create_stacked_draft_session_persists_parent_and_base_branch() {
 }
 
 #[tokio::test]
-async fn test_create_stacked_draft_session_rejects_nested_child() {
+async fn test_create_stacked_draft_session_chains_five_drafts_and_rejects_sixth() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_git(dir.path()).await;
-    let parent_session_id = app.create_session().await.expect("failed to create parent");
-    let parent_session = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == parent_session_id)
-        .expect("expected parent session");
-    parent_session.status = Status::Review;
-    let child_session_id = app
-        .create_stacked_draft_session(&parent_session_id)
-        .await
-        .expect("failed to create stacked draft session");
+    let root_session_id = app.create_session().await.expect("failed to create root");
+    let mut parent_session_id = root_session_id;
+    for _ in 1..=5 {
+        parent_session_id = app
+            .create_stacked_draft_session(&parent_session_id)
+            .await
+            .expect("failed to create nested stack level");
+    }
 
     // Act
-    let result = app.create_stacked_draft_session(&child_session_id).await;
+    let result = app.create_stacked_draft_session(&parent_session_id).await;
 
     // Assert
-    let error = result.expect_err("nested stacked draft creation should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("Stacked sessions can only be created from root sessions")
-    );
+    let error = result.expect_err("sixth stack level should fail");
+    assert!(error.to_string().contains("five-level stack limit"));
+    assert_eq!(app.sessions.sessions().len(), 6);
 }
 
 #[tokio::test]
@@ -6133,8 +6126,9 @@ async fn test_cancel_draft_session() {
 }
 
 #[tokio::test]
-/// Ensures canceling a parent session also cancels its stacked draft child.
-async fn test_cancel_session_cascades_to_stacked_child() {
+/// Ensures canceling a parent session stops and cancels every nonterminal
+/// stacked descendant.
+async fn test_cancel_session_cascades_to_stacked_descendants() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_git(dir.path()).await;
@@ -6143,6 +6137,22 @@ async fn test_cancel_session_cascades_to_stacked_child() {
         .create_stacked_draft_session(&parent_session_id)
         .await
         .expect("failed to create stacked draft session");
+    crate::test_support::set_session_status_for_test(&mut app, &child_session_id, Status::Review);
+    let grandchild_session_id = app
+        .create_stacked_draft_session(&child_session_id)
+        .await
+        .expect("failed to create nested stacked draft session");
+    crate::test_support::set_session_status_for_test(
+        &mut app,
+        &grandchild_session_id,
+        Status::Queued,
+    );
+    app.services
+        .db()
+        .operations()
+        .insert_session_operation("grandchild-operation", &grandchild_session_id, "rebase")
+        .await
+        .expect("failed to insert grandchild operation");
     crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
 
     // Act
@@ -6165,8 +6175,34 @@ async fn test_cancel_session_cascades_to_stacked_child() {
         .iter()
         .find(|session| session.id == child_session_id)
         .expect("missing child session");
+    let grandchild_session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == grandchild_session_id)
+        .expect("missing grandchild session");
     assert_eq!(parent_session.status, Status::Canceled);
     assert_eq!(child_session.status, Status::Canceled);
+    assert_eq!(grandchild_session.status, Status::Canceled);
+    let grandchild_handles = app
+        .sessions
+        .session_handles_or_err(&grandchild_session_id)
+        .expect("missing grandchild session handles");
+    assert!(
+        grandchild_handles
+            .cancel_token
+            .lock()
+            .expect("grandchild cancel token lock")
+            .is_cancelled()
+    );
+    assert!(
+        app.services
+            .db()
+            .operations()
+            .is_cancel_requested_for_operation("grandchild-operation")
+            .await
+            .expect("failed to load grandchild operation cancellation")
+    );
 
     let db_sessions = app
         .services
@@ -6183,8 +6219,105 @@ async fn test_cancel_session_cascades_to_stacked_child() {
         .iter()
         .find(|session| session.id == child_session_id)
         .expect("missing persisted child session");
+    let db_grandchild_session = db_sessions
+        .iter()
+        .find(|session| session.id == grandchild_session_id)
+        .expect("missing persisted grandchild session");
     assert_eq!(db_parent_session.status, "Canceled");
     assert_eq!(db_child_session.status, "Canceled");
+    assert_eq!(db_grandchild_session.status, "Canceled");
+}
+
+#[tokio::test]
+/// Ensures a stack cascade preserves a descendant that is already terminal.
+async fn test_cancel_session_preserves_terminal_stacked_descendant() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let parent_session_id = app.create_session().await.expect("failed to create parent");
+    let child_session_id = app
+        .create_stacked_draft_session(&parent_session_id)
+        .await
+        .expect("failed to create stacked draft session");
+    crate::test_support::set_session_status_for_test(&mut app, &child_session_id, Status::Done);
+    app.services
+        .db()
+        .sessions()
+        .update_session_status_with_timing_at(&child_session_id, "Done", 0)
+        .await
+        .expect("failed to persist terminal child status");
+    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+
+    // Act
+    app.sessions
+        .cancel_session(&app.services, &parent_session_id)
+        .await
+        .expect("failed to cancel parent session");
+
+    // Assert
+    app.sessions.sync_from_handles();
+    let child_session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == child_session_id)
+        .expect("missing terminal child session");
+    assert_eq!(child_session.status, Status::Done);
+    let db_sessions = app
+        .services
+        .db()
+        .sessions()
+        .load_sessions()
+        .await
+        .expect("failed to load sessions");
+    let db_child_session = db_sessions
+        .iter()
+        .find(|session| session.id == child_session_id)
+        .expect("missing persisted terminal child session");
+    assert_eq!(db_child_session.status, "Done");
+}
+
+#[tokio::test]
+/// Ensures parent cancellation reports a descendant cascade failure instead
+/// of returning success after the parent status was already persisted.
+async fn test_cancel_session_reports_stacked_descendant_failure() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let parent_session_id = app.create_session().await.expect("failed to create parent");
+    let child_session_id = app
+        .create_stacked_draft_session(&parent_session_id)
+        .await
+        .expect("failed to create stacked draft session");
+    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+    app.sessions
+        .session_handles_mut()
+        .remove(child_session_id.as_str());
+
+    // Act
+    let result = app
+        .sessions
+        .cancel_session(&app.services, &parent_session_id)
+        .await;
+
+    // Assert
+    let error = result.expect_err("descendant cancellation failure should be reported");
+    assert!(error.to_string().contains(child_session_id.as_str()));
+    app.sessions.sync_from_handles();
+    let parent_session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == parent_session_id)
+        .expect("missing parent session");
+    let child_session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == child_session_id)
+        .expect("missing child session");
+    assert_eq!(parent_session.status, Status::Canceled);
+    assert_eq!(child_session.status, Status::Draft);
 }
 
 #[tokio::test]

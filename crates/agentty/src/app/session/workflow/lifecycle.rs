@@ -26,6 +26,7 @@ use crate::domain::agent::{
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
     QueuedMessage, ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
+    can_create_stacked_child as stack_can_create_stacked_child,
     can_merge_session_branch_in_stack as stack_can_merge_session_branch,
     can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
     can_rebase_session_branch_in_stack as stack_can_rebase_session_branch,
@@ -104,6 +105,42 @@ enum ReplyEligibility {
     /// Accept a structured question answer during turn finalization or while
     /// the session is already waiting in `Question`.
     QuestionAnswer,
+}
+
+/// Capability used to authorize and stop one terminal cancellation.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CancellationCapability {
+    /// Cancellation initiated through the ordinary user action.
+    User,
+    /// Coordinator-only cancellation of a managed worker.
+    Managed,
+    /// Forced cancellation of a descendant after its stack parent is canceled.
+    StackedDescendant,
+}
+
+impl CancellationCapability {
+    /// Returns whether this capability can cancel the current session state.
+    fn allows(self, session: &Session) -> bool {
+        match self {
+            Self::User => session.allows_cancel_action(),
+            Self::Managed => {
+                session.allows_cancel_action()
+                    || (session.is_managed()
+                        && (matches!(session.status, Status::Draft | Status::InProgress)
+                            || session.status.allows_review_actions()))
+            }
+            Self::StackedDescendant => {
+                session.status != Status::Canceled
+                    && session.status.can_transition_to(Status::Canceled)
+            }
+        }
+    }
+
+    /// Returns whether cancellation must stop active or reserved branch work.
+    fn stops_branch_work(self, status: Status) -> bool {
+        status == Status::InProgress
+            || (self == Self::StackedDescendant && status.is_stack_branch_mutating())
+    }
 }
 
 impl ReplyEligibility {
@@ -491,9 +528,10 @@ impl SessionManager {
     ) -> Result<String, SessionError> {
         let (base_branch, parent_id) = {
             let parent_session = self.session_or_err(parent_session_id)?;
-            if !parent_session.allows_stacked_child_creation() {
+            if !stack_can_create_stacked_child(&self.state.sessions, parent_session_id) {
                 return Err(SessionError::Workflow(
-                    "Stacked sessions can only be created from root sessions with active branches"
+                    "Stacked sessions require an active materialized parent below the five-level \
+                     stack limit"
                         .to_string(),
                 ));
             }
@@ -1311,26 +1349,31 @@ impl SessionManager {
         })
     }
 
-    /// Returns whether a staged draft can start under the current one-level
-    /// stack constraints.
+    /// Returns whether the selected session can parent another stacked draft.
+    pub(crate) fn can_create_stacked_child(&self, session_id: &str) -> bool {
+        stack_can_create_stacked_child(&self.state.sessions, session_id)
+    }
+
+    /// Returns whether a staged draft can start under the current stack
+    /// constraints.
     pub(crate) fn can_start_staged_session(&self, session_id: &str) -> bool {
         stack_can_start_staged_session(&self.state.sessions, session_id)
     }
 
     /// Returns whether a session can start branch-mutating work without
-    /// competing with another member of its one-level stack.
+    /// competing with another member of its stack.
     pub(crate) fn can_mutate_session_branch_in_stack(&self, session_id: &str) -> bool {
         stack_can_mutate_session_branch(&self.state.sessions, session_id)
     }
 
     /// Returns whether a session can enter the merge queue without competing
-    /// with another member of its one-level stack.
+    /// with another member of its stack.
     pub(crate) fn can_merge_session_branch_in_stack(&self, session_id: &str) -> bool {
         stack_can_merge_session_branch(&self.state.sessions, session_id)
     }
 
     /// Returns whether a session can start sync work without competing with
-    /// another member of its one-level stack.
+    /// another member of its stack.
     pub(crate) fn can_rebase_session_branch_in_stack(&self, session_id: &str) -> bool {
         stack_can_rebase_session_branch(&self.state.sessions, session_id)
     }
@@ -3306,13 +3349,13 @@ impl SessionManager {
         session_id: &str,
     ) -> Result<(), SessionError> {
         let status_updated = self
-            .cancel_single_session(services, session_id, false)
+            .cancel_single_session(services, session_id, CancellationCapability::User)
             .await?;
         if !status_updated {
             return Ok(());
         }
         self.cancel_stacked_child_sessions(services, session_id)
-            .await;
+            .await?;
 
         Ok(())
     }
@@ -3327,11 +3370,11 @@ impl SessionManager {
         session_id: &str,
     ) -> Result<(), SessionError> {
         let status_updated = self
-            .cancel_single_session(services, session_id, true)
+            .cancel_single_session(services, session_id, CancellationCapability::Managed)
             .await?;
         if status_updated {
             self.cancel_stacked_child_sessions(services, session_id)
-                .await;
+                .await?;
         }
 
         Ok(())
@@ -3342,14 +3385,14 @@ impl SessionManager {
         &self,
         services: &AppServices,
         session_id: &str,
-        allow_managed: bool,
+        cancellation_capability: CancellationCapability,
     ) -> Result<bool, SessionError> {
         let session = self.session_or_err(session_id)?;
-        let managed_cancel_allowed = allow_managed
-            && session.is_managed()
-            && (matches!(session.status, Status::Draft | Status::InProgress)
-                || session.status.allows_review_actions());
-        if !session.allows_cancel_action() && !managed_cancel_allowed {
+        if !cancellation_capability.allows(session) {
+            if cancellation_capability == CancellationCapability::StackedDescendant {
+                return Ok(false);
+            }
+
             return Err(SessionError::Workflow(
                 "Session is not cancelable in its current state".to_string(),
             ));
@@ -3357,13 +3400,13 @@ impl SessionManager {
 
         let branch_name = session_branch(&session.id);
         let folder = session.folder.clone();
-        let is_running = session.status == Status::InProgress;
+        let stops_branch_work = cancellation_capability.stops_branch_work(session.status);
         let has_worktree = services.fs_client().is_dir(folder.clone());
         let handles = self.session_handles_or_err(session_id)?;
         let status_transition = StatusTransition::from_services(services, handles, session_id);
 
-        if is_running {
-            Self::signal_running_session_cancellation(services, handles, session_id).await;
+        if stops_branch_work {
+            Self::signal_session_cancellation(services, handles, session_id).await;
         }
 
         let status_updated = status_transition.apply(Status::Canceled).await;
@@ -3381,20 +3424,28 @@ impl SessionManager {
         Ok(status_updated)
     }
 
-    /// Cancels every loaded one-level stacked child of `parent_session_id`.
+    /// Cancels every loaded stacked descendant of `parent_session_id`.
     ///
-    /// Child cancellation is best-effort after the parent has already reached
-    /// `Canceled`, but it reuses the same single-session cancellation path so
-    /// staged draft temp data and any future child worktree resources are
-    /// cleaned consistently.
+    /// The cascade bypasses the ordinary user-action gate, stops active or
+    /// reserved descendant branch work, and attempts every loaded descendant
+    /// before reporting any failures to the parent cancellation caller.
+    ///
+    /// # Errors
+    /// Returns a workflow error listing descendants that could not be
+    /// canceled after all other descendants have been attempted.
     pub(crate) async fn cancel_stacked_child_sessions(
         &self,
         services: &AppServices,
         parent_session_id: &str,
-    ) {
-        for child_session_id in self.stacked_child_session_ids(parent_session_id) {
+    ) -> Result<(), SessionError> {
+        let mut cancellation_failures = Vec::new();
+        for child_session_id in self.stacked_descendant_session_ids(parent_session_id) {
             if let Err(error) = self
-                .cancel_single_session(services, child_session_id.as_str(), false)
+                .cancel_single_session(
+                    services,
+                    child_session_id.as_str(),
+                    CancellationCapability::StackedDescendant,
+                )
                 .await
             {
                 warn!(
@@ -3403,23 +3454,47 @@ impl SessionManager {
                     error = %error,
                     "failed to cancel stacked child session after parent cancellation"
                 );
+                cancellation_failures.push(format!("{child_session_id}: {error}"));
             }
         }
+
+        if cancellation_failures.is_empty() {
+            return Ok(());
+        }
+
+        Err(SessionError::Workflow(format!(
+            "Failed to cancel stacked descendants: {}",
+            cancellation_failures.join("; ")
+        )))
     }
 
-    /// Returns loaded one-level child ids for one parent session.
-    fn stacked_child_session_ids(&self, parent_session_id: &str) -> Vec<SessionId> {
-        self.state
-            .sessions
-            .iter()
-            .filter(|session| {
-                session
-                    .parent_session_id
-                    .as_ref()
-                    .is_some_and(|parent_id| parent_id.as_str() == parent_session_id)
-            })
-            .map(|session| session.id.clone())
-            .collect()
+    /// Returns loaded descendant ids in parent-before-child order.
+    fn stacked_descendant_session_ids(&self, parent_session_id: &str) -> Vec<SessionId> {
+        let mut ancestor_session_ids = vec![SessionId::from(parent_session_id)];
+        let mut descendant_session_ids = Vec::new();
+
+        loop {
+            let next_descendants = self
+                .state
+                .sessions
+                .iter()
+                .filter(|session| {
+                    session.parent_session_id.as_ref().is_some_and(|parent_id| {
+                        ancestor_session_ids.contains(parent_id)
+                            && !descendant_session_ids.contains(&session.id)
+                    })
+                })
+                .map(|session| session.id.clone())
+                .collect::<Vec<_>>();
+            if next_descendants.is_empty() {
+                break;
+            }
+
+            ancestor_session_ids.extend(next_descendants.iter().cloned());
+            descendant_session_ids.extend(next_descendants);
+        }
+
+        descendant_session_ids
     }
 
     /// Defers terminal cancellation cleanup so foreground key handling returns
@@ -3459,9 +3534,9 @@ impl SessionManager {
         services.track_cleanup_task(cleanup_task_handle);
     }
 
-    /// Requests cancellation for queued operations and signals the active
-    /// running turn for a session that is being terminally canceled.
-    async fn signal_running_session_cancellation(
+    /// Requests cancellation for unfinished operations, clears queued work,
+    /// and signals any active agent turn for a terminally canceled session.
+    async fn signal_session_cancellation(
         services: &AppServices,
         handles: &SessionHandles,
         session_id: &str,

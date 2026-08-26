@@ -19,8 +19,8 @@ const OPTION_DETAIL_WIDTH: usize = 27;
 const OPTION_LABEL_WIDTH: usize = 12;
 /// Detail text for the experimental orchestrator session creation path.
 const ORCHESTRATOR_SESSION_PREVIEW_DETAIL: &str = "[Preview] Plan workers";
-/// Detail text for the experimental stacked session creation path.
-const STACKED_SESSION_PREVIEW_DETAIL: &str = "[Preview] Stack on selected";
+/// Detail text for the stacked session creation path.
+const STACKED_SESSION_DETAIL: &str = "Stack on selected";
 /// Popup dimensions for the compact session selector.
 const OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
     overlay::OverlayDimensions::new(30, 22, MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT);
@@ -69,7 +69,7 @@ impl SessionCreationOverlay {
                 3,
                 "Stacked",
                 if self.can_create_stacked_session {
-                    STACKED_SESSION_PREVIEW_DETAIL
+                    STACKED_SESSION_DETAIL
                 } else {
                     "Select parent first"
                 },
@@ -216,7 +216,8 @@ mod tests {
         assert!(text.contains("Draft"));
         assert!(text.contains(ORCHESTRATOR_SESSION_PREVIEW_DETAIL));
         assert!(text.contains("Stacked"));
-        assert!(text.contains(STACKED_SESSION_PREVIEW_DETAIL));
+        assert!(text.contains(STACKED_SESSION_DETAIL));
+        assert!(!text.contains("[Preview] Stack on selected"));
         assert!(text.contains("j/k: move | Enter: select | q: close"));
     }
 
@@ -301,7 +302,7 @@ mod tests {
             stacked_line
                 .spans
                 .iter()
-                .any(|span| span.content.contains(STACKED_SESSION_PREVIEW_DETAIL))
+                .any(|span| span.content.contains(STACKED_SESSION_DETAIL))
         );
     }
 

@@ -98,6 +98,68 @@ fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
     Ok(())
 }
 
+/// Seeds a review-ready stack parent with a nested descendant waiting on a
+/// question so parent cancellation must stop non-`InProgress` branch work.
+fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv) -> E2eResult {
+    let parent_session_id = "cascadep-0001";
+    let child_session_id = "cascadec-0001";
+    let grandchild_session_id = "cascadeg-0001";
+
+    common::seed_session(
+        env,
+        SessionSeed::regular(parent_session_id, "gpt-5.6-sol", "main", "Review")
+            .with_title("Cancel cascade parent"),
+    )?;
+    common::seed_session(
+        env,
+        SessionSeed::stacked_draft(
+            child_session_id,
+            "gpt-5.6-sol",
+            "wt/cascadep",
+            "Review",
+            parent_session_id,
+        )
+        .with_title("Cancel cascade child"),
+    )?;
+    common::seed_session(
+        env,
+        SessionSeed::stacked_draft(
+            grandchild_session_id,
+            "gpt-5.6-sol",
+            "wt/cascadec",
+            "Question",
+            child_session_id,
+        )
+        .with_title("Active cascade grandchild"),
+    )?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        for (session_id, updated_at) in [
+            (grandchild_session_id, 1),
+            (child_session_id, 2),
+            (parent_session_id, 3),
+        ] {
+            database
+                .sessions()
+                .update_session_updated_at(session_id, updated_at)
+                .await?;
+        }
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    for session_id in [parent_session_id, child_session_id, grandchild_session_id] {
+        std::fs::create_dir_all(test_support::session_folder(
+            &env.agentty_root.join("wt"),
+            session_id,
+        ))?;
+    }
+
+    Ok(())
+}
+
 /// Verify that confirming quit with `y` causes the process to exit with
 /// code 0.
 ///
@@ -441,6 +503,75 @@ fn stacked_child_cancel_confirmation_archives_child() -> E2eResult {
                     &final_full,
                 );
                 assertion::assert_not_visible(frame, "└ [XS] Stacked child");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that canceling a stack parent also cancels a nested descendant in
+/// active non-`InProgress` branch work.
+#[test]
+fn stacked_parent_cancel_cascades_active_descendant() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("stacked_parent_cancel_cascade")
+        .with_git()
+        .setup(seed_cancelable_parent_with_active_stacked_descendant)
+        .zola(
+            "Stacked cancellation cascade",
+            "Cancel a stack parent and stop every active nested descendant.",
+            122,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Active cascade grandchild", 5000)
+                    .wait_for_text("c: cancel", 5000)
+                    .capture_labeled(
+                        "active_nested_stack",
+                        "Nested stack before parent cancellation",
+                    )
+                    .press_key("c")
+                    .wait_for_text("Confirm Cancel", 3000)
+                    .capture_labeled(
+                        "confirm_parent_cancel",
+                        "Confirmation for stack parent cancellation",
+                    )
+                    .press_key("y")
+                    .wait_for_text("ARCHIVE", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "canceled_nested_stack",
+                        "Parent and active descendants canceled together",
+                    )
+            },
+            |frame, report| {
+                let active_frame = common::frame_from_capture(&report.captures[0]);
+                let active_full = Region::full(active_frame.cols(), active_frame.rows());
+                assertion::assert_text_in_region(
+                    &active_frame,
+                    "Active cascade grandchild",
+                    &active_full,
+                );
+                assertion::assert_text_in_region(&active_frame, "Question", &active_full);
+
+                let confirmation_frame = common::frame_from_capture(&report.captures[1]);
+                let confirmation_full =
+                    Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                assertion::assert_text_in_region(
+                    &confirmation_frame,
+                    "Confirm Cancel",
+                    &confirmation_full,
+                );
+
+                let final_full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Cancel cascade parent", &final_full);
+                assertion::assert_text_in_region(frame, "Cancel cascade child", &final_full);
+                assertion::assert_text_in_region(frame, "Active cascade grandchild", &final_full);
+                let final_text = frame.text_in_region(&final_full);
+                assert_eq!(final_text.matches("Canceled").count(), 3);
             },
         )?;
 

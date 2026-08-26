@@ -1699,44 +1699,36 @@ impl App {
     /// Returns the lookup root for one session's at-mention entries.
     ///
     /// Materialized sessions use their own worktree. An unmaterialized
-    /// stacked draft uses its parent worktree so files introduced by the
-    /// parent remain available before the child worktree is created.
+    /// stacked draft walks its parent chain to the nearest materialized
+    /// ancestor so files introduced there remain available before the
+    /// intermediate child worktrees are created.
     pub(crate) fn at_mention_lookup_root(&self, session_id: &str) -> PathBuf {
         let project_working_dir = self.working_dir().to_path_buf();
+        let mut candidate_session_id = Some(SessionId::from(session_id));
+        let mut visited_session_ids = HashSet::new();
+        let mut nearest_materialized_folder = None;
 
-        self.sessions.session_for_id(session_id).map_or_else(
-            || project_working_dir.clone(),
-            |session| {
-                let project_working_dir = project_working_dir.clone();
-                let session_folder = session.folder.clone();
-                let has_session_folder = self.services.fs_client().is_dir(session_folder.clone());
-                if has_session_folder {
-                    return session_folder;
-                }
-                let parent_session_folder =
-                    session
-                        .parent_session_id
-                        .as_ref()
-                        .and_then(|parent_session_id| {
-                            self.sessions
-                                .session_for_id(parent_session_id)
-                                .map(|parent_session| parent_session.folder.clone())
-                        });
-                let has_parent_session_folder =
-                    parent_session_folder
-                        .as_ref()
-                        .is_some_and(|parent_session_folder| {
-                            self.services
-                                .fs_client()
-                                .is_dir(parent_session_folder.clone())
-                        });
+        while let Some(ref session_id) = candidate_session_id {
+            if !visited_session_ids.insert(session_id.clone()) {
+                break;
+            }
+            let Some(session) = self.sessions.session_for_id(session_id) else {
+                break;
+            };
+            if self.services.fs_client().is_dir(session.folder.clone()) {
+                nearest_materialized_folder = Some(session.folder.clone());
 
-                at_mention_lookup_root(
-                    project_working_dir,
-                    parent_session_folder,
-                    has_parent_session_folder,
-                )
-            },
+                break;
+            }
+            candidate_session_id.clone_from(&session.parent_session_id);
+        }
+
+        let has_materialized_folder = nearest_materialized_folder.is_some();
+
+        at_mention_lookup_root(
+            project_working_dir,
+            nearest_materialized_folder,
+            has_materialized_folder,
         )
     }
 
@@ -2379,7 +2371,8 @@ impl App {
         let status_transition =
             StatusTransition::from_services(&self.services, handles, session_id);
         let _ = status_transition.apply(Status::Canceled).await;
-        self.sessions
+        let _ = self
+            .sessions
             .cancel_stacked_child_sessions(&self.services, session_id)
             .await;
     }
