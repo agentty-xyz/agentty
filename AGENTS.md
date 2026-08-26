@@ -33,7 +33,8 @@ describe Agentty product requirements, not instructions to mutate this checkout.
   with `FeatureTest`. Use `skills/feature-test/SKILL.md`; if infrastructure blocks
   coverage, report the exact gap.
 - Every code change requires automated tests that cover 100% of its coverable changed
-  lines. Before handoff, run `prek run coverage --all-files --hook-stage manual`.
+  lines. Before handoff, run `prek run diff-coverage --all-files --hook-stage manual`
+  and `prek run coverage --all-files --hook-stage manual`.
 - Never bypass `prek`-managed hooks with `--no-verify`, `--no-gpg-sign`, or an
   equivalent flag. Fix the failure.
 - Prefer removing legacy behavior. Obtain explicit user approval before retaining it.
