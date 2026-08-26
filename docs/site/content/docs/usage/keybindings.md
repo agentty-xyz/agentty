@@ -348,10 +348,13 @@ and inline comment shortcuts and batch submission.
 | `Ctrl+Y` / `Ctrl+Shift+Z`           | Redo                                |
 | `Esc`                               | Cancel                              |
 | `Tab`                               | Focus chat output for scrolling     |
-| `Shift+Tab`                         | Toggle Auto Edit / Read Only        |
+| `Shift+Tab`                         | Cycle the session permission mode   |
 | `@`                                 | Open file picker                    |
 | `/`                                 | Open slash commands                 |
 | `j` / `k` / `Up` / `Down`           | Navigate and wrap slash menu        |
+
+Use `/mode` to select `Auto Edit`, `Auto Edit + Auto Address Comments`, or `Read Only`.
+`Shift+Tab` cycles those modes in that order.
 
 While the chat output is focused, the `d` diff-preview hint is hidden only when the
 latest successful refresh found an empty diff against the session's base branch. The

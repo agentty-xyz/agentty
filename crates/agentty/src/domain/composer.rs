@@ -9,6 +9,7 @@ use crate::domain::agent::{
     self, AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
 };
 use crate::domain::input::InputState;
+use crate::domain::permission::PermissionMode;
 use crate::domain::personality::PersonalitySummary;
 
 /// One selectable row in the prompt slash-command menu.
@@ -44,6 +45,8 @@ pub enum PromptSuggestionSelection {
     Agent(AgentKind),
     /// Agent and model selected during `/model` model selection.
     Model(AgentSelection),
+    /// Session mode selected during `/mode` selection.
+    Mode(PermissionMode),
     /// Workspace personality selected or cleared during `/personality`.
     Personality(Option<PersonalitySummary>),
     /// Session-scoped reasoning selection chosen during `/reasoning`.
@@ -366,6 +369,8 @@ pub enum PromptSlashStage {
     Command,
     /// Selecting a model after choosing an agent.
     Model,
+    /// Selecting a session permission and automation mode.
+    Mode,
     /// Selecting or clearing a workspace personality.
     Personality,
     /// Selecting a session-specific reasoning level override.
@@ -884,6 +889,10 @@ fn build_slash_suggestion_list(
 
             ("/model Model (j/k move, Enter select)", models)
         }
+        PromptSlashStage::Mode => (
+            "/mode (j/k move, Enter select)",
+            permission_mode_suggestion_items(),
+        ),
         PromptSlashStage::Personality => (
             "/personality (j/k move, Enter select)",
             personality_suggestion_items(&slash_state.personalities),
@@ -957,6 +966,16 @@ fn selected_slash_action(
                 selected_model,
             )))
         }
+        PromptSlashStage::Mode => {
+            let selected_permission_mode = PermissionMode::ALL
+                .get(clamp_selected_index(
+                    slash_state.selected_index,
+                    PermissionMode::ALL.len(),
+                ))
+                .copied()?;
+
+            Some(PromptSuggestionSelection::Mode(selected_permission_mode))
+        }
         PromptSlashStage::Personality => {
             if slash_state.personalities.is_empty() {
                 return None;
@@ -1025,6 +1044,7 @@ fn resolve_model_stage_agent(
 fn command_description(command: &str) -> &'static str {
     match command {
         "/apply" => "Verify focused-review suggestions, then apply the correct ones.",
+        "/mode" => "Choose editing permissions and focused-review automation.",
         "/model" => "Choose an agent and model for this session.",
         "/personality" => "List: .agents/agents/. Choose a personality for this session.",
         "/reasoning" => "Override the reasoning level for this session.",
@@ -1040,7 +1060,14 @@ fn prompt_slash_commands(
     allow_apply_command: bool,
 ) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
-    let mut commands = vec!["/apply", "/model", "/personality", "/reasoning", "/speed"];
+    let mut commands = vec![
+        "/apply",
+        "/mode",
+        "/model",
+        "/personality",
+        "/reasoning",
+        "/speed",
+    ];
     if !allow_apply_command {
         commands.retain(|command| *command != "/apply");
     }
@@ -1129,6 +1156,19 @@ fn speed_suggestion_items() -> Vec<PromptSuggestionItem> {
             badge: None,
             detail: Some(speed_mode.description().to_string()),
             label: speed_mode.name().to_string(),
+            metadata: None,
+        })
+        .collect()
+}
+
+/// Returns the render-ready dropdown rows for `/mode`.
+fn permission_mode_suggestion_items() -> Vec<PromptSuggestionItem> {
+    PermissionMode::ALL
+        .into_iter()
+        .map(|permission_mode| PromptSuggestionItem {
+            badge: None,
+            detail: Some(permission_mode.description().to_string()),
+            label: permission_mode.display_label().to_string(),
             metadata: None,
         })
         .collect()
@@ -1485,11 +1525,14 @@ mod tests {
             .into_iter()
             .map(|item| item.label)
             .collect::<Vec<_>>();
-        assert_eq!(labels, vec!["/model", "/personality", "/reasoning"]);
+        assert_eq!(
+            labels,
+            vec!["/mode", "/model", "/personality", "/reasoning"]
+        );
     }
 
     #[test]
-    fn test_model_is_selected_for_m_shortcut() {
+    fn test_mode_is_selected_for_m_shortcut() {
         // Arrange
         let slash_state = PromptSlashState::default();
 
@@ -1506,12 +1549,9 @@ mod tests {
                 .iter()
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["/model"]
+            vec!["/mode", "/model"]
         );
-        assert_eq!(
-            selection,
-            Some(PromptSuggestionSelection::Command("/model"))
-        );
+        assert_eq!(selection, Some(PromptSuggestionSelection::Command("/mode")));
     }
 
     #[test]
@@ -1650,6 +1690,44 @@ mod tests {
                 AgentKind::Claude,
                 AgentModel::ClaudeFable5,
             )))
+        );
+    }
+
+    #[test]
+    fn test_mode_stage_lists_modes_and_returns_selected_mode() {
+        // Arrange
+        let slash_state = PromptSlashState {
+            selected_index: 1,
+            stage: PromptSlashStage::Mode,
+            ..PromptSlashState::default()
+        };
+
+        // Act
+        let suggestion_list =
+            build_prompt_slash_suggestion_list("/mode", &slash_state, AgentKind::Codex, false)
+                .expect("mode suggestions should render");
+        let selection =
+            resolve_prompt_slash_selection("/mode", &slash_state, AgentKind::Codex, false);
+
+        // Assert
+        assert_eq!(suggestion_list.title, "/mode (j/k move, Enter select)");
+        assert_eq!(
+            suggestion_list
+                .items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Auto Edit",
+                "Auto Edit + Auto Address Comments",
+                "Read Only"
+            ]
+        );
+        assert_eq!(
+            selection,
+            Some(PromptSuggestionSelection::Mode(
+                PermissionMode::AutoEditAddressComments
+            ))
         );
     }
 
@@ -1976,7 +2054,7 @@ mod tests {
         // Assert
         assert_eq!(
             labels,
-            vec!["/model", "/personality", "/reasoning", "/speed"]
+            vec!["/mode", "/model", "/personality", "/reasoning", "/speed"]
         );
         assert_eq!(suggestion_list.selected_index, 0);
     }
@@ -1998,7 +2076,7 @@ mod tests {
                 .iter()
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["/model", "/personality", "/reasoning"]
+            vec!["/mode", "/model", "/personality", "/reasoning"]
         );
     }
 
@@ -2014,9 +2092,6 @@ mod tests {
         let selection = resolve_prompt_slash_selection("/", &slash_state, AgentKind::Codex, false);
 
         // Assert
-        assert_eq!(
-            selection,
-            Some(PromptSuggestionSelection::Command("/model"))
-        );
+        assert_eq!(selection, Some(PromptSuggestionSelection::Command("/mode")));
     }
 }

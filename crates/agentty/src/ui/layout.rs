@@ -863,7 +863,7 @@ mod tests {
         // Assert
         assert_eq!(
             labels,
-            vec!["/model", "/personality", "/reasoning", "/speed"]
+            vec!["/mode", "/model", "/personality", "/reasoning", "/speed"]
         );
         assert_eq!(menu.selected_index, 0);
     }
