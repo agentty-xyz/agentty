@@ -18,10 +18,10 @@ use super::{
     has_unmerged_paths, head_commit_message, head_hash, head_short_hash, in_progress_operation,
     is_rebase_in_progress, is_worktree_clean, list_conflicted_files, list_local_commit_titles,
     list_staged_conflict_marker_files, list_upstream_commit_titles, main_checkout_working_tree,
-    main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_remote_branch, rebase,
-    rebase_continue, rebase_onto_start, rebase_start, ref_hash, remote_branch_exists,
-    remove_worktree, repo_url, squash_merge, squash_merge_diff, stage_all, sync,
-    tracked_worktree_status, worktree_status,
+    main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_new_remote_branch,
+    push_current_branch_to_remote_branch, rebase, rebase_continue, rebase_onto_start, rebase_start,
+    ref_hash, remote_branch_exists, remove_worktree, repo_url, squash_merge, squash_merge_diff,
+    stage_all, sync, tracked_worktree_status, worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -334,6 +334,17 @@ pub trait GitClient: Send + Sync {
     /// # Errors
     /// Returns an error when remote push fails.
     fn push_current_branch_to_remote_branch(
+        &self,
+        repo_path: PathBuf,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<String, GitError>>;
+
+    /// Pushes the current branch to one explicit remote branch while requiring
+    /// that the remote branch does not exist.
+    ///
+    /// # Errors
+    /// Returns an error when the remote branch exists or the push fails.
+    fn push_current_branch_to_new_remote_branch(
         &self,
         repo_path: PathBuf,
         remote_branch_name: String,
@@ -689,6 +700,16 @@ impl GitClient for RealGitClient {
         })
     }
 
+    fn push_current_branch_to_new_remote_branch(
+        &self,
+        repo_path: PathBuf,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<String, GitError>> {
+        Box::pin(async move {
+            push_current_branch_to_new_remote_branch(repo_path, remote_branch_name).await
+        })
+    }
+
     fn remote_branch_exists(
         &self,
         repo_path: PathBuf,
@@ -891,6 +912,36 @@ mod tests {
 
         // Assert
         assert_eq!(changed_files, vec!["new.txt".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_real_git_client_pushes_new_remote_branch() {
+        // Arrange
+        let repo_dir = tempdir().expect("failed to create temp dir");
+        let remote_dir = tempdir().expect("failed to create remote temp dir");
+        setup_test_git_repo(repo_dir.path());
+        run_git_command(remote_dir.path(), &["init", "--bare"]);
+        let remote_path = remote_dir.path().to_string_lossy().to_string();
+        run_git_command(repo_dir.path(), &["remote", "add", "origin", &remote_path]);
+        let client = RealGitClient;
+
+        // Act
+        let upstream_reference = client
+            .push_current_branch_to_new_remote_branch(
+                repo_dir.path().to_path_buf(),
+                "review/new-branch".to_string(),
+            )
+            .await
+            .expect("new remote branch push should succeed");
+        let local_head = run_git_command_stdout(repo_dir.path(), &["rev-parse", "HEAD"]);
+        let remote_head = run_git_command_stdout(
+            remote_dir.path(),
+            &["rev-parse", "refs/heads/review/new-branch"],
+        );
+
+        // Assert
+        assert_eq!(upstream_reference, "origin/review/new-branch");
+        assert_eq!(local_head, remote_head);
     }
 
     #[tokio::test]

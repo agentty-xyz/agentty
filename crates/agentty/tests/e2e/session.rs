@@ -1110,7 +1110,18 @@ fn seed_slow_successful_review_request_publish(
     seed_review_ready_session(env)?;
     seed_review_worktree_with_diff(env)?;
 
-    seed_successful_review_request_publish(env, 3, 15)
+    seed_successful_review_request_publish(env, 3, 15, "wt/review-s", false)
+}
+
+/// Seeds a review-ready session whose chosen review branch was deleted from
+/// the remote before its first publish.
+fn seed_review_request_publish_with_deleted_remote_branch(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+    seed_review_worktree_with_diff(env)?;
+
+    seed_successful_review_request_publish(env, 0, 0, "review/deleted", true)
 }
 
 /// Seeds a live focused review that completes before a delayed review-request
@@ -1118,7 +1129,7 @@ fn seed_slow_successful_review_request_publish(
 fn seed_review_request_timeline(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_with_resolved_decision(env)?;
 
-    seed_successful_review_request_publish(env, 0, 0)
+    seed_successful_review_request_publish(env, 0, 0, "wt/review-s", false)
 }
 
 /// Configures the review-ready worktree and forge stubs for one successful
@@ -1127,20 +1138,49 @@ fn seed_successful_review_request_publish(
     env: &BuilderEnv,
     push_delay_seconds: u64,
     create_delay_seconds: u64,
+    review_branch_name: &str,
+    remote_branch_was_deleted: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session_worktree = env.agentty_root.join("wt").join("review-s");
     run_git(&session_worktree, &["branch", "-m", "wt/review-s"])?;
     run_git(&session_worktree, &["branch", "main", "HEAD"])?;
+    if remote_branch_was_deleted {
+        let stale_tracking_ref = format!("refs/remotes/origin/{review_branch_name}");
+        run_git(
+            &session_worktree,
+            &["update-ref", stale_tracking_ref.as_str(), "HEAD"],
+        )?;
+    }
 
     let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|path| path.join("git"))
         .find(|path| path.is_file())
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
     let git_path = env.stub_bin.join("git");
+    let remote_lookup = if remote_branch_was_deleted {
+        r#"if [ "$1" = "ls-remote" ]; then
+  exit 0
+fi
+"#
+        .to_string()
+    } else {
+        String::new()
+    };
+    let push_lease_guard = if remote_branch_was_deleted {
+        format!(
+            r#"  case "$*" in
+    *"--force-with-lease=refs/heads/{review_branch_name}: --set-upstream"*) ;;
+    *) printf '%s\n' 'missing empty lease for deleted remote branch' >&2; exit 1 ;;
+  esac
+"#
+        )
+    } else {
+        String::new()
+    };
     let script = format!(
         r#"#!/bin/sh
-if [ "$1" = "push" ]; then
-  sleep {push_delay_seconds}
+{remote_lookup}if [ "$1" = "push" ]; then
+{push_lease_guard}  sleep {push_delay_seconds}
   exit 0
 fi
 exec '{}' "$@"
@@ -1170,7 +1210,7 @@ case "$*" in
     touch "$marker_path"
     ;;
   *"pr view"*)
-    printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
+    printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"__REVIEW_BRANCH_NAME__","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
     ;;
   *)
     echo "unexpected gh invocation: $*" >&2
@@ -1181,7 +1221,8 @@ esac
     .replace(
         "__CREATE_DELAY_SECONDS__",
         &create_delay_seconds.to_string(),
-    );
+    )
+    .replace("__REVIEW_BRANCH_NAME__", review_branch_name);
     std::fs::write(&gh_path, gh_script)?;
     #[cfg(unix)]
     std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
@@ -7220,6 +7261,44 @@ fn review_request_publish_shortcut_opens_publish_popup() -> E2eResult {
                     "Leave blank to push as `wt/review-s`",
                     &full,
                 );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that a first review-request publish can recreate a custom branch
+/// that was deleted remotely despite a stale local remote-tracking ref.
+#[test]
+fn review_request_publish_recreates_deleted_remote_branch() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_deleted_remote_branch")
+        .with_git()
+        .setup(seed_review_request_publish_with_deleted_remote_branch)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("p")
+                    .wait_for_text("Publish Review Request", 5000)
+                    .write_text("review/deleted")
+                    .press_key("Enter")
+                    .wait_for_text("[Review Request] Created PR", 15000)
+                    .capture_labeled(
+                        "deleted_remote_branch_recreated",
+                        "Review request published after its former remote branch was deleted",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42",
+                    &full,
+                );
+                assertion::assert_not_visible(frame, "already exists");
             },
         )?;
 

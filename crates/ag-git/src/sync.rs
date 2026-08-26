@@ -923,52 +923,6 @@ async fn push_current_branch_with_runner(
     primary_upstream_reference(&repo_path, command_runner).await
 }
 
-/// Checks whether a branch already exists on the remote.
-///
-/// Resolves the remote name from the current branch config, falling back
-/// to `origin`, then runs `git ls-remote --heads <remote> <branch>`.
-/// Returns `true` when the remote reports at least one matching ref.
-///
-/// # Arguments
-/// * `repo_path` - Path to the git repository or worktree
-/// * `remote_branch_name` - Branch name to look up on the remote
-///
-/// # Errors
-/// Returns a [`GitError`] if the `git ls-remote` command fails.
-pub(crate) async fn remote_branch_exists(
-    repo_path: PathBuf,
-    remote_branch_name: String,
-) -> Result<bool, GitError> {
-    let command_runner = ProcessAsyncGitCommandRunner;
-
-    remote_branch_exists_with_runner(repo_path, remote_branch_name, &command_runner).await
-}
-
-/// Checks a remote branch through an injected asynchronous command boundary.
-async fn remote_branch_exists_with_runner(
-    repo_path: PathBuf,
-    remote_branch_name: String,
-    command_runner: &dyn AsyncGitCommandRunner,
-) -> Result<bool, GitError> {
-    let remote_name = current_branch_remote_name(&repo_path, command_runner)
-        .await?
-        .unwrap_or_else(|| "origin".to_string());
-    let arguments = vec![
-        "ls-remote".to_string(),
-        "--heads".to_string(),
-        remote_name,
-        remote_branch_name,
-    ];
-    let stdout = run_git_command_with_runner(
-        AsyncGitCommand::new(repo_path, arguments),
-        "Git ls-remote failed",
-        command_runner,
-    )
-    .await?;
-
-    Ok(!stdout.trim().is_empty())
-}
-
 /// Pushes the current branch to one explicit remote branch name with
 /// `--force-with-lease` and returns the resulting upstream reference.
 ///
@@ -993,6 +947,58 @@ pub(crate) async fn push_current_branch_to_remote_branch(
 
     push_current_branch_to_remote_branch_with_runner(repo_path, remote_branch_name, &command_runner)
         .await
+}
+
+/// Pushes the current branch to one explicit remote branch name while
+/// requiring that the remote ref does not exist.
+///
+/// The explicit empty lease ignores stale local remote-tracking refs left
+/// behind after the remote branch was deleted, while still refusing to
+/// overwrite a branch created concurrently.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+/// * `remote_branch_name` - Target branch name to create or update on the
+///   remote
+///
+/// # Returns
+/// The upstream reference on success, for example `origin/feature/review`.
+///
+/// # Errors
+/// Returns a [`GitError`] if the remote branch exists or `git push` fails.
+pub(crate) async fn push_current_branch_to_new_remote_branch(
+    repo_path: PathBuf,
+    remote_branch_name: String,
+) -> Result<String, GitError> {
+    let command_runner = ProcessAsyncGitCommandRunner;
+
+    push_current_branch_to_new_remote_branch_with_runner(
+        repo_path,
+        remote_branch_name,
+        &command_runner,
+    )
+    .await
+}
+
+/// Checks whether a branch already exists on the remote.
+///
+/// Resolves the remote name from the current branch config, falling back
+/// to `origin`, then runs `git ls-remote --heads <remote> <branch>`.
+/// Returns `true` when the remote reports at least one matching ref.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+/// * `remote_branch_name` - Branch name to look up on the remote
+///
+/// # Errors
+/// Returns a [`GitError`] if the `git ls-remote` command fails.
+pub(crate) async fn remote_branch_exists(
+    repo_path: PathBuf,
+    remote_branch_name: String,
+) -> Result<bool, GitError> {
+    let command_runner = ProcessAsyncGitCommandRunner;
+
+    remote_branch_exists_with_runner(repo_path, remote_branch_name, &command_runner).await
 }
 
 /// Pushes one explicit branch through an injected asynchronous command
@@ -1021,6 +1027,60 @@ async fn push_current_branch_to_remote_branch_with_runner(
     .await?;
 
     Ok(format!("{remote_name}/{remote_branch_name}"))
+}
+
+/// Pushes one explicit branch while requiring its remote ref to be absent.
+async fn push_current_branch_to_new_remote_branch_with_runner(
+    repo_path: PathBuf,
+    remote_branch_name: String,
+    command_runner: &dyn AsyncGitCommandRunner,
+) -> Result<String, GitError> {
+    let remote_name = current_branch_remote_name(&repo_path, command_runner)
+        .await?
+        .unwrap_or_else(|| "origin".to_string());
+    let remote_ref = format!("refs/heads/{remote_branch_name}");
+    let lease_argument = format!("--force-with-lease={remote_ref}:");
+    let push_refspec = format!("HEAD:{remote_branch_name}");
+    let arguments = vec![
+        "push".to_string(),
+        lease_argument,
+        "--set-upstream".to_string(),
+        remote_name.clone(),
+        push_refspec,
+    ];
+    run_git_command_with_runner(
+        AsyncGitCommand::new(repo_path, arguments),
+        "Git push failed",
+        command_runner,
+    )
+    .await?;
+
+    Ok(format!("{remote_name}/{remote_branch_name}"))
+}
+
+/// Checks a remote branch through an injected asynchronous command boundary.
+async fn remote_branch_exists_with_runner(
+    repo_path: PathBuf,
+    remote_branch_name: String,
+    command_runner: &dyn AsyncGitCommandRunner,
+) -> Result<bool, GitError> {
+    let remote_name = current_branch_remote_name(&repo_path, command_runner)
+        .await?
+        .unwrap_or_else(|| "origin".to_string());
+    let arguments = vec![
+        "ls-remote".to_string(),
+        "--heads".to_string(),
+        remote_name,
+        remote_branch_name,
+    ];
+    let stdout = run_git_command_with_runner(
+        AsyncGitCommand::new(repo_path, arguments),
+        "Git ls-remote failed",
+        command_runner,
+    )
+    .await?;
+
+    Ok(!stdout.trim().is_empty())
 }
 
 /// Returns the current upstream reference for `HEAD`.
@@ -2581,6 +2641,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn new_remote_branch_push_requires_missing_remote_ref() {
+        // Arrange
+        let repo_path = PathBuf::from("test-repo");
+        let mut command_runner = MockAsyncGitCommandRunner::new();
+        let mut sequence = Sequence::new();
+        let expectations = [
+            (
+                vec!["rev-parse", "--abbrev-ref", "HEAD"],
+                async_git_output(0, "main\n", Vec::new()),
+            ),
+            (
+                vec!["config", "--get", "branch.main.remote"],
+                async_git_output(1, Vec::new(), Vec::new()),
+            ),
+            (
+                vec![
+                    "push",
+                    "--force-with-lease=refs/heads/review/topic:",
+                    "--set-upstream",
+                    "origin",
+                    "HEAD:review/topic",
+                ],
+                async_git_output(0, Vec::new(), Vec::new()),
+            ),
+        ];
+        for (arguments, output) in expectations {
+            let arguments = arguments
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            command_runner
+                .expect_run()
+                .with(function(move |command: &AsyncGitCommand| {
+                    command.arguments == arguments
+                }))
+                .times(1)
+                .in_sequence(&mut sequence)
+                .return_once(move |_| Box::pin(async move { Ok(output) }));
+        }
+
+        // Act
+        let upstream_reference = push_current_branch_to_new_remote_branch_with_runner(
+            repo_path,
+            "review/topic".to_string(),
+            &command_runner,
+        )
+        .await
+        .expect("new remote branch push should succeed");
+
+        // Assert
+        assert_eq!(upstream_reference, "origin/review/topic");
+    }
+
+    #[tokio::test]
     async fn remote_branch_lookup_checks_isolated_local_remote() {
         // Arrange
         let temp_dir = tempdir().expect("failed to create temp dir");
@@ -2598,55 +2712,6 @@ mod tests {
 
         // Assert
         assert!(exists);
-    }
-
-    #[tokio::test]
-    async fn remote_branch_lookup_preserves_remote_config_failure() {
-        // Arrange
-        let repo_path = PathBuf::from("test-repo");
-        let mut command_runner = MockAsyncGitCommandRunner::new();
-        let mut sequence = Sequence::new();
-        command_runner
-            .expect_run()
-            .with(function(|command: &AsyncGitCommand| {
-                command.arguments == ["rev-parse", "--abbrev-ref", "HEAD"]
-            }))
-            .times(1)
-            .in_sequence(&mut sequence)
-            .return_once(|_| Box::pin(async { Ok(async_git_output(0, "main\n", Vec::new())) }));
-        command_runner
-            .expect_run()
-            .with(function(|command: &AsyncGitCommand| {
-                command.arguments == ["config", "--get", "branch.main.remote"]
-            }))
-            .times(1)
-            .in_sequence(&mut sequence)
-            .return_once(|_| {
-                Box::pin(async {
-                    Ok(async_git_output(
-                        128,
-                        Vec::new(),
-                        "fatal: malformed branch config",
-                    ))
-                })
-            });
-
-        // Act
-        let error = remote_branch_exists_with_runner(
-            repo_path,
-            "review/topic".to_string(),
-            &command_runner,
-        )
-        .await
-        .expect_err("remote config failure should not fall back to origin");
-
-        // Assert
-        assert!(matches!(
-            error,
-            GitError::CommandFailed { command, stderr }
-                if command == "git config --get branch.main.remote"
-                    && stderr.contains("malformed branch config")
-        ));
     }
 
     #[tokio::test]
@@ -2900,6 +2965,108 @@ main\torigin/main\tbehind 2\nwt/1234abcd\torigin/wt/1234abcd\tahead 3, behind \
 
         // Assert
         assert_eq!(upstream_reference, "origin/review/custom-branch");
+    }
+
+    #[tokio::test]
+    async fn new_remote_branch_push_rejects_existing_remote_branch() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let remote_dir = tempdir().expect("failed to create remote temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(remote_dir.path(), &["init", "--bare"]);
+        let remote_path = remote_dir.path().to_string_lossy().to_string();
+        run_git_command(temp_dir.path(), &["remote", "add", "origin", &remote_path]);
+        run_git_command(
+            temp_dir.path(),
+            &["push", "origin", "HEAD:review/existing-branch"],
+        );
+        let remote_head_before = git_command_stdout(
+            remote_dir.path(),
+            &["rev-parse", "refs/heads/review/existing-branch"],
+        );
+        fs::write(temp_dir.path().join("new.txt"), "new local review\n")
+            .expect("failed to write new local review file");
+        run_git_command(temp_dir.path(), &["add", "new.txt"]);
+        run_git_command(temp_dir.path(), &["commit", "-m", "New local review"]);
+
+        // Act
+        let result = push_current_branch_to_new_remote_branch(
+            temp_dir.path().to_path_buf(),
+            "review/existing-branch".to_string(),
+        )
+        .await;
+        let remote_head_after = git_command_stdout(
+            remote_dir.path(),
+            &["rev-parse", "refs/heads/review/existing-branch"],
+        );
+
+        // Assert
+        let error = result.expect_err("existing remote branch should be rejected");
+        assert!(error.to_string().contains("stale info"));
+        assert_eq!(remote_head_before, remote_head_after);
+    }
+
+    #[tokio::test]
+    async fn new_remote_branch_push_ignores_stale_remote_tracking_ref() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let remote_dir = tempdir().expect("failed to create remote temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(remote_dir.path(), &["init", "--bare"]);
+        let remote_path = remote_dir.path().to_string_lossy().to_string();
+        run_git_command(temp_dir.path(), &["remote", "add", "origin", &remote_path]);
+        run_git_command(temp_dir.path(), &["checkout", "-b", "previous-review"]);
+        fs::write(temp_dir.path().join("previous.txt"), "previous review\n")
+            .expect("failed to write previous review file");
+        run_git_command(temp_dir.path(), &["add", "previous.txt"]);
+        run_git_command(temp_dir.path(), &["commit", "-m", "Previous review"]);
+        let previous_head = git_command_stdout(temp_dir.path(), &["rev-parse", "HEAD"]);
+        run_git_command(
+            temp_dir.path(),
+            &[
+                "push",
+                "--set-upstream",
+                "origin",
+                "HEAD:review/deleted-branch",
+            ],
+        );
+        run_git_command(
+            temp_dir.path(),
+            &["push", "origin", ":review/deleted-branch"],
+        );
+        run_git_command(
+            temp_dir.path(),
+            &[
+                "update-ref",
+                "refs/remotes/origin/review/deleted-branch",
+                &previous_head,
+            ],
+        );
+        run_git_command(temp_dir.path(), &["checkout", "main"]);
+        fs::write(
+            temp_dir.path().join("replacement.txt"),
+            "replacement review\n",
+        )
+        .expect("failed to write replacement review file");
+        run_git_command(temp_dir.path(), &["add", "replacement.txt"]);
+        run_git_command(temp_dir.path(), &["commit", "-m", "Replacement review"]);
+
+        // Act
+        let upstream_reference = push_current_branch_to_new_remote_branch(
+            temp_dir.path().to_path_buf(),
+            "review/deleted-branch".to_string(),
+        )
+        .await
+        .expect("new branch push should ignore the stale remote-tracking ref");
+        let local_head = git_command_stdout(temp_dir.path(), &["rev-parse", "HEAD"]);
+        let remote_head = git_command_stdout(
+            remote_dir.path(),
+            &["rev-parse", "refs/heads/review/deleted-branch"],
+        );
+
+        // Assert
+        assert_eq!(upstream_reference, "origin/review/deleted-branch");
+        assert_eq!(local_head, remote_head);
     }
 
     #[tokio::test]

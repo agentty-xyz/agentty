@@ -598,7 +598,9 @@ can retry without reporting a false terminal cancellation.
 **InProgress**, `p` opens a publish popup for the linked forge review request:
 
 - Leave the field empty to keep the default branch target, or type a custom remote
-  branch name. After the first publish, the popup is locked to that same remote branch.
+  branch name. Agentty rejects a custom name that currently exists remotely. A name
+  whose remote branch was deleted can be reused even if a stale local remote-tracking
+  ref remains. After the first publish, the popup is locked to that same remote branch.
 - Agentty publishes with `git push --force-with-lease`, then creates or refreshes the
   linked review request. After confirmation, the popup closes and publishing continues
   on the session worker while session chat remains interactive. During **InProgress**,
