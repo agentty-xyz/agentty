@@ -802,6 +802,7 @@ async fn end_turn_no_answer(app: &mut App) {
     {
         *handle_status = Status::Review;
     }
+    app.sessions.wake_session_worker(session_id.as_str());
 
     app.services.emit_app_event(AppEvent::SessionUpdated {
         session_id: session_id.clone(),
