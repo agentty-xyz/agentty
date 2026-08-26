@@ -466,17 +466,18 @@ flowchart LR
    changes durable and loaded availability to unknown, since external edits can make a
    previously empty diff stale. A durable invalidation failure prevents the tmux window
    from opening, so restart cannot restore a stale empty state after external edits.
-   When a turn completes while another project is active, the foreground reducer
-   atomically marks the existing worker session's focused review as pending. A late
-   completion event for a deleted session therefore cannot recreate an orphaned trigger.
-   The same marker is written when the response arrives before the loaded session's
-   final `Review` transition. Transient write failures retain the in-memory trigger and
-   retry through the event reducer with bounded backoff. Startup and project switching
-   reload pending triggers for the active project after its session snapshots reload. A
-   diff preparation result that lands while its project is inactive persists and
-   requeues the same trigger, and an automatic review with no diff clears the durable
-   marker, so switching projects or restarting cannot drop or endlessly replay the
-   review.
+   When a turn completes while another project is active, the foreground reducer loads
+   the persisted session target, atomically marks its focused review as pending, and
+   starts diff preparation without adding that session to the active-project snapshot.
+   Captured folder, review-agent, and diff-source inputs let preparation continue if a
+   project switch unloads an already-started session. A late completion event for a
+   deleted session therefore cannot recreate an orphaned trigger. The same marker is
+   written when the response arrives before the loaded session's final `Review`
+   transition. Transient write failures retain the in-memory trigger and retry through
+   the event reducer with bounded backoff. Startup and project switching reload pending
+   triggers for the active project after its session snapshots reload. An automatic
+   review with no diff clears the durable marker, so switching projects or restarting
+   cannot drop or endlessly replay the review.
 
 ### Operation Lifecycle and Recovery
 

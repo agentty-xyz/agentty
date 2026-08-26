@@ -1052,6 +1052,12 @@ impl App {
         let mut auto_review_session_ids =
             self.sessions_entering_review(&event_batch.session_ids, &previous_session_states);
         auto_review_session_ids.extend(completed_review_session_ids);
+        auto_review_session_ids.extend(
+            event_batch
+                .session_ids
+                .intersection(&self.deferred_auto_review_session_ids)
+                .cloned(),
+        );
         self.start_or_defer_auto_reviews(&auto_review_session_ids)
             .await;
         app::review::hydrate_review_transients(&self.review_cache, self.sessions.state_mut());
@@ -1921,8 +1927,8 @@ impl App {
         self.start_auto_review_diff_loads(session_ids);
     }
 
-    /// Starts automatic reviews for loaded sessions and retains triggers for
-    /// sessions whose owning project is currently inactive.
+    /// Starts automatic reviews for loaded and inactive-project sessions,
+    /// retaining durable triggers when preparation cannot start yet.
     async fn start_or_defer_auto_reviews(&mut self, session_ids: &HashSet<SessionId>) {
         let mut loaded_session_ids = HashSet::new();
 
@@ -1943,7 +1949,9 @@ impl App {
                 continue;
             }
 
-            self.defer_auto_review_session(session_id).await;
+            if !self.start_inactive_auto_review_diff_load(session_id).await {
+                self.defer_auto_review_session(session_id).await;
+            }
         }
 
         self.start_auto_review_diff_loads(&loaded_session_ids);
@@ -2598,6 +2606,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use std::panic::AssertUnwindSafe;
+    use std::sync::Arc;
 
     use ag_forge::{
         ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
@@ -3090,9 +3099,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_turn_defers_auto_review_when_project_is_inactive() {
+    async fn completed_turn_starts_auto_review_when_project_is_inactive() {
         // Arrange
-        let (mut app, base_dir) = crate::test_support::new_test_app().await;
+        let diff_text = "diff --git a/file.rs b/file.rs\n+inactive change";
+        let expected_hash = crate::app::diff_content_hash(diff_text);
+        let mut git_client = ag_git::MockGitClient::new();
+        git_client
+            .expect_diff()
+            .once()
+            .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+        let clients = crate::test_support::test_app_clients().with_git_client(Arc::new(git_client));
+        let (mut app, base_dir) = crate::test_support::new_test_app_with_clients(clients).await;
         let session_id = SessionId::from("inactive-completed-session");
         let inactive_project_path = base_dir.path().join("inactive-project");
         let inactive_project_id = app
@@ -3114,6 +3131,32 @@ mod tests {
             )
             .await
             .expect("failed to insert inactive session");
+        app.services
+            .db()
+            .settings()
+            .upsert_project_settings(
+                inactive_project_id,
+                vec![
+                    (
+                        crate::domain::setting::SettingName::DefaultReviewAgent,
+                        "claude".to_string(),
+                    ),
+                    (
+                        crate::domain::setting::SettingName::DefaultReviewModel,
+                        "claude-sonnet-5".to_string(),
+                    ),
+                    (
+                        crate::domain::setting::SettingName::DefaultReviewReasoningLevel,
+                        "low".to_string(),
+                    ),
+                    (
+                        crate::domain::setting::SettingName::DefaultReviewSpeedMode,
+                        "fast".to_string(),
+                    ),
+                ],
+            )
+            .await
+            .expect("failed to persist inactive-project review settings");
         let turn_applied_state = TurnAppliedState {
             follow_up_tasks: Vec::new(),
             questions: Vec::new(),
@@ -3126,12 +3169,31 @@ mod tests {
             turn_applied_state,
         })
         .await;
+        let diff_event =
+            tokio::time::timeout(std::time::Duration::from_secs(1), app.next_app_event())
+                .await
+                .expect("timed out waiting for inactive-project diff")
+                .expect("inactive-project diff should emit an event");
+        app.apply_app_events(diff_event).await;
 
         // Assert
-        assert_eq!(
-            app.deferred_auto_review_session_ids,
-            HashSet::from([session_id.clone()])
-        );
+        assert!(app.deferred_auto_review_session_ids.is_empty());
+        assert!(app.pending_session_diff_requests.is_empty());
+        assert!(matches!(
+            app.review_cache.get(&session_id),
+            Some(app::review::ReviewCacheEntry::Loading {
+                diff_hash,
+                review_agent,
+            }) if *diff_hash == expected_hash
+                && *review_agent == (
+                    crate::domain::agent::AgentSelection::new(
+                        crate::domain::agent::AgentKind::Claude,
+                        crate::domain::agent::AgentModel::ClaudeOpus5,
+                    ),
+                    crate::domain::agent::ReasoningLevel::Low,
+                    crate::domain::agent::SpeedMode::Fast,
+                )
+        ));
         assert_eq!(
             app.services
                 .db()
