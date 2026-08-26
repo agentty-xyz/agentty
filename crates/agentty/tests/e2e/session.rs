@@ -72,6 +72,9 @@ const SECOND_QUESTION_TEXT: &str = "Which tests should be added?";
 /// Clarification question emitted by the delayed stub while help is open.
 const RECONCILE_QUESTION_TEXT: &str = "Should I add a regression test?";
 
+/// Clarification question emitted after session sync has already been queued.
+const QUEUED_SYNC_QUESTION_TEXT: &str = "Should I continue before syncing?";
+
 /// Visible confirmation emitted only when Codex receives unrestricted Auto
 /// Edit policies at both app-server request boundaries.
 const CODEX_AUTO_EDIT_POLICY_CONFIRMED_TEXT: &str = "Codex Auto Edit unrestricted policy applied.";
@@ -2199,6 +2202,30 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
     if fail_sync_validation {
         install_sync_validation_failure_git_stub(env, &validation_failure_marker)?;
     }
+
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+}
+
+/// Installs a delayed Claude turn that ends with a clarification question so
+/// the scenario can cancel it while sync remains queued on the worker.
+fn install_queued_sync_question_claude_stub(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat > /dev/null 2>&1
+sleep 8
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Need one clarification before sync.\",\"questions\":[{{\"text\":\"{QUEUED_SYNC_QUESTION_TEXT}\",\"options\":[\"Continue\"]}}]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+"#
+    );
+
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
@@ -4546,6 +4573,63 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     .rect
                     .row;
                 assert!(answer_row < sync_row);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify canceling a clarification question wakes the session worker and
+/// resumes sync that was queued during the preceding active turn.
+#[test]
+fn session_queued_sync_resumes_after_question_cancel() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_queued_sync_resumes_after_question_cancel")
+        .with_git()
+        .setup(install_queued_sync_question_claude_stub)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Ask before completing this turn")
+                    .wait_for_text("Ask before completing this turn", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Ctrl+c: stop", 5000)
+                    .wait_for_text("r: sync", 5000)
+                    .press_key("r")
+                    .wait_for_text("rebase onto the base branch after this turn", 5000)
+                    .wait_for_text(QUEUED_SYNC_QUESTION_TEXT, 30000)
+                    .capture_labeled(
+                        "queued_sync_waiting_on_question",
+                        "Queued sync pauses while the active turn asks a question",
+                    )
+                    .press_key("ctrl+c")
+                    .wait_for_text("[Sync] Successfully synced", 10000)
+                    .wait_for_text("Enter: reply", 5000)
+            },
+            |frame, report| {
+                let question_frame = common::frame_from_capture(&report.captures[0]);
+                let question_full = Region::full(question_frame.cols(), question_frame.rows());
+                assertion::assert_text_in_region(
+                    &question_frame,
+                    QUEUED_SYNC_QUESTION_TEXT,
+                    &question_full,
+                );
+                assertion::assert_text_in_region(
+                    &question_frame,
+                    "≡ sync — rebase onto the base branch after this turn",
+                    &question_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
+                assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                assertion::assert_not_visible(frame, QUEUED_SYNC_QUESTION_TEXT);
+                assertion::assert_not_visible(frame, "≡ sync —");
             },
         )?;
 

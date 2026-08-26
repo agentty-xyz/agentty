@@ -14,7 +14,7 @@ use ag_agent::{
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_protocol::AgentResponse;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -190,12 +190,19 @@ impl ScheduledSessionCommand {
 struct SessionWorkerHandle {
     queued_work_sequence: Arc<AtomicU64>,
     sender: mpsc::UnboundedSender<ScheduledSessionCommand>,
+    wakeup: Arc<Notify>,
 }
 
 impl SessionWorkerHandle {
     /// Reserves the next submission order shared with queued chat messages.
     fn next_queued_work_order(&self) -> u64 {
         self.queued_work_sequence.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Wakes the worker so buffered work is reconsidered after an external
+    /// status transition.
+    fn wake(&self) {
+        self.wakeup.notify_one();
     }
 }
 
@@ -808,6 +815,13 @@ impl SessionWorkerService {
         self.workers.remove(session_id);
     }
 
+    /// Wakes an existing session worker after an external state transition.
+    pub(super) fn wake_session_worker(&self, session_id: &str) {
+        if let Some(worker) = self.workers.get(session_id) {
+            worker.wake();
+        }
+    }
+
     /// Returns an existing session worker sender or creates one lazily.
     fn ensure_session_worker(
         &mut self,
@@ -851,13 +865,15 @@ impl SessionWorkerService {
             transcript: Arc::clone(&runtime.transcript),
         };
         let (sender, receiver) = mpsc::unbounded_channel();
+        let wakeup = Arc::new(Notify::new());
         let worker = SessionWorkerHandle {
             queued_work_sequence: Arc::clone(&runtime.queued_work_sequence),
             sender,
+            wakeup: Arc::clone(&wakeup),
         };
         self.workers
             .insert(runtime.session_id.clone(), worker.clone());
-        Self::spawn_session_worker(context, services.one_shot_client(), receiver);
+        Self::spawn_session_worker(context, services.one_shot_client(), wakeup, receiver);
 
         worker
     }
@@ -921,6 +937,7 @@ impl SessionWorkerService {
     fn spawn_session_worker(
         context: SessionWorkerContext,
         one_shot_client: Arc<dyn OneShotClient>,
+        wakeup: Arc<Notify>,
         mut receiver: mpsc::UnboundedReceiver<ScheduledSessionCommand>,
     ) {
         tokio::spawn(async move {
@@ -931,10 +948,15 @@ impl SessionWorkerService {
                 }
 
                 let Some(work) = Self::next_scheduled_work(&context, &mut pending_commands) else {
-                    let Some(command) = receiver.recv().await else {
-                        break;
-                    };
-                    pending_commands.push_back(command);
+                    tokio::select! {
+                        command = receiver.recv() => {
+                            let Some(command) = command else {
+                                break;
+                            };
+                            pending_commands.push_back(command);
+                        }
+                        () = wakeup.notified() => {}
+                    }
 
                     continue;
                 };
@@ -1472,6 +1494,12 @@ impl SessionManager {
     /// Drops the in-memory worker sender for a session.
     pub(super) fn clear_session_worker(&mut self, session_id: &str) {
         self.worker_service_mut().clear_session_worker(session_id);
+    }
+
+    /// Wakes an existing worker so it re-evaluates buffered work against the
+    /// current session status.
+    pub(crate) fn wake_session_worker(&mut self, session_id: &str) {
+        self.worker_service_mut().wake_session_worker(session_id);
     }
 
     /// Drops worker queues for touched sessions that reached terminal status.
@@ -5709,6 +5737,7 @@ mod tests {
         SessionWorkerService::spawn_session_worker(
             harness.context,
             auto_commit_one_shot_client(),
+            Arc::new(Notify::new()),
             command_rx,
         );
         command_tx
@@ -6688,6 +6717,56 @@ mod tests {
         ));
         assert_eq!(pending_commands.len(), 1);
         assert_eq!(queue_handle.lock().expect("queue lock").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_worker_wakeup_resumes_buffered_action_after_question_cancel() {
+        // Arrange
+        let (mut context, _db, _queue_handle, _base_dir) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::Question).await;
+        let status = Arc::clone(&context.status);
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        context.app_event_tx = app_event_tx;
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let wakeup = Arc::new(Notify::new());
+        let mut worker_service = SessionWorkerService::new();
+        worker_service.workers.insert(
+            SessionId::from("sess1"),
+            SessionWorkerHandle {
+                queued_work_sequence: Arc::new(AtomicU64::new(0)),
+                sender: command_tx.clone(),
+                wakeup: Arc::clone(&wakeup),
+            },
+        );
+        SessionWorkerService::spawn_session_worker(
+            context,
+            auto_commit_one_shot_client(),
+            Arc::clone(&wakeup),
+            command_rx,
+        );
+        command_tx
+            .send(ScheduledSessionCommand::queued(
+                SessionCommand::Rebase {
+                    base_branch: "main".to_string(),
+                    operation_id: "already-resolved-rebase".to_string(),
+                },
+                0,
+            ))
+            .expect("failed to queue rebase");
+        tokio::task::yield_now().await;
+
+        // Act
+        *status.lock().expect("status lock") = Status::Review;
+        worker_service.wake_session_worker("sess1");
+        let resolved_event =
+            tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv()).await;
+
+        // Assert
+        assert!(matches!(
+            resolved_event,
+            Ok(Some(AppEvent::SessionQueuedSyncResolved { session_id }))
+                if session_id == "sess1"
+        ));
     }
 
     #[tokio::test]

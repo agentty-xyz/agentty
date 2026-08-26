@@ -686,7 +686,9 @@ one structured response protocol (`answer`, `questions`, `review_comment_outcome
    answer, and submits it as a normal reply turn.
 
 Pressing `Ctrl+C` instead ends question mode immediately, restores the session to
-`Review`, and does not send the generated clarification reply.
+`Review`, and does not send the generated clarification reply. The status transition
+also wakes the session worker so branch actions that were queued before the question
+continue in their original order.
 
 ## Background Task Catalog
 
