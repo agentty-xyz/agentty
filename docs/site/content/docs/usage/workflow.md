@@ -441,8 +441,8 @@ unchanged.
 ## Session Types
 
 <a id="usage-draft-stacked"></a> From the **Sessions** tab, press `a` to choose between
-`Regular`, `Draft`, `Orchestrator`, and `Stacked` session creation. `Orchestrator` and
-an available `Stacked` option are marked `[Preview]`:
+`Regular`, `Draft`, `Orchestrator`, and `Stacked` session creation. `Orchestrator` is
+marked `[Preview]`:
 
 - `Regular` starts the agent immediately on the first `Enter`.
 - `Draft` stages each `Enter` as one ordered draft message and starts only after you
@@ -455,18 +455,24 @@ an available `Stacked` option are marked `[Preview]`:
   worker sessions, verifies their results, and integrates the approved work. The
   controller reads the repository but never owns branch changes.
 - `Stacked` creates a draft below the selected parent session, with its future branch
-  based on the parent session branch. Only one stacking level is available.
+  based on the parent session branch. A stack can contain up to five stacked levels
+  below its root session.
 
 Stacked drafts show `s` start only when the parent is in **Review** or **AgentReview**
-and no stack member is running, queued, syncing, merging, or waiting on a question.
-While a materialized child is linked, the parent keeps `Enter` replies, `m` merge
-queueing, `r` sync, and direct `/` access to slash commands. Syncing the parent (or
-completing a parent turn) rebases review-ready children onto the refreshed parent branch
-automatically. When the parent merges, children are retargeted onto the parent's base
-branch and review-ready children are synced with `git rebase --onto` so they keep only
-their own commits. If an automatic child sync cannot start or complete, the affected
-child session shows a `[Sync Error]` notice with the failure. When the parent is
-canceled, its stacked child is canceled too.
+and no stack member is running, queued, syncing, merging, or waiting on a question. An
+unstarted stacked draft can already parent another stacked draft, so you can stage the
+full stack before any child worktree exists. Start the drafts from parent to child; each
+child's `s` action appears only after its immediate parent reaches review. While a
+materialized child is linked, the parent keeps `Enter` replies, `m` merge queueing, `r`
+sync, and direct `/` access to slash commands. Syncing the parent (or completing a
+parent turn) rebases review-ready direct children onto the refreshed parent branch
+automatically, cascading through deeper descendants. When a parent merges, its children
+are retargeted onto the parent's base branch as root sessions and review-ready children
+are synced with `git rebase --onto` so they keep only their own commits. If an automatic
+child sync cannot start or complete, the affected child session shows a `[Sync Error]`
+notice with the failure. When a parent is canceled, Agentty stops queued, running,
+question, sync, and merge work throughout the stack before canceling every nonterminal
+descendant. Descendants already in a terminal state keep that state.
 
 ### Parallel Orchestration
 
@@ -752,7 +758,8 @@ Ghostty may consume `Cmd+Z` before Agentty or a surrounding `tmux` session recei
 `@` file lookups keep the raw `@path/to/file` text visible and highlighted in the
 composer and transcript; the agent-facing prompt rewrites them to quoted `path/to/file`
 tokens. Before a stacked draft materializes its own worktree, lookup suggestions come
-from the parent session worktree so newly created parent files remain available.
+from the nearest materialized ancestor worktree so newly created ancestor files remain
+available through unstarted intermediate drafts.
 
 If an agent command exits with an error, Agentty prints a short failure header followed
 by captured `stdout` and `stderr` sections, with JSONL provider events summarized into

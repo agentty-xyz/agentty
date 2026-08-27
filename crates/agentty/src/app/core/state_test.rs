@@ -3148,6 +3148,66 @@ async fn app_event_applies_at_mention_entries_to_session_runtime() {
     );
 }
 
+#[tokio::test]
+async fn at_mention_lookup_root_uses_nearest_materialized_stacked_ancestor() {
+    // Arrange
+    let (mut app, temp_dir) = crate::test_support::new_test_app().await;
+    let ancestor_folder = temp_dir.path().join("materialized-ancestor");
+    fs::create_dir(&ancestor_folder).expect("failed to create ancestor folder");
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("ancestor-session")
+            .folder(ancestor_folder.clone())
+            .build(),
+    );
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("unmaterialized-parent")
+            .folder(temp_dir.path().join("missing-parent"))
+            .parent_session_id(Some(SessionId::from("ancestor-session")))
+            .build(),
+    );
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("unmaterialized-child")
+            .folder(temp_dir.path().join("missing-child"))
+            .parent_session_id(Some(SessionId::from("unmaterialized-parent")))
+            .build(),
+    );
+
+    // Act
+    let lookup_root = app.at_mention_lookup_root("unmaterialized-child");
+
+    // Assert
+    assert_eq!(lookup_root, ancestor_folder);
+}
+
+#[tokio::test]
+async fn at_mention_lookup_root_falls_back_for_cyclic_parent_chain() {
+    // Arrange
+    let (mut app, temp_dir) = crate::test_support::new_test_app().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("first-session")
+            .folder(temp_dir.path().join("missing-first"))
+            .parent_session_id(Some(SessionId::from("second-session")))
+            .build(),
+    );
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("second-session")
+            .folder(temp_dir.path().join("missing-second"))
+            .parent_session_id(Some(SessionId::from("first-session")))
+            .build(),
+    );
+
+    // Act
+    let lookup_root = app.at_mention_lookup_root("first-session");
+
+    // Assert
+    assert_eq!(lookup_root, app.working_dir());
+}
+
 #[test]
 /// Verifies repeated `AgentResponseReceived` events keep the newest
 /// reducer projection while accumulating token usage for the session.

@@ -24,6 +24,9 @@ use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 /// Folder name under a project root that stores Agentty session metadata.
 pub const SESSION_DATA_DIR: &str = ".agentty";
 
+/// Maximum number of stacked descendants in one root-to-child chain.
+pub const MAX_STACK_DEPTH: usize = 5;
+
 /// Full in-progress loader label shown while post-turn commit-message
 /// generation and git commit orchestration are running.
 pub(crate) const COMMITTING_PROGRESS_LABEL: &str = "Committing...";
@@ -358,20 +361,27 @@ impl Session {
         self.is_draft_session() && self.status == Status::Draft && !self.prompt.is_empty()
     }
 
-    /// Returns whether this session can create a one-level stacked draft
-    /// child.
+    /// Returns whether this session can parent a stacked draft.
     ///
-    /// Only root sessions with materialized branches can be parents in the
-    /// first stacked-session version. Explicit draft sessions are excluded
-    /// because their worktree branch is deferred until start, and terminal
-    /// sessions no longer provide an active branch to stack on.
+    /// Unstarted standalone drafts are excluded because their worktree branch
+    /// is deferred until start. Unstarted stacked drafts can stage descendants
+    /// against their deterministic future branch, though each descendant must
+    /// still wait for its immediate parent to reach review before starting.
+    /// Terminal sessions no longer provide an active branch to stack on. The
+    /// stack-wide depth policy is evaluated separately because it requires the
+    /// loaded session graph.
     pub fn allows_stacked_child_creation(&self) -> bool {
-        self.parent_session_id.is_none()
-            && !self.is_draft_session()
-            && !matches!(
-                self.status,
-                Status::Merged | Status::Done | Status::Canceled
-            )
+        if self.is_draft_session()
+            && self.status == Status::Draft
+            && self.parent_session_id.is_none()
+        {
+            return false;
+        }
+
+        !matches!(
+            self.status,
+            Status::Merged | Status::Done | Status::Canceled
+        )
     }
 
     /// Returns whether this session can be forked into a new independent
@@ -427,8 +437,7 @@ impl Session {
         self.role.is_managed()
     }
 
-    /// Returns whether this session belongs to a one-level stack beneath a
-    /// parent session branch.
+    /// Returns whether this session is stacked beneath another session branch.
     pub fn is_stacked_child(&self) -> bool {
         self.parent_session_id.is_some()
     }
@@ -596,11 +605,23 @@ impl Session {
     }
 }
 
+/// Returns whether `parent_session_id` can parent another stacked draft
+/// without exceeding [`MAX_STACK_DEPTH`].
+pub(crate) fn can_create_stacked_child(sessions: &[Session], parent_session_id: &str) -> bool {
+    let Some(parent_session) = find_session(sessions, parent_session_id) else {
+        return false;
+    };
+
+    parent_session.allows_stacked_child_creation()
+        && session_stack_depth(sessions, parent_session_id)
+            .is_some_and(|depth| depth < MAX_STACK_DEPTH)
+}
+
 /// Returns whether the staged draft identified by `session_id` can start
-/// under the currently loaded one-level stack.
+/// under the currently loaded stack.
 ///
 /// Root drafts only need their own staged prompt state. Stacked drafts also
-/// require a review-ready parent and no sibling/parent branch work already
+/// require a review-ready immediate parent and no other branch work already
 /// running or queued in the same stack.
 pub(crate) fn can_start_staged_session_in_stack(sessions: &[Session], session_id: &str) -> bool {
     let Some(stack) = SessionStack::for_session(sessions, session_id) else {
@@ -614,7 +635,7 @@ pub(crate) fn can_start_staged_session_in_stack(sessions: &[Session], session_id
     if session.parent_session_id.is_none() {
         return true;
     }
-    if !stack.root_allows_stacked_child_start() {
+    if !stack.parent_allows_stacked_child_start() {
         return false;
     }
 
@@ -623,7 +644,7 @@ pub(crate) fn can_start_staged_session_in_stack(sessions: &[Session], session_id
 
 /// Returns whether the session identified by `session_id` can start slash
 /// command branch mutation while preserving one active branch worker per
-/// one-level stack.
+/// stack.
 ///
 /// This blocks parent branch edits once a child branch has materialized, and
 /// blocks any stack member from starting branch work while a different member
@@ -637,7 +658,7 @@ pub(crate) fn can_mutate_session_branch_in_stack(sessions: &[Session], session_i
         return false;
     }
 
-    if stack.requested_session_is_root() && stack.has_materialized_child() {
+    if stack.has_materialized_descendant() {
         return false;
     }
 
@@ -676,7 +697,7 @@ pub(crate) fn can_rebase_session_branch_in_stack(sessions: &[Session], session_i
     !stack.has_branch_mutating_member_except(session_id)
 }
 
-/// Returns whether a session can accept a chat reply under one-level stack
+/// Returns whether a session can accept a chat reply under stack
 /// constraints.
 ///
 /// Replies are allowed when the stack has no other member actively running or
@@ -691,41 +712,31 @@ pub(crate) fn can_reply_to_session_in_stack(sessions: &[Session], session_id: &s
     !stack.has_branch_mutating_member_except(session_id)
 }
 
-/// Snapshot of a loaded one-level stack for branch-work policy checks.
+/// Snapshot of one loaded stack tree for branch-work policy checks.
 struct SessionStack<'a> {
     members: Vec<&'a Session>,
     requested_session: &'a Session,
-    root_session: &'a Session,
 }
 
 impl<'a> SessionStack<'a> {
     /// Builds the stack containing `session_id` from the loaded session list.
     fn for_session(sessions: &'a [Session], session_id: &str) -> Option<Self> {
         let requested_session = find_session(sessions, session_id)?;
-        let root_session = match requested_session.parent_session_id.as_ref() {
-            Some(parent_session_id) => find_session(sessions, parent_session_id.as_str())?,
-            None => requested_session,
-        };
+        let root_session = stack_root_session(sessions, requested_session)?;
         let members = sessions
             .iter()
-            .filter(|session| Self::session_belongs_to_root(session, root_session.id.as_str()))
+            .filter(|session| session_stack_root_id(sessions, session) == Some(&root_session.id))
             .collect();
 
         Some(Self {
             members,
             requested_session,
-            root_session,
         })
     }
 
     /// Returns the session whose action is being evaluated.
     fn requested_session(&self) -> &'a Session {
         self.requested_session
-    }
-
-    /// Returns whether the requested session is the stack root.
-    fn requested_session_is_root(&self) -> bool {
-        self.requested_session.parent_session_id.is_none()
     }
 
     /// Returns whether another stack member is currently reserving or
@@ -737,11 +748,16 @@ impl<'a> SessionStack<'a> {
             .any(|session| session.status.is_stack_branch_mutating())
     }
 
-    /// Returns whether the root already has a non-terminal child branch that
-    /// has started at least one live turn.
-    fn has_materialized_child(&self) -> bool {
+    /// Returns whether the requested session has a non-terminal descendant
+    /// branch that has started at least one live turn.
+    fn has_materialized_descendant(&self) -> bool {
         self.members.iter().any(|session| {
-            session.parent_session_id.is_some()
+            session.id != self.requested_session.id
+                && session_is_descendant_of(
+                    &self.members,
+                    session,
+                    self.requested_session.id.as_str(),
+                )
                 && !matches!(
                     session.status,
                     Status::Draft | Status::Merged | Status::Done | Status::Canceled
@@ -749,21 +765,84 @@ impl<'a> SessionStack<'a> {
         })
     }
 
-    /// Returns whether the root is in a state that lets a stacked draft child
-    /// materialize.
-    fn root_allows_stacked_child_start(&self) -> bool {
-        self.root_session.status.allows_stacked_child_start()
+    /// Returns whether the immediate parent is in a state that lets the
+    /// requested stacked draft materialize.
+    ///
+    /// The caller handles root drafts before invoking this stacked-only gate.
+    fn parent_allows_stacked_child_start(&self) -> bool {
+        self.requested_session
+            .parent_session_id
+            .as_ref()
+            .is_some_and(|parent_session_id| {
+                self.members.iter().any(|session| {
+                    session.id == *parent_session_id && session.status.allows_stacked_child_start()
+                })
+            })
+    }
+}
+
+/// Returns the zero-based stack depth of a session, rejecting missing or
+/// cyclic parent chains. Root sessions have depth zero.
+fn session_stack_depth(sessions: &[Session], session_id: &str) -> Option<usize> {
+    let mut current_session = find_session(sessions, session_id)?;
+    let mut visited_session_ids = Vec::new();
+    let mut depth = 0;
+
+    while let Some(parent_session_id) = current_session.parent_session_id.as_ref() {
+        if visited_session_ids.contains(&current_session.id) {
+            return None;
+        }
+        visited_session_ids.push(current_session.id.clone());
+        current_session = find_session(sessions, parent_session_id.as_str())?;
+        depth += 1;
     }
 
-    /// Returns whether `session` belongs to the one-level stack rooted at
-    /// `root_session_id`.
-    fn session_belongs_to_root(session: &Session, root_session_id: &str) -> bool {
-        session.id.as_str() == root_session_id
-            || session
-                .parent_session_id
-                .as_ref()
-                .is_some_and(|parent_session_id| parent_session_id.as_str() == root_session_id)
+    (!visited_session_ids.contains(&current_session.id)).then_some(depth)
+}
+
+/// Returns the root session for a valid loaded parent chain.
+fn stack_root_session<'a>(sessions: &'a [Session], session: &'a Session) -> Option<&'a Session> {
+    let depth = session_stack_depth(sessions, session.id.as_str())?;
+    let mut root_session = session;
+
+    for _ in 0..depth {
+        root_session = find_session(sessions, root_session.parent_session_id.as_deref()?)?;
     }
+
+    Some(root_session)
+}
+
+/// Returns the root id for a session with a valid loaded parent chain.
+fn session_stack_root_id<'a>(
+    sessions: &'a [Session],
+    session: &'a Session,
+) -> Option<&'a SessionId> {
+    stack_root_session(sessions, session).map(|root_session| &root_session.id)
+}
+
+/// Returns whether `session` descends from `ancestor_session_id` within the
+/// already-connected stack member set.
+fn session_is_descendant_of(
+    members: &[&Session],
+    session: &Session,
+    ancestor_session_id: &str,
+) -> bool {
+    let mut current_session = session;
+
+    while let Some(parent_session_id) = current_session.parent_session_id.as_ref() {
+        if parent_session_id.as_str() == ancestor_session_id {
+            return true;
+        }
+        let Some(parent_session) = members
+            .iter()
+            .find(|candidate| candidate.id == *parent_session_id)
+        else {
+            return false;
+        };
+        current_session = parent_session;
+    }
+
+    false
 }
 
 /// Finds one loaded session by id.
@@ -1087,7 +1166,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_allows_stacked_child_creation_returns_true_for_root_active_session() {
+    fn test_allows_stacked_child_creation_returns_true_for_materialized_active_session() {
         // Arrange
         let session = SessionFixtureBuilder::new()
             .draft(false)
@@ -1102,13 +1181,19 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_allows_stacked_child_creation_rejects_drafts_children_and_terminal_sessions() {
+    fn test_stacked_child_creation_accepts_stacked_drafts_and_rejects_root_drafts_or_terminal() {
         // Arrange
         let draft_session = SessionFixtureBuilder::new()
             .draft(true)
             .status(Status::Draft)
             .build();
+        let stacked_draft_session = SessionFixtureBuilder::new()
+            .draft(true)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .status(Status::Draft)
+            .build();
         let child_session = SessionFixtureBuilder::new()
+            .draft(true)
             .parent_session_id(Some(SessionId::from("parent-session")))
             .status(Status::Review)
             .build();
@@ -1120,6 +1205,7 @@ pub(crate) mod tests {
 
         // Act
         let allows_draft_child = draft_session.allows_stacked_child_creation();
+        let allows_stacked_draft_child = stacked_draft_session.allows_stacked_child_creation();
         let allows_nested_child = child_session.allows_stacked_child_creation();
         let allows_merged_child = merged_session.allows_stacked_child_creation();
         let allows_done_child = done_session.allows_stacked_child_creation();
@@ -1127,10 +1213,128 @@ pub(crate) mod tests {
 
         // Assert
         assert!(!allows_draft_child);
-        assert!(!allows_nested_child);
+        assert!(allows_stacked_draft_child);
+        assert!(allows_nested_child);
         assert!(!allows_merged_child);
         assert!(!allows_done_child);
         assert!(!allows_canceled_child);
+    }
+
+    #[test]
+    fn test_can_create_stacked_child_allows_depth_five_and_rejects_depth_six() {
+        // Arrange
+        let root_session = SessionFixtureBuilder::new()
+            .id("root")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let level_1 = SessionFixtureBuilder::new()
+            .id("level-1")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("root")))
+            .build();
+        let level_2 = SessionFixtureBuilder::new()
+            .id("level-2")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("level-1")))
+            .build();
+        let level_3 = SessionFixtureBuilder::new()
+            .id("level-3")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("level-2")))
+            .build();
+        let level_4 = SessionFixtureBuilder::new()
+            .id("level-4")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("level-3")))
+            .build();
+        let level_5 = SessionFixtureBuilder::new()
+            .id("level-5")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("level-4")))
+            .build();
+        let sessions = vec![root_session, level_1, level_2, level_3, level_4, level_5];
+
+        // Act
+        let can_create_level_5 = can_create_stacked_child(&sessions, "level-4");
+        let can_create_level_6 = can_create_stacked_child(&sessions, "level-5");
+
+        // Assert
+        assert!(can_create_level_5);
+        assert!(!can_create_level_6);
+    }
+
+    #[test]
+    fn test_can_create_stacked_child_rejects_missing_sessions_and_invalid_parent_chains() {
+        // Arrange
+        let missing_parent = SessionFixtureBuilder::new()
+            .id("missing-parent-child")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("missing")))
+            .build();
+        let first_cycle_member = SessionFixtureBuilder::new()
+            .id("cycle-a")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("cycle-b")))
+            .build();
+        let second_cycle_member = SessionFixtureBuilder::new()
+            .id("cycle-b")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("cycle-a")))
+            .build();
+        let sessions = vec![missing_parent, first_cycle_member, second_cycle_member];
+
+        // Act
+        let missing_session_allowed = can_create_stacked_child(&sessions, "missing-session");
+        let missing_parent_allowed = can_create_stacked_child(&sessions, "missing-parent-child");
+        let cycle_allowed = can_create_stacked_child(&sessions, "cycle-a");
+
+        // Assert
+        assert!(!missing_session_allowed);
+        assert!(!missing_parent_allowed);
+        assert!(!cycle_allowed);
+    }
+
+    #[test]
+    fn test_session_is_descendant_of_walks_nested_chain_and_rejects_missing_parent() {
+        // Arrange
+        let root_session = SessionFixtureBuilder::new().id("root-session").build();
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .parent_session_id(Some(SessionId::from("root-session")))
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .id("child-session")
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let orphan_session = SessionFixtureBuilder::new()
+            .id("orphan-session")
+            .parent_session_id(Some(SessionId::from("missing-session")))
+            .build();
+        let members = vec![
+            &root_session,
+            &parent_session,
+            &child_session,
+            &orphan_session,
+        ];
+
+        // Act
+        let child_is_descendant =
+            session_is_descendant_of(&members, &child_session, "root-session");
+        let orphan_is_descendant =
+            session_is_descendant_of(&members, &orphan_session, "root-session");
+
+        // Assert
+        assert!(child_is_descendant);
+        assert!(!orphan_is_descendant);
     }
 
     #[test]
@@ -1360,6 +1564,36 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_can_start_nested_staged_session_uses_immediate_parent_review_state() {
+        // Arrange
+        let root_session = SessionFixtureBuilder::new()
+            .id("root-session")
+            .draft(false)
+            .status(Status::Draft)
+            .build();
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("root-session")))
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .id("child-session")
+            .draft(true)
+            .status(Status::Draft)
+            .prompt("Ready nested draft")
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![root_session, parent_session, child_session];
+
+        // Act
+        let can_start_child = can_start_staged_session_in_stack(&sessions, "child-session");
+
+        // Assert
+        assert!(can_start_child);
+    }
+
+    #[test]
     fn test_can_mutate_session_branch_in_stack_blocks_parent_with_materialized_child() {
         // Arrange
         let parent_session = SessionFixtureBuilder::new()
@@ -1374,6 +1608,35 @@ pub(crate) mod tests {
             .parent_session_id(Some(SessionId::from("parent-session")))
             .build();
         let sessions = vec![parent_session, child_session];
+
+        // Act
+        let can_mutate_parent = can_mutate_session_branch_in_stack(&sessions, "parent-session");
+
+        // Assert
+        assert!(!can_mutate_parent);
+    }
+
+    #[test]
+    fn test_can_mutate_session_branch_in_stack_blocks_parent_with_nested_descendant() {
+        // Arrange
+        let root_session = SessionFixtureBuilder::new()
+            .id("root-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("root-session")))
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .id("child-session")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .build();
+        let sessions = vec![root_session, parent_session, child_session];
 
         // Act
         let can_mutate_parent = can_mutate_session_branch_in_stack(&sessions, "parent-session");
@@ -1589,6 +1852,35 @@ pub(crate) mod tests {
 
         // Assert
         assert!(!can_reply_to_parent);
+    }
+
+    #[test]
+    fn test_can_reply_to_session_in_stack_blocks_active_nested_descendant() {
+        // Arrange
+        let root_session = SessionFixtureBuilder::new()
+            .id("root-session")
+            .draft(false)
+            .status(Status::Review)
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .id("child-session")
+            .draft(true)
+            .status(Status::Review)
+            .parent_session_id(Some(SessionId::from("root-session")))
+            .build();
+        let running_grandchild_session = SessionFixtureBuilder::new()
+            .id("grandchild-session")
+            .draft(true)
+            .status(Status::InProgress)
+            .parent_session_id(Some(SessionId::from("child-session")))
+            .build();
+        let sessions = vec![root_session, child_session, running_grandchild_session];
+
+        // Act
+        let can_reply_to_root = can_reply_to_session_in_stack(&sessions, "root-session");
+
+        // Assert
+        assert!(!can_reply_to_root);
     }
 
     /// Builds a minimal session fixture for reasoning-level tests.

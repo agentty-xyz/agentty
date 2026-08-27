@@ -20,8 +20,10 @@ pub enum SessionGroup {
 pub enum SessionTreePosition {
     /// Root-level session row with no tree marker.
     Root,
-    /// One-level child row connected to its parent.
+    /// Nested child row connected to its parent.
     Child {
+        /// One-based depth below the root row.
+        depth: usize,
         /// Whether this is the final child rendered under the parent.
         is_last: bool,
     },
@@ -177,17 +179,18 @@ fn append_group_rows<'a>(
             session,
             tree_position: SessionTreePosition::Root,
         });
-        append_stacked_child_rows(rows, stacked_children, session.id.as_str(), group);
+        append_stacked_child_rows(rows, stacked_children, session.id.as_str(), group, 1);
     }
 }
 
-/// Adds the one-level stacked children that belong in the parent's current
-/// display group.
+/// Adds stacked descendants that belong in the parent's current display
+/// group.
 fn append_stacked_child_rows<'a>(
     rows: &mut Vec<GroupedSessionRow<'a>>,
     stacked_children: &StackedChildIndex<'a>,
     parent_session_id: &str,
     group: SessionGroup,
+    depth: usize,
 ) {
     let Some(children) = stacked_children.get(parent_session_id) else {
         return;
@@ -204,9 +207,17 @@ fn append_stacked_child_rows<'a>(
             index,
             session,
             tree_position: SessionTreePosition::Child {
+                depth,
                 is_last: child_position + 1 == child_count,
             },
         });
+        append_stacked_child_rows(
+            rows,
+            stacked_children,
+            session.id.as_str(),
+            group,
+            depth + 1,
+        );
     }
 }
 
@@ -555,11 +566,17 @@ mod tests {
                 ("parent-1".to_string(), SessionTreePosition::Root),
                 (
                     "child-1".to_string(),
-                    SessionTreePosition::Child { is_last: false },
+                    SessionTreePosition::Child {
+                        depth: 1,
+                        is_last: false,
+                    },
                 ),
                 (
                     "child-2".to_string(),
-                    SessionTreePosition::Child { is_last: true },
+                    SessionTreePosition::Child {
+                        depth: 1,
+                        is_last: true,
+                    },
                 ),
             ]
         );
@@ -633,7 +650,80 @@ mod tests {
             vec![
                 "Archive".to_string(),
                 "parent-1:Root".to_string(),
-                "child-1:Child { is_last: true }".to_string(),
+                "child-1:Child { depth: 1, is_last: true }".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_grouped_session_rows_nests_descendants_to_depth_five() {
+        // Arrange
+        let root_session = crate::test_support::titled_session_fixture("root", Status::Review);
+        let mut level_1 = crate::test_support::titled_session_fixture("level-1", Status::Review);
+        level_1.parent_session_id = Some("root".into());
+        let mut level_2 = crate::test_support::titled_session_fixture("level-2", Status::Review);
+        level_2.parent_session_id = Some("level-1".into());
+        let mut level_3 = crate::test_support::titled_session_fixture("level-3", Status::Review);
+        level_3.parent_session_id = Some("level-2".into());
+        let mut level_4 = crate::test_support::titled_session_fixture("level-4", Status::Review);
+        level_4.parent_session_id = Some("level-3".into());
+        let mut level_5 = crate::test_support::titled_session_fixture("level-5", Status::Review);
+        level_5.parent_session_id = Some("level-4".into());
+        let sessions = vec![level_5, level_3, root_session, level_1, level_2, level_4];
+
+        // Act
+        let ordered_rows = grouped_session_rows(&sessions)
+            .into_iter()
+            .filter_map(|row| match row {
+                GroupedSessionRow::Session {
+                    session,
+                    tree_position,
+                    ..
+                } => Some((session.id.to_string(), tree_position)),
+                GroupedSessionRow::GroupLabel(_) => None,
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            ordered_rows,
+            vec![
+                ("root".to_string(), SessionTreePosition::Root),
+                (
+                    "level-1".to_string(),
+                    SessionTreePosition::Child {
+                        depth: 1,
+                        is_last: true,
+                    },
+                ),
+                (
+                    "level-2".to_string(),
+                    SessionTreePosition::Child {
+                        depth: 2,
+                        is_last: true,
+                    },
+                ),
+                (
+                    "level-3".to_string(),
+                    SessionTreePosition::Child {
+                        depth: 3,
+                        is_last: true,
+                    },
+                ),
+                (
+                    "level-4".to_string(),
+                    SessionTreePosition::Child {
+                        depth: 4,
+                        is_last: true,
+                    },
+                ),
+                (
+                    "level-5".to_string(),
+                    SessionTreePosition::Child {
+                        depth: 5,
+                        is_last: true,
+                    },
+                ),
             ]
         );
     }

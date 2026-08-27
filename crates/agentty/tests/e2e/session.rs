@@ -1319,7 +1319,7 @@ fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-/// Seeds a one-level stack where both parent and child are review-ready.
+/// Seeds a stack where both parent and child are review-ready.
 fn seed_review_ready_parent_with_review_child(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1342,6 +1342,54 @@ fn seed_review_ready_parent_with_review_child(
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("stack-pa"))?;
     std::fs::create_dir_all(env.agentty_root.join("wt").join("stack-ch"))?;
+
+    Ok(())
+}
+
+/// Seeds four review-ready stack levels for nested creation coverage.
+fn seed_four_level_review_stack(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_session(
+        env,
+        SessionSeed::regular("stackl00-0001", "gpt-5.6-sol", "main", "Review")
+            .with_title("Stack root"),
+    )?;
+    for level in 1..=4 {
+        let session_id = format!("stackl0{level}-0001");
+        let parent_level = level - 1;
+        let parent_session_id = format!("stackl0{parent_level}-0001");
+        let parent_branch = format!("wt/stackl0{parent_level}");
+        let title = format!("Stack level {level}");
+        common::seed_session(
+            env,
+            SessionSeed::stacked_draft(
+                &session_id,
+                "gpt-5.6-sol",
+                &parent_branch,
+                "Review",
+                &parent_session_id,
+            )
+            .with_title(&title),
+        )?;
+    }
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        for level in 0..=4 {
+            let session_id = format!("stackl0{level}-0001");
+            let updated_at = i64::from(5 - level);
+            database
+                .sessions()
+                .update_session_updated_at(&session_id, updated_at)
+                .await?;
+        }
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    for level in 0..=4 {
+        std::fs::create_dir_all(env.agentty_root.join("wt").join(format!("stackl0{level}")))?;
+    }
 
     Ok(())
 }
@@ -3271,33 +3319,47 @@ fn seed_draft_at_lookup_project(env: &BuilderEnv) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-/// Seeds an unmaterialized stacked draft whose parent worktree contains a new
-/// file that is absent from the project checkout.
-fn seed_stacked_at_lookup_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    let parent_session_id = "atparent-0001";
+/// Seeds two unmaterialized stacked drafts whose nearest materialized ancestor
+/// contains a new file that is absent from the project checkout.
+fn seed_nested_stacked_at_lookup_session(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ancestor_session_id = "atparent-0001";
+    let parent_session_id = "atmiddle-0001";
     let child_session_id = "atchildx-0001";
     common::seed_session(
         env,
-        SessionSeed::regular(parent_session_id, "gpt-5.6-sol", "main", "Review")
-            .with_title("Parent with lookup file"),
+        SessionSeed::regular(ancestor_session_id, "gpt-5.6-sol", "main", "Review")
+            .with_title("Ancestor with lookup file"),
+    )?;
+    common::seed_session(
+        env,
+        SessionSeed::stacked_draft(
+            parent_session_id,
+            "gpt-5.6-sol",
+            "wt/atparent",
+            "Draft",
+            ancestor_session_id,
+        )
+        .with_title("Unmaterialized middle draft"),
     )?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
             child_session_id,
             "gpt-5.6-sol",
-            "wt/atparent",
+            "wt/atmiddle",
             "Draft",
             parent_session_id,
         )
-        .with_title("Stacked lookup child"),
+        .with_title("Nested lookup child"),
     )?;
 
     let parent_worktree = env.agentty_root.join("wt").join("atparent");
     std::fs::create_dir_all(&parent_worktree)?;
     std::fs::write(
-        parent_worktree.join("parent_lookup_target.txt"),
-        "parent lookup target\n",
+        parent_worktree.join("ancestor_lookup_target.txt"),
+        "ancestor lookup target\n",
     )?;
 
     Ok(())
@@ -6257,33 +6319,36 @@ fn prompt_image_paste_unavailable_shows_inline_error() -> E2eResult {
     Ok(())
 }
 
-/// Verify that choosing Stacked creates a startable draft under the selected
-/// parent and renders the one-level stack with a tree connection in the
-/// session list.
+/// Verify that choosing Stacked creates a fifth-level draft under the selected
+/// parent without a preview marker and renders the nested tree.
 #[test]
 fn stacked_session_creation() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("stacked_session_creation")
         .with_git()
-        .setup(seed_review_ready_session)
+        .setup(seed_four_level_review_stack)
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("Review-ready session shortcuts", 5000)
+                    .wait_for_text("Stack level 4", 5000)
+                    .press_key("Down")
+                    .press_key("Down")
+                    .press_key("Down")
+                    .press_key("Down")
                     .viewing_pause_ms(1200)
                     .press_key("a")
                     .wait_for_text("Stacked", 5000)
                     .press_key("Down")
                     .press_key("Down")
                     .press_key("Down")
-                    .wait_for_text("[Preview] Stack on selected", 5000)
+                    .wait_for_text("Stack on selected", 5000)
                     .capture_labeled("stacked_selector", "Stacked creation selector")
                     .press_key("Enter")
                     .wait_for_text("Enter: stage draft", 5000)
                     .capture_labeled("stacked_draft_view", "Stacked draft action footer")
-                    .write_text("Stacked draft")
+                    .write_text("Stack level 5")
                     .press_key("Enter")
                     .wait_for_text("Draft Session", 5000)
                     .capture_labeled(
@@ -6292,7 +6357,7 @@ fn stacked_session_creation() -> E2eResult {
                     )
                     .viewing_pause_ms(1200)
                     .press_key("q")
-                    .wait_for_text("Stacked draft", 5000)
+                    .wait_for_text("ACTIVE", 5000)
                     .capture_labeled("stacked_list", "Stacked draft connected in session list")
             },
             |frame, report| {
@@ -6301,9 +6366,10 @@ fn stacked_session_creation() -> E2eResult {
                 assertion::assert_text_in_region(&selector_frame, "Stacked", &selector_full);
                 assertion::assert_text_in_region(
                     &selector_frame,
-                    "[Preview] Stack on selected",
+                    "Stack on selected",
                     &selector_full,
                 );
+                assertion::assert_not_visible(&selector_frame, "[Preview] Stack on selected");
 
                 let draft_view_frame = common::frame_from_capture(&report.captures[1]);
                 assertion::assert_not_visible(&draft_view_frame, "s: start");
@@ -6317,8 +6383,8 @@ fn stacked_session_creation() -> E2eResult {
                 assertion::assert_not_visible(&ready_frame, "r: sync");
 
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Review-ready ses", &full);
-                assertion::assert_text_in_region(frame, "└ [XS] Stacked draft", &full);
+                assertion::assert_text_in_region(frame, "Stack root", &full);
+                assertion::assert_text_in_region(frame, "        └ [XS]", &full);
             },
         )?;
 
@@ -6446,9 +6512,9 @@ fn stacked_pending_post_merge_restack_failure_is_visible() -> E2eResult {
     Ok(())
 }
 
-/// Verify that a stacked draft can keep collecting staged prompts while its
-/// parent is still running, but the start shortcut stays hidden until the
-/// parent returns to review.
+/// Verify that a stacked draft can keep collecting staged prompts and parent
+/// another stacked draft while its own parent is still running, but the start
+/// shortcut stays hidden until the parent returns to review.
 #[test]
 fn stacked_session_start_waits_for_parent_review() -> E2eResult {
     // Arrange, Act, Assert
@@ -6466,7 +6532,7 @@ fn stacked_session_start_waits_for_parent_review() -> E2eResult {
                     .press_key("Down")
                     .press_key("Down")
                     .press_key("Down")
-                    .wait_for_text("[Preview] Stack on selected", 5000)
+                    .wait_for_text("Stack on selected", 5000)
                     .press_key("Enter")
                     .wait_for_text("Enter: stage draft", 5000)
                     .write_text("Waiting child draft")
@@ -6476,13 +6542,30 @@ fn stacked_session_start_waits_for_parent_review() -> E2eResult {
                         "stacked_draft_waiting_parent",
                         "Stacked draft staged while parent is still running",
                     )
+                    .press_key("q")
+                    .wait_for_text("ACTIVE", 5000)
+                    .press_key("a")
+                    .wait_for_text("Stacked", 5000)
+                    .press_key("Down")
+                    .press_key("Down")
+                    .press_key("Down")
+                    .wait_for_text("Stack on selected", 5000)
+                    .capture_labeled(
+                        "stacked_draft_parent_selector",
+                        "Stacked draft can parent another staged draft",
+                    )
             },
-            |frame, _report| {
+            |frame, report| {
+                let draft_frame = common::frame_from_capture(&report.captures[0]);
+                let draft_full = Region::full(draft_frame.cols(), draft_frame.rows());
+                assertion::assert_text_in_region(&draft_frame, "Enter: add draft", &draft_full);
+                assertion::assert_not_visible(&draft_frame, "s: start");
+                assertion::assert_not_visible(&draft_frame, "m: add to merge queue");
+                assertion::assert_not_visible(&draft_frame, "r: sync");
+
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Enter: add draft", &full);
-                assertion::assert_not_visible(frame, "s: start");
-                assertion::assert_not_visible(frame, "m: add to merge queue");
-                assertion::assert_not_visible(frame, "r: sync");
+                assertion::assert_text_in_region(frame, "Stack on selected", &full);
+                assertion::assert_not_visible(frame, "Select parent first");
             },
         )?;
 
@@ -6924,30 +7007,30 @@ fn draft_session_at_lookup() -> E2eResult {
     Ok(())
 }
 
-/// Verify that an unmaterialized stacked draft resolves `@` suggestions from
-/// its parent worktree.
+/// Verify that a nested unmaterialized stacked draft resolves `@` suggestions
+/// from its nearest materialized ancestor worktree.
 #[test]
 fn stacked_session_at_lookup() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("stacked_session_at_lookup")
         .with_git()
-        .setup(seed_stacked_at_lookup_session)
+        .setup(seed_nested_stacked_at_lookup_session)
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("Stacked lookup child", 5000)
+                    .wait_for_text("Nested lookup child", 5000)
                     .press_key("Enter")
                     .wait_for_text("Enter: add draft", 3000)
                     .press_key("Enter")
                     .wait_for_text("Enter: stage draft", 3000)
-                    .write_text("@parent_lookup")
-                    .wait_for_text("parent_lookup_target.txt", 5000)
+                    .write_text("@ancestor_lookup")
+                    .wait_for_text("ancestor_lookup_target.txt", 5000)
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "parent_lookup_target.txt", &full);
+                assertion::assert_text_in_region(frame, "ancestor_lookup_target.txt", &full);
                 assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
             },
         )?;

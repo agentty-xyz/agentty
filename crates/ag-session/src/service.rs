@@ -27,7 +27,7 @@ pub enum CreateSessionMode {
         /// Durable task row used to re-link the child after restart.
         task_id: i64,
     },
-    /// Creates a one-level draft stacked on an existing parent session.
+    /// Creates a draft stacked on an existing parent session.
     Stacked {
         /// Review-ready parent session whose branch becomes the stack base.
         parent_session_id: SessionId,

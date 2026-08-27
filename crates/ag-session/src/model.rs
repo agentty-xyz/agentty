@@ -332,8 +332,13 @@ impl SessionStatus {
             ) | (
                 SessionStatus::Draft | SessionStatus::InProgress,
                 SessionStatus::Rebasing
-            ) | (SessionStatus::InProgress, SessionStatus::Canceled)
-                | (SessionStatus::Review, SessionStatus::AgentReview)
+            ) | (
+                SessionStatus::InProgress
+                    | SessionStatus::Queued
+                    | SessionStatus::Rebasing
+                    | SessionStatus::Merging,
+                SessionStatus::Canceled
+            ) | (SessionStatus::Review, SessionStatus::AgentReview)
                 | (SessionStatus::AgentReview, SessionStatus::Review)
                 | (
                     SessionStatus::Review | SessionStatus::AgentReview,
@@ -413,7 +418,7 @@ pub struct SessionSettings {
     pub base_branch: String,
     /// Whether the session uses deferred draft materialization.
     pub is_draft: bool,
-    /// Parent session for a one-level stacked session.
+    /// Immediate parent session for a stacked session.
     pub parent_session_id: Option<SessionId>,
     /// Provider permission mode used for future turns.
     pub permission_mode: PermissionMode,
@@ -583,6 +588,24 @@ mod tests {
         assert!(status.can_transition_to(SessionStatus::Merged));
         assert!(status.can_transition_to(SessionStatus::Done));
         assert!(!status.can_transition_to(SessionStatus::Review));
+    }
+
+    #[test]
+    fn active_branch_work_statuses_can_transition_to_canceled() {
+        // Arrange
+        let statuses = [
+            SessionStatus::Question,
+            SessionStatus::Queued,
+            SessionStatus::Rebasing,
+            SessionStatus::Merging,
+        ];
+
+        // Act
+        let cancellation_transitions =
+            statuses.map(|status| status.can_transition_to(SessionStatus::Canceled));
+
+        // Assert
+        assert_eq!(cancellation_transitions, [true; 4]);
     }
 
     #[test]

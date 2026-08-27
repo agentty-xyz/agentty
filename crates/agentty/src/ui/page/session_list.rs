@@ -314,12 +314,19 @@ fn session_group_label(group: SessionGroup) -> &'static str {
     }
 }
 
-/// Returns the rendered tree marker for one grouped session row.
-fn tree_position_label(tree_position: SessionTreePosition) -> &'static str {
+/// Returns the indented tree marker for one grouped session row.
+fn tree_position_label(tree_position: SessionTreePosition) -> String {
     match tree_position {
-        SessionTreePosition::Root => "",
-        SessionTreePosition::Child { is_last: true } => TREE_BRANCH_LAST,
-        SessionTreePosition::Child { is_last: false } => TREE_BRANCH_MIDDLE,
+        SessionTreePosition::Root => String::new(),
+        SessionTreePosition::Child { depth, is_last } => {
+            let branch = if is_last {
+                TREE_BRANCH_LAST
+            } else {
+                TREE_BRANCH_MIDDLE
+            };
+
+            format!("{}{branch}", "  ".repeat(depth.saturating_sub(1)))
+        }
     }
 }
 
@@ -1187,6 +1194,65 @@ mod tests {
         assert_eq!(tree_cell.fg, style::palette::text_muted());
         assert_eq!(tree_cell.bg, style::palette::surface_selection());
         assert_ne!(tree_cell.fg, tree_cell.bg);
+    }
+
+    #[test]
+    fn test_tree_position_label_uses_middle_branch_for_nonfinal_child() {
+        // Arrange
+        let tree_position = SessionTreePosition::Child {
+            depth: 2,
+            is_last: false,
+        };
+
+        // Act
+        let label = tree_position_label(tree_position);
+
+        // Assert
+        assert_eq!(label, "  ├ ");
+    }
+
+    #[test]
+    fn test_render_session_rows_indent_to_stack_depth_five() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(100, 14);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(5));
+        let sessions = (0..=5)
+            .map(|depth| {
+                let mut session = crate::test_support::titled_session_fixture(
+                    &format!("level-{depth}"),
+                    Status::Review,
+                );
+                session.title = Some(if depth == 0 {
+                    "Stack root".to_string()
+                } else {
+                    format!("Stack level {depth}")
+                });
+                if depth > 0 {
+                    session.parent_session_id = Some(format!("level-{}", depth - 1).into());
+                }
+
+                session
+            })
+            .collect::<Vec<_>>();
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Stack root"));
+        assert!(text.contains("└ [XS] Stack level 1"));
+        assert!(text.contains("  └ [XS] Stack level 2"));
+        assert!(text.contains("    └ [XS] Stack level 3"));
+        assert!(text.contains("      └ [XS] Stack level 4"));
+        assert!(text.contains("        └ [XS] Stack level 5"));
     }
 
     #[test]

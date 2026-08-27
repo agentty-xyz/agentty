@@ -303,7 +303,7 @@ fn next_session_creation_selection(app: &App) -> usize {
 /// Returns the selected session id when it can parent a stacked draft.
 fn selected_stacked_parent_session_id(app: &App) -> Option<SessionId> {
     app.selected_session()
-        .filter(|session| session.allows_stacked_child_creation())
+        .filter(|session| app.sessions.can_create_stacked_child(&session.id))
         .map(|session| session.id.clone())
 }
 

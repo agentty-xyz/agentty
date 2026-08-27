@@ -138,16 +138,16 @@ pub(crate) struct ViewHelpState {
     /// Whether this session can fork into a new independent session.
     pub(crate) can_fork_session: ViewActionAvailability,
     /// Whether this session can enter the merge queue under the current
-    /// one-level stack consistency rules.
+    /// stack consistency rules.
     pub(crate) can_merge_session_branch: ViewActionAvailability,
     /// Whether this session can start branch-mutating work under the current
-    /// one-level stack consistency rules.
+    /// stack consistency rules.
     pub(crate) can_mutate_session_branch: ViewActionAvailability,
     /// Whether the current session currently has a local worktree directory
     /// available to open.
     pub(crate) can_open_worktree: ViewActionAvailability,
-    /// Whether this session can start sync work under the current one-level
-    /// stack consistency rules.
+    /// Whether this session can start sync work under the current stack
+    /// consistency rules.
     pub(crate) can_rebase_session_branch: ViewActionAvailability,
     /// Whether the current session has a diff available to inspect.
     pub(crate) can_show_diff: ViewActionAvailability,

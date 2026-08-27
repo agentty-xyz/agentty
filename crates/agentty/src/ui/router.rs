@@ -8,7 +8,9 @@ use crate::app::Tab;
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::{ProjectListItem, ordered_project_items};
-use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
+use crate::domain::session::{
+    DailyActivity, Session, SessionId, activity_day_key_with_offset, can_create_stacked_child,
+};
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, DiffFocus, DiffLineComments, DiffPreview, DiffRestoreTarget,
     DiffReviewComments, DiffSidebarFocus, HelpContext, allows_diff_line_comment_reply,
@@ -46,7 +48,7 @@ impl RouteSharedContext<'_> {
                 .table_state
                 .selected()
                 .and_then(|selected_index| self.sessions.get(selected_index))
-                .is_some_and(Session::allows_stacked_child_creation)
+                .is_some_and(|session| can_create_stacked_child(self.sessions, session.id.as_str()))
     }
 }
 
