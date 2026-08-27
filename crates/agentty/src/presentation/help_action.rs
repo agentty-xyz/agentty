@@ -828,6 +828,76 @@ pub(crate) struct DiffFooterContext {
     pub(crate) sidebar_focus: DiffSidebarFocus,
 }
 
+impl DiffFooterContext {
+    /// Appends actions for the sidebar section that currently controls the Diff
+    /// pane.
+    fn add_sidebar_actions(self, actions: &mut Vec<HelpAction>, can_submit_line_comments: bool) {
+        match self.sidebar_focus {
+            DiffSidebarFocus::Files if self.focus == DiffFocus::Files => {
+                actions.push(HelpAction::new("select file", "j/k", "Select file"));
+                actions.push(HelpAction::new(
+                    "open",
+                    "Enter/l",
+                    "Focus the selected file's changed lines",
+                ));
+                actions.push(HelpAction::new("preview", "p", "Toggle markdown preview"));
+                actions.extend(self.file_comment.help_action("comment"));
+                if self.has_review_comments {
+                    actions.push(HelpAction::new("comments", "c", "Focus review comments"));
+                }
+            }
+            DiffSidebarFocus::Files => {
+                actions[0] = HelpAction::new("back", "q", "Back to session");
+                actions.push(HelpAction::new("files", "Esc/Left", "Focus changed files"));
+                actions.push(HelpAction::new(
+                    "select row",
+                    "j/k",
+                    "Select changed line or inline comment",
+                ));
+                if matches!(
+                    self.line_comment_state,
+                    DiffLineCommentFooterState::Ready { .. }
+                ) {
+                    actions.push(HelpAction::new(
+                        "comment",
+                        "Enter",
+                        "Edit the selected line's or inline comment's feedback",
+                    ));
+                }
+                if can_submit_line_comments {
+                    actions.push(diff_comment_submit_action());
+                }
+            }
+            DiffSidebarFocus::Comments => {
+                actions[0] = HelpAction::new("back", "q", "Back to session");
+                actions.push(HelpAction::new("select comment", "j/k", "Select comment"));
+                if self.can_mark_selected {
+                    actions.push(HelpAction::new(
+                        "select",
+                        "Space",
+                        "Toggle selected comment for agent evaluation",
+                    ));
+                }
+                if self.can_submit {
+                    actions.push(HelpAction::new(
+                        "submit",
+                        "Enter",
+                        "Submit selected comments to the agent",
+                    ));
+                }
+            }
+        }
+        if self.sidebar_focus == DiffSidebarFocus::Comments {
+            actions.push(HelpAction::new("files", "f/Esc", "Focus changed files"));
+            actions.push(HelpAction::new(
+                "scroll pane",
+                "Up/Down",
+                "Scroll comment details",
+            ));
+        }
+    }
+}
+
 /// Whether the selected diff-tree row supports whole-file comments.
 #[derive(Clone, Copy)]
 pub(crate) enum DiffFileCommentAvailability {
@@ -917,69 +987,7 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
     {
         actions.push(diff_comment_submit_action());
     }
-    match context.sidebar_focus {
-        DiffSidebarFocus::Files if context.focus == DiffFocus::Files => {
-            actions.push(HelpAction::new("select file", "j/k", "Select file"));
-            actions.push(HelpAction::new(
-                "open",
-                "Enter/l",
-                "Focus the selected file's changed lines",
-            ));
-            actions.push(HelpAction::new("preview", "p", "Toggle markdown preview"));
-            actions.extend(context.file_comment.help_action("comment"));
-            if context.has_review_comments {
-                actions.push(HelpAction::new("comments", "c", "Focus review comments"));
-            }
-        }
-        DiffSidebarFocus::Files => {
-            actions[0] = HelpAction::new("back", "q", "Back to session");
-            actions.push(HelpAction::new("files", "Esc/Left", "Focus changed files"));
-            actions.push(HelpAction::new(
-                "select row",
-                "j/k",
-                "Select changed line or inline comment",
-            ));
-            if matches!(
-                context.line_comment_state,
-                DiffLineCommentFooterState::Ready { .. }
-            ) {
-                actions.push(HelpAction::new(
-                    "comment",
-                    "Enter",
-                    "Edit the selected line's or inline comment's feedback",
-                ));
-            }
-            if can_submit_line_comments {
-                actions.push(diff_comment_submit_action());
-            }
-        }
-        DiffSidebarFocus::Comments => {
-            actions[0] = HelpAction::new("back", "q", "Back to session");
-            actions.push(HelpAction::new("select comment", "j/k", "Select comment"));
-            if context.can_mark_selected {
-                actions.push(HelpAction::new(
-                    "select",
-                    "Space",
-                    "Toggle selected comment for agent evaluation",
-                ));
-            }
-            if context.can_submit {
-                actions.push(HelpAction::new(
-                    "submit",
-                    "Enter",
-                    "Submit selected comments to the agent",
-                ));
-            }
-        }
-    }
-    if context.sidebar_focus == DiffSidebarFocus::Comments {
-        actions.push(HelpAction::new("files", "f/Esc", "Focus changed files"));
-        actions.push(HelpAction::new(
-            "scroll pane",
-            "Up/Down",
-            "Scroll comment details",
-        ));
-    }
+    context.add_sidebar_actions(&mut actions, can_submit_line_comments);
     actions.push(HelpAction::new("help", "?", "Help"));
 
     actions

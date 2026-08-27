@@ -10,7 +10,8 @@ use thiserror::Error;
 
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::{
-    LifecycleEmitter, LifecycleId, LifecycleObserver, ToolErrorType, TurnErrorType, TurnLifecycle,
+    LifecycleEmitter, LifecycleId, LifecycleObserver, ToolErrorType, ToolLifecycle, TurnErrorType,
+    TurnLifecycle,
 };
 use crate::model::{
     CompletionMetadata, Model, ModelError, ModelMessage, ModelRequest, ModelResponse,
@@ -628,6 +629,14 @@ impl Harness {
             Some(tool_lifecycle) => tool_lifecycle.scope(operation).await,
             None => operation.await,
         };
+
+        Self::finish_tool_call(result, tool_lifecycle)
+    }
+
+    fn finish_tool_call(
+        result: Result<(String, ToolActivity), TurnError>,
+        tool_lifecycle: Option<ToolLifecycle>,
+    ) -> Result<(String, ToolActivity), TurnError> {
         match result {
             Ok(result) => {
                 if let Some(tool_lifecycle) = tool_lifecycle {

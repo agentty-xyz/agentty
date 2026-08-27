@@ -235,20 +235,9 @@ where
     let mut pending_prompt = initial_prompt;
     let mut turn_failed = false;
     loop {
-        let prompt = if let Some(prompt) = pending_prompt.take() {
-            prompt
-        } else {
-            if mode == ChatMode::Interactive {
-                output.write_all(b">>> ").await?;
-                output.flush().await?;
-            }
-            let mut prompt = String::new();
-            if input.read_line(&mut prompt).await? == 0 {
-                break;
-            }
-            trim_line_ending(&mut prompt);
-
-            prompt
+        let Some(prompt) = read_prompt(&mut pending_prompt, &mut input, &mut output, mode).await?
+        else {
+            break;
         };
         if prompt.trim().is_empty() {
             continue;
@@ -274,6 +263,32 @@ where
     } else {
         Ok(())
     }
+}
+
+async fn read_prompt<Input, Output>(
+    pending_prompt: &mut Option<String>,
+    input: &mut Input,
+    output: &mut Output,
+    mode: ChatMode,
+) -> Result<Option<String>, io::Error>
+where
+    Input: AsyncBufRead + Unpin,
+    Output: AsyncWrite + Unpin,
+{
+    if let Some(prompt) = pending_prompt.take() {
+        return Ok(Some(prompt));
+    }
+    if mode == ChatMode::Interactive {
+        output.write_all(b">>> ").await?;
+        output.flush().await?;
+    }
+    let mut prompt = String::new();
+    if input.read_line(&mut prompt).await? == 0 {
+        return Ok(None);
+    }
+    trim_line_ending(&mut prompt);
+
+    Ok(Some(prompt))
 }
 
 async fn write_outcome(
