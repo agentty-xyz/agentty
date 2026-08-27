@@ -2750,6 +2750,159 @@ async fn test_start_session_uses_full_prompt_text_as_title() {
 }
 
 #[tokio::test]
+async fn test_append_session_to_stack_persists_parent_and_queues_sync() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let parent_session_id = app.create_session().await.expect("failed to create parent");
+    let session_id = app.create_session().await.expect("failed to create child");
+    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::AgentReview);
+    let expected_parent_branch = session_branch(&parent_session_id);
+
+    // Act
+    let result = app
+        .append_session_to_stack(&session_id, &parent_session_id)
+        .await;
+    let persisted_session = app
+        .services
+        .db()
+        .sessions()
+        .load_session(&session_id)
+        .await
+        .expect("failed to load appended session")
+        .expect("appended session should exist");
+    let in_memory_session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == session_id)
+        .expect("appended in-memory session should exist");
+
+    // Assert
+    assert!(result.is_ok(), "append should start: {:?}", result.err());
+    assert_eq!(
+        in_memory_session.parent_session_id.as_deref(),
+        Some(parent_session_id.as_str())
+    );
+    assert_eq!(in_memory_session.base_branch, expected_parent_branch);
+    assert_eq!(
+        persisted_session.parent_session_id.as_deref(),
+        Some(parent_session_id.as_str())
+    );
+    assert_eq!(persisted_session.base_branch, expected_parent_branch);
+}
+
+#[tokio::test]
+async fn test_append_session_to_stack_preserves_pending_restack_base_while_sync_is_queued() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let parent_session_id = app.create_session().await.expect("failed to create parent");
+    let session_id = app.create_session().await.expect("failed to create child");
+    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+    let pending_restack_base = "former-parent-tip";
+    app.services
+        .db()
+        .sessions()
+        .update_session_stack_base_commit_hash(&session_id, Some(pending_restack_base.to_string()))
+        .await
+        .expect("failed to seed pending restack base");
+    let branch_operation_lock = Arc::clone(
+        &app.sessions
+            .session_handles_or_err(&session_id)
+            .expect("expected child session handles")
+            .branch_operation_lock,
+    );
+    let existing_operation_guard = branch_operation_lock.lock_owned().await;
+
+    // Act
+    let result = app
+        .append_session_to_stack(&session_id, &parent_session_id)
+        .await;
+    let preserved_restack_base = app
+        .services
+        .db()
+        .sessions()
+        .get_session_stack_base_commit_hash(&session_id)
+        .await
+        .expect("failed to load pending restack base");
+
+    // Assert
+    assert!(result.is_ok(), "append should queue: {:?}", result.err());
+    assert_eq!(
+        preserved_restack_base.as_deref(),
+        Some(pending_restack_base)
+    );
+
+    drop(app);
+    drop(existing_operation_guard);
+}
+
+#[tokio::test]
+async fn test_append_session_to_stack_rolls_back_metadata_when_sync_cannot_start() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let parent_session_id = app.create_session().await.expect("failed to create parent");
+    let session_id = app.create_session().await.expect("failed to create child");
+    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+    app.sessions
+        .session_handles_mut()
+        .remove(session_id.as_str());
+
+    // Act
+    let result = app
+        .append_session_to_stack(&session_id, &parent_session_id)
+        .await;
+    let persisted_session = app
+        .services
+        .db()
+        .sessions()
+        .load_session(&session_id)
+        .await
+        .expect("failed to load rolled-back session")
+        .expect("rolled-back session should exist");
+    let in_memory_session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == session_id)
+        .expect("rolled-back in-memory session should exist");
+
+    // Assert
+    assert!(result.is_err());
+    assert_eq!(in_memory_session.parent_session_id, None);
+    assert_eq!(in_memory_session.base_branch, "main");
+    assert_eq!(persisted_session.parent_session_id, None);
+    assert_eq!(persisted_session.base_branch, "main");
+}
+
+#[tokio::test]
+async fn test_append_session_to_stack_rejects_non_review_source() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let parent_session_id = app.create_session().await.expect("failed to create parent");
+    let session_id = app.create_session().await.expect("failed to create source");
+    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+
+    // Act
+    let result = app
+        .append_session_to_stack(&session_id, &parent_session_id)
+        .await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(crate::app::AppError::Session(SessionError::Workflow(message)))
+            if message.contains("Review")
+    ));
+}
+
+#[tokio::test]
 async fn test_reply_first_message_uses_full_prompt_text_as_title() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");

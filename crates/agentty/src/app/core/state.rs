@@ -587,6 +587,23 @@ impl App {
         Ok(session_id)
     }
 
+    /// Moves one review-ready root session beneath an eligible parent and
+    /// starts the required branch sync.
+    ///
+    /// # Errors
+    /// Returns an error when stack policy, persistence, or sync startup fails.
+    pub async fn append_session_to_stack(
+        &mut self,
+        session_id: &str,
+        parent_session_id: &str,
+    ) -> Result<(), AppError> {
+        self.sessions
+            .append_session_to_stack(&self.services, session_id, parent_session_id)
+            .await?;
+
+        Ok(())
+    }
+
     /// Forks one root review-ready session and opens the forked session
     /// view.
     ///

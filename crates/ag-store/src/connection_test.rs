@@ -1129,6 +1129,71 @@ async fn test_load_pending_stack_restack_session_ids_returns_only_review_ready_p
     assert_eq!(pending_session_ids, vec!["ready-child".to_string()]);
 }
 
+#[tokio::test]
+async fn test_update_session_stack_membership_updates_and_clears_linkage_atomically() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    insert_session_fixture(&database, "parent-session", "main", "Review", project_id).await;
+    insert_session_fixture(&database, "child-session", "main", "Review", project_id).await;
+
+    // Act
+    database
+        .sessions()
+        .update_session_stack_membership(
+            "child-session",
+            Some("parent-session"),
+            "wt/parent-session",
+            Some("old-parent-tip".to_string()),
+        )
+        .await
+        .expect("failed to attach child");
+    let attached = database
+        .sessions()
+        .load_session("child-session")
+        .await
+        .expect("failed to load attached child")
+        .expect("attached child should exist");
+    let attached_stack_base = database
+        .sessions()
+        .get_session_stack_base_commit_hash("child-session")
+        .await
+        .expect("failed to load attached stack base");
+    database
+        .sessions()
+        .update_session_stack_membership("child-session", None, "main", None)
+        .await
+        .expect("failed to clear child membership");
+    let detached = database
+        .sessions()
+        .load_session("child-session")
+        .await
+        .expect("failed to load detached child")
+        .expect("detached child should exist");
+    let detached_stack_base = database
+        .sessions()
+        .get_session_stack_base_commit_hash("child-session")
+        .await
+        .expect("failed to load detached stack base");
+
+    // Assert
+    assert_eq!(
+        attached.parent_session_id.as_deref(),
+        Some("parent-session")
+    );
+    assert_eq!(attached.base_branch, "wt/parent-session");
+    assert_eq!(attached_stack_base.as_deref(), Some("old-parent-tip"));
+    assert_eq!(detached.parent_session_id, None);
+    assert_eq!(detached.base_branch, "main");
+    assert_eq!(detached_stack_base, None);
+}
+
 /// Verifies `load_sessions_metadata()` returns session count and max
 /// `updated_at`.
 #[tokio::test]

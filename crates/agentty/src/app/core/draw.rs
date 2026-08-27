@@ -56,6 +56,7 @@ impl App {
         match &self.mode {
             AppMode::List
             | AppMode::SessionCreation { .. }
+            | AppMode::StackAppendParentSelection { .. }
             | AppMode::PreCommitHookWarning { .. }
             | AppMode::ProjectSwitcher { .. }
             | AppMode::Confirmation { .. }

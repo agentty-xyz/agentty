@@ -556,6 +556,16 @@ pub trait SessionRepository: Send + Sync {
         stack_base_commit_hash: Option<String>,
     ) -> Result<(), DbError>;
 
+    /// Updates the parent link, rebase target, and deterministic old-base
+    /// marker for one session as one atomic row mutation.
+    async fn update_session_stack_membership(
+        &self,
+        id: &str,
+        parent_session_id: Option<&str>,
+        base_branch: &str,
+        stack_base_commit_hash: Option<String>,
+    ) -> Result<(), DbError>;
+
     /// Updates the saved prompt for a session row.
     async fn update_session_prompt(&self, id: &str, prompt: &str) -> Result<(), DbError>;
 
@@ -2249,6 +2259,36 @@ SET stack_base_commit_hash = ?,
 WHERE id = ?
 ",
         )
+        .bind(stack_base_commit_hash)
+        .bind(now)
+        .bind(id)
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn update_session_stack_membership(
+        &self,
+        id: &str,
+        parent_session_id: Option<&str>,
+        base_branch: &str,
+        stack_base_commit_hash: Option<String>,
+    ) -> Result<(), DbError> {
+        let now = self.now();
+
+        sqlx::query(
+            r"
+UPDATE session
+SET parent_session_id = ?,
+    base_branch = ?,
+    stack_base_commit_hash = ?,
+    updated_at = ?
+WHERE id = ?
+",
+        )
+        .bind(parent_session_id)
+        .bind(base_branch)
         .bind(stack_base_commit_hash)
         .bind(now)
         .bind(id)
