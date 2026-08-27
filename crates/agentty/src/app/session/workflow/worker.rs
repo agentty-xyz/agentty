@@ -3954,7 +3954,7 @@ mod tests {
         mock_git_client
             .expect_commit_all_preserving_single_commit()
             .once()
-            .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
         mock_git_client
             .expect_head_short_hash()
             .once()
@@ -5530,6 +5530,11 @@ mod tests {
                 assert_eq!(paths, vec!["src/lib.rs".to_string()]);
                 Box::pin(async { Ok(Vec::new()) })
             });
+        mock_git_client
+            .expect_run_pre_commit_hook()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(()) }));
         mock_git_client
             .expect_rebase_continue()
             .times(1)

@@ -814,7 +814,9 @@ orchestration paths:
 - Session sync: assisted rebase onto the local base branch (unpublished) or the
   published upstream's remote base ref (published). Rebase-conflict prompts run through
   the existing session channel so the provider keeps conversation context while Agentty
-  owns staging and `git rebase --continue`.
+  owns staging, invokes the effective `pre-commit` hook against the resolved index, and
+  runs `git rebase --continue`. Hook rejection enters the existing assisted-rebase abort
+  path before any post-rebase auto-push can start.
 - Review-request publish: push with `--force-with-lease`, then create or refresh the
   forge review request through `ReviewRequestClient`; a first publish to a custom branch
   rejects a currently existing remote ref. When the ref is absent, the push supplies an

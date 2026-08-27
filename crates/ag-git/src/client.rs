@@ -20,8 +20,8 @@ use super::{
     list_staged_conflict_marker_files, list_upstream_commit_titles, main_checkout_working_tree,
     main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_new_remote_branch,
     push_current_branch_to_remote_branch, rebase, rebase_continue, rebase_onto_start, rebase_start,
-    ref_hash, remote_branch_exists, remove_worktree, repo_url, squash_merge, squash_merge_diff,
-    stage_all, sync, tracked_worktree_status, worktree_status,
+    ref_hash, remote_branch_exists, remove_worktree, repo_url, run_pre_commit_hook, squash_merge,
+    squash_merge_diff, stage_all, sync, tracked_worktree_status, worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -50,6 +50,15 @@ pub trait GitClient: Send + Sync {
     /// Returns an error when a supported pre-commit configuration exists but
     /// its effective Git hook is missing or cannot be executed.
     fn check_pre_commit_hook_ready(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>>;
+
+    /// Runs the effective Git `pre-commit` hook against the current index.
+    ///
+    /// Missing hooks are accepted, matching normal Git commit behavior.
+    ///
+    /// # Errors
+    /// Returns an error when Git cannot run the hook or the hook rejects the
+    /// staged changes.
+    fn run_pre_commit_hook(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>>;
 
     /// Creates a new worktree at `worktree_path` on `branch_name` from
     /// `start_ref` inside `repo_path`.
@@ -178,22 +187,14 @@ pub trait GitClient: Send + Sync {
 
     /// Stages and commits all changes in `repo_path` using `message`.
     ///
-    /// Set `no_verify` to skip commit hooks.
-    ///
     /// # Errors
     /// Returns an error when staging or commit creation fails.
-    fn commit_all(
-        &self,
-        repo_path: PathBuf,
-        message: String,
-        no_verify: bool,
-    ) -> GitFuture<Result<(), GitError>>;
+    fn commit_all(&self, repo_path: PathBuf, message: String) -> GitFuture<Result<(), GitError>>;
 
     /// Commits all changes while preserving one evolving session commit in
     /// `repo_path`.
     ///
-    /// Uses `commit_message` for new or amended commit content. Set
-    /// `no_verify` to skip commit hooks.
+    /// Uses `commit_message` for new or amended commit content.
     ///
     /// # Errors
     /// Returns an error when staging, amend/create, or branch inspection fails.
@@ -203,7 +204,6 @@ pub trait GitClient: Send + Sync {
         base_branch: String,
         commit_message: String,
         message_strategy: SingleCommitMessageStrategy,
-        no_verify: bool,
     ) -> GitFuture<Result<(), GitError>>;
 
     /// Stages all tracked and untracked changes in `repo_path`.
@@ -482,6 +482,10 @@ impl GitClient for RealGitClient {
         Box::pin(async move { check_pre_commit_hook_ready(repo_path).await })
     }
 
+    fn run_pre_commit_hook(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>> {
+        Box::pin(async move { run_pre_commit_hook(repo_path).await })
+    }
+
     fn create_worktree(
         &self,
         repo_path: PathBuf,
@@ -578,13 +582,8 @@ impl GitClient for RealGitClient {
         Box::pin(async move { list_conflicted_files(repo_path).await })
     }
 
-    fn commit_all(
-        &self,
-        repo_path: PathBuf,
-        message: String,
-        no_verify: bool,
-    ) -> GitFuture<Result<(), GitError>> {
-        Box::pin(async move { commit_all(repo_path, message, no_verify).await })
+    fn commit_all(&self, repo_path: PathBuf, message: String) -> GitFuture<Result<(), GitError>> {
+        Box::pin(async move { commit_all(repo_path, message).await })
     }
 
     fn commit_all_preserving_single_commit(
@@ -593,7 +592,6 @@ impl GitClient for RealGitClient {
         base_branch: String,
         commit_message: String,
         message_strategy: SingleCommitMessageStrategy,
-        no_verify: bool,
     ) -> GitFuture<Result<(), GitError>> {
         Box::pin(async move {
             commit_all_preserving_single_commit(
@@ -601,7 +599,6 @@ impl GitClient for RealGitClient {
                 base_branch,
                 commit_message,
                 message_strategy,
-                no_verify,
             )
             .await
         })
@@ -848,6 +845,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_real_git_client_runs_hook_checks_and_commits() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        fs::write(dir.path().join("README.md"), "updated repo")
+            .expect("failed to update tracked file");
+        let client = RealGitClient;
+
+        // Act
+        client
+            .check_pre_commit_hook_ready(dir.path().to_path_buf())
+            .await
+            .expect("repository without hook configuration should be ready");
+        client
+            .run_pre_commit_hook(dir.path().to_path_buf())
+            .await
+            .expect("missing pre-commit hook should be accepted");
+        client
+            .commit_all(
+                dir.path().to_path_buf(),
+                "Update repository documentation".to_string(),
+            )
+            .await
+            .expect("real git client should commit changes");
+
+        // Assert
+        assert_eq!(
+            run_git_command_stdout(dir.path(), &["log", "-1", "--pretty=%s"]),
+            "Update repository documentation"
+        );
+    }
+
+    #[tokio::test]
     async fn test_real_git_client_detects_merge_conflicts() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -1016,7 +1046,6 @@ mod tests {
             "main".to_string(),
             commit_message.clone(),
             SingleCommitMessageStrategy::Replace,
-            false,
         )
         .await;
         let commit_count = run_git_command_stdout(dir.path(), &["rev-list", "--count", "HEAD"]);
@@ -1044,7 +1073,6 @@ mod tests {
             "main".to_string(),
             commit_message.clone(),
             SingleCommitMessageStrategy::Replace,
-            false,
         )
         .await
         .expect("failed to create first session commit");
@@ -1058,7 +1086,6 @@ mod tests {
             "main".to_string(),
             commit_message.clone(),
             SingleCommitMessageStrategy::Replace,
-            false,
         )
         .await;
         let second_hash = run_git_command_stdout(dir.path(), &["rev-parse", "HEAD"]);
@@ -1082,7 +1109,6 @@ mod tests {
             "main".to_string(),
             "First session message".to_string(),
             SingleCommitMessageStrategy::Replace,
-            false,
         )
         .await
         .expect("failed to create first session commit");
@@ -1094,7 +1120,6 @@ mod tests {
             "main".to_string(),
             "Refined session message".to_string(),
             SingleCommitMessageStrategy::Replace,
-            false,
         )
         .await;
         let head_message = run_git_command_stdout(dir.path(), &["log", "-1", "--pretty=%B"]);
@@ -1128,7 +1153,6 @@ mod tests {
             "main".to_string(),
             commit_message.clone(),
             SingleCommitMessageStrategy::Replace,
-            false,
         )
         .await;
         lock_cleanup

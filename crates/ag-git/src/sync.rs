@@ -68,24 +68,16 @@ pub enum PullRebaseResult {
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
 /// * `commit_message` - Message for the commit
-/// * `no_verify` - When `true`, skips configured git hooks such as
-///   `prek`-managed `pre-commit` and `commit-msg` hooks (`--no-verify`)
-///
 /// # Returns
 /// Ok(()) on success.
 ///
 /// # Errors
 /// Returns a [`GitError`] if staging or committing changes fails.
-pub(crate) async fn commit_all(
-    repo_path: PathBuf,
-    commit_message: String,
-    no_verify: bool,
-) -> Result<(), GitError> {
+pub(crate) async fn commit_all(repo_path: PathBuf, commit_message: String) -> Result<(), GitError> {
     commit_all_with_retry(
         repo_path,
         commit_message,
         SingleCommitMessageStrategy::Replace,
-        no_verify,
         false,
     )
     .await
@@ -103,9 +95,6 @@ pub(crate) async fn commit_all(
 /// * `commit_message` - Message that identifies the session commit
 /// * `message_strategy` - Whether amends replace or reuse the existing `HEAD`
 ///   message
-/// * `no_verify` - When `true`, skips configured git hooks such as
-///   `prek`-managed `pre-commit` and `commit-msg` hooks (`--no-verify`)
-///
 /// # Returns
 /// Ok(()) on success.
 ///
@@ -117,7 +106,6 @@ pub(crate) async fn commit_all_preserving_single_commit(
     base_branch: String,
     commit_message: String,
     message_strategy: SingleCommitMessageStrategy,
-    no_verify: bool,
 ) -> Result<(), GitError> {
     let amend_existing_commit = has_commits_since(repo_path.clone(), base_branch).await?;
 
@@ -125,7 +113,6 @@ pub(crate) async fn commit_all_preserving_single_commit(
         repo_path,
         commit_message,
         message_strategy,
-        no_verify,
         amend_existing_commit,
     )
     .await
@@ -153,6 +140,38 @@ pub(crate) async fn stage_all(repo_path: PathBuf) -> Result<(), GitError> {
 /// hook path cannot be resolved.
 pub(crate) async fn check_pre_commit_hook_ready(repo_path: PathBuf) -> Result<(), GitError> {
     spawn_blocking(move || ensure_pre_commit_hook_ready(&repo_path)).await?
+}
+
+/// Runs the effective Git `pre-commit` hook against the current index.
+///
+/// Missing hooks are accepted so repositories without configured validation
+/// retain Git's normal commit behavior. Hook failures are returned with their
+/// captured output.
+///
+/// # Errors
+/// Returns a [`GitError`] when Git cannot run the hook or the hook rejects the
+/// staged changes.
+pub(crate) async fn run_pre_commit_hook(repo_path: PathBuf) -> Result<(), GitError> {
+    spawn_blocking(move || {
+        pre_commit_hook_result(run_git_command_output_sync(
+            &repo_path,
+            &["hook", "run", "--ignore-missing", "pre-commit"],
+        ))
+    })
+    .await?
+}
+
+/// Interprets the output of an effective pre-commit hook invocation.
+fn pre_commit_hook_result(output: Result<Output, GitError>) -> Result<(), GitError> {
+    let output = output?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(GitError::CommandFailed {
+        command: "git hook run pre-commit".to_string(),
+        stderr: command_output_detail(&output.stdout, &output.stderr),
+    })
 }
 
 /// Returns the short hash of the current `HEAD` commit.
@@ -1417,7 +1436,6 @@ async fn commit_all_with_retry(
     repo_path: PathBuf,
     commit_message: String,
     message_strategy: SingleCommitMessageStrategy,
-    no_verify: bool,
     amend_existing_commit: bool,
 ) -> Result<(), GitError> {
     spawn_blocking(move || {
@@ -1428,7 +1446,6 @@ async fn commit_all_with_retry(
                 &repo_path,
                 &commit_message,
                 message_strategy,
-                no_verify,
                 amend_existing_commit,
             )?;
 
@@ -1638,7 +1655,6 @@ fn run_commit_command(
     repo_path: &Path,
     commit_message: &str,
     message_strategy: SingleCommitMessageStrategy,
-    no_verify: bool,
     amend_existing_commit: bool,
 ) -> Result<Output, GitError> {
     let mut args = vec!["commit"];
@@ -1656,10 +1672,6 @@ fn run_commit_command(
     } else {
         args.push("-m");
         args.push(commit_message);
-    }
-
-    if no_verify {
-        args.push("--no-verify");
     }
 
     run_git_command_with_index_lock_retry(repo_path, &args, &[])
@@ -2151,19 +2163,23 @@ mod tests {
 
     #[cfg(unix)]
     fn write_executable_pre_commit_hook(hook_path: &Path) {
+        write_executable_hook(hook_path, "#!/bin/sh\nexit 0\n");
+    }
+
+    #[cfg(unix)]
+    fn write_executable_hook(hook_path: &Path, contents: &str) {
         fs::create_dir_all(
             hook_path
                 .parent()
                 .expect("pre-commit hook should have a parent directory"),
         )
         .expect("failed to create hooks directory");
-        fs::write(hook_path, "#!/bin/sh\nexit 0\n").expect("failed to write pre-commit hook");
+        fs::write(hook_path, contents).expect("failed to write Git hook");
         let mut permissions = fs::metadata(hook_path)
-            .expect("failed to read pre-commit hook metadata")
+            .expect("failed to read Git hook metadata")
             .permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(hook_path, permissions)
-            .expect("failed to make pre-commit hook executable");
+        fs::set_permissions(hook_path, permissions).expect("failed to make Git hook executable");
     }
 
     #[test]
@@ -2276,6 +2292,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_pre_commit_hook_accepts_missing_hook() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+
+        // Act
+        let result = run_pre_commit_hook(temp_dir.path().to_path_buf()).await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_pre_commit_hook_uses_effective_custom_hook() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(
+            temp_dir.path(),
+            &["config", "core.hooksPath", ".custom-hooks"],
+        );
+        write_executable_hook(
+            &temp_dir.path().join(".custom-hooks").join("pre-commit"),
+            "#!/bin/sh\nprintf 'ran\\n' > pre-commit-ran\n",
+        );
+
+        // Act
+        let result = run_pre_commit_hook(temp_dir.path().to_path_buf()).await;
+
+        // Assert
+        assert!(result.is_ok());
+        assert_eq!(
+            fs::read_to_string(temp_dir.path().join("pre-commit-ran"))
+                .expect("pre-commit marker should exist"),
+            "ran\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_pre_commit_hook_returns_hook_failure_output() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        let hook_path = temp_dir.path().join(git_command_stdout(
+            temp_dir.path(),
+            &["rev-parse", "--git-path", "hooks/pre-commit"],
+        ));
+        write_executable_hook(
+            &hook_path,
+            "#!/bin/sh\nprintf 'resolved conflict rejected\\n' >&2\nexit 1\n",
+        );
+
+        // Act
+        let result = run_pre_commit_hook(temp_dir.path().to_path_buf()).await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(GitError::CommandFailed {
+                ref command,
+                ref stderr,
+            }) if command == "git hook run pre-commit"
+                && stderr.contains("resolved conflict rejected")
+        ));
+    }
+
+    #[test]
+    fn pre_commit_hook_result_preserves_command_launch_error() {
+        // Arrange
+        let command_error = GitError::CommandFailed {
+            command: "git hook run pre-commit".to_string(),
+            stderr: "git executable unavailable".to_string(),
+        };
+
+        // Act
+        let result = pre_commit_hook_result(Err(command_error));
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(GitError::CommandFailed { ref stderr, .. })
+                if stderr == "git executable unavailable"
+        ));
+    }
+
+    #[tokio::test]
     async fn commit_all_allows_configured_validation_without_hook() {
         // Arrange
         let temp_dir = tempdir().expect("failed to create temp dir");
@@ -2289,12 +2393,7 @@ mod tests {
             .expect("failed to write worktree change");
 
         // Act
-        let result = commit_all(
-            temp_dir.path().to_path_buf(),
-            "Change README".to_string(),
-            false,
-        )
-        .await;
+        let result = commit_all(temp_dir.path().to_path_buf(), "Change README".to_string()).await;
 
         // Assert
         assert!(result.is_ok());
@@ -3205,7 +3304,6 @@ main\torigin/main\tbehind 2\nwt/1234abcd\torigin/wt/1234abcd\tahead 3, behind \
             "main".to_string(),
             "Session commit".to_string(),
             SingleCommitMessageStrategy::Replace,
-            true,
         )
         .await;
 
