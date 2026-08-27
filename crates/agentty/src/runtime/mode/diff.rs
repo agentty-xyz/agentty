@@ -327,11 +327,7 @@ fn selected_line_comment_target(
         .review_comments
         .as_ref()
         .is_some_and(|review_comments| review_comments.sidebar_focus == DiffSidebarFocus::Comments);
-    if can_reply_with_line_comments
-        && is_shift_char_key(key, 'c')
-        && *navigation.focus == DiffFocus::Files
-        && !review_comments_are_focused
-    {
+    if can_reply_with_line_comments && is_shift_char_key(key, 'c') && !review_comments_are_focused {
         return render_cache_store
             .diff_layout_cache()
             .content(navigation.diff)
@@ -409,6 +405,8 @@ fn start_line_comment_edit(
         DiffCommentTarget::File { path }
             if content.selected_file_path(*file_explorer_selected_index) == Some(path.as_str()) =>
         {
+            line_comments.cancel_selection();
+
             (0, true)
         }
         DiffCommentTarget::File { .. } => return,
@@ -2802,7 +2800,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_comments_on_selected_file_and_builds_next_turn() {
+    async fn test_handle_comments_on_selected_file_from_active_row_selection() {
         // Arrange
         let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
         let diff = concat!(
@@ -2810,13 +2808,24 @@ mod tests {
             "@@ -0,0 +1 @@\n",
             "+fn main() {}\n",
         );
-        app.mode = diff_mode_fixture(diff, 1, DiffFocus::Files, DiffPreview::default());
+        app.mode = diff_mode_fixture(diff, 1, DiffFocus::Content, DiffPreview::default());
 
-        // Act
+        // Act — start a row selection from inside the file, then replace it
+        // with a whole-file comment.
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT),
+        );
         handle(
             &mut app,
             TEST_TERMINAL_SIZE,
             KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT),
+        );
+        let selection_cleared_while_editing = matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. }
+                if line_comments.is_editing() && !line_comments.is_selecting()
         );
         handle(
             &mut app,
@@ -2830,6 +2839,7 @@ mod tests {
         );
 
         // Assert
+        assert!(selection_cleared_while_editing);
         assert!(matches!(
             &app.mode,
             AppMode::Diff {
@@ -2840,6 +2850,7 @@ mod tests {
                 && line_comments.comments[0].target
                     == DiffCommentTarget::file("src/main.rs")
                 && line_comments.comments[0].input.text() == "R"
+                && !line_comments.is_selecting()
         ));
 
         // Act

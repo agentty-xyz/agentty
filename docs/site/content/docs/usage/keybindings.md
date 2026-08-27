@@ -273,18 +273,20 @@ Pressing `d` from session view opens Diff mode focused on Files with the right p
 showing the git diff. While Files remains focused, use `Shift+j` / `Shift+k` or `Up` /
 `Down` to scroll the selected file without moving focus. Press `Enter` or `l` on a file
 to focus its changes, or press `Shift+C` to open a whole-file comment above its patch.
-Within the patch, press `Enter` to edit the selected changed line inline. After
-finishing with `Enter` or `Esc`, use `j` / `k` or the arrow keys to move through changed
-lines and completed file or inline comments. Press `Enter` on a selected comment to edit
-its text again. Press `Shift+V` on a changed line to start a visual changed-row
-selection, extend it with the same navigation keys, then press `Enter` to comment on the
-range or `Esc` to cancel the selection. The range stays highlighted while its inline
-editor is open and after the comment is finished, so the comment's source remains
-visible. `Esc`, `Left`, `h`, or `f` returns focus to the file tree when no visual
-selection is active. Linked review requests add a Comments section below Files; `c`
-focuses Comments while the file tree is focused, and `f` returns to Files. The Comments
-section keeps its own `Enter` action for submitting marked review threads. Press `s` to
-submit every file, line, and range comment together in the next turn from any Diff pane.
+Within the patch, `Shift+C` also opens the whole-file comment, including while a visual
+row selection is active; opening it clears that row selection. Press `Enter` to edit the
+selected changed line inline. After finishing with `Enter` or `Esc`, use `j` / `k` or
+the arrow keys to move through changed lines and completed file or inline comments.
+Press `Enter` on a selected comment to edit its text again. Press `Shift+V` on a changed
+line to start a visual changed-row selection, extend it with the same navigation keys,
+then press `Enter` to comment on the range or `Esc` to cancel the selection. The range
+stays highlighted while its inline editor is open and after the comment is finished, so
+the comment's source remains visible. `Esc`, `Left`, `h`, or `f` returns focus to the
+file tree when no visual selection is active. Linked review requests add a Comments
+section below Files; `c` focuses Comments while the file tree is focused, and `f`
+returns to Files. The Comments section keeps its own `Enter` action for submitting
+marked review threads. Press `s` to submit every file, line, and range comment together
+in the next turn from any Diff pane.
 
 | Key                   | Action                                         |
 | --------------------- | ---------------------------------------------- |

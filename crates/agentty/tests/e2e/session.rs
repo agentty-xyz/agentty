@@ -8261,6 +8261,17 @@ fn test_diff_row_selection_comments() -> E2eResult {
                         "selected_comment_rows",
                         "Visual line selection highlights a changed-row range",
                     )
+                    .write_text("C")
+                    .wait_for_text("file comment: |", 5000)
+                    .write_text("Review the selected file.")
+                    .press_key(ENTER_KEY)
+                    .wait_for_text("file comment: Review the selected file.", 3000)
+                    .capture_labeled(
+                        "file_comment_from_row_selection",
+                        "Whole-file feedback replaces the visual row selection",
+                    )
+                    .write_text("V")
+                    .press_key("j")
                     .press_key(ENTER_KEY)
                     .wait_for_text("comment: |", 5000)
                     .write_text("Explain these lines.")
@@ -8282,8 +8293,19 @@ fn test_diff_row_selection_comments() -> E2eResult {
                 let selection_frame = common::frame_from_capture(&report.captures[0]);
                 let selection_full = Region::full(selection_frame.cols(), selection_frame.rows());
                 assertion::assert_text_in_region(&selection_frame, "Esc: cancel", &selection_full);
+                assertion::assert_text_in_region(&selection_frame, "Shift+C", &selection_full);
 
-                let editor_frame = common::frame_from_capture(&report.captures[1]);
+                let file_comment_frame = common::frame_from_capture(&report.captures[1]);
+                let file_comment_full =
+                    Region::full(file_comment_frame.cols(), file_comment_frame.rows());
+                assertion::assert_text_in_region(
+                    &file_comment_frame,
+                    "file comment: Review the selected file.",
+                    &file_comment_full,
+                );
+                assertion::assert_not_visible(&file_comment_frame, "Esc: cancel");
+
+                let editor_frame = common::frame_from_capture(&report.captures[2]);
                 let editor_full = Region::full(editor_frame.cols(), editor_frame.rows());
                 assertion::assert_text_in_region(
                     &editor_frame,
