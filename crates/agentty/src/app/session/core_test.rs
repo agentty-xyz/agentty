@@ -434,6 +434,9 @@ fn setup_mock_merge_and_rebase_expectations(mock: &mut git::MockGitClient) {
     mock.expect_rebase_onto_start()
         .times(0..)
         .returning(|_, _, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+    mock.expect_run_pre_commit_hook()
+        .times(0..)
+        .returning(|_| Box::pin(async { Ok(()) }));
     mock.expect_rebase_continue()
         .times(0..)
         .returning(|_| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
@@ -530,10 +533,10 @@ fn synthetic_added_line_diff(line_count: usize) -> String {
 fn setup_mock_commit_and_branch_expectations(mock: &mut git::MockGitClient) {
     mock.expect_commit_all()
         .times(0..)
-        .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _| Box::pin(async { Ok(()) }));
     mock.expect_commit_all_preserving_single_commit()
         .times(0..)
-        .returning(|_, _, _, _, _| {
+        .returning(|_, _, _, _| {
             Box::pin(async {
                 Err(git::GitError::OutputParse(
                     "Nothing to commit: no changes detected".to_string(),
@@ -4794,7 +4797,7 @@ async fn test_spawn_session_task_auto_commits_changes() {
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .times(1)
-        .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_head_short_hash()
         .times(1)
@@ -4898,14 +4901,13 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .times(1)
-        .withf(|_, base_branch, commit_message, strategy, no_verify| {
+        .withf(|_, base_branch, commit_message, strategy| {
             base_branch == "main"
                 && commit_message == "Refine session work"
                 && *strategy == git::SingleCommitMessageStrategy::Replace
-                && !*no_verify
         })
         .in_sequence(&mut sequence)
-        .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_head_short_hash()
         .times(1)
@@ -4941,7 +4943,6 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
             SpeedMode::Normal,
         ),
         &one_shot_client,
-        false,
         false,
     )
     .await
@@ -5806,8 +5807,7 @@ async fn test_rebase_session_auto_commits_uncommitted_changes() {
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .times(1)
-        .withf(|_, _, _, _, no_verify| !*no_verify)
-        .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_head_short_hash()
         .times(1)

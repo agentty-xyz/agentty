@@ -667,12 +667,8 @@ impl SessionTaskService {
     ) -> Result<Option<SessionCommitOutcome>, SessionError> {
         let mut failure_tracker =
             FailureTracker::new(AUTO_COMMIT_ASSIST_POLICY.max_identical_failure_streak);
-        // Test repos do not install hooks deterministically; skip hook
-        // execution in tests to keep auto-commit behavior stable.
-        let skip_verify_hooks = cfg!(test);
-
         for assist_attempt in 1..=AUTO_COMMIT_ASSIST_POLICY.max_attempts + 1 {
-            match Self::commit_changes_with_git_client(context, skip_verify_hooks).await {
+            match Self::commit_changes_with_git_client(context).await {
                 Ok(commit_outcome) => {
                     return Ok(Some(commit_outcome));
                 }
@@ -712,17 +708,14 @@ impl SessionTaskService {
 
     /// Commits all worktree changes and returns the current `HEAD` short hash.
     ///
-    /// Pass `no_verify` to skip commit hooks (used in tests for deterministic
-    /// execution without local `prek` hook setup). The model used for
-    /// commit-message generation is resolved from the session's auto-commit
-    /// settings before the git commit is attempted.
+    /// The model used for commit-message generation is resolved from the
+    /// session's auto-commit settings before the git commit is attempted.
     ///
     /// # Errors
     /// Returns an error if commit-message generation, staging/commit, or
     /// `HEAD` resolution fails.
     async fn commit_changes_with_git_client(
         context: &AssistContext,
-        no_verify: bool,
     ) -> Result<SessionCommitOutcome, SessionError> {
         let base_branch = context
             .db
@@ -750,7 +743,6 @@ impl SessionTaskService {
                 auto_commit_speed_mode,
             ),
             context.one_shot_client.as_ref(),
-            no_verify,
             Self::load_include_coauthored_by_agentty_setting(&context.db, &context.id).await,
         )
         .await
@@ -936,7 +928,6 @@ impl SessionTaskService {
             crate::domain::agent::SpeedMode,
         ),
         one_shot_client: &dyn OneShotClient,
-        no_verify: bool,
         include_coauthored_by_agentty: bool,
     ) -> Result<SessionCommitOutcome, SessionError> {
         let (session_agent, reasoning_level, speed_mode) = agent_settings;
@@ -980,7 +971,6 @@ impl SessionTaskService {
                 base_branch.to_string(),
                 generated_commit_message.clone(),
                 git::SingleCommitMessageStrategy::Replace,
-                no_verify,
             )
             .await?;
 
@@ -2759,7 +2749,7 @@ mod tests {
         mock_git_client
             .expect_commit_all_preserving_single_commit()
             .times(1)
-            .returning(|_, _, _, _, _| Box::pin(async { Ok::<_, GitError>(()) }));
+            .returning(|_, _, _, _| Box::pin(async { Ok::<_, GitError>(()) }));
         mock_git_client
             .expect_head_short_hash()
             .times(1)
@@ -3012,7 +3002,7 @@ mod tests {
         mock_git_client
             .expect_commit_all_preserving_single_commit()
             .times(1)
-            .returning(|_, _, _, _, _| Box::pin(async { Ok::<_, GitError>(()) }));
+            .returning(|_, _, _, _| Box::pin(async { Ok::<_, GitError>(()) }));
         mock_git_client
             .expect_head_short_hash()
             .times(1)

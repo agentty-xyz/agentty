@@ -421,8 +421,11 @@ first and rebase onto the remote base ref, unpublished sessions rebase onto the 
 local base branch. In **InProgress**, the sync request is queued behind the running turn
 before the session enters **Rebasing**. If the rebase stops on conflicts, Agentty asks
 the existing agent session to resolve only the conflicted files, then stages the edits
-and continues the rebase itself. The completed conversation remains in place while the
-rebase or merge status animates below it.
+and runs the repository's effective `pre-commit` hook before continuing the rebase
+itself. A hook failure aborts the rebase, records a `[Sync Error]`, and prevents the
+post-rebase auto-push. Repositories without an installed hook retain Git's normal
+no-hook behavior. The completed conversation remains in place while the rebase or merge
+status animates below it.
 
 During normal turns, the agent prompt names the session worktree as the only writable
 root. After a turn, if Agentty detects that the main checkout's tracked-file status

@@ -455,6 +455,23 @@ impl RebaseAssistLoopInput {
         .await
     }
 
+    /// Runs the effective pre-commit hook against the staged conflict
+    /// resolution.
+    ///
+    /// # Errors
+    /// Returns an error when the hook rejects the staged changes or cannot be
+    /// executed.
+    async fn run_pre_commit_hook(&self) -> Result<(), SessionError> {
+        self.git_client()
+            .run_pre_commit_hook(self.folder().to_path_buf())
+            .await
+            .map_err(|error| {
+                SessionError::Workflow(format!(
+                    "Pre-commit hook rejected resolved rebase conflicts: {error}"
+                ))
+            })
+    }
+
     /// Continues in-progress rebase for the active workflow.
     ///
     /// # Errors
@@ -2030,7 +2047,6 @@ impl SessionManager {
                 auto_commit_speed_mode,
             ),
             input.one_shot_client.as_ref(),
-            false,
             include_coauthored_by_agentty,
         )
         .await
@@ -2566,6 +2582,7 @@ impl SessionManager {
         failure_tracker: &mut FailureTracker,
         assist_attempt: usize,
     ) -> Result<RebaseAssistAttemptOutcome, SessionError> {
+        assist_input.run_pre_commit_hook().await?;
         let continue_step = assist_input.run_rebase_continue().await?;
 
         Self::evaluate_rebase_continue_step(
@@ -3387,6 +3404,10 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok(false) }));
         mock_git_client
+            .expect_run_pre_commit_hook()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
             .expect_rebase_continue()
             .times(1)
             .returning(|_| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
@@ -4013,8 +4034,8 @@ mod tests {
             .expect_commit_all_preserving_single_commit()
             .times(1)
             .in_sequence(&mut sequence)
-            .withf(|_, base_branch, _, _, _| base_branch == "origin/main")
-            .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
+            .withf(|_, base_branch, _, _| base_branch == "origin/main")
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
         mock_git_client
             .expect_head_short_hash()
             .times(1)
@@ -4085,6 +4106,58 @@ mod tests {
         assert_eq!(error.to_string(), "failed to list conflicts");
     }
 
+    #[tokio::test]
+    async fn test_run_rebase_assist_loop_core_aborts_when_pre_commit_hook_fails() {
+        // Arrange
+        let mut mock_git_client = git::MockGitClient::new();
+        let mut sequence = Sequence::new();
+        mock_git_client
+            .expect_list_conflicted_files()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+        mock_git_client
+            .expect_list_staged_conflict_marker_files()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+        mock_git_client
+            .expect_run_pre_commit_hook()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(GitError::CommandFailed {
+                        command: "git hook run pre-commit".to_string(),
+                        stderr: "resolved conflict rejected".to_string(),
+                    })
+                })
+            });
+        mock_git_client.expect_rebase_continue().times(0);
+        mock_git_client
+            .expect_abort_rebase()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let (_temp_dir, input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+
+        // Act
+        let result = SessionManager::run_rebase_assist_loop_core(
+            RebaseAssistLoopInput::Session(Box::new(input)),
+            None,
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("hook failure should stop assisted rebase");
+        assert_eq!(
+            error.to_string(),
+            "Pre-commit hook rejected resolved rebase conflicts: git hook run pre-commit: \
+             resolved conflict rejected"
+        );
+    }
+
     /// Verifies session rebase assistance stops when the same conflict detail
     /// repeats after the initial conflict state.
     #[tokio::test]
@@ -4100,6 +4173,10 @@ mod tests {
             .expect_list_staged_conflict_marker_files()
             .times(REBASE_ASSIST_POLICY.max_attempts)
             .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+        mock_git_client
+            .expect_run_pre_commit_hook()
+            .times(REBASE_ASSIST_POLICY.max_attempts)
+            .returning(|_| Box::pin(async { Ok(()) }));
         mock_git_client
             .expect_rebase_continue()
             .times(REBASE_ASSIST_POLICY.max_attempts)
@@ -4183,6 +4260,11 @@ mod tests {
                 .in_sequence(&mut sequence)
                 .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
             mock_git_client
+                .expect_run_pre_commit_hook()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| Box::pin(async { Ok(()) }));
+            mock_git_client
                 .expect_rebase_continue()
                 .times(1)
                 .in_sequence(&mut sequence)
@@ -4245,6 +4327,11 @@ mod tests {
                 .times(1)
                 .in_sequence(&mut sequence)
                 .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+            mock_git_client
+                .expect_run_pre_commit_hook()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| Box::pin(async { Ok(()) }));
             mock_git_client
                 .expect_rebase_continue()
                 .times(1)

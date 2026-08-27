@@ -898,9 +898,17 @@ fn seed_clean_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::
 /// Seeds a review-ready worktree whose committed change conflicts with a
 /// newer commit on the stored base branch.
 fn seed_merge_conflict_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_merge_conflict_session_with_model(env, "gpt-5.6-sol")
+}
+
+/// Seeds the merge-conflict fixture with a specific persisted agent model.
+fn seed_merge_conflict_session_with_model(
+    env: &BuilderEnv,
+    model: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(MERGE_CONFLICT_SESSION_ID, "gpt-5.6-sol", "main", "Review")
+        SessionSeed::regular(MERGE_CONFLICT_SESSION_ID, model, "main", "Review")
             .with_title("Update shared configuration"),
     )?;
 
@@ -940,6 +948,43 @@ fn seed_merge_conflict_session(env: &BuilderEnv) -> Result<(), Box<dyn std::erro
     std::fs::write(env.workdir.join("shared.txt"), "main change\n")?;
     run_git(&env.workdir, &["add", "shared.txt"])?;
     run_git(&env.workdir, &["commit", "-m", "Change main configuration"])?;
+
+    Ok(())
+}
+
+/// Seeds an assisted rebase conflict whose staged resolution is rejected by
+/// the effective pre-commit hook.
+fn seed_rebase_pre_commit_hook_failure_session(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_merge_conflict_session_with_model(env, "gemini-3.1-pro-preview")?;
+
+    let antigravity_path = env.stub_bin.join("agy");
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'agy 1.2.0\n'; exit 0; fi
+
+printf '%s\n' '{"event":"init","conversation_id":"rebase-hook-test","init":{"cwd":"stub"}}'
+turn=0
+while IFS= read -r prompt_event; do
+  turn=$((turn + 1))
+  printf 'resolved by rebase assistance\n' > shared.txt
+  answer='Resolved the staged rebase conflict.'
+  printf '{"event":"step_update","step_update":{"conversation_id":"rebase-hook-test","step_index":%s,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":4,"output_tokens":4}}}\n' "$turn"
+  printf '{"event":"result","result":{"conversation_id":"rebase-hook-test","status":"SUCCESS","response":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[]}","structured_output":{"answer":"%s","questions":[],"review_comment_outcomes":[]},"error":"","duration_seconds":0.1,"num_turns":%s,"usage":{"input_tokens":4,"output_tokens":4,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":8}}}\n' "$answer" "$answer" "$turn"
+done
+"#;
+    std::fs::write(&antigravity_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&antigravity_path, std::fs::Permissions::from_mode(0o755))?;
+
+    let pre_commit_hook = env.workdir.join(".git").join("hooks").join("pre-commit");
+    std::fs::write(
+        &pre_commit_hook,
+        "#!/bin/sh\nprintf 'resolved conflict rejected by pre-commit hook\\n' >&2\nexit 1\n",
+    )?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&pre_commit_hook, std::fs::Permissions::from_mode(0o755))?;
 
     Ok(())
 }
@@ -3633,6 +3678,39 @@ fn test_session_merge_conflict_alert() -> E2eResult {
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Merge conflict with main", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify assisted rebase conflict resolutions must pass the effective
+/// pre-commit hook before Agentty continues the rebase.
+#[test]
+fn test_session_rebase_pre_commit_hook_failure() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_rebase_pre_commit_hook_failure")
+        .with_git()
+        .setup(seed_rebase_pre_commit_hook_failure_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("[merge conflict]", 10000)
+                    .press_key("Enter")
+                    .wait_for_text("Merge conflict with main", 5000)
+                    .press_key("r")
+                    .wait_for_text("[Sync Error]", 15000)
+                    .capture_labeled(
+                        "rebase_pre_commit_hook_failure",
+                        "Pre-commit hook blocks the assisted rebase resolution",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "[Sync Error]", &full);
+                assertion::assert_text_in_region(frame, "Pre-commit hook rejected", &full);
+                assertion::assert_text_in_region(frame, "resolved conflict rejected", &full);
             },
         )?;
 
