@@ -72,6 +72,52 @@ pub(crate) async fn load_default_fast_agent_setting(
     .await
 }
 
+/// Loads the persisted review-agent defaults for one project.
+///
+/// Background review workflows use this when the owning project is not the
+/// active UI project, so generation keeps the model, reasoning, and speed
+/// configured for the session's project. Unconfigured projects use the same
+/// provider-aware baseline as normal project loading, independent of the
+/// active project's defaults.
+pub(crate) async fn load_default_review_agent_setting(
+    services: &AppServices,
+    project_id: i64,
+) -> crate::app::review::ReviewAgent {
+    let available_agent_kinds = services.available_agent_kinds();
+    let fallback_selection = default_smart_fallback_selection(&available_agent_kinds);
+    let default_smart_agent = load_default_smart_agent_selection_from_repositories(
+        services.db(),
+        Some(project_id),
+        fallback_selection,
+        &available_agent_kinds,
+    )
+    .await;
+    let default_review_agent = load_model_selection_setting(
+        services.db(),
+        Some(project_id),
+        SettingName::DefaultReviewAgent,
+        SettingName::DefaultReviewModel,
+        default_smart_agent,
+        &available_agent_kinds,
+    )
+    .await
+    .unwrap_or(default_smart_agent);
+    let defaults = load_model_role_defaults(
+        services.db(),
+        project_id,
+        SettingName::DefaultReviewReasoningLevel,
+        SettingName::DefaultReviewSpeedMode,
+        default_review_agent,
+    )
+    .await;
+
+    (
+        defaults.selection,
+        defaults.reasoning_level,
+        defaults.speed_mode,
+    )
+}
+
 /// Loads the persisted fast-model default from repositories as an agent/model
 /// selection.
 ///
@@ -246,10 +292,7 @@ impl SettingsManager {
         available_agent_kinds: Vec<AgentKind>,
         project_id: i64,
     ) -> Self {
-        let default_smart_fallback = fallback_selection_for_available_model(
-            AgentKind::Antigravity.default_model(),
-            &available_agent_kinds,
-        );
+        let default_smart_fallback = default_smart_fallback_selection(&available_agent_kinds);
         let default_smart_agent = load_default_smart_agent_selection_from_repositories(
             &repositories,
             Some(project_id),
@@ -839,6 +882,14 @@ fn fallback_selection_for_available_model(
         agent::resolve_agent_kind_for_model(model, available_agent_kinds, fallback_agent_kind);
 
     AgentSelection::new(agent_kind, model)
+}
+
+/// Returns the owner-independent smart-model baseline for one provider set.
+fn default_smart_fallback_selection(available_agent_kinds: &[AgentKind]) -> AgentSelection {
+    fallback_selection_for_available_model(
+        AgentKind::Antigravity.default_model(),
+        available_agent_kinds,
+    )
 }
 
 /// Loads the persisted terminal color theme through the settings repository.
@@ -1475,6 +1526,54 @@ mod tests {
 
         // Assert
         assert_eq!(fallback_loaded_model, AgentModel::ClaudeHaiku4520251001);
+    }
+
+    #[tokio::test]
+    async fn load_default_review_agent_setting_uses_inactive_project_baseline() {
+        // Arrange
+        let (services, active_project_id) = test_services().await;
+        let inactive_project_id = services
+            .db()
+            .projects()
+            .upsert_project("/tmp/inactive-project", Some("main".to_string()))
+            .await
+            .expect("failed to create inactive project");
+        services
+            .db()
+            .settings()
+            .upsert_project_settings(
+                active_project_id,
+                vec![
+                    (
+                        SettingName::DefaultSmartAgent,
+                        AgentKind::Codex.name().to_string(),
+                    ),
+                    (
+                        SettingName::DefaultSmartModel,
+                        AgentModel::Gpt56Sol.as_str().to_string(),
+                    ),
+                ],
+            )
+            .await
+            .expect("failed to persist active project smart default");
+        services
+            .db()
+            .settings()
+            .set_active_project_id(active_project_id)
+            .await
+            .expect("failed to set active project");
+
+        // Act
+        let (selection, reasoning_level, speed_mode) =
+            load_default_review_agent_setting(&services, inactive_project_id).await;
+
+        // Assert
+        assert_eq!(
+            selection,
+            AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro)
+        );
+        assert_eq!(reasoning_level, ReasoningLevel::default());
+        assert_eq!(speed_mode, SpeedMode::default());
     }
 
     #[tokio::test]

@@ -1491,14 +1491,15 @@ impl App {
     ///
     /// The review assist prompt enforces inspection-only review constraints
     /// and recommends verification commands instead of running them.
-    pub(crate) fn start_review_assist(
+    pub(crate) async fn start_review_assist(
         &mut self,
         session_id: &str,
         session_folder: &Path,
         diff_hash: u64,
         review_diff: &str,
+        review_agent: app::review::ReviewAgent,
     ) {
-        let review_agent = app::review::normalize_review_agent(self.review_agent());
+        let review_agent = app::review::normalize_review_agent(review_agent);
         self.review_cache.insert(
             SessionId::from(session_id),
             ReviewCacheEntry::Loading {
@@ -1506,24 +1507,7 @@ impl App {
                 review_agent,
             },
         );
-        let session_chat_history = self
-            .sessions
-            .session_handles()
-            .get(session_id)
-            .and_then(|handles| {
-                handles
-                    .transcript
-                    .lock()
-                    .ok()
-                    .as_deref()
-                    .and_then(SessionTranscript::conversation_replay_text)
-            })
-            .or_else(|| {
-                self.sessions
-                    .session_for_id(session_id)
-                    .and_then(|session| session.transcript.as_ref())
-                    .and_then(SessionTranscript::conversation_replay_text)
-            });
+        let session_chat_history = self.session_chat_history(session_id).await;
 
         mark_session_agent_review(self.sessions.state_mut(), session_id);
         if let Some(session) = self.sessions.state_mut().session_mut_for_id(session_id) {
@@ -1545,6 +1529,36 @@ impl App {
             review_diff,
             session_chat_history.as_deref(),
         );
+    }
+
+    /// Returns saved conversation context from live state or persistence.
+    pub(super) async fn session_chat_history(&self, session_id: &str) -> Option<String> {
+        let live_history = self
+            .sessions
+            .session_handles()
+            .get(session_id)
+            .and_then(|handles| {
+                handles
+                    .transcript
+                    .lock()
+                    .ok()
+                    .as_deref()
+                    .and_then(SessionTranscript::conversation_replay_text)
+            })
+            .or_else(|| {
+                self.sessions
+                    .session_for_id(session_id)
+                    .and_then(|session| session.transcript.as_ref())
+                    .and_then(SessionTranscript::conversation_replay_text)
+            });
+        if live_history.is_some() {
+            return live_history;
+        }
+
+        session::load_session_transcript(self.services.db(), session_id)
+            .await
+            .ok()
+            .and_then(|transcript| transcript.conversation_replay_text())
     }
 
     /// Reloads sessions when metadata cache indicates changes.

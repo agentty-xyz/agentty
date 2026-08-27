@@ -2160,11 +2160,21 @@ const QUEUED_REVIEW_FOLLOW_UP_ANSWER: &str = "Queued review follow-up completed 
 const QUEUED_FIFO_UTILITY_ANSWER: &str = "Queued FIFO helper response";
 /// Focused-review result emitted after a turn completes in an inactive project.
 const DEFERRED_PROJECT_REVIEW_TEXT: &str = "Deferred project completion received focused review.";
+/// Prompt persisted before the owning project becomes inactive.
+const DEFERRED_PROJECT_REVIEW_PROMPT: &str = "Finish while I view another project";
+/// Turn result that the inactive project's focused review must receive as
+/// history.
+const DEFERRED_PROJECT_TURN_ANSWER: &str = "Completed work while another project was active.";
+/// Diagnostic emitted when inactive focused review loses persisted chat
+/// history.
+const MISSING_DEFERRED_PROJECT_HISTORY_TEXT: &str =
+    "Inactive focused review omitted saved session history.";
 
 /// Installs a delayed session turn plus a distinct focused-review response so
 /// project-switching scenarios can prove the automatic review ran.
 fn install_deferred_project_review_claude_stub(
     env: &BuilderEnv,
+    review_started_marker: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
     let script = format!(
@@ -2174,7 +2184,15 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 prompt=$(cat)
 case "$prompt" in
   *"Review the Git diff for display in a terminal UI."*)
-    result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- {DEFERRED_PROJECT_REVIEW_TEXT}\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[]}}'
+    case "$prompt" in
+      *"{DEFERRED_PROJECT_REVIEW_PROMPT}"*"{DEFERRED_PROJECT_TURN_ANSWER}"*)
+        printf 'started\n' > '{}'
+        result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- {DEFERRED_PROJECT_REVIEW_TEXT}\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[]}}'
+        ;;
+      *)
+        result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- {MISSING_DEFERRED_PROJECT_HISTORY_TEXT}\\n\\n### Suggestions\\n\\n- Restore saved session history.\",\"questions\":[]}}'
+        ;;
+    esac
     ;;
   *"Generate a concise, commit-style title"*)
     result='{{\"answer\":\"Cross-project focused review\",\"questions\":[]}}'
@@ -2185,12 +2203,13 @@ case "$prompt" in
   *)
     sleep 3
     printf 'review me\n' > deferred-project-review.txt
-    result='{{\"answer\":\"Completed work while another project was active.\",\"questions\":[]}}'
+    result='{{\"answer\":\"{DEFERRED_PROJECT_TURN_ANSWER}\",\"questions\":[]}}'
     ;;
 esac
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":9}}}}"
 "###,
+        review_started_marker.display(),
     );
 
     std::fs::write(&claude_path, script)?;
@@ -4750,30 +4769,64 @@ fn session_queued_action_survives_project_switching() -> E2eResult {
     Ok(())
 }
 
-/// Verify a turn that finishes while another project is active starts and
-/// displays focused review after its owning project is restored.
+/// Verify a turn that finishes while another project is active starts focused
+/// review immediately and displays it after its owning project is restored.
 #[test]
 fn completed_session_review_survives_project_switching() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
+    let review_started_marker = Arc::new(Mutex::new(None::<PathBuf>));
+    let setup_review_started_marker = Arc::clone(&review_started_marker);
+
     FeatureTest::new("completed_session_review_survives_project_switching")
         .with_git()
-        .setup(|env| {
-            install_deferred_project_review_claude_stub(env)?;
+        .setup(move |env| {
+            let marker_path = env.stub_bin.join("deferred-project-review-started");
+            setup_review_started_marker
+                .lock()
+                .expect("review marker capture should remain available")
+                .replace(marker_path.clone());
+            install_deferred_project_review_claude_stub(env, &marker_path)?;
             common::seed_second_project(env)
         })
         .run(
-            |scenario| {
+            move |scenario| {
+                // Act
+                let review_started_marker = review_started_marker
+                    .lock()
+                    .expect("review marker capture should remain available")
+                    .clone()
+                    .expect("setup should capture the review marker path");
+
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::create_session_with_prompt_and_return_to_list(
-                        "Finish while I view another project",
+                        DEFERRED_PROJECT_REVIEW_PROMPT,
                     ))
                     .press_key("p")
                     .wait_for_text("Switch project", 5000)
                     .press_key("j")
                     .press_key("Enter")
                     .wait_for_text("Project: zeta-project", 5000)
-                    .sleep_ms(6000)
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        move |frame| {
+                            if review_started_marker.is_file() {
+                                return Ok(());
+                            }
+
+                            let full = Region::full(frame.cols(), frame.rows());
+                            assertion::match_text_in_region(
+                                frame,
+                                "focused review request started",
+                                &full,
+                            )
+                        },
+                    )
+                    .capture_labeled(
+                        "inactive_project_review_started",
+                        "Focused review starts while zeta-project remains active",
+                    )
                     .press_key("p")
                     .wait_for_text("Switch project", 5000)
                     .press_key("Enter")
@@ -4786,11 +4839,22 @@ fn completed_session_review_survives_project_switching() -> E2eResult {
                         "Focused review after inactive-project completion",
                     )
             },
-            |frame, _report| {
+            |frame, report| {
+                // Assert
+                let inactive_project_frame = common::frame_from_capture(&report.captures[0]);
+                let inactive_project_full =
+                    Region::full(inactive_project_frame.cols(), inactive_project_frame.rows());
+                assertion::assert_text_in_region(
+                    &inactive_project_frame,
+                    "Project: zeta-project",
+                    &inactive_project_full,
+                );
+
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, DEFERRED_PROJECT_REVIEW_TEXT, &full);
                 assertion::assert_text_in_region(frame, "Suggestions", &full);
                 assertion::assert_not_visible(frame, "Reviewing changes with");
+                assertion::assert_not_visible(frame, MISSING_DEFERRED_PROJECT_HISTORY_TEXT);
             },
         )?;
 

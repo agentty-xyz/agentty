@@ -2,14 +2,15 @@
 
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
+use std::path::PathBuf;
 
 use tracing::warn;
 
-use crate::app::App;
-use crate::app::review::{self, FocusedReviewPersistence, ReviewCacheEntry};
+use crate::app::review::{self, FocusedReviewPersistence, ReviewAgent, ReviewCacheEntry};
 use crate::app::task::{SessionDiffTaskInput, SessionDiffTaskSource, TaskService};
+use crate::app::{App, session};
 use crate::domain::review::FocusedReviewStatus;
-use crate::domain::session::{SessionId, SessionRole, Status};
+use crate::domain::session::{Session, SessionId, SessionRole, Status};
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
     TransientMessageSlot,
@@ -66,6 +67,13 @@ pub(crate) struct PendingSessionDiffRequest {
     session_id: SessionId,
 }
 
+/// Stable focused-review inputs captured before a project switch can unload
+/// the session snapshot.
+struct FocusedReviewTarget {
+    folder: PathBuf,
+    review_agent: ReviewAgent,
+}
+
 /// Action resumed after one full diff finishes loading.
 enum SessionDiffPurpose {
     ApplyFocusedReview {
@@ -78,6 +86,7 @@ enum SessionDiffPurpose {
     Review {
         cached_diff_hash: Option<u64>,
         is_manual: bool,
+        target: FocusedReviewTarget,
     },
 }
 
@@ -315,6 +324,69 @@ impl App {
         }
     }
 
+    /// Starts automatic review preparation for a review-ready session whose
+    /// project is not currently loaded.
+    pub(super) async fn start_inactive_auto_review_diff_load(
+        &mut self,
+        session_id: &SessionId,
+    ) -> bool {
+        if self.pending_session_diff_requests.values().any(|request| {
+            request.session_id == *session_id
+                && matches!(&request.purpose, SessionDiffPurpose::Review { .. })
+        }) || matches!(
+            self.review_cache.get(session_id),
+            Some(ReviewCacheEntry::Loading { .. } | ReviewCacheEntry::Suppressed)
+        ) {
+            return true;
+        }
+
+        let Ok(Some(row)) = self
+            .services
+            .db()
+            .sessions()
+            .load_session(session_id.as_str())
+            .await
+        else {
+            return false;
+        };
+        let status = row.status.parse::<Status>().ok();
+        let role = row
+            .role
+            .as_deref()
+            .and_then(|value| value.parse::<SessionRole>().ok())
+            .unwrap_or_default();
+        if role == SessionRole::Orchestrator
+            || !matches!(status, Some(Status::Review | Status::AgentReview))
+        {
+            return false;
+        }
+        let Some(project_id) = row.project_id else {
+            return false;
+        };
+        let review_agent =
+            crate::app::setting::load_default_review_agent_setting(&self.services, project_id)
+                .await;
+        let folder = session::session_folder(self.services.base_path(), session_id.as_str());
+        let source = SessionDiffTaskSource::Worktree {
+            archived_fallback: None,
+            base_branch: row.base_branch,
+            git_client: self.services.git_client(),
+        };
+
+        self.defer_auto_review_session(session_id).await;
+
+        self.start_review_diff_load_for_target(
+            session_id,
+            false,
+            FocusedReviewTarget {
+                folder: folder.clone(),
+                review_agent,
+            },
+            folder,
+            source,
+        )
+    }
+
     /// Invalidates review and apply continuations captured before newly
     /// completed turns, then clears their stale focused-review generations.
     pub(super) fn supersede_review_diff_loads(&mut self, session_ids: &HashSet<SessionId>) {
@@ -360,8 +432,9 @@ impl App {
             SessionDiffPurpose::Review {
                 cached_diff_hash,
                 is_manual,
+                target,
             } => {
-                self.apply_review_diff_update(update, cached_diff_hash, is_manual)
+                self.apply_review_diff_update(update, cached_diff_hash, is_manual, target)
                     .await;
             }
         }
@@ -441,6 +514,14 @@ impl App {
         purpose: SessionDiffPurpose,
     ) -> Option<u64> {
         let session = self.sessions.session_for_id(session_id)?;
+        let (folder, source) = self.session_diff_task_target(session);
+
+        Some(self.spawn_session_diff_request_for_target(session_id, purpose, folder, source))
+    }
+
+    /// Captures one loaded session's folder and archive-or-worktree diff
+    /// source.
+    fn session_diff_task_target(&self, session: &Session) -> (PathBuf, SessionDiffTaskSource) {
         let source = if session.is_managed()
             && (session.status == Status::Done
                 || (session.role == SessionRole::OrchestrationResearcher
@@ -457,9 +538,22 @@ impl App {
                 git_client: self.services.git_client(),
             }
         };
+
+        (session.folder.clone(), source)
+    }
+
+    /// Spawns one diff task from captured session metadata and registers its
+    /// foreground continuation.
+    fn spawn_session_diff_request_for_target(
+        &mut self,
+        session_id: &SessionId,
+        purpose: SessionDiffPurpose,
+        folder: PathBuf,
+        source: SessionDiffTaskSource,
+    ) -> u64 {
         let input = SessionDiffTaskInput {
             app_event_tx: self.services.event_sender(),
-            folder: session.folder.clone(),
+            folder,
             session_id: session_id.clone(),
             source,
         };
@@ -472,12 +566,39 @@ impl App {
             },
         );
 
-        Some(request_id)
+        request_id
     }
 
     /// Starts one deduplicated review-preparation request and shows loading
     /// state only when there is no prior review output to retain.
     fn start_review_diff_load(&mut self, session_id: &SessionId, is_manual: bool) -> bool {
+        let review_agent = review::normalize_review_agent(self.review_agent());
+        let Some(session) = self.sessions.session_for_id(session_id) else {
+            return false;
+        };
+        let (folder, source) = self.session_diff_task_target(session);
+
+        self.start_review_diff_load_for_target(
+            session_id,
+            is_manual,
+            FocusedReviewTarget {
+                folder: folder.clone(),
+                review_agent,
+            },
+            folder,
+            source,
+        )
+    }
+
+    /// Starts one review-preparation request from stable target metadata.
+    fn start_review_diff_load_for_target(
+        &mut self,
+        session_id: &SessionId,
+        is_manual: bool,
+        target: FocusedReviewTarget,
+        folder: PathBuf,
+        source: SessionDiffTaskSource,
+    ) -> bool {
         if self.pending_session_diff_requests.values().any(|request| {
             request.session_id == *session_id
                 && matches!(&request.purpose, SessionDiffPurpose::Review { .. })
@@ -489,21 +610,19 @@ impl App {
             .review_cache
             .get(session_id)
             .and_then(ReviewCacheEntry::diff_hash);
-        if self
-            .spawn_session_diff_request(
-                session_id,
-                SessionDiffPurpose::Review {
-                    cached_diff_hash,
-                    is_manual,
-                },
-            )
-            .is_none()
-        {
-            return false;
-        }
+        let review_agent = target.review_agent;
+        self.spawn_session_diff_request_for_target(
+            session_id,
+            SessionDiffPurpose::Review {
+                cached_diff_hash,
+                is_manual,
+                target,
+            },
+            folder,
+            source,
+        );
 
         if is_manual && cached_diff_hash.is_none() {
-            let review_agent = review::normalize_review_agent(self.review_agent());
             self.review_cache.insert(
                 session_id.clone(),
                 ReviewCacheEntry::Loading {
@@ -613,26 +732,29 @@ impl App {
         update: SessionDiffUpdate,
         cached_diff_hash: Option<u64>,
         is_manual: bool,
+        target: FocusedReviewTarget,
     ) {
         let session_id = update.session_id;
-        let Some(session) = self.sessions.session_for_id(&session_id) else {
-            if !is_manual {
-                self.defer_auto_review_session(&session_id).await;
-            }
-            if cached_diff_hash.is_none() {
-                self.review_cache.remove(&session_id);
-            }
-
-            return;
+        let status = if let Some(session) = self.sessions.session_for_id(&session_id) {
+            Some(session.status)
+        } else {
+            self.services
+                .db()
+                .sessions()
+                .load_session(session_id.as_str())
+                .await
+                .ok()
+                .flatten()
+                .and_then(|row| row.status.parse::<Status>().ok())
         };
-        if !matches!(session.status, Status::Review | Status::AgentReview) {
+        if !matches!(status, Some(Status::Review | Status::AgentReview)) {
             if cached_diff_hash.is_none() {
                 self.clear_review_output(&session_id);
             }
 
             return;
         }
-        let session_folder = session.folder.clone();
+        self.deferred_auto_review_session_ids.remove(&session_id);
         let diff = match update.result {
             Ok(diff) if !diff.starts_with("Failed to run git diff:") => diff,
             Ok(error) | Err(error) => {
@@ -681,7 +803,14 @@ impl App {
             return;
         }
 
-        self.start_review_assist(&session_id, &session_folder, diff_hash, &diff);
+        self.start_review_assist(
+            &session_id,
+            &target.folder,
+            diff_hash,
+            &diff,
+            target.review_agent,
+        )
+        .await;
         self.persist_focused_review_updates(vec![FocusedReviewPersistence {
             diff_hash: Some(diff_hash),
             session_id,
@@ -740,6 +869,19 @@ mod tests {
                 web_url: "https://example.test/pull/42".to_string(),
             },
         });
+    }
+
+    /// Builds stable review inputs for direct diff-completion tests.
+    fn test_review_target(app: &App, session_id: &SessionId) -> FocusedReviewTarget {
+        let folder = app.sessions.session_for_id(session_id).map_or_else(
+            || session::session_folder(app.services.base_path(), session_id.as_str()),
+            |session| session.folder.clone(),
+        );
+
+        FocusedReviewTarget {
+            folder,
+            review_agent: app.review_agent(),
+        }
     }
 
     #[tokio::test]
@@ -985,7 +1127,102 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn automatic_review_diff_completion_after_project_switch_survives_restart() {
+    async fn automatic_review_diff_load_ignores_missing_loaded_session() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let session_ids = HashSet::from([SessionId::from("missing-session")]);
+
+        // Act
+        app.start_auto_review_diff_loads(&session_ids);
+
+        // Assert
+        assert!(app.pending_session_diff_requests.is_empty());
+        assert!(app.review_cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn inactive_auto_review_diff_load_accepts_existing_request() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let session_id = SessionId::from("inactive-review-pending");
+        let target = test_review_target(&app, &session_id);
+        app.pending_session_diff_requests.insert(
+            42,
+            PendingSessionDiffRequest {
+                purpose: SessionDiffPurpose::Review {
+                    cached_diff_hash: None,
+                    is_manual: false,
+                    target,
+                },
+                session_id: session_id.clone(),
+            },
+        );
+
+        // Act
+        let accepted = app.start_inactive_auto_review_diff_load(&session_id).await;
+
+        // Assert
+        assert!(accepted);
+        assert_eq!(app.pending_session_diff_requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn inactive_auto_review_diff_load_rejects_invalid_persisted_metadata() {
+        // Arrange
+        let (mut app, _base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
+        let project_id = app.projects.active_project_id();
+        let invalid_status_id = SessionId::from("inactive-invalid-status");
+        let inactive_status_id = SessionId::from("inactive-done-status");
+        let missing_project_id = SessionId::from("inactive-missing-project");
+        for (session_id, status) in [
+            (&invalid_status_id, "Review"),
+            (&inactive_status_id, "Done"),
+            (&missing_project_id, "Review"),
+        ] {
+            app.services
+                .db()
+                .sessions()
+                .insert_session(
+                    session_id.as_str(),
+                    "gpt-5.6-sol",
+                    "main",
+                    status,
+                    project_id,
+                )
+                .await
+                .expect("failed to insert inactive session fixture");
+        }
+        sqlx::query("UPDATE session SET status = 'Unknown' WHERE id = ?")
+            .bind(invalid_status_id.as_str())
+            .execute(&pool)
+            .await
+            .expect("failed to invalidate inactive session status");
+        sqlx::query("UPDATE session SET project_id = NULL WHERE id = ?")
+            .bind(missing_project_id.as_str())
+            .execute(&pool)
+            .await
+            .expect("failed to clear inactive session project");
+
+        // Act
+        let invalid_status_started = app
+            .start_inactive_auto_review_diff_load(&invalid_status_id)
+            .await;
+        let inactive_status_started = app
+            .start_inactive_auto_review_diff_load(&inactive_status_id)
+            .await;
+        let missing_project_started = app
+            .start_inactive_auto_review_diff_load(&missing_project_id)
+            .await;
+
+        // Assert
+        assert!(!invalid_status_started);
+        assert!(!inactive_status_started);
+        assert!(!missing_project_started);
+        assert!(app.pending_session_diff_requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn automatic_review_diff_completion_continues_for_inactive_project() {
         // Arrange
         let (mut app, base_dir) = crate::test_support::new_test_app().await;
         let repositories = app.services.db().clone();
@@ -1014,8 +1251,13 @@ mod tests {
         };
 
         // Act
-        app.apply_review_diff_update(update, None, false).await;
-        let deferred_in_memory = app.deferred_auto_review_session_ids.clone();
+        let target = test_review_target(&app, &session_id);
+        app.apply_review_diff_update(update, None, false, target)
+            .await;
+        let review_is_loading = matches!(
+            app.review_cache.get(&session_id),
+            Some(ReviewCacheEntry::Loading { .. })
+        );
         drop(app);
         let recoverable_session_ids = repositories
             .sessions()
@@ -1024,7 +1266,7 @@ mod tests {
             .expect("failed to recover deferred review after restart");
 
         // Assert
-        assert_eq!(deferred_in_memory, HashSet::from([session_id.clone()]));
+        assert!(review_is_loading);
         assert_eq!(recoverable_session_ids, [session_id.as_str()]);
     }
 
@@ -1142,7 +1384,9 @@ mod tests {
         };
 
         // Act
-        app.apply_review_diff_update(update, None, false).await;
+        let target = test_review_target(&app, &session_id);
+        app.apply_review_diff_update(update, None, false, target)
+            .await;
 
         // Assert
         assert_eq!(
@@ -1158,6 +1402,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automatic_empty_review_diff_preserves_cached_output() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = review_app().await;
+        let cached_diff_hash = 42;
+        app.review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Ready {
+                diff_hash: cached_diff_hash,
+                text: "## Review\nExisting finding.".to_string(),
+            },
+        );
+        let update = SessionDiffUpdate {
+            request_id: 1,
+            result: Ok(String::new()),
+            session_id: session_id.clone(),
+        };
+        let target = test_review_target(&app, &session_id);
+
+        // Act
+        app.apply_review_diff_update(update, Some(cached_diff_hash), false, target)
+            .await;
+
+        // Assert
+        assert!(matches!(
+            app.review_cache.get(&session_id),
+            Some(ReviewCacheEntry::Ready { diff_hash, text })
+                if *diff_hash == cached_diff_hash && text.contains("Existing finding")
+        ));
+        assert_eq!(app.sessions.sessions()[0].status, Status::Review);
+    }
+
+    #[tokio::test]
     async fn deleting_session_discards_pending_review_diff_and_late_completion() {
         // Arrange
         let (mut app, _base_dir, session_id) = review_app().await;
@@ -1168,6 +1444,7 @@ mod tests {
                 purpose: SessionDiffPurpose::Review {
                     cached_diff_hash: None,
                     is_manual: false,
+                    target: test_review_target(&app, &session_id),
                 },
                 session_id: session_id.clone(),
             },
@@ -1199,6 +1476,7 @@ mod tests {
                 purpose: SessionDiffPurpose::Review {
                     cached_diff_hash: None,
                     is_manual: false,
+                    target: test_review_target(&app, &session_id),
                 },
                 session_id: session_id.clone(),
             },

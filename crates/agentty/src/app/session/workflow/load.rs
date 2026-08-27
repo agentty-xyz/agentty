@@ -621,7 +621,7 @@ fn insert_loaded_session_handle(
 }
 
 /// Loads ordered session messages into the render transcript snapshot.
-async fn load_session_transcript(
+pub(crate) async fn load_session_transcript(
     db: &AppRepositories,
     session_id: &str,
 ) -> Result<SessionTranscript, DbError> {

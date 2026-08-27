@@ -669,6 +669,55 @@ async fn test_switch_project_recovers_persisted_deferred_review_after_restart() 
 }
 
 #[tokio::test]
+async fn session_chat_history_loads_persisted_transcript_for_unloaded_session() {
+    // Arrange
+    let (app, _base_dir) = crate::test_support::new_test_app().await;
+    let session_id = "unloaded-review-history";
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            session_id,
+            AgentModel::Gpt56Sol.as_str(),
+            "main",
+            "Review",
+            app.active_project_id(),
+        )
+        .await
+        .expect("failed to insert unloaded review session");
+    app.services
+        .db()
+        .sessions()
+        .append_session_message(
+            session_id,
+            SessionMessageKind::UserPrompt,
+            "Keep the accepted tradeoff",
+        )
+        .await
+        .expect("failed to persist review prompt");
+    app.services
+        .db()
+        .sessions()
+        .append_session_message(
+            session_id,
+            SessionMessageKind::AssistantAnswer,
+            "The accepted tradeoff remains in place.",
+        )
+        .await
+        .expect("failed to persist review answer");
+    assert!(app.sessions.session_for_id(session_id).is_none());
+
+    // Act
+    let session_chat_history = app.session_chat_history(session_id).await;
+
+    // Assert
+    assert_eq!(
+        session_chat_history.as_deref(),
+        Some(" › Keep the accepted tradeoff\n\nThe accepted tradeoff remains in place.\n\n")
+    );
+}
+
+#[tokio::test]
 async fn test_switch_immediately_after_response_recovers_in_progress_review() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
@@ -751,6 +800,7 @@ async fn test_switch_immediately_after_response_recovers_in_progress_review() {
         version: 1,
     })
     .await;
+    let pending_before_return = app.pending_session_diff_requests.len();
     let pending_after_status_transition = repositories
         .sessions()
         .load_pending_focused_review_session_ids(first_project_id)
@@ -766,6 +816,7 @@ async fn test_switch_immediately_after_response_recovers_in_progress_review() {
         HashSet::from([SessionId::from(session_id)])
     );
     assert_eq!(pending_after_status_transition, [session_id]);
+    assert_eq!(pending_before_return, 1);
     assert!(app.deferred_auto_review_session_ids.is_empty());
     assert_eq!(app.pending_session_diff_requests.len(), 1);
 }
