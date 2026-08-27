@@ -278,35 +278,39 @@ showing the git diff. While Files remains focused, use `Shift+j` / `Shift+k` or 
 to focus its changes, or press `Shift+C` to open a whole-file comment above its patch.
 Within the patch, `Shift+C` also opens the whole-file comment, including while a visual
 row selection is active; opening it clears that row selection. Press `Enter` to edit the
-selected changed line inline. After finishing with `Enter` or `Esc`, use `j` / `k` or
-the arrow keys to move through changed lines and completed file or inline comments.
-Press `Enter` on a selected comment to edit its text again. Press `Shift+V` on a changed
-line to start a visual changed-row selection, extend it with the same navigation keys,
-then press `Enter` to comment on the range or `Esc` to cancel the selection. The range
-stays highlighted while its inline editor is open and after the comment is finished, so
-the comment's source remains visible. `Esc`, `Left`, `h`, or `f` returns focus to the
-file tree when no visual selection is active. Linked review requests add a Comments
-section below Files; `c` focuses Comments while the file tree is focused, and `f`
-returns to Files. The Comments section keeps its own `Enter` action for submitting
-marked review threads. Press `s` to submit every file, line, and range comment together
-in the next turn from any Diff pane.
+selected changed line inline. File editors are titled `File comment`; inline editors
+identify added ranges as `New line N` or `New lines N-M` and deleted ranges as
+`Old line N` or `Old lines N-M`. A selection spanning both sides shows both ranges. Use
+`Alt+Enter` or `Shift+Enter` to add lines, and finish with `Enter` or `Esc`. Then use
+`j` / `k` or the arrow keys to move through changed lines and completed file or inline
+comments. Press `Enter` on a selected comment to edit its text again. Press `Shift+V` on
+a changed line to start a visual changed-row selection, extend it with the same
+navigation keys, then press `Enter` to comment on the range or `Esc` to cancel the
+selection. The range stays highlighted while its inline editor is open and after the
+comment is finished, so the comment's source remains visible. `Esc`, `Left`, `h`, or `f`
+returns focus to the file tree when no visual selection is active. Linked review
+requests add a Comments section below Files; `c` focuses Comments while the file tree is
+focused, and `f` returns to Files. The Comments section keeps its own `Enter` action for
+submitting marked review threads. Press `s` to submit every file, line, and range
+comment together in the next turn from any Diff pane.
 
-| Key                   | Action                                         |
-| --------------------- | ---------------------------------------------- |
-| `q`                   | Back to session                                |
-| `Esc`                 | Focus Files, or leave from Files               |
-| `j` / `k`             | Select a file, changed line, or inline comment |
-| `Shift+j` / `Shift+k` | Scroll selected file, or select a diff row     |
-| `Shift+C`             | Comment on the selected whole file             |
-| `Shift+V`             | Start visual changed-row selection             |
-| `Enter`               | Focus a file, or edit/finish a comment         |
-| `l`                   | Focus the selected file's changes              |
-| `Up` / `Down`         | Scroll file/preview, or select a diff row      |
-| `Left` / `h` / `f`    | Return to Files                                |
-| `p`                   | Toggle markdown preview                        |
-| `c`                   | Focus linked review comments                   |
-| `s`                   | Submit all diff comments                       |
-| `?`                   | Help                                           |
+| Key                         | Action                                         |
+| --------------------------- | ---------------------------------------------- |
+| `q`                         | Back to session                                |
+| `Esc`                       | Focus Files, or leave from Files               |
+| `j` / `k`                   | Select a file, changed line, or inline comment |
+| `Shift+j` / `Shift+k`       | Scroll selected file, or select a diff row     |
+| `Shift+C`                   | Comment on the selected whole file             |
+| `Shift+V`                   | Start visual changed-row selection             |
+| `Alt+Enter` / `Shift+Enter` | Insert a comment newline                       |
+| `Enter`                     | Focus a file, or edit/finish a comment         |
+| `l`                         | Focus the selected file's changes              |
+| `Up` / `Down`               | Scroll file/preview, or select a diff row      |
+| `Left` / `h` / `f`          | Return to Files                                |
+| `p`                         | Toggle markdown preview                        |
+| `c`                         | Focus linked review comments                   |
+| `s`                         | Submit all diff comments                       |
+| `?`                         | Help                                           |
 
 <a id="usage-diff-totals"></a> The diff panel title includes aggregate `+added` and
 `-removed` line totals. Every file and folder row in the left panel shows its own

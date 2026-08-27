@@ -2957,6 +2957,39 @@ fn seed_linked_review_worktree_with_diff(
     Ok(())
 }
 
+/// Seeds a linked review worktree whose diff replaces one existing source
+/// line, yielding adjacent old- and new-side rows.
+fn seed_linked_review_worktree_with_replacement_diff(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(env.workdir.join("src"))?;
+    std::fs::write(
+        env.workdir.join("src/main.rs"),
+        "fn main() {\n    println!(\"before\");\n}\n",
+    )?;
+    run_git(&env.workdir, &["add", "."])?;
+    run_git(&env.workdir, &["commit", "-m", "add initial main"])?;
+    seed_review_ready_session(env)?;
+
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    std::fs::remove_dir(&session_worktree)?;
+    let session_worktree_path = session_worktree
+        .to_str()
+        .ok_or("session worktree path must be valid UTF-8")?;
+    run_git(
+        &env.workdir,
+        &["worktree", "add", session_worktree_path, "wt/review-s"],
+    )?;
+    std::fs::write(
+        session_worktree.join("src/main.rs"),
+        "fn main() {\n    println!(\"after\");\n}\n",
+    )?;
+    run_git(&session_worktree, &["add", "."])?;
+    run_git(&session_worktree, &["commit", "-m", "replace main"])?;
+
+    Ok(())
+}
+
 /// Installs a deterministic Codex app-server stub for the submitted line
 /// comment turn.
 fn seed_line_comment_codex_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -8515,7 +8548,7 @@ fn test_diff_line_comments() -> E2eResult {
         })
         .run(
             |scenario| {
-                scenario
+                let scenario = scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
@@ -8525,18 +8558,20 @@ fn test_diff_line_comments() -> E2eResult {
                     .wait_for_text("Enter/l: open", 5000)
                     .wait_for_text("Shift+C: comment", 5000)
                     .write_text("C")
-                    .wait_for_text("file comment: |", 5000)
-                    .write_text("Review the whole file.")
-                    .press_key(ENTER_KEY)
-                    .wait_for_text("file comment: Review the whole file.", 3000)
+                    .wait_for_text("File comment", 5000);
+
+                enter_multiline_diff_file_comment(scenario)
+                    .wait_for_stable_frame(300, 3000)
+                    .press_key("Esc")
+                    .wait_for_text("Add regression coverage.", 3000)
                     .capture_labeled(
                         "whole_file_comment",
-                        "Whole-file feedback appears above the selected patch",
+                        "Multiline whole-file feedback appears above the selected patch",
                     )
                     .press_key("j")
                     .wait_for_text("Enter: comment", 5000)
                     .press_key(ENTER_KEY)
-                    .wait_for_text("comment: |", 5000)
+                    .wait_for_text("New line 1", 5000)
                     .write_text("Explain the entry point.")
                     .wait_for_text("Explain the entry point.|", 3000)
                     .press_key(ENTER_KEY)
@@ -8556,7 +8591,7 @@ fn test_diff_line_comments() -> E2eResult {
                     .write_text("Why print review?")
                     .wait_for_text("Why print review?|", 3000)
                     .press_key(ENTER_KEY)
-                    .wait_for_text("comment: Why print review?", 3000)
+                    .wait_for_text("Why print review?", 3000)
                     .wait_for_stable_frame(1000, 5000)
                     .capture_labeled(
                         "inline_line_comments",
@@ -8568,6 +8603,8 @@ fn test_diff_line_comments() -> E2eResult {
                     .press_key("s")
                     .wait_for_text("File comments:", 5000)
                     .wait_for_text("src/main.rs: Review the whole file.", 5000)
+                    .wait_for_text("| Check the tests too.", 5000)
+                    .wait_for_text("| Add regression coverage.", 5000)
                     .wait_for_text("Line comments:", 5000)
                     .wait_for_text(
                         "src/main.rs:1 [new]: Explain the entry point. Updated.",
@@ -8593,13 +8630,30 @@ fn test_diff_line_comments() -> E2eResult {
     Ok(())
 }
 
+/// Enters enough file-comment rows to exercise completed-editor expansion.
+fn enter_multiline_diff_file_comment(scenario: Scenario) -> Scenario {
+    scenario
+        .write_text("Review the whole file.")
+        .press_key("Ctrl+j")
+        .write_text("Check the tests too.")
+        .press_key("Ctrl+j")
+        .write_text("Verify the docs.")
+        .press_key("Ctrl+j")
+        .write_text("Keep the public API stable.")
+        .press_key("Ctrl+j")
+        .write_text("Handle errors explicitly.")
+        .press_key("Ctrl+j")
+        .write_text("Add regression coverage.")
+}
+
 /// Verifies inline comment selection, editing, and next-turn submission.
 fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
     let file_comment_frame = common::frame_from_capture(&report.captures[0]);
     let file_comment_full = Region::full(file_comment_frame.cols(), file_comment_frame.rows());
+    assertion::assert_text_in_region(&file_comment_frame, "File comment", &file_comment_full);
     assertion::assert_text_in_region(
         &file_comment_frame,
-        "file comment: Review the whole file.",
+        "Add regression coverage.",
         &file_comment_full,
     );
 
@@ -8608,18 +8662,19 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
         Region::full(selected_comment_frame.cols(), selected_comment_frame.rows());
     assertion::assert_text_in_region(
         &selected_comment_frame,
-        "comment: Explain the entry point.",
+        "New line 1",
+        &selected_comment_full,
+    );
+    assertion::assert_text_in_region(
+        &selected_comment_frame,
+        "Explain the entry point.",
         &selected_comment_full,
     );
 
     let diff_frame = common::frame_from_capture(&report.captures[2]);
     let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
-    assertion::assert_text_in_region(
-        &diff_frame,
-        "comment: Explain the entry point. Updated.",
-        &diff_full,
-    );
-    assertion::assert_text_in_region(&diff_frame, "comment: Why print review?", &diff_full);
+    assertion::assert_text_in_region(&diff_frame, "Explain the entry point. Updated.", &diff_full);
+    assertion::assert_text_in_region(&diff_frame, "Why print review?", &diff_full);
 
     let full = Region::full(frame.cols(), frame.rows());
     assertion::assert_text_in_region(frame, "Line comment received.", &full);
@@ -8635,8 +8690,7 @@ fn test_diff_row_selection_comments() -> E2eResult {
     FeatureTest::new("diff_row_selection_comments")
         .with_git()
         .setup(|env| {
-            seed_review_ready_session(env)?;
-            seed_linked_review_worktree_with_diff(env)?;
+            seed_linked_review_worktree_with_replacement_diff(env)?;
             seed_sessions_startup_tab(env)
         })
         .run(
@@ -8659,10 +8713,10 @@ fn test_diff_row_selection_comments() -> E2eResult {
                         "Visual line selection highlights a changed-row range",
                     )
                     .write_text("C")
-                    .wait_for_text("file comment: |", 5000)
+                    .wait_for_text("File comment", 5000)
                     .write_text("Review the selected file.")
                     .press_key(ENTER_KEY)
-                    .wait_for_text("file comment: Review the selected file.", 3000)
+                    .wait_for_text("Review the selected file.", 3000)
                     .capture_labeled(
                         "file_comment_from_row_selection",
                         "Whole-file feedback replaces the visual row selection",
@@ -8670,7 +8724,7 @@ fn test_diff_row_selection_comments() -> E2eResult {
                     .write_text("V")
                     .press_key("j")
                     .press_key(ENTER_KEY)
-                    .wait_for_text("comment: |", 5000)
+                    .wait_for_text("Old line 2 · New line 2", 5000)
                     .write_text("Explain these lines.")
                     .wait_for_text("Explain these lines.|", 3000)
                     .wait_for_stable_frame(300, 5000)
@@ -8679,7 +8733,7 @@ fn test_diff_row_selection_comments() -> E2eResult {
                         "Selected rows stay highlighted while entering the comment",
                     )
                     .press_key(ENTER_KEY)
-                    .wait_for_text("comment: Explain these lines.", 3000)
+                    .wait_for_text("Explain these lines.", 3000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
                         "row_range_comment",
@@ -8697,7 +8751,12 @@ fn test_diff_row_selection_comments() -> E2eResult {
                     Region::full(file_comment_frame.cols(), file_comment_frame.rows());
                 assertion::assert_text_in_region(
                     &file_comment_frame,
-                    "file comment: Review the selected file.",
+                    "File comment",
+                    &file_comment_full,
+                );
+                assertion::assert_text_in_region(
+                    &file_comment_frame,
+                    "Review the selected file.",
                     &file_comment_full,
                 );
                 assertion::assert_not_visible(&file_comment_frame, "Esc: cancel");
@@ -8706,12 +8765,18 @@ fn test_diff_row_selection_comments() -> E2eResult {
                 let editor_full = Region::full(editor_frame.cols(), editor_frame.rows());
                 assertion::assert_text_in_region(
                     &editor_frame,
-                    "comment: Explain these lines.|",
+                    "Old line 2 · New line 2",
+                    &editor_full,
+                );
+                assertion::assert_text_in_region(
+                    &editor_frame,
+                    "Explain these lines.|",
                     &editor_full,
                 );
 
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "comment: Explain these lines.", &full);
+                assertion::assert_text_in_region(frame, "Old line 2 · New line 2", &full);
+                assertion::assert_text_in_region(frame, "Explain these lines.", &full);
             },
         )?;
 

@@ -12,6 +12,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use rustc_hash::FxHasher;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::domain::session::Session;
 use crate::presentation::app_mode::{
@@ -30,9 +31,12 @@ use crate::ui::page::review_comment;
 use crate::ui::{Component, Page, diff_util, markdown, style};
 
 const WRAPPED_CHUNK_START_INDEX: usize = 0;
+const DIFF_COMMENT_CACHE_ENTRY_LIMIT: usize = 64;
 const DIFF_CONTENT_CACHE_ENTRY_LIMIT: usize = 8;
 const DIFF_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
 const FILE_LIST_CHANGE_TOTAL_SPAN_COUNT: usize = 4;
+const COMMENT_INPUT_HORIZONTAL_MARGIN: usize = 1;
+const COMMENT_INPUT_MAX_VISIBLE_LINES: usize = 5;
 
 /// Compact identity for one raw diff string.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,6 +54,18 @@ struct DiffLayoutCacheKey {
     diff_content: DiffContentCacheKey,
     reserve_scrollbar_width: bool,
     selected_index: usize,
+    style_version: u64,
+}
+
+/// Cache key for one fully rendered file or inline comment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DiffCommentCacheKey {
+    comment_index: usize,
+    content_width: usize,
+    input_cursor: usize,
+    input_revision: u64,
+    is_editing: bool,
+    is_selected: bool,
     style_version: u64,
 }
 
@@ -529,12 +545,14 @@ pub(crate) struct DiffResolvedLayout {
 }
 
 /// One diff comment row inserted adjacent to its file or changed rows.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 struct DiffLineCommentInsertion {
     comment: usize,
     display_row: usize,
     end_changed_line_index: usize,
+    height: usize,
     highlight_changed_line_bounds: Option<(usize, usize)>,
+    lines: Arc<[Line<'static>]>,
     source_end: usize,
 }
 
@@ -542,11 +560,7 @@ struct DiffLineCommentInsertion {
 struct DiffVisibleLineRequest<'a> {
     comment_insertions: &'a [DiffLineCommentInsertion],
     comment_highlight_ranges: &'a [Range<usize>],
-    content_width: usize,
-    line_comments: &'a DiffLineComments,
-    prefix_width: usize,
     scroll_offset: u16,
-    selected_comment_index: Option<usize>,
     selected_range: Option<&'a Range<usize>>,
     viewport_height: u16,
 }
@@ -558,20 +572,26 @@ impl DiffResolvedLayout {
         content: &DiffContentSnapshot,
         selected_file_index: usize,
         line_comments: &DiffLineComments,
+        diff_layout_cache: &DiffLayoutCache,
     ) -> Self {
         let comment_insertions = diff_line_comment_insertions(
             content,
             selected_file_index,
             &cached_layout.changed_line_ranges,
             line_comments,
+            cached_layout.render_layout.content_width,
+            diff_layout_cache,
         );
         let changed_line_ranges = changed_line_ranges_with_comments(
             &cached_layout.changed_line_ranges,
             &comment_insertions,
         );
-        let line_count = cached_layout
-            .line_count
-            .saturating_add(comment_insertions.len());
+        let line_count = cached_layout.line_count.saturating_add(
+            comment_insertions
+                .iter()
+                .map(|insertion| insertion.height)
+                .sum(),
+        );
         let show_scrollbar = diff_util::diff_has_scrollable_overflow(
             line_count,
             cached_layout.render_layout.viewport_height,
@@ -675,7 +695,9 @@ impl DiffResolvedLayout {
                 .iter()
                 .find(|insertion| insertion.comment == comment_index)
         {
-            return Some(insertion.display_row..insertion.display_row.saturating_add(1));
+            return Some(
+                insertion.display_row..insertion.display_row.saturating_add(insertion.height),
+            );
         }
 
         self.changed_line_ranges
@@ -806,6 +828,8 @@ fn diff_line_comment_insertions(
     selected_file_index: usize,
     changed_line_ranges: &[Range<usize>],
     line_comments: &DiffLineComments,
+    content_width: usize,
+    diff_layout_cache: &DiffLayoutCache,
 ) -> Vec<DiffLineCommentInsertion> {
     let mut insertions = line_comments
         .comments
@@ -840,11 +864,22 @@ fn diff_line_comment_insertions(
                     }
                 };
 
+            let lines = diff_layout_cache.comment_lines(
+                comment_index,
+                line_comment,
+                line_comments.editing_index == Some(comment_index),
+                line_comments.selected_comment_index() == Some(comment_index),
+                content_width,
+            );
+            let height = lines.len();
+
             Some((
                 insertion_index,
                 comment_index,
                 end_changed_line_index,
+                height,
                 highlight_changed_line_bounds,
+                lines,
             ))
         })
         .collect::<Vec<_>>();
@@ -852,19 +887,28 @@ fn diff_line_comment_insertions(
 
     insertions
         .into_iter()
-        .enumerate()
-        .map(
-            |(
-                preceding_comment_count,
-                (insertion_index, comment, end_changed_line_index, highlight_changed_line_bounds),
-            )| DiffLineCommentInsertion {
+        .scan(0usize, |preceding_comment_height, insertion| {
+            let (
+                insertion_index,
                 comment,
-                display_row: insertion_index.saturating_add(preceding_comment_count),
                 end_changed_line_index,
+                height,
                 highlight_changed_line_bounds,
+                lines,
+            ) = insertion;
+            let display_row = insertion_index.saturating_add(*preceding_comment_height);
+            *preceding_comment_height = preceding_comment_height.saturating_add(height);
+
+            Some(DiffLineCommentInsertion {
+                comment,
+                display_row,
+                end_changed_line_index,
+                height,
+                highlight_changed_line_bounds,
+                lines,
                 source_end: insertion_index,
-            },
-        )
+            })
+        })
         .collect()
 }
 
@@ -876,13 +920,14 @@ fn changed_line_ranges_with_comments(
     changed_line_ranges
         .iter()
         .map(|range| {
-            let preceding_comment_count = insertions
+            let preceding_comment_height = insertions
                 .iter()
                 .filter(|insertion| insertion.source_end <= range.start)
-                .count();
+                .map(|insertion| insertion.height)
+                .sum::<usize>();
 
-            range.start.saturating_add(preceding_comment_count)
-                ..range.end.saturating_add(preceding_comment_count)
+            range.start.saturating_add(preceding_comment_height)
+                ..range.end.saturating_add(preceding_comment_height)
         })
         .collect()
 }
@@ -913,18 +958,29 @@ struct DiffLayoutCacheEntry {
     layout: DiffCachedLayout,
 }
 
+/// Cached rows for one complete diff comment render snapshot.
+struct DiffCommentCacheEntry {
+    input_text: Arc<str>,
+    key: DiffCommentCacheKey,
+    lines: Arc<[Line<'static>]>,
+    target: DiffCommentTarget,
+}
+
 /// Bounded cache for parsed diff content and fully assembled diff layouts.
 ///
 /// The parsed-content layer avoids re-parsing the same raw diff and rebuilding
 /// file-tree metadata or per-path line ranges on every frame. Its key includes
 /// the raw diff's hash and byte length plus the active style version, so
 /// replacing the diff or theme invalidates the styled snapshot. The
-/// rendered-layout layer sits above styled diff assembly so
-/// scroll metrics and frame painting
-/// reuse the same rows until diff content, selection, panel width/height,
-/// scrollbar gutter state, or the active style version changes. Both LRU
-/// layers evict their oldest entries at their fixed limits.
+/// rendered-layout layer sits above styled diff assembly so scroll metrics
+/// and frame painting reuse the same rows until diff content, selection,
+/// panel width/height, scrollbar gutter state, or the active style version
+/// changes. The comment layer retains rows by input snapshot, width, target,
+/// interaction state, and style version so height measurement and painting
+/// share one render. Every LRU layer evicts its oldest entries at its fixed
+/// limit.
 pub struct DiffLayoutCache {
+    comment_rows: RefCell<VecDeque<DiffCommentCacheEntry>>,
     content_entries: RefCell<VecDeque<DiffContentCacheEntry>>,
     layout_entries: RefCell<VecDeque<DiffLayoutCacheEntry>>,
 }
@@ -932,6 +988,7 @@ pub struct DiffLayoutCache {
 impl Default for DiffLayoutCache {
     fn default() -> Self {
         Self {
+            comment_rows: RefCell::new(VecDeque::with_capacity(DIFF_COMMENT_CACHE_ENTRY_LIMIT)),
             content_entries: RefCell::new(VecDeque::with_capacity(DIFF_CONTENT_CACHE_ENTRY_LIMIT)),
             layout_entries: RefCell::new(VecDeque::with_capacity(DIFF_LAYOUT_CACHE_ENTRY_LIMIT)),
         }
@@ -993,6 +1050,7 @@ impl DiffLayoutCache {
             content,
             selected_index,
             line_comments,
+            self,
         );
         if !resolved_without_scrollbar.show_scrollbar {
             return resolved_without_scrollbar;
@@ -1009,7 +1067,75 @@ impl DiffLayoutCache {
             content,
             selected_index,
             line_comments,
+            self,
         )
+    }
+
+    /// Returns cached comment rows or renders and stores one input snapshot.
+    fn comment_lines(
+        &self,
+        comment_index: usize,
+        comment: &DiffLineComment,
+        is_editing: bool,
+        is_selected: bool,
+        content_width: usize,
+    ) -> Arc<[Line<'static>]> {
+        let key = DiffCommentCacheKey {
+            comment_index,
+            content_width,
+            input_cursor: comment.input.cursor,
+            input_revision: comment.input.revision(),
+            is_editing,
+            is_selected,
+            style_version: style::active_theme_cache_version(),
+        };
+        if let Some(lines) = self.cached_comment_lines(&key, comment) {
+            return lines;
+        }
+
+        let lines = Arc::from(DiffPage::inline_comment_lines(
+            comment,
+            is_editing,
+            is_selected,
+            content_width,
+        ));
+        self.store_comment_lines(DiffCommentCacheEntry {
+            input_text: Arc::from(comment.input.text()),
+            key,
+            lines: Arc::clone(&lines),
+            target: comment.target.clone(),
+        });
+
+        lines
+    }
+
+    /// Returns cached comment rows and promotes the entry in the LRU queue.
+    fn cached_comment_lines(
+        &self,
+        key: &DiffCommentCacheKey,
+        comment: &DiffLineComment,
+    ) -> Option<Arc<[Line<'static>]>> {
+        let mut entries = self.comment_rows.borrow_mut();
+        let entry_index = entries.iter().position(|entry| {
+            &entry.key == key
+                && entry.input_text.as_ref() == comment.input.text()
+                && entry.target == comment.target
+        })?;
+        let entry = entries.remove(entry_index)?;
+        let lines = Arc::clone(&entry.lines);
+        entries.push_front(entry);
+
+        Some(lines)
+    }
+
+    /// Stores rendered comment rows and evicts entries over the fixed limit.
+    fn store_comment_lines(&self, entry: DiffCommentCacheEntry) {
+        let mut entries = self.comment_rows.borrow_mut();
+        entries.push_front(entry);
+
+        while entries.len() > DIFF_COMMENT_CACHE_ENTRY_LIMIT {
+            entries.pop_back();
+        }
     }
 
     /// Returns cached parsed content for a matching diff fingerprint and
@@ -1281,11 +1407,7 @@ impl<'a> DiffPage<'a> {
             &DiffVisibleLineRequest {
                 comment_insertions: &layout.comment_insertions,
                 comment_highlight_ranges: &comment_highlight_ranges,
-                content_width: layout.render_layout.content_width,
-                line_comments: self.line_comments,
-                prefix_width: layout.render_layout.prefix_width,
                 scroll_offset,
-                selected_comment_index: self.line_comments.selected_comment_index(),
                 selected_range: selected_range.as_ref(),
                 viewport_height: layout.render_layout.viewport_height,
             },
@@ -1311,9 +1433,14 @@ impl<'a> DiffPage<'a> {
     /// Builds visible rows from cached diff lines plus short-lived comments.
     fn borrowed_visible_lines_with_comments<'line>(
         lines: &'line [Line<'static>],
-        request: &DiffVisibleLineRequest<'_>,
+        request: &DiffVisibleLineRequest<'line>,
     ) -> Vec<Line<'line>> {
-        let line_count = lines.len().saturating_add(request.comment_insertions.len());
+        let comment_height = request
+            .comment_insertions
+            .iter()
+            .map(|insertion| insertion.height)
+            .sum::<usize>();
+        let line_count = lines.len().saturating_add(comment_height);
         let start_index = usize::from(request.scroll_offset).min(line_count);
         let end_index = start_index
             .saturating_add(usize::from(request.viewport_height))
@@ -1321,28 +1448,24 @@ impl<'a> DiffPage<'a> {
 
         (start_index..end_index)
             .filter_map(|display_row| {
-                if let Some(insertion) = request
-                    .comment_insertions
-                    .iter()
-                    .find(|insertion| insertion.display_row == display_row)
-                {
-                    let comment = request.line_comments.comments.get(insertion.comment)?;
+                if let Some(insertion) = request.comment_insertions.iter().find(|insertion| {
+                    (insertion.display_row..insertion.display_row.saturating_add(insertion.height))
+                        .contains(&display_row)
+                }) {
+                    let comment_line = insertion
+                        .lines
+                        .get(display_row.saturating_sub(insertion.display_row))?;
 
-                    return Some(Self::inline_comment_line(
-                        comment,
-                        request.line_comments.editing_index == Some(insertion.comment),
-                        request.selected_comment_index == Some(insertion.comment),
-                        request.prefix_width,
-                        request.content_width,
-                    ));
+                    return Some(text_util::borrowed_paint_line(comment_line));
                 }
 
-                let preceding_comment_count = request
+                let preceding_comment_height = request
                     .comment_insertions
                     .iter()
                     .filter(|insertion| insertion.display_row < display_row)
-                    .count();
-                let original_index = display_row.saturating_sub(preceding_comment_count);
+                    .map(|insertion| insertion.height)
+                    .sum::<usize>();
+                let original_index = display_row.saturating_sub(preceding_comment_height);
                 let mut paint_line = text_util::borrowed_paint_line(lines.get(original_index)?);
                 if request
                     .comment_highlight_ranges
@@ -1369,18 +1492,13 @@ impl<'a> DiffPage<'a> {
             .collect()
     }
 
-    /// Builds one full-width highlighted comment row with an editing cursor.
-    fn inline_comment_line(
+    /// Builds one bordered multiline comment editor with a contextual title.
+    fn inline_comment_lines(
         comment: &DiffLineComment,
         is_editing: bool,
         is_selected: bool,
-        prefix_width: usize,
         content_width: usize,
-    ) -> Line<'static> {
-        let label = match &comment.target {
-            DiffCommentTarget::File { .. } => "file comment: ",
-            DiffCommentTarget::Lines(_) => "comment: ",
-        };
+    ) -> Vec<Line<'static>> {
         let background = if is_editing {
             style::palette::surface_selection()
         } else {
@@ -1395,38 +1513,126 @@ impl<'a> DiffPage<'a> {
             .fg(style::palette::text())
             .bg(background)
             .add_modifier(selected_modifier);
-        let text = if is_editing {
-            input_text_with_cursor(&comment.input)
-        } else {
-            comment.input.text().to_string()
-        };
-        let spans = vec![
-            Span::styled(" ".repeat(prefix_width), content_style),
-            Span::styled(
-                label,
-                Style::default()
-                    .fg(style::palette::accent())
-                    .bg(background)
-                    .add_modifier(Modifier::BOLD | selected_modifier),
-            ),
-            Span::styled(text, content_style),
-        ];
-        let mut line = Line::from(text_util::truncate_spans_with_ellipsis(
-            spans,
-            content_width,
-        ));
-        for span in &mut line.spans {
-            span.style = span.style.bg(background);
+        let chrome_style = Style::default()
+            .fg(style::palette::accent())
+            .bg(background)
+            .add_modifier(Modifier::BOLD | selected_modifier);
+        let comment_margin = COMMENT_INPUT_HORIZONTAL_MARGIN.min(content_width);
+        let box_width = content_width.saturating_sub(comment_margin);
+        if box_width < 5 {
+            return vec![Self::padded_comment_line(
+                vec![Span::styled(" ".repeat(box_width), content_style)],
+                comment_margin,
+                content_width,
+                content_style,
+            )];
         }
-        let line_width = line.width();
+
+        let title = Self::inline_comment_title(&comment.target);
+        let title = text_util::truncate_with_ellipsis(&title, box_width.saturating_sub(5));
+        let title_width = UnicodeWidthStr::width(title.as_str());
+        let top_fill_width = box_width.saturating_sub(title_width.saturating_add(5));
+        let top_border = vec![
+            Span::styled("╭─ ", chrome_style),
+            Span::styled(title, chrome_style),
+            Span::styled(format!(" {}╮", "─".repeat(top_fill_width)), chrome_style),
+        ];
+        let body_width = box_width.saturating_sub(4).max(1);
+        let (body_lines, cursor_row) =
+            wrapped_comment_input(&comment.input, is_editing, body_width);
+        let visible_line_count = if is_editing {
+            body_lines.len().min(COMMENT_INPUT_MAX_VISIBLE_LINES)
+        } else {
+            body_lines.len()
+        };
+        let body_start = if is_editing {
+            cursor_row.saturating_sub(visible_line_count.saturating_sub(1))
+        } else {
+            0
+        }
+        .min(body_lines.len().saturating_sub(visible_line_count));
+        let bottom_border = vec![Span::styled(
+            format!("╰{}╯", "─".repeat(box_width.saturating_sub(2))),
+            chrome_style,
+        )];
+        let mut lines = Vec::with_capacity(visible_line_count.saturating_add(2));
+        lines.push(Self::padded_comment_line(
+            top_border,
+            comment_margin,
+            content_width,
+            content_style,
+        ));
+        lines.extend(
+            body_lines
+                .into_iter()
+                .skip(body_start)
+                .take(visible_line_count)
+                .map(|body| {
+                    let body_padding =
+                        body_width.saturating_sub(UnicodeWidthStr::width(body.as_str()));
+
+                    Self::padded_comment_line(
+                        vec![
+                            Span::styled("│ ", chrome_style),
+                            Span::styled(body, content_style),
+                            Span::styled(format!("{} │", " ".repeat(body_padding)), chrome_style),
+                        ],
+                        comment_margin,
+                        content_width,
+                        content_style,
+                    )
+                }),
+        );
+        lines.push(Self::padded_comment_line(
+            bottom_border,
+            comment_margin,
+            content_width,
+            content_style,
+        ));
+
+        lines
+    }
+
+    /// Returns the title shown in one file or inline comment editor.
+    fn inline_comment_title(target: &DiffCommentTarget) -> String {
+        let DiffCommentTarget::Lines(target) = target else {
+            return "File comment".to_string();
+        };
+
+        [(DiffLineSide::Old, "Old"), (DiffLineSide::New, "New")]
+            .into_iter()
+            .filter_map(|(side, label)| {
+                target.line_bounds(side).map(|(first_line, last_line)| {
+                    if first_line == last_line {
+                        format!("{label} line {first_line}")
+                    } else {
+                        format!("{label} lines {first_line}-{last_line}")
+                    }
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+
+    /// Adds the editor margin and full-width background to a comment row.
+    fn padded_comment_line(
+        spans: Vec<Span<'static>>,
+        comment_margin: usize,
+        content_width: usize,
+        content_style: Style,
+    ) -> Line<'static> {
+        let mut spans = std::iter::once(Span::styled(" ".repeat(comment_margin), content_style))
+            .chain(spans)
+            .collect::<Vec<_>>();
+        let line_width = spans.iter().map(Span::width).sum::<usize>();
         if line_width < content_width {
-            line.spans.push(Span::styled(
+            spans.push(Span::styled(
                 " ".repeat(content_width - line_width),
                 content_style,
             ));
         }
 
-        line
+        Line::from(spans)
     }
 
     /// Renders ready markdown content or a preview availability notice.
@@ -1821,22 +2027,77 @@ fn preview_path_for_selection<'a>(
     Some(preview_path)
 }
 
-/// Inserts a visible cursor marker into one diff comment's text.
-fn input_text_with_cursor(input: &crate::domain::input::InputState) -> String {
-    let character_count = input.text().chars().count();
-    let cursor = input.cursor.min(character_count);
-    let mut text = String::with_capacity(input.text().len().saturating_add(1));
-    for (character_index, character) in input.text().chars().enumerate() {
-        if character_index == cursor {
-            text.push('|');
-        }
-        text.push(character);
-    }
-    if cursor == character_count {
-        text.push('|');
-    }
+/// Wraps one comment input while preserving explicit newlines and cursor row.
+fn wrapped_comment_input(
+    input: &crate::domain::input::InputState,
+    show_cursor: bool,
+    width: usize,
+) -> (Vec<String>, usize) {
+    let width = width.max(1);
+    let characters = input.text().chars().collect::<Vec<_>>();
+    let cursor = input.cursor.min(characters.len());
+    let mut current_line = String::new();
+    let mut current_width = 0;
+    let mut cursor_row = 0;
+    let mut lines = Vec::new();
 
-    text
+    for character_index in 0..=characters.len() {
+        if show_cursor && character_index == cursor {
+            push_wrapped_comment_character(
+                '|',
+                true,
+                width,
+                &mut lines,
+                &mut current_line,
+                &mut current_width,
+                &mut cursor_row,
+            );
+        }
+        let Some(character) = characters.get(character_index).copied() else {
+            break;
+        };
+        if character == '\n' {
+            lines.push(std::mem::take(&mut current_line));
+            current_width = 0;
+
+            continue;
+        }
+
+        push_wrapped_comment_character(
+            character,
+            false,
+            width,
+            &mut lines,
+            &mut current_line,
+            &mut current_width,
+            &mut cursor_row,
+        );
+    }
+    lines.push(current_line);
+
+    (lines, cursor_row)
+}
+
+/// Appends one character, starting a new hard-wrapped row when required.
+fn push_wrapped_comment_character(
+    character: char,
+    is_cursor: bool,
+    width: usize,
+    lines: &mut Vec<String>,
+    current_line: &mut String,
+    current_width: &mut usize,
+    cursor_row: &mut usize,
+) {
+    let character_width = character.width().unwrap_or_default();
+    if *current_width > 0 && current_width.saturating_add(character_width) > width {
+        lines.push(std::mem::take(current_line));
+        *current_width = 0;
+    }
+    if is_cursor {
+        *cursor_row = lines.len();
+    }
+    current_line.push(character);
+    *current_width = current_width.saturating_add(character_width);
 }
 
 /// Resolves cached markdown rows with a scrollbar-width second pass.
@@ -2220,9 +2481,10 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("comment: Explain this entry point|"));
+        assert!(text.contains("New line 1"));
+        assert!(text.contains("Explain this entry point|"));
         assert!(text.find("fn main() {}").is_some_and(|source_index| {
-            text.find("comment: Explain this entry point|")
+            text.find("New line 1")
                 .is_some_and(|comment| comment > source_index)
         }));
 
@@ -2280,8 +2542,9 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         let comment_index = text
-            .find("file comment: Review the complete file|")
+            .find("File comment")
             .expect("file editor should be visible");
+        assert!(text.contains("Review the complete file|"));
         let source_index = text
             .find("fn main() {}")
             .expect("selected file patch should be visible");
@@ -2465,60 +2728,186 @@ mod tests {
     }
 
     #[test]
-    fn test_inline_comment_highlighting_distinguishes_active_and_completed_rows() {
+    fn test_inline_comment_editor_shows_added_range_title_and_state_highlighting() {
         // Arrange
         let comment = DiffLineComment {
             input: crate::domain::input::InputState::with_text("Explain this".to_string()),
-            target: DiffLineCommentTarget::single(DiffLineCommentAnchor {
-                content: "review();".to_string(),
-                line: 1,
-                path: "src/main.rs".to_string(),
-                side: DiffLineSide::New,
-            })
+            target: DiffLineCommentTarget::from_anchors(vec![
+                DiffLineCommentAnchor {
+                    content: "review();".to_string(),
+                    line: 4,
+                    path: "src/main.rs".to_string(),
+                    side: DiffLineSide::New,
+                },
+                DiffLineCommentAnchor {
+                    content: "finish();".to_string(),
+                    line: 8,
+                    path: "src/main.rs".to_string(),
+                    side: DiffLineSide::New,
+                },
+            ])
+            .expect("two anchors should create a range target")
             .into(),
         };
 
         // Act
-        let completed_line = DiffPage::inline_comment_line(&comment, false, false, 4, 40);
-        let selected_line = DiffPage::inline_comment_line(&comment, false, true, 4, 40);
-        let active_line = DiffPage::inline_comment_line(&comment, true, true, 4, 40);
+        let completed_lines = DiffPage::inline_comment_lines(&comment, false, false, 40);
+        let selected_lines = DiffPage::inline_comment_lines(&comment, false, true, 40);
+        let active_lines = DiffPage::inline_comment_lines(&comment, true, true, 40);
 
         // Assert
-        assert_eq!(completed_line.width(), 40);
-        assert_eq!(selected_line.width(), 40);
-        assert_eq!(active_line.width(), 40);
+        assert_eq!(completed_lines.len(), 3);
+        assert!(completed_lines[0].to_string().contains("New lines 4-8"));
+        assert!(completed_lines[0].to_string().starts_with(" ╭─ New"));
+        assert!(completed_lines.iter().all(|line| line.width() == 40));
+        assert!(selected_lines.iter().all(|line| line.width() == 40));
+        assert!(active_lines.iter().all(|line| line.width() == 40));
         assert!(
-            completed_line
-                .spans
+            completed_lines
                 .iter()
-                .all(|span| { span.style.bg == Some(style::palette::surface_prompt()) })
+                .flat_map(|line| &line.spans)
+                .all(|span| span.style.bg == Some(style::palette::surface_prompt()))
         );
         assert!(
-            selected_line
-                .spans
+            selected_lines
                 .iter()
+                .flat_map(|line| &line.spans)
                 .all(|span| span.style.add_modifier.contains(Modifier::REVERSED))
         );
-        assert!(active_line.spans.iter().all(|span| {
-            span.style.bg == Some(style::palette::surface_selection())
-                && !span.style.add_modifier.contains(Modifier::REVERSED)
-        }));
+        assert!(
+            active_lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .all(|span| {
+                    span.style.bg == Some(style::palette::surface_selection())
+                        && !span.style.add_modifier.contains(Modifier::REVERSED)
+                })
+        );
     }
 
     #[test]
-    fn test_input_text_with_cursor_clamps_cursor_to_comment_end() {
+    fn test_completed_inline_comment_renders_every_body_row() {
         // Arrange
-        let mut input = crate::domain::input::InputState::with_text("review".to_string());
-        input.cursor = usize::MAX;
+        let comment = DiffLineComment {
+            input: crate::domain::input::InputState::with_text(
+                "one\ntwo\nthree\nfour\nfive\nsix".to_string(),
+            ),
+            target: DiffCommentTarget::file("src/main.rs"),
+        };
 
         // Act
-        let text_at_end = input_text_with_cursor(&input);
-        input.cursor = 3;
-        let text_in_middle = input_text_with_cursor(&input);
+        let completed_lines = DiffPage::inline_comment_lines(&comment, false, false, 40);
+        let active_lines = DiffPage::inline_comment_lines(&comment, true, true, 40);
 
         // Assert
-        assert_eq!(text_at_end, "review|");
-        assert_eq!(text_in_middle, "rev|iew");
+        assert_eq!(completed_lines.len(), 8);
+        assert!(
+            completed_lines
+                .iter()
+                .any(|line| line.to_string().contains("one"))
+        );
+        assert!(
+            completed_lines
+                .iter()
+                .any(|line| line.to_string().contains("six"))
+        );
+        assert_eq!(active_lines.len(), COMMENT_INPUT_MAX_VISIBLE_LINES + 2);
+        assert!(
+            active_lines
+                .iter()
+                .all(|line| !line.to_string().contains("one"))
+        );
+        assert!(
+            active_lines
+                .iter()
+                .any(|line| line.to_string().contains("six|"))
+        );
+    }
+
+    #[test]
+    fn test_inline_comment_title_distinguishes_deleted_and_mixed_ranges() {
+        // Arrange
+        let deleted_target = DiffLineCommentTarget::single(DiffLineCommentAnchor {
+            content: "old();".to_string(),
+            line: 4,
+            path: "src/main.rs".to_string(),
+            side: DiffLineSide::Old,
+        });
+        let mixed_target = DiffLineCommentTarget::from_anchors(vec![
+            DiffLineCommentAnchor {
+                content: "old_first();".to_string(),
+                line: 4,
+                path: "src/main.rs".to_string(),
+                side: DiffLineSide::Old,
+            },
+            DiffLineCommentAnchor {
+                content: "old_last();".to_string(),
+                line: 5,
+                path: "src/main.rs".to_string(),
+                side: DiffLineSide::Old,
+            },
+            DiffLineCommentAnchor {
+                content: "new_first();".to_string(),
+                line: 4,
+                path: "src/main.rs".to_string(),
+                side: DiffLineSide::New,
+            },
+            DiffLineCommentAnchor {
+                content: "new_last();".to_string(),
+                line: 6,
+                path: "src/main.rs".to_string(),
+                side: DiffLineSide::New,
+            },
+        ])
+        .expect("mixed anchors should create a target");
+
+        // Act
+        let deleted_title = DiffPage::inline_comment_title(&deleted_target.into());
+        let mixed_title = DiffPage::inline_comment_title(&mixed_target.into());
+
+        // Assert
+        assert_eq!(deleted_title, "Old line 4");
+        assert_eq!(mixed_title, "Old lines 4-5 · New lines 4-6");
+    }
+
+    #[test]
+    fn test_wrapped_comment_input_preserves_newlines_and_clamps_cursor() {
+        // Arrange
+        let mut input =
+            crate::domain::input::InputState::with_text("first line\nsecond".to_string());
+        input.cursor = usize::MAX;
+        let narrow_input = crate::domain::input::InputState::with_text("abcdef".to_string());
+
+        // Act
+        let (text_at_end, cursor_row_at_end) = wrapped_comment_input(&input, true, 20);
+        input.cursor = 3;
+        let (text_in_middle, cursor_row_in_middle) = wrapped_comment_input(&input, true, 20);
+        let (wrapped_text, _) = wrapped_comment_input(&narrow_input, false, 3);
+
+        // Assert
+        assert_eq!(text_at_end, ["first line", "second|"]);
+        assert_eq!(cursor_row_at_end, 1);
+        assert_eq!(text_in_middle, ["fir|st line", "second"]);
+        assert_eq!(cursor_row_in_middle, 0);
+        assert_eq!(wrapped_text, ["abc", "def"]);
+    }
+
+    #[test]
+    fn test_padded_comment_line_fills_remaining_content_width() {
+        // Arrange
+        let content_style = Style::default().fg(style::palette::text());
+
+        // Act
+        let line = DiffPage::padded_comment_line(
+            vec![Span::styled("body", content_style)],
+            2,
+            10,
+            content_style,
+        );
+
+        // Assert
+        assert_eq!(line.width(), 10);
+        assert_eq!(line.to_string(), "  body    ");
     }
 
     #[test]
@@ -2808,12 +3197,18 @@ mod tests {
         line_comments.finish_editing();
 
         // Act
-        let insertions =
-            diff_line_comment_insertions(&content, 0, &changed_line_ranges, &line_comments);
+        let insertions = diff_line_comment_insertions(
+            &content,
+            0,
+            &changed_line_ranges,
+            &line_comments,
+            80,
+            &cache,
+        );
 
         // Assert
         assert_eq!(line_comments.comments.len(), 3);
-        assert_eq!(insertions, []);
+        assert!(insertions.is_empty());
     }
 
     #[test]
@@ -3039,6 +3434,47 @@ mod tests {
         // Assert
         assert!(Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
         assert_eq!(first_layout.line_count, second_layout.line_count);
+    }
+
+    #[test]
+    fn test_diff_comment_cache_tracks_input_snapshot_and_width() {
+        // Arrange
+        let cache = DiffLayoutCache::default();
+        let mut comment = DiffLineComment {
+            input: crate::domain::input::InputState::with_text("first".to_string()),
+            target: DiffCommentTarget::file("src/main.rs"),
+        };
+
+        // Act
+        let first_lines = cache.comment_lines(0, &comment, false, false, 40);
+        let repeated_lines = cache.comment_lines(0, &comment, false, false, 40);
+        let replacement = DiffLineComment {
+            input: crate::domain::input::InputState::with_text("other".to_string()),
+            target: DiffCommentTarget::file("src/main.rs"),
+        };
+        let replacement_lines = cache.comment_lines(0, &replacement, false, false, 40);
+        comment.input.insert_text(" second");
+        let revised_lines = cache.comment_lines(0, &comment, false, false, 40);
+        let narrower_lines = cache.comment_lines(0, &comment, false, false, 20);
+
+        // Assert
+        assert!(Arc::ptr_eq(&first_lines, &repeated_lines));
+        assert!(!Arc::ptr_eq(&first_lines, &replacement_lines));
+        assert!(!Arc::ptr_eq(&first_lines, &revised_lines));
+        assert!(!Arc::ptr_eq(&revised_lines, &narrower_lines));
+        assert!(replacement_lines[1].to_string().contains("other"));
+        assert_eq!(cache.comment_rows.borrow().len(), 4);
+
+        // Act
+        for content_width in 1..=DIFF_COMMENT_CACHE_ENTRY_LIMIT + 1 {
+            cache.comment_lines(0, &comment, false, false, content_width);
+        }
+
+        // Assert
+        assert_eq!(
+            cache.comment_rows.borrow().len(),
+            DIFF_COMMENT_CACHE_ENTRY_LIMIT
+        );
     }
 
     #[test]
