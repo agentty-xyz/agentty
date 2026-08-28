@@ -7,6 +7,39 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.8] - 2026-08-27
+
+### Added
+
+- agentty: edit and submit multiline Diff comments from the review pane.
+- agentty: append review-ready sessions to existing stacks and support stacks up to five
+  levels deep.
+- agentty: automatically address focused-review feedback in a dedicated remediation
+  mode.
+- agentty: create whole-file comments from selected Diff rows.
+- ag-harness: support batched tool calls and provide a live provider-compatibility
+  benchmark.
+
+### Changed
+
+- agentty: run configured pre-commit hooks before assisted rebase continuation.
+- agentty: continue automatic reviews when their projects become inactive.
+- agentty: protect custom session branches with remote leases during synchronization.
+- ag-harness: centralize provider model configuration in a shared catalog.
+- quality: require 100% diff coverage for coverable changed lines.
+- deps: update `taiki-e/install-action`.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.8`.
+
+### Fixed
+
+- agentty: resume queued synchronization after a question is cancelled.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.15.7] - 2026-08-24
 
 ### Changed
