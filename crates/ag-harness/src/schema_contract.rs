@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::{self, Write};
 use std::sync::Arc;
 
 use jsonschema::error::ValidationErrorKind;
@@ -86,7 +87,8 @@ impl OutputSchema {
     }
 
     pub(crate) fn validate_value(&self, output: &Value) -> Result<(), OutputValidationError> {
-        ensure_content_size(&output.to_string())?;
+        let mut writer = ContentSizeWriter { bytes_written: 0 };
+        serde_json::to_writer(&mut writer, output).map_err(|_| OutputValidationError::TooLarge)?;
         self.validate(output)
     }
 
@@ -103,6 +105,25 @@ impl OutputSchema {
             });
         }
 
+        Ok(())
+    }
+}
+
+struct ContentSizeWriter {
+    bytes_written: usize,
+}
+
+impl Write for ContentSizeWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if buffer.len() > RESPONSE_CONTENT_LIMIT_BYTES.saturating_sub(self.bytes_written) {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        self.bytes_written += buffer.len();
+
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
@@ -467,6 +488,18 @@ mod tests {
 
         // Assert
         assert_eq!(error, OutputValidationError::TooLarge);
+    }
+
+    #[test]
+    fn flushes_content_size_writer() {
+        // Arrange
+        let mut writer = ContentSizeWriter { bytes_written: 0 };
+
+        // Act
+        let result = writer.flush();
+
+        // Assert
+        assert!(result.is_ok());
     }
 
     #[test]
