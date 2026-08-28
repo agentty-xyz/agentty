@@ -55,15 +55,18 @@ of pasted text.
 | `?`                 | Help                                                 |
 
 If pre-commit configuration exists without an executable hook, `a` first opens a
-warning. Press `Enter` to continue to the `Regular`, `Draft`, `Orchestrator`, or
-`Stacked` selector, or `Esc` / `q` to cancel. `Orchestrator` and an available `Stacked`
-option are marked `[Preview]`.
+warning. Press `Enter` to continue to the `Regular`, `Draft`, `Orchestrator`, `Stacked`,
+or `Append to stack` selector, or `Esc` / `q` to cancel. `Orchestrator` is marked
+`[Preview]`, as is `Append to stack`.
 
-In the `a` selector, `Stacked` is enabled only when the selected session is a root
-session with an active branch. `c` appears only for cancelable rows: running sessions,
-review-ready sessions, unstarted draft sessions, and draft orchestrators. Canceling a
-running orchestrator opens a confirmation that names its running-child count and
-cascades to those children.
+In the `a` selector, `Stacked` is enabled only when the selected session can parent a
+new draft within the five-level stack limit. `Append to stack` is enabled only for an
+independent **Review** or **AgentReview** session with an eligible idle parent. Select
+the action, choose the destination parent with `j` / `k`, and press `Enter` to move and
+sync the session branch. Long parent lists keep the current selection visible while you
+navigate. `c` appears only for cancelable rows: running sessions, review-ready sessions,
+unstarted draft sessions, and draft orchestrators. Canceling a running orchestrator
+opens a confirmation that names its running-child count and cascades to those children.
 
 <a id="usage-session-list-project-switcher"></a> The `p` popup lists registered projects
 in most-recently-opened order with the active project marked by a `* ` prefix. Each row

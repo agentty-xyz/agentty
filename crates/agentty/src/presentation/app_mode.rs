@@ -717,6 +717,14 @@ pub enum AppMode {
         /// Highlighted session creation option.
         selected_option_index: usize,
     },
+    /// Displays eligible parent sessions for moving one review-ready session
+    /// into an existing stack.
+    StackAppendParentSelection {
+        /// Highlighted eligible parent row.
+        selected_parent_index: usize,
+        /// Review-ready session that will become a stacked child.
+        session_id: SessionId,
+    },
     /// Displays an advisory before opening the session creation selector.
     PreCommitHookWarning {
         /// Full warning text, installation commands, and future-enforcement

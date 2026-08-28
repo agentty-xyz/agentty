@@ -1,6 +1,6 @@
 +++
 title = "Session creation"
-description = "Choose a regular, draft, orchestrator, or stacked session from the creation selector."
+description = "Create a session or append a review-ready session to an existing stack."
 weight = 30
 [extra]
 gif = "session_creation.gif"

@@ -448,7 +448,8 @@ unchanged.
 ## Session Types
 
 <a id="usage-draft-stacked"></a> From the **Sessions** tab, press `a` to choose between
-`Regular`, `Draft`, `Orchestrator`, and `Stacked` session creation. `Orchestrator` is
+`Regular`, `Draft`, `Orchestrator`, and `Stacked` session creation, or choose
+`Append to stack` to move an existing session. `Orchestrator` and `Append to stack` are
 marked `[Preview]`:
 
 - `Regular` starts the agent immediately on the first `Enter`.
@@ -464,6 +465,10 @@ marked `[Preview]`:
 - `Stacked` creates a draft below the selected parent session, with its future branch
   based on the parent session branch. A stack can contain up to five stacked levels
   below its root session.
+- `Append to stack` moves the selected independent **Review** or **AgentReview** session
+  below a parent chosen in the next popup. Agentty immediately syncs the moved branch
+  onto that parent branch. Sessions with children or linked review requests stay
+  independent, and a busy or depth-limited destination is omitted from the parent list.
 
 Stacked drafts show `s` start only when the parent is in **Review** or **AgentReview**
 and no stack member is running, queued, syncing, merging, or waiting on a question. An

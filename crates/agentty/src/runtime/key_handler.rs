@@ -11,7 +11,7 @@ use crate::app::App;
 #[cfg(test)]
 use crate::app::ReviewCacheEntry;
 use crate::domain::orchestration::IntegrationApproach;
-use crate::domain::session::SessionId;
+use crate::domain::session::{SessionId, can_append_session_to_stack};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DiffSidebarFocus,
@@ -54,6 +54,9 @@ where
             AppMode::List => mode::list::handle(app, key).await,
             AppMode::SessionCreation { .. } => {
                 unreachable!("session creation mode is handled before dispatch matching")
+            }
+            AppMode::StackAppendParentSelection { .. } => {
+                handle_stack_append_parent_key(app, key).await
             }
             AppMode::PreCommitHookWarning { .. } => {
                 Ok(handle_pre_commit_hook_warning_key(app, key))
@@ -202,13 +205,10 @@ async fn handle_session_creation_key(app: &mut App, key: KeyEvent) -> io::Result
             app.mode = AppMode::List;
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            update_session_creation_selection(app, 0);
+            select_previous_session_creation_option(app);
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            update_session_creation_selection(
-                app,
-                next_session_creation_selection(app).saturating_add(1),
-            );
+            select_next_session_creation_option(app);
         }
         KeyCode::Enter => {
             create_selected_session(app).await?;
@@ -221,17 +221,47 @@ async fn handle_session_creation_key(app: &mut App, key: KeyEvent) -> io::Result
 
 /// Updates the highlighted option in the session creation selector.
 fn update_session_creation_selection(app: &mut App, selected_option_index: usize) {
-    let max_option_index = if selected_stacked_parent_session_id(app).is_some() {
-        3
-    } else {
-        2
-    };
+    let mut selected_option_index = selected_option_index.min(4);
+    while selected_option_index > 0
+        && !session_creation_option_is_enabled(app, selected_option_index)
+    {
+        selected_option_index = selected_option_index.saturating_sub(1);
+    }
 
     if let AppMode::SessionCreation {
         selected_option_index: current_index,
     } = &mut app.mode
     {
-        *current_index = selected_option_index.min(max_option_index);
+        *current_index = selected_option_index;
+    }
+}
+
+/// Moves to the previous enabled session-creation option.
+fn select_previous_session_creation_option(app: &mut App) {
+    let current_index = current_session_creation_selection(app);
+    let previous_index = (0..current_index)
+        .rev()
+        .find(|option_index| session_creation_option_is_enabled(app, *option_index))
+        .unwrap_or(current_index);
+    update_session_creation_selection(app, previous_index);
+}
+
+/// Moves to the next enabled session-creation option.
+fn select_next_session_creation_option(app: &mut App) {
+    let current_index = current_session_creation_selection(app);
+    let next_index = ((current_index + 1)..=4)
+        .find(|option_index| session_creation_option_is_enabled(app, *option_index))
+        .unwrap_or(current_index);
+    update_session_creation_selection(app, next_index);
+}
+
+/// Returns whether one creation-selector row can currently be chosen.
+fn session_creation_option_is_enabled(app: &App, option_index: usize) -> bool {
+    match option_index {
+        0..=2 => true,
+        3 => selected_stacked_parent_session_id(app).is_some(),
+        4 => selected_stack_append_session_id(app).is_some(),
+        _ => false,
     }
 }
 
@@ -248,6 +278,17 @@ async fn create_selected_session(app: &mut App) -> io::Result<()> {
             };
 
             CreateSessionMode::Stacked { parent_session_id }
+        }
+        4 => {
+            let Some(session_id) = selected_stack_append_session_id(app) else {
+                return Ok(());
+            };
+            app.mode = AppMode::StackAppendParentSelection {
+                selected_parent_index: 0,
+                session_id,
+            };
+
+            return Ok(());
         }
         _ => return Ok(()),
     };
@@ -295,16 +336,127 @@ fn current_session_creation_selection(app: &App) -> usize {
     }
 }
 
-/// Returns the next selectable session-creation option for down navigation.
-fn next_session_creation_selection(app: &App) -> usize {
-    current_session_creation_selection(app)
-}
-
 /// Returns the selected session id when it can parent a stacked draft.
 fn selected_stacked_parent_session_id(app: &App) -> Option<SessionId> {
     app.selected_session()
         .filter(|session| app.sessions.can_create_stacked_child(&session.id))
         .map(|session| session.id.clone())
+}
+
+/// Returns the selected review-ready session when it has an eligible parent.
+fn selected_stack_append_session_id(app: &App) -> Option<SessionId> {
+    let selected_session = app.selected_session()?;
+    app.sessions
+        .sessions()
+        .iter()
+        .any(|candidate| {
+            can_append_session_to_stack(
+                app.sessions.sessions(),
+                selected_session.id.as_str(),
+                candidate.id.as_str(),
+            )
+        })
+        .then(|| selected_session.id.clone())
+}
+
+/// Handles navigation and confirmation in the stack-parent selector.
+async fn handle_stack_append_parent_key(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = AppMode::SessionCreation {
+                selected_option_index: 4,
+            };
+        }
+        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
+            app.mode = AppMode::List;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            update_stack_append_parent_selection(app, true);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            update_stack_append_parent_selection(app, false);
+        }
+        KeyCode::Enter => append_session_to_selected_stack(app).await,
+        _ => {}
+    }
+
+    Ok(EventResult::Continue)
+}
+
+/// Moves the highlighted eligible parent up or down by one row.
+fn update_stack_append_parent_selection(app: &mut App, move_up: bool) {
+    let AppMode::StackAppendParentSelection {
+        selected_parent_index,
+        session_id,
+    } = &app.mode
+    else {
+        return;
+    };
+    let parent_count = stack_append_parent_session_ids(app, session_id).len();
+    let updated_index = if move_up {
+        selected_parent_index.saturating_sub(1)
+    } else {
+        selected_parent_index
+            .saturating_add(1)
+            .min(parent_count.saturating_sub(1))
+    };
+
+    if let AppMode::StackAppendParentSelection {
+        selected_parent_index,
+        ..
+    } = &mut app.mode
+    {
+        *selected_parent_index = updated_index;
+    }
+}
+
+/// Returns eligible parent identifiers in visible session order.
+fn stack_append_parent_session_ids(app: &App, session_id: &SessionId) -> Vec<SessionId> {
+    app.sessions
+        .sessions()
+        .iter()
+        .filter(|candidate| {
+            can_append_session_to_stack(
+                app.sessions.sessions(),
+                session_id.as_str(),
+                candidate.id.as_str(),
+            )
+        })
+        .map(|session| session.id.clone())
+        .collect()
+}
+
+/// Moves the source session beneath the highlighted parent and starts its
+/// synchronization.
+async fn append_session_to_selected_stack(app: &mut App) {
+    let AppMode::StackAppendParentSelection {
+        selected_parent_index,
+        session_id,
+    } = &app.mode
+    else {
+        return;
+    };
+    let session_id = session_id.clone();
+    let parent_session_id = stack_append_parent_session_ids(app, &session_id)
+        .get(*selected_parent_index)
+        .cloned();
+    app.mode = AppMode::List;
+
+    let Some(parent_session_id) = parent_session_id else {
+        return;
+    };
+    if let Err(error) = app
+        .append_session_to_stack(session_id.as_str(), parent_session_id.as_str())
+        .await
+    {
+        app.mode = AppMode::SyncBlockedPopup {
+            default_branch: None,
+            is_loading: false,
+            message: error.to_string(),
+            project_name: None,
+            title: "Append to stack failed".to_string(),
+        };
+    }
 }
 
 /// Handles key input while the MRU project switcher popup is visible.
@@ -950,6 +1102,25 @@ mod tests {
             .unwrap_or_default()
     }
 
+    async fn appendable_stack_test_app() -> (App, tempfile::TempDir, String, String) {
+        let (mut app, base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        let parent_session_id = app.create_session().await.expect("failed to create parent");
+        let source_session_id = app.create_session().await.expect("failed to create source");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &parent_session_id,
+            crate::domain::session::Status::Review,
+        );
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &source_session_id,
+            crate::domain::session::Status::Review,
+        );
+
+        (app, base_dir, parent_session_id, source_session_id)
+    }
+
     #[test]
     fn test_content_area_for_terminal_excludes_global_bars() {
         // Arrange
@@ -1093,6 +1264,349 @@ mod tests {
                 ..
             } if session_id == &child_session_id
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_session_creation_key_opens_parent_selector_for_review_session() {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        let parent_session_id = app.create_session().await.expect("failed to create parent");
+        let source_session_id = app.create_session().await.expect("failed to create source");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &parent_session_id,
+            crate::domain::session::Status::Review,
+        );
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &source_session_id,
+            crate::domain::session::Status::AgentReview,
+        );
+        let source_index = app
+            .sessions
+            .sessions()
+            .iter()
+            .position(|session| session.id == source_session_id)
+            .expect("source session should exist");
+        app.sessions.select_session_index(Some(source_index));
+        app.mode = AppMode::SessionCreation {
+            selected_option_index: 3,
+        };
+
+        // Act
+        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .expect("failed to select append option");
+        let result = handle_session_creation_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::StackAppendParentSelection {
+                selected_parent_index: 0,
+                ref session_id,
+            } if session_id.as_str() == source_session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_key_event_routes_stack_parent_escape_to_creation_selector() {
+        // Arrange
+        let (mut app, _base_dir, _parent_session_id, source_session_id) =
+            appendable_stack_test_app().await;
+        app.mode = AppMode::StackAppendParentSelection {
+            selected_parent_index: 0,
+            session_id: source_session_id.into(),
+        };
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        let result = handle_key_event(
+            &mut app,
+            &PresentationState::default(),
+            &mut terminal,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::SessionCreation {
+                selected_option_index: 4,
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_session_creation_navigation_moves_up_and_clamps_disabled_options() {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        app.mode = AppMode::SessionCreation {
+            selected_option_index: 4,
+        };
+
+        // Act
+        update_session_creation_selection(&mut app, 4);
+        let clamped_selection = current_session_creation_selection(&app);
+        let result =
+            handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
+                .await;
+        let moved_selection = current_session_creation_selection(&app);
+        let unknown_option_enabled = session_creation_option_is_enabled(&app, usize::MAX);
+        app.mode = AppMode::SessionCreation {
+            selected_option_index: 4,
+        };
+        let disabled_append_result = handle_session_creation_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(clamped_selection, 2);
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert_eq!(moved_selection, 1);
+        assert!(!unknown_option_enabled);
+        assert!(matches!(disabled_append_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::SessionCreation {
+                selected_option_index: 4,
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_stack_parent_selector_appends_session_and_returns_to_list() {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        let parent_session_id = app.create_session().await.expect("failed to create parent");
+        let source_session_id = app.create_session().await.expect("failed to create source");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &parent_session_id,
+            crate::domain::session::Status::Review,
+        );
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &source_session_id,
+            crate::domain::session::Status::Review,
+        );
+        app.mode = AppMode::StackAppendParentSelection {
+            selected_parent_index: 0,
+            session_id: source_session_id.clone().into(),
+        };
+
+        // Act
+        let result = handle_stack_append_parent_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        let source_session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == source_session_id)
+            .expect("source session should remain loaded");
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert!(matches!(app.mode, AppMode::List));
+        assert_eq!(
+            source_session.parent_session_id.as_deref(),
+            Some(parent_session_id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stack_parent_selector_handles_navigation_close_and_unbound_keys() {
+        // Arrange
+        let (mut app, _base_dir, _parent_session_id, source_session_id) =
+            appendable_stack_test_app().await;
+        app.mode = AppMode::StackAppendParentSelection {
+            selected_parent_index: 0,
+            session_id: source_session_id.clone().into(),
+        };
+
+        // Act
+        for key_code in [KeyCode::Down, KeyCode::Up, KeyCode::Char('x')] {
+            handle_stack_append_parent_key(&mut app, KeyEvent::new(key_code, KeyModifiers::NONE))
+                .await
+                .expect("parent navigation should continue");
+        }
+        assert!(matches!(
+            app.mode,
+            AppMode::StackAppendParentSelection {
+                selected_parent_index: 0,
+                ..
+            }
+        ));
+        handle_stack_append_parent_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("parent selector should close");
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_stack_parent_selector_selects_parent_beyond_compact_viewport() {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        for _ in 0..8 {
+            let parent_session_id = app.create_session().await.expect("failed to create parent");
+            crate::test_support::set_session_status_for_test(
+                &mut app,
+                &parent_session_id,
+                crate::domain::session::Status::Review,
+            );
+        }
+        let source_session_id = app.create_session().await.expect("failed to create source");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &source_session_id,
+            crate::domain::session::Status::Review,
+        );
+        app.mode = AppMode::StackAppendParentSelection {
+            selected_parent_index: 0,
+            session_id: source_session_id.clone().into(),
+        };
+        let eligible_parent_ids =
+            stack_append_parent_session_ids(&app, &SessionId::from(source_session_id.as_str()));
+        let expected_parent_id = eligible_parent_ids
+            .last()
+            .expect("expected eligible parents")
+            .clone();
+
+        // Act
+        for _ in 1..eligible_parent_ids.len() {
+            handle_stack_append_parent_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            )
+            .await
+            .expect("failed to move parent selection");
+        }
+        handle_stack_append_parent_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to append to selected parent");
+        let source_session = app
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == source_session_id)
+            .expect("source session should remain loaded");
+
+        // Assert
+        assert_eq!(
+            source_session.parent_session_id.as_deref(),
+            Some(expected_parent_id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stack_parent_helpers_ignore_inactive_or_empty_selection() {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+
+        // Act
+        update_stack_append_parent_selection(&mut app, true);
+        append_session_to_selected_stack(&mut app).await;
+        app.mode = AppMode::StackAppendParentSelection {
+            selected_parent_index: 0,
+            session_id: "missing-source".into(),
+        };
+        let result = handle_stack_append_parent_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_stack_parent_selector_surfaces_sync_start_failure() {
+        // Arrange
+        let (mut app, _base_dir, _parent_session_id, source_session_id) =
+            appendable_stack_test_app().await;
+        app.sessions
+            .session_handles_mut()
+            .remove(source_session_id.as_str());
+        app.mode = AppMode::StackAppendParentSelection {
+            selected_parent_index: 0,
+            session_id: source_session_id.into(),
+        };
+
+        // Act
+        let result = handle_stack_append_parent_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::SyncBlockedPopup { ref title, .. } if title == "Append to stack failed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_session_creation_skips_append_option_for_non_review_session() {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        let parent_session_id = app.create_session().await.expect("failed to create parent");
+        let source_session_id = app.create_session().await.expect("failed to create source");
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &parent_session_id,
+            crate::domain::session::Status::Review,
+        );
+        crate::test_support::set_session_status_for_test(
+            &mut app,
+            &source_session_id,
+            crate::domain::session::Status::InProgress,
+        );
+        let source_index = app
+            .sessions
+            .sessions()
+            .iter()
+            .position(|session| session.id == source_session_id)
+            .expect("source session should exist");
+        app.sessions.select_session_index(Some(source_index));
+        app.mode = AppMode::SessionCreation {
+            selected_option_index: 3,
+        };
+
+        // Act
+        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .expect("failed to navigate creation options");
+
+        // Assert
+        assert_eq!(current_session_creation_selection(&app), 3);
     }
 
     #[tokio::test]

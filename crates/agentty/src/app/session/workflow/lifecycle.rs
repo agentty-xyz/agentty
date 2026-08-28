@@ -26,6 +26,7 @@ use crate::domain::agent::{
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
     QueuedMessage, ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
+    can_append_session_to_stack as stack_can_append_session,
     can_create_stacked_child as stack_can_create_stacked_child,
     can_merge_session_branch_in_stack as stack_can_merge_session_branch,
     can_mutate_session_branch_in_stack as stack_can_mutate_session_branch,
@@ -449,6 +450,93 @@ impl SessionManager {
     ) -> Result<String, SessionError> {
         self.create_stacked_draft_session_with_optional_settings(services, parent_session_id, None)
             .await
+    }
+
+    /// Moves one independent review-ready session beneath another session and
+    /// queues a branch sync onto the new parent branch.
+    ///
+    /// # Errors
+    /// Returns an error when either session is ineligible, stack policy would
+    /// be violated, metadata cannot be persisted, or the sync cannot start.
+    pub async fn append_session_to_stack(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        parent_session_id: &str,
+    ) -> Result<(), SessionError> {
+        if !stack_can_append_session(&self.state.sessions, session_id, parent_session_id) {
+            return Err(SessionError::Workflow(
+                "Append to stack requires an independent Review or AgentReview session and an \
+                 idle review-ready parent"
+                    .to_string(),
+            ));
+        }
+
+        let (old_base_branch, old_parent_session_id, parent_branch) = {
+            let session = self.session_or_err(session_id)?;
+            let parent_session = self.session_or_err(parent_session_id)?;
+            let parent_branch = self
+                .session_branch_name(&parent_session.id)
+                .map_or_else(|| session_branch(&parent_session.id), str::to_string);
+
+            (
+                session.base_branch.clone(),
+                session.parent_session_id.clone(),
+                parent_branch,
+            )
+        };
+        let old_stack_base_commit_hash = services
+            .db()
+            .sessions()
+            .get_session_stack_base_commit_hash(session_id)
+            .await?;
+        services
+            .db()
+            .sessions()
+            .update_session_stack_membership(
+                session_id,
+                Some(parent_session_id),
+                &parent_branch,
+                old_stack_base_commit_hash.clone(),
+            )
+            .await?;
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id.as_str() == session_id)
+        {
+            session.base_branch.clone_from(&parent_branch);
+            session.parent_session_id = Some(SessionId::from(parent_session_id));
+        }
+
+        if let Err(error) = self.rebase_session(services, session_id).await {
+            services
+                .db()
+                .sessions()
+                .update_session_stack_membership(
+                    session_id,
+                    old_parent_session_id.as_deref(),
+                    &old_base_branch,
+                    old_stack_base_commit_hash,
+                )
+                .await?;
+            if let Some(session) = self
+                .state
+                .sessions
+                .iter_mut()
+                .find(|session| session.id.as_str() == session_id)
+            {
+                session.base_branch = old_base_branch;
+                session.parent_session_id = old_parent_session_id;
+            }
+
+            return Err(error);
+        }
+
+        services.emit_session_and_project_refresh_events();
+
+        Ok(())
     }
 
     /// Creates one blank draft session for an explicit persisted project.

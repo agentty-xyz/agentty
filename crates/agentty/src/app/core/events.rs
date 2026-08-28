@@ -1664,6 +1664,7 @@ impl App {
             } => view_id == session_id,
             AppMode::List
             | AppMode::SessionCreation { .. }
+            | AppMode::StackAppendParentSelection { .. }
             | AppMode::PreCommitHookWarning { .. }
             | AppMode::ProjectSwitcher { .. }
             | AppMode::Confirmation { .. }

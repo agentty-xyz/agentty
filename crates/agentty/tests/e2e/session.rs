@@ -36,6 +36,8 @@ type E2eResult = Result<(), Box<dyn std::error::Error>>;
 const LOADER_SESSION_ID: &str = "loader-session-0001";
 /// Stable id for the session whose branch conflicts with `main`.
 const MERGE_CONFLICT_SESSION_ID: &str = "merge-conflict-0001";
+/// Parent count that exceeds the append selector's terminal viewport.
+const APPEND_OVERFLOW_PARENT_COUNT: u8 = 36;
 
 /// Stable id for the Antigravity session whose replay exceeds the former argv
 /// transport limit.
@@ -1547,6 +1549,107 @@ fn seed_four_level_review_stack(env: &BuilderEnv) -> Result<(), Box<dyn std::err
     for level in 0..=4 {
         std::fs::create_dir_all(env.agentty_root.join("wt").join(format!("stackl0{level}")))?;
     }
+
+    Ok(())
+}
+
+/// Seeds two independent review branches that can be combined into one stack.
+fn seed_appendable_review_sessions(env: &BuilderEnv) -> E2eResult {
+    let parent_session_id = "append-p-0001";
+    let child_session_id = "append-c-0001";
+    let parent_worktree = env.agentty_root.join("wt").join("append-p");
+    let child_worktree = env.agentty_root.join("wt").join("append-c");
+    std::fs::create_dir_all(env.agentty_root.join("wt"))?;
+    let parent_worktree_path = parent_worktree.to_string_lossy().into_owned();
+    let child_worktree_path = child_worktree.to_string_lossy().into_owned();
+    run_git(
+        &env.workdir,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt/append-p",
+            parent_worktree_path.as_str(),
+            "main",
+        ],
+    )?;
+    run_git(
+        &env.workdir,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt/append-c",
+            child_worktree_path.as_str(),
+            "main",
+        ],
+    )?;
+    std::fs::write(parent_worktree.join("parent.txt"), "parent change\n")?;
+    run_git(&parent_worktree, &["add", "."])?;
+    run_git(&parent_worktree, &["commit", "-m", "parent change"])?;
+    std::fs::write(child_worktree.join("child.txt"), "child change\n")?;
+    run_git(&child_worktree, &["add", "."])?;
+    run_git(&child_worktree, &["commit", "-m", "child change"])?;
+
+    common::seed_session(
+        env,
+        SessionSeed::regular(parent_session_id, "gpt-5.6-sol", "main", "Review")
+            .with_title("Append parent session"),
+    )?;
+    common::seed_session(
+        env,
+        SessionSeed::regular(child_session_id, "gpt-5.6-sol", "main", "Review")
+            .with_title("Append child session"),
+    )?;
+    for parent_index in 0..APPEND_OVERFLOW_PARENT_COUNT {
+        let overflow_parent_id = format!("append-overflow-{parent_index:02}");
+        let overflow_parent_title = format!("Overflow parent {parent_index:02}");
+        std::fs::create_dir_all(test_support::session_folder(
+            &env.agentty_root.join("wt"),
+            overflow_parent_id.as_str(),
+        ))?;
+        common::seed_session(
+            env,
+            SessionSeed::regular(overflow_parent_id.as_str(), "gpt-5.6-sol", "main", "Review")
+                .with_title(overflow_parent_title.as_str()),
+        )?;
+    }
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_updated_at(parent_session_id, 10)
+            .await?;
+        database
+            .sessions()
+            .update_session_updated_at(child_session_id, 1_000)
+            .await?;
+        for parent_index in 0..APPEND_OVERFLOW_PARENT_COUNT {
+            database
+                .sessions()
+                .update_session_updated_at(
+                    format!("append-overflow-{parent_index:02}").as_str(),
+                    100 + i64::from(parent_index),
+                )
+                .await?;
+        }
+        test_support::persist_active_tab_for_test(&database, agentty::app::Tab::Sessions).await?;
+
+        Ok::<(), agentty::db::DbError>(())
+    })?;
+
+    Ok(())
+}
+
+/// Starts a feature recording on the Sessions tab without replay-time tab
+/// persistence changing the scenario's first action.
+fn seed_sessions_tab(env: &BuilderEnv) -> E2eResult {
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        test_support::persist_active_tab_for_test(&database, agentty::app::Tab::Sessions).await
+    })?;
 
     Ok(())
 }
@@ -6220,9 +6323,10 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
     // Arrange
     FeatureTest::new("session_creation")
         .with_git()
+        .setup(seed_sessions_tab)
         .zola(
             "Session creation",
-            "Choose a regular, draft, orchestrator, or stacked session from the creation selector.",
+            "Create a session or append a review-ready session to an existing stack.",
             30,
         )
         .run(
@@ -6230,10 +6334,10 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
                 // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(1500)
                     .press_key("a")
                     .wait_for_text("Regular", 5000)
+                    .viewing_pause_ms(1500)
                     .capture_labeled("creation_selector", "Session creation selector")
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
@@ -6256,6 +6360,16 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
                 assertion::assert_text_in_region(
                     &selector_frame,
                     "Select parent first",
+                    &selector_full,
+                );
+                assertion::assert_text_in_region(
+                    &selector_frame,
+                    "Append to stack",
+                    &selector_full,
+                );
+                assertion::assert_text_in_region(
+                    &selector_frame,
+                    "[Preview] Review only",
                     &selector_full,
                 );
                 assertion::assert_text_in_region(&selector_frame, "Enter: select", &selector_full);
@@ -6575,6 +6689,99 @@ fn stacked_session_creation() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Stack root", &full);
                 assertion::assert_text_in_region(frame, "        └ [XS]", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that an independent review-ready session can be moved beneath a
+/// selected parent from the session creation overlay.
+#[test]
+fn append_session_to_stack() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("append_session_to_stack")
+        .with_git()
+        .setup(seed_appendable_review_sessions)
+        .zola(
+            "Append a session to a stack",
+            "Move a review-ready session beneath another session and sync its branch.",
+            41,
+        )
+        .run(
+            |scenario| {
+                let scenario = scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Append child session", 5000)
+                    .press_key("a")
+                    .press_key("Down")
+                    .press_key("Down")
+                    .press_key("Down")
+                    .press_key("Down")
+                    .wait_for_text("[Preview] Move under parent", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "append_action",
+                        "Append to stack action for a review-ready session",
+                    )
+                    .press_key("Enter")
+                    .wait_for_text("Choose parent session", 5000)
+                    .capture_labeled("parent_selector", "Eligible destination parent sessions")
+                    .viewing_pause_ms(1500);
+                let scenario = (1..APPEND_OVERFLOW_PARENT_COUNT).fold(scenario, |scenario, _| {
+                    scenario.press_key("Down").sleep_ms(30)
+                });
+
+                scenario
+                    .wait_for_text("Choose parent session", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "scrolled_parent_selector",
+                        "Selected destination stays visible after scrolling",
+                    )
+            },
+            |frame, report| {
+                let action_frame = common::frame_from_capture(&report.captures[0]);
+                let action_full = Region::full(action_frame.cols(), action_frame.rows());
+                assertion::assert_text_in_region(&action_frame, "Append to stack", &action_full);
+                assertion::assert_text_in_region(
+                    &action_frame,
+                    "[Preview] Move under parent",
+                    &action_full,
+                );
+
+                let selector_frame = common::frame_from_capture(&report.captures[1]);
+                let selector_full = Region::full(selector_frame.cols(), selector_frame.rows());
+                assertion::assert_text_in_region(
+                    &selector_frame,
+                    "Choose parent session",
+                    &selector_full,
+                );
+                assertion::assert_text_in_region(
+                    &selector_frame,
+                    "Overflow parent 35",
+                    &selector_full,
+                );
+
+                let scrolled_selector_frame = common::frame_from_capture(&report.captures[2]);
+                let scrolled_selector_full = Region::full(
+                    scrolled_selector_frame.cols(),
+                    scrolled_selector_frame.rows(),
+                );
+                assertion::assert_text_in_region(
+                    &scrolled_selector_frame,
+                    "Overflow parent 00",
+                    &scrolled_selector_full,
+                );
+                assertion::assert_text_in_region(
+                    &scrolled_selector_frame,
+                    "Enter: append",
+                    &scrolled_selector_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Overflow parent 00", &full);
+                assertion::assert_text_in_region(frame, "Choose parent session", &full);
             },
         )?;
 

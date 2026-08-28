@@ -384,6 +384,19 @@ impl Session {
         )
     }
 
+    /// Returns whether this session can be moved beneath another session.
+    ///
+    /// Appending changes the branch base and immediately starts a sync, so the
+    /// source must be an independent, review-ready user-owned branch without
+    /// a forge review request whose target would become stale.
+    pub fn allows_stack_append(&self) -> bool {
+        self.accepts_user_turns()
+            && self.owns_branch_changes()
+            && self.parent_session_id.is_none()
+            && self.review_request.is_none()
+            && self.status.allows_review_actions()
+    }
+
     /// Returns whether this session can be forked into a new independent
     /// session branch.
     ///
@@ -615,6 +628,37 @@ pub(crate) fn can_create_stacked_child(sessions: &[Session], parent_session_id: 
     parent_session.allows_stacked_child_creation()
         && session_stack_depth(sessions, parent_session_id)
             .is_some_and(|depth| depth < MAX_STACK_DEPTH)
+}
+
+/// Returns whether one review-ready root session can be moved beneath
+/// `parent_session_id` and synchronized as a stacked child.
+pub(crate) fn can_append_session_to_stack(
+    sessions: &[Session],
+    session_id: &str,
+    parent_session_id: &str,
+) -> bool {
+    if session_id == parent_session_id {
+        return false;
+    }
+    let Some(session) = find_session(sessions, session_id) else {
+        return false;
+    };
+    let Some(parent_session) = find_session(sessions, parent_session_id) else {
+        return false;
+    };
+
+    session.allows_stack_append()
+        && !sessions.iter().any(|candidate| {
+            candidate
+                .parent_session_id
+                .as_deref()
+                .is_some_and(|parent_id| parent_id == session_id)
+        })
+        && parent_session.accepts_user_turns()
+        && parent_session.owns_branch_changes()
+        && parent_session.status.allows_review_actions()
+        && can_create_stacked_child(sessions, parent_session_id)
+        && can_rebase_session_branch_in_stack(sessions, parent_session_id)
 }
 
 /// Returns whether the staged draft identified by `session_id` can start
@@ -1218,6 +1262,114 @@ pub(crate) mod tests {
         assert!(!allows_merged_child);
         assert!(!allows_done_child);
         assert!(!allows_canceled_child);
+    }
+
+    #[test]
+    fn test_allows_stack_append_accepts_review_states_and_rejects_non_review_or_child() {
+        // Arrange
+        let review_session = SessionFixtureBuilder::new().status(Status::Review).build();
+        let agent_review_session = SessionFixtureBuilder::new()
+            .status(Status::AgentReview)
+            .build();
+        let running_session = SessionFixtureBuilder::new()
+            .status(Status::InProgress)
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .status(Status::Review)
+            .build();
+
+        // Act
+        let allows_review = review_session.allows_stack_append();
+        let allows_agent_review = agent_review_session.allows_stack_append();
+        let allows_running = running_session.allows_stack_append();
+        let allows_child = child_session.allows_stack_append();
+
+        // Assert
+        assert!(allows_review);
+        assert!(allows_agent_review);
+        assert!(!allows_running);
+        assert!(!allows_child);
+    }
+
+    #[test]
+    fn test_can_append_session_to_stack_accepts_idle_review_ready_root_and_parent() {
+        // Arrange
+        let source_session = SessionFixtureBuilder::new()
+            .id("source-session")
+            .status(Status::AgentReview)
+            .build();
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .status(Status::Review)
+            .build();
+        let sessions = vec![source_session, parent_session];
+
+        // Act
+        let can_append = can_append_session_to_stack(&sessions, "source-session", "parent-session");
+
+        // Assert
+        assert!(can_append);
+    }
+
+    #[test]
+    fn test_can_append_session_to_stack_rejects_invalid_ids_and_source_with_child() {
+        // Arrange
+        let source_session = SessionFixtureBuilder::new()
+            .id("source-session")
+            .status(Status::Review)
+            .build();
+        let child_session = SessionFixtureBuilder::new()
+            .id("child-session")
+            .parent_session_id(Some(SessionId::from("source-session")))
+            .status(Status::Review)
+            .build();
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .status(Status::Review)
+            .build();
+        let sessions = vec![source_session, child_session, parent_session];
+
+        // Act
+        let same_session =
+            can_append_session_to_stack(&sessions, "source-session", "source-session");
+        let missing_source =
+            can_append_session_to_stack(&sessions, "missing-session", "parent-session");
+        let missing_parent =
+            can_append_session_to_stack(&sessions, "source-session", "missing-session");
+        let source_with_child =
+            can_append_session_to_stack(&sessions, "source-session", "parent-session");
+
+        // Assert
+        assert!(!same_session);
+        assert!(!missing_source);
+        assert!(!missing_parent);
+        assert!(!source_with_child);
+    }
+
+    #[test]
+    fn test_can_append_session_to_stack_rejects_active_parent_stack() {
+        // Arrange
+        let source_session = SessionFixtureBuilder::new()
+            .id("source-session")
+            .status(Status::Review)
+            .build();
+        let parent_session = SessionFixtureBuilder::new()
+            .id("parent-session")
+            .status(Status::Review)
+            .build();
+        let running_child = SessionFixtureBuilder::new()
+            .id("running-child")
+            .parent_session_id(Some(SessionId::from("parent-session")))
+            .status(Status::InProgress)
+            .build();
+        let sessions = vec![source_session, parent_session, running_child];
+
+        // Act
+        let can_append = can_append_session_to_stack(&sessions, "source-session", "parent-session");
+
+        // Assert
+        assert!(!can_append);
     }
 
     #[test]

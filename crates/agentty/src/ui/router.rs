@@ -9,7 +9,8 @@ use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::session::{
-    DailyActivity, Session, SessionId, activity_day_key_with_offset, can_create_stacked_child,
+    DailyActivity, Session, SessionId, activity_day_key_with_offset, can_append_session_to_stack,
+    can_create_stacked_child,
 };
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, DiffFocus, DiffLineComments, DiffPreview, DiffRestoreTarget,
@@ -49,6 +50,33 @@ impl RouteSharedContext<'_> {
                 .selected()
                 .and_then(|selected_index| self.sessions.get(selected_index))
                 .is_some_and(|session| can_create_stacked_child(self.sessions, session.id.as_str()))
+    }
+
+    /// Returns whether the selected session has at least one eligible stack
+    /// parent.
+    fn can_append_selected_session(&self) -> bool {
+        let Some(session_id) = self
+            .table_state
+            .selected()
+            .and_then(|selected_index| self.sessions.get(selected_index))
+            .map(|session| session.id.as_str())
+        else {
+            return false;
+        };
+
+        self.sessions.iter().any(|candidate| {
+            can_append_session_to_stack(self.sessions, session_id, candidate.id.as_str())
+        })
+    }
+
+    /// Returns eligible parent rows for one source session.
+    fn stack_append_parent_sessions(&self, session_id: &str) -> Vec<&Session> {
+        self.sessions
+            .iter()
+            .filter(|candidate| {
+                can_append_session_to_stack(self.sessions, session_id, candidate.id.as_str())
+            })
+            .collect()
     }
 }
 
@@ -269,6 +297,7 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
         },
         AppMode::List
         | AppMode::SessionCreation { .. }
+        | AppMode::StackAppendParentSelection { .. }
         | AppMode::PreCommitHookWarning { .. }
         | AppMode::ProjectSwitcher { .. }
         | AppMode::SyncBlockedPopup { .. }
@@ -485,8 +514,15 @@ fn render_mode_overlay(
         } => component::session_creation_overlay::SessionCreationOverlay::new(
             *selected_option_index,
             shared.can_create_stacked_session(),
+            shared.can_append_selected_session(),
         )
         .render(f, area),
+        AppMode::StackAppendParentSelection {
+            selected_parent_index,
+            session_id,
+        } => {
+            render_stack_append_parent_overlay(f, area, shared, session_id, *selected_parent_index);
+        }
         AppMode::PreCommitHookWarning { message } => {
             component::info_overlay::InfoOverlay::new("Pre-commit hook warning", message)
                 .render(f, area);
@@ -564,6 +600,22 @@ fn render_mode_overlay(
         )
         .render(f, area),
     }
+}
+
+/// Renders the eligible parent choices for the session being appended.
+fn render_stack_append_parent_overlay(
+    f: &mut Frame,
+    area: Rect,
+    shared: &RouteSharedContext<'_>,
+    session_id: &SessionId,
+    selected_parent_index: usize,
+) {
+    let parent_sessions = shared.stack_append_parent_sessions(session_id);
+    component::stack_append_parent_overlay::StackAppendParentOverlay::new(
+        &parent_sessions,
+        selected_parent_index,
+    )
+    .render(f, area);
 }
 
 /// Renders the confirmation overlay after its classified base surface.
@@ -849,6 +901,38 @@ mod tests {
         session.transcript = Some(transcript);
 
         session
+    }
+
+    #[test]
+    fn route_shared_context_finds_appendable_parent_for_selected_review_session() {
+        // Arrange
+        let sessions = vec![session_fixture("source"), session_fixture("parent")];
+        let mut project_table_state = TableState::default();
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let shared = RouteSharedContext {
+            active_project_id: 1,
+            available_agent_clis: &[],
+            current_tab: Tab::Sessions,
+            default_reasoning_level: ReasoningLevel::High,
+            mru_project_order: &[],
+            project_table_state: &mut project_table_state,
+            projects: &[],
+            session_git_statuses: &HashMap::new(),
+            sessions: &sessions,
+            settings_screen: None,
+            stats_activity: &[],
+            table_state: &mut table_state,
+        };
+
+        // Act
+        let can_append = shared.can_append_selected_session();
+        let parent_sessions = shared.stack_append_parent_sessions("source");
+
+        // Assert
+        assert!(can_append);
+        assert_eq!(parent_sessions.len(), 1);
+        assert_eq!(parent_sessions[0].id.as_str(), "parent");
     }
 
     /// Flattens a rendered test buffer into a plain string for text assertions.
@@ -1363,6 +1447,13 @@ mod tests {
                     selected_option_index: 0,
                 },
                 "New Session",
+            ),
+            (
+                AppMode::StackAppendParentSelection {
+                    selected_parent_index: 0,
+                    session_id: "session-overlay".into(),
+                },
+                "Append to stack",
             ),
             (
                 AppMode::PreCommitHookWarning {

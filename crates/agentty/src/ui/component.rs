@@ -26,6 +26,8 @@ pub mod queue_pulse;
 pub mod session_creation_overlay;
 /// Session transcript, progress, and result rendering.
 pub mod session_output;
+/// Existing-session stack parent selector.
+pub mod stack_append_parent_overlay;
 /// Application and session status header.
 pub mod status_bar;
 /// Top-level navigation tabs.
