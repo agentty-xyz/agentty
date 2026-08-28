@@ -344,7 +344,7 @@ fn pre_action_rejection_decision(
 /// Returns the canonical wire-level policy for one permission mode.
 fn permission_mode_policy(permission_mode: PermissionMode) -> &'static PermissionModePolicy {
     match permission_mode {
-        PermissionMode::AutoEdit => &AUTO_EDIT_POLICY,
+        PermissionMode::AutoEdit | PermissionMode::AutoEditAddressComments => &AUTO_EDIT_POLICY,
         PermissionMode::ReadOnly => &READ_ONLY_POLICY,
     }
 }

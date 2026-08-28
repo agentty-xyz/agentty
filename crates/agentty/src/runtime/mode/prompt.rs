@@ -74,7 +74,7 @@ enum PromptInputMode {
 ///
 /// `Tab` moves focus between the composer and the chat transcript above it,
 /// unless the `@`-mention dropdown is open and claims the key for completion.
-/// `Shift+Tab` toggles the session permission mode while the composer is
+/// `Shift+Tab` cycles the session permission mode while the composer is
 /// focused. While the transcript holds focus, scroll keys navigate it and the
 /// composer text stays untouched. Pressing `q` from transcript focus returns to
 /// the sessions list and saves the complete composer for the next reopen.
@@ -839,6 +839,9 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                 .await;
             apply_prompt_apply_outcome(app, outcome).await;
         }
+        Some(PromptSuggestionSelection::Command("/mode")) => {
+            open_prompt_permission_mode_stage(app, prompt_context.session_index);
+        }
         Some(PromptSuggestionSelection::Command("/reasoning")) => {
             open_prompt_reasoning_stage(app, prompt_context.session_index);
         }
@@ -886,6 +889,10 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             app.update_prompt_session_model(&prompt_context.session_id, selected_agent)
                 .await;
         }
+        Some(PromptSuggestionSelection::Mode(permission_mode)) => {
+            clear_prompt_slash_input(app).await;
+            persist_prompt_permission_mode(app, prompt_context, permission_mode).await;
+        }
         Some(PromptSuggestionSelection::Personality(personality)) => {
             clear_prompt_slash_input(app).await;
             app.update_prompt_session_personality(&prompt_context.session_id, personality)
@@ -905,16 +912,27 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
     }
 }
 
-/// Toggles and persists the permission mode without changing the composer.
+/// Cycles and persists the permission mode without changing the composer.
 async fn toggle_prompt_permission_mode(app: &mut App, prompt_context: &PromptContext) {
     let current_permission_mode = app
         .session_at(prompt_context.session_index)
         .map_or_else(PermissionMode::default, |session| session.permission_mode);
     let permission_mode = match current_permission_mode {
-        PermissionMode::AutoEdit => PermissionMode::ReadOnly,
+        PermissionMode::AutoEdit => PermissionMode::AutoEditAddressComments,
+        PermissionMode::AutoEditAddressComments => PermissionMode::ReadOnly,
         PermissionMode::ReadOnly => PermissionMode::AutoEdit,
     };
 
+    persist_prompt_permission_mode(app, prompt_context, permission_mode).await;
+}
+
+/// Persists one selected permission mode and reports failures in the target
+/// session transcript.
+async fn persist_prompt_permission_mode(
+    app: &mut App,
+    prompt_context: &PromptContext,
+    permission_mode: PermissionMode,
+) {
     if let Err(error) = app
         .update_prompt_session_permission_mode(&prompt_context.session_id, permission_mode)
         .await
@@ -925,6 +943,23 @@ async fn toggle_prompt_permission_mode(app: &mut App, prompt_context: &PromptCon
             &format!("Failed to change mode; the session remains unchanged: {error}"),
         )
         .await;
+    }
+}
+
+/// Opens `/mode` with the current session mode preselected.
+fn open_prompt_permission_mode_stage(app: &mut App, session_index: usize) {
+    let selected_permission_mode = app
+        .session_at(session_index)
+        .map_or_else(PermissionMode::default, |session| session.permission_mode);
+    let selected_index = PermissionMode::ALL
+        .iter()
+        .position(|permission_mode| *permission_mode == selected_permission_mode)
+        .unwrap_or(0);
+
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+        slash_state.stage = PromptSlashStage::Mode;
+        slash_state.selected_agent = None;
+        slash_state.selected_index = selected_index;
     }
 }
 
@@ -2382,7 +2417,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(commands, vec!["/model"]);
+        assert_eq!(commands, vec!["/mode", "/model"]);
     }
 
     /// Verifies the root slash-command menu exposes every command in display
@@ -2406,7 +2441,14 @@ mod tests {
         // Assert
         assert_eq!(
             commands,
-            vec!["/apply", "/model", "/personality", "/reasoning", "/speed"]
+            vec![
+                "/apply",
+                "/mode",
+                "/model",
+                "/personality",
+                "/reasoning",
+                "/speed"
+            ]
         );
     }
 
@@ -2735,7 +2777,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_prompt_slash_submit_maps_filtered_first_command_to_model() {
+    async fn test_handle_prompt_slash_submit_maps_filtered_first_command_to_mode() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/", None).await;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
@@ -2745,7 +2787,7 @@ mod tests {
 
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
-            assert_eq!(slash_state.stage, PromptSlashStage::Agent);
+            assert_eq!(slash_state.stage, PromptSlashStage::Mode);
             assert_eq!(slash_state.selected_agent, None);
             assert_eq!(slash_state.selected_index, 0);
         }
@@ -2831,11 +2873,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_backtab_toggles_permission_mode_and_preserves_input() {
+    async fn test_backtab_cycles_permission_modes_and_preserves_input() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
 
         // Act
+        press_prompt_key(&mut app, KeyCode::BackTab).await;
+        let auto_address_mode = app.sessions.sessions()[0].permission_mode;
         press_prompt_key(&mut app, KeyCode::BackTab).await;
         let read_only_mode = app.sessions.sessions()[0].permission_mode;
         press_prompt_key(&mut app, KeyCode::BackTab).await;
@@ -2845,6 +2889,7 @@ mod tests {
             &app.mode,
             AppMode::Prompt { input, .. } if input.text() == "draft text"
         ));
+        assert_eq!(auto_address_mode, PermissionMode::AutoEditAddressComments);
         assert_eq!(read_only_mode, PermissionMode::ReadOnly);
         assert_eq!(
             app.sessions.sessions()[0].permission_mode,
@@ -3982,6 +4027,30 @@ mod tests {
                 input, slash_state, ..
             } if input.text() == "/model" && slash_state.stage == PromptSlashStage::Agent
         ));
+    }
+
+    #[tokio::test]
+    async fn test_mode_slash_command_selects_auto_address_mode() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/mode", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_submit_key(&mut app, &prompt_context).await;
+        press_prompt_key(&mut app, KeyCode::Down).await;
+        handle_prompt_submit_key(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt {
+                input, slash_state, ..
+            } if input.text().is_empty() && *slash_state == PromptSlashState::default()
+        ));
+        assert_eq!(
+            app.sessions.sessions()[0].permission_mode,
+            PermissionMode::AutoEditAddressComments
+        );
     }
 
     #[tokio::test]

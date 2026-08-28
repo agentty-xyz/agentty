@@ -27,6 +27,8 @@ use crate::presentation::app_mode::ReviewCommentSelection;
 
 /// Checked-in prompt template submitted by the `/apply` slash command.
 const APPLY_REVIEW_PROMPT_TEMPLATE: &str = include_str!("template/apply_review_prompt.md");
+/// Maximum automatic focused-review remediation turns per user prompt.
+pub(crate) const MAX_AUTO_ADDRESS_REVIEW_ITERATIONS: u8 = 3;
 /// Checked-in prompt template submitted from the review-comments page.
 const RESOLVE_REVIEW_COMMENT_PROMPT_TEMPLATE: &str =
     include_str!("template/resolve_review_comment_prompt.md");
@@ -183,6 +185,7 @@ impl App {
             return PromptWorkflowOutcome::KeepPrompt;
         }
 
+        self.auto_address_review_iterations.remove(&session_id);
         self.submit_turn_prompt(session_id.clone(), session_mode, prompt)
             .await;
 
@@ -401,7 +404,57 @@ impl App {
             );
         }
 
+        if result.is_ok() {
+            self.auto_address_review_iterations.remove(session_id);
+        }
+
         result
+    }
+
+    /// Starts bounded `/apply`-equivalent turns for newly ready focused
+    /// reviews whose session mode enables automatic remediation.
+    pub(crate) fn auto_address_focused_reviews(&mut self, ready_session_ids: Vec<SessionId>) {
+        for session_id in ready_session_ids {
+            let Some(session_index) = self
+                .sessions
+                .sessions()
+                .iter()
+                .position(|session| session.id == session_id)
+            else {
+                continue;
+            };
+            if self.sessions.sessions()[session_index].permission_mode
+                != PermissionMode::AutoEditAddressComments
+            {
+                continue;
+            }
+
+            let completed_iterations = self
+                .auto_address_review_iterations
+                .get(&session_id)
+                .copied()
+                .unwrap_or(0);
+            if completed_iterations >= MAX_AUTO_ADDRESS_REVIEW_ITERATIONS {
+                continue;
+            }
+
+            let Some((cached_hash, suggestions)) =
+                self.review_cache
+                    .get(&session_id)
+                    .and_then(|entry| match entry {
+                        ReviewCacheEntry::Ready { diff_hash, text } => {
+                            review::review_suggestions(text)
+                                .map(|suggestions| (*diff_hash, suggestions))
+                        }
+                        ReviewCacheEntry::Loading { .. }
+                        | ReviewCacheEntry::Failed { .. }
+                        | ReviewCacheEntry::Suppressed => None,
+                    })
+            else {
+                continue;
+            };
+            self.start_auto_apply_review_diff_load(&session_id, cached_hash, suggestions);
+        }
     }
 
     /// Persists one slash-selected response-speed preference and logs any
@@ -1315,6 +1368,64 @@ mod tests {
             }
         );
         assert_eq!(duplicate_apply, PromptApplyOutcome::ClearComposer);
+    }
+
+    #[tokio::test]
+    async fn auto_address_focused_reviews_starts_apply_turns_and_stops_at_limit() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let session_id: SessionId = app
+            .create_session()
+            .await
+            .expect("session should be created")
+            .into();
+        app.sessions.sessions_mut()[0].status = Status::Review;
+        app.review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Ready {
+                diff_hash: 42,
+                text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
+            },
+        );
+
+        // Act
+        app.auto_address_focused_reviews(vec![
+            SessionId::from("missing-session"),
+            session_id.clone(),
+        ]);
+        app.sessions.sessions_mut()[0].permission_mode = PermissionMode::AutoEditAddressComments;
+        app.review_cache
+            .insert(session_id.clone(), ReviewCacheEntry::Suppressed);
+        app.auto_address_focused_reviews(vec![session_id.clone()]);
+        app.review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Ready {
+                diff_hash: 42,
+                text: "## Review\n### Suggestions\n- None".to_string(),
+            },
+        );
+        app.auto_address_focused_reviews(vec![session_id.clone()]);
+        app.review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Ready {
+                diff_hash: 42,
+                text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
+            },
+        );
+        app.auto_address_focused_reviews(vec![session_id.clone()]);
+        assert!(!app.auto_address_review_iterations.contains_key(&session_id));
+        assert_eq!(app.pending_session_diff_requests.len(), 1);
+        app.pending_session_diff_requests.clear();
+        app.auto_address_review_iterations
+            .insert(session_id.clone(), MAX_AUTO_ADDRESS_REVIEW_ITERATIONS);
+        app.auto_address_focused_reviews(vec![session_id.clone()]);
+
+        // Assert
+        assert_eq!(
+            app.auto_address_review_iterations.get(&session_id),
+            Some(&MAX_AUTO_ADDRESS_REVIEW_ITERATIONS)
+        );
+        assert!(app.pending_session_diff_requests.is_empty());
     }
 
     #[test]

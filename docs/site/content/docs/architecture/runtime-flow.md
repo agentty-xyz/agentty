@@ -163,7 +163,10 @@ focused-review state application and persistence run afterward. Key behaviors:
   queued diff results are reduced, and repeated `/apply` checks are deduplicated per
   session. Clearing or regenerating focused review also invalidates pending `/apply`
   continuations, whose completions revalidate the current review-ready cache generation
-  before submitting an agent turn.
+  before submitting an agent turn. Sessions in `Auto Edit + Auto Address Comments` reuse
+  this continuation automatically when a ready review has actionable suggestions. Each
+  resulting turn re-enters focused review, and an in-memory per-user-prompt counter
+  stops automatic application after three turns.
 - Externally merged review requests transition sessions to read-only `Merged`; only a
   successful user-triggered sync of the request's local target advances them to `Done`.
   Closed requests transition editable sessions to `Canceled`.

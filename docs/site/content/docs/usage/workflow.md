@@ -209,8 +209,10 @@ available in the session transcript.
 
 While the composer is open, `Tab` moves focus to the chat transcript above it so the
 conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without
-losing the typed draft. `Shift+Tab` toggles the session between `Auto Edit` and
-`Read Only` without changing the draft. While that chat transcript is focused, the `d`
+losing the typed draft. `Shift+Tab` cycles the session through `Auto Edit`,
+`Auto Edit + Auto Address Comments`, and `Read Only` without changing the draft. The
+combined mode also verifies and applies focused-review suggestions after each completed
+turn for up to three iterations. While that chat transcript is focused, the `d`
 diff-preview hint appears unless the latest successful refresh found an empty diff
 against the session's base branch; `d` opens text, binary, metadata-only, or diagnostic
 diff output. Leaving the preview returns to the composer with the draft intact. Before
@@ -801,30 +803,37 @@ with `j` / `k` or `Up` / `Down`.
 | Command        | Description                                                   |
 | -------------- | ------------------------------------------------------------- |
 | `/apply`       | Verify focused-review suggestions, then apply the valid ones. |
+| `/mode`        | Choose editing permissions and review automation.             |
 | `/model`       | Switch the model for the current session.                     |
 | `/personality` | Choose an agent personality for the current session.          |
 | `/reasoning`   | Override the reasoning level for the current session.         |
 | `/speed`       | Choose normal or fast responses for this session.             |
 
-`/apply` requires a completed focused review (`f` key). `Shift+Tab` stores a
-session-scoped permission mode for following chat turns. `Auto Edit` uses the agent's
-standard editing permissions. Codex `Auto Edit` has full command access, including for
-browser tests and local services that cannot run inside its sandbox. Claude `Auto Edit`
-can likewise retry incompatible commands outside its sandbox. During those chat turns,
-`Read Only` prevents repository and filesystem writes. The composer title always shows
-the current permission as `Auto Edit` or `Read Only`, after the response speed when that
-provider supports speed control. In `Read Only`, agents do not ask for write access;
-when a requested change requires edits, they suggest switching to `Auto Edit` with
-`Shift+Tab`. `/model` offers only locally available backends; see
-[Agents & Models](@/docs/agents/backends.md). `/speed` is available for Claude and Codex
-sessions. The selected speed is stored with the session, shown after the reasoning level
-in the session header and beside the composer title, and applied to following turns.
-Gemini and Antigravity sessions have no speed control, so their header and composer omit
-the speed display entirely. Fast responses use the provider's higher-cost low-latency
-mode. Enabling Fast moves Claude sessions to `claude-opus-5` and Codex Spark sessions to
-`gpt-5.6-sol` without changing the project default model. Returning to Normal does not
-change the selected model. Selecting a model that does not support Fast resets the
-session to Normal before the model changes.
+`/apply` requires a completed focused review (`f` key). `/mode` stores a session-scoped
+mode for following chat turns. `Auto Edit` uses the agent's standard editing
+permissions. `Auto Edit + Auto Address Comments` uses the same permissions and
+automatically runs the verification-gated `/apply` flow when focused review returns
+actionable suggestions. The resulting turn is reviewed again; automation stops when no
+actionable suggestions remain or after three automatic application turns. A new user
+prompt or mode selection starts a fresh iteration budget. Codex auto-edit modes have
+full command access, including for browser tests and local services that cannot run
+inside its sandbox. Claude auto-edit modes can likewise retry incompatible commands
+outside its sandbox. During those chat turns, `Read Only` prevents repository and
+filesystem writes. The composer title always shows the current mode after the response
+speed when that provider supports speed control. `Shift+Tab` cycles `Auto Edit`,
+`Auto Edit + Auto Address Comments`, and `Read Only` in that order without changing the
+draft. In `Read Only`, agents do not ask for write access; when a requested change
+requires edits, they suggest switching to `Auto Edit` with `Shift+Tab`. `/model` offers
+only locally available backends; see [Agents & Models](@/docs/agents/backends.md).
+`/speed` is available for Claude and Codex sessions. The selected speed is stored with
+the session, shown after the reasoning level in the session header and beside the
+composer title, and applied to following turns. Gemini and Antigravity sessions have no
+speed control, so their header and composer omit the speed display entirely. Fast
+responses use the provider's higher-cost low-latency mode. Enabling Fast moves Claude
+sessions to `claude-opus-5` and Codex Spark sessions to `gpt-5.6-sol` without changing
+the project default model. Returning to Normal does not change the selected model.
+Selecting a model that does not support Fast resets the session to Normal before the
+model changes.
 
 `/personality` scans `.agents/agents/*/agent.md` in the session worktree when the picker
 opens. Agentty does not scan the global `~/.agents` directory. Each enabled definition

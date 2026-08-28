@@ -877,6 +877,118 @@ fn seed_review_ready_session_on_sessions_tab(
     Ok(())
 }
 
+/// Seeds the review-ready feature session with automatic addressing already
+/// selected so semantic execution and GIF replay remain idempotent.
+fn seed_auto_address_review_mode(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_on_sessions_tab(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_permission_mode(
+                "review-shortcut-0001",
+                agentty::domain::permission::PermissionMode::AutoEditAddressComments,
+            )
+            .await
+    })?;
+
+    Ok(())
+}
+
+/// Seeds a real review worktree and deterministic providers for automatic
+/// remediation lifecycle coverage.
+fn seed_auto_address_review_lifecycle(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_auto_address_review_mode(env)?;
+    seed_linked_review_worktree_with_diff(env)?;
+    install_auto_address_review_lifecycle_stub(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_model("review-shortcut-0001", "claude-haiku-4-5-20251001")
+            .await
+    })?;
+
+    Ok(())
+}
+
+/// Installs one prompt-aware Claude stub that exposes both automatic-review
+/// stop conditions through stable transcript text.
+fn install_auto_address_review_lifecycle_stub(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let claude_path = env.stub_bin.join("claude");
+    let script = r###"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+
+state_dir=${0%/*}
+review_count_file="$state_dir/auto-address-review-count"
+if [ -f "$review_count_file" ]; then
+  read review_count < "$review_count_file"
+else
+  review_count=0
+fi
+prompt=$(cat)
+
+case "$prompt" in
+  *"Review the Git diff for display in a terminal UI."*)
+    review_count=$((review_count + 1))
+    printf '%s\n' "$review_count" > "$review_count_file"
+    case "$review_count" in
+      1)
+        result='{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- First lifecycle review completed.\\n\\n### Suggestions\\n\\n- Apply the first lifecycle suggestion.\",\"questions\":[]}'
+        ;;
+      2)
+        result='{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- No suggestions remain after one automatic remediation.\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[]}'
+        ;;
+      3|4|5)
+        result='{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Iteration-limit lifecycle review completed.\\n\\n### Suggestions\\n\\n- Apply the next bounded lifecycle suggestion.\",\"questions\":[]}'
+        ;;
+      6)
+        result='{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Three automatic remediation iterations completed.\\n\\n### Suggestions\\n\\n- Fourth suggestion remains unapplied at the iteration limit.\",\"questions\":[]}'
+        ;;
+      *)
+        result='{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Automatic remediation exceeded the iteration limit.\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[]}'
+        ;;
+    esac
+    ;;
+  *"Verify the focused-review suggestions against the current code"*)
+    result='{\"answer\":\"Automatic remediation turn completed.\",\"questions\":[]}'
+    ;;
+  *"Start the no-suggestions lifecycle"*)
+    result='{\"answer\":\"No-suggestions lifecycle turn completed.\",\"questions\":[]}'
+    ;;
+  *"Start the iteration-limit lifecycle"*)
+    result='{\"answer\":\"Iteration-limit lifecycle turn completed.\",\"questions\":[]}'
+    ;;
+  *)
+    result='{\"answer\":\"Auto-address lifecycle utility response.\",\"questions\":[]}'
+    ;;
+esac
+
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{\"input_tokens\":5,\"output_tokens\":9}}"
+"###;
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultReviewAgent", "claude"),
+            ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+        ],
+    )
+}
+
 /// Seeds one review-ready session whose latest diff refresh found no changes.
 fn seed_clean_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
@@ -9575,17 +9687,17 @@ fn model_slash_command_contains_match_is_visible() -> E2eResult {
     Ok(())
 }
 
-/// Verify `Shift+Tab` toggles the permission mode without changing the draft.
+/// Verify `/mode` selects a session permission mode from the composer.
 #[test]
 fn session_permission_mode_selection() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_permission_mode_selection")
         .with_git()
         .with_terminal_size(180, 24)
-        .setup(seed_review_ready_session_on_sessions_tab)
+        .setup(seed_auto_address_review_mode)
         .zola(
             "Switch session mode",
-            "Toggle chat between auto-edit and read-only with Shift+Tab.",
+            "Choose auto-edit, auto-address, or read-only from the composer.",
             43,
         )
         .run(
@@ -9600,32 +9712,214 @@ fn session_permission_mode_selection() -> E2eResult {
                         "initial_permission_mode",
                         "Prompt title shows the current session permission mode",
                     )
-                    .write_text("Keep this draft")
-                    .press_key("BackTab")
+                    .write_text("/mode")
+                    .wait_for_text("Choose editing permissions", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Auto Edit + Auto Address Comments", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Auto Edit + Auto Address Comments", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
-                        "permission_mode_toggled",
-                        "Shift+Tab toggles the mode and preserves the draft",
+                        "permission_mode_selected",
+                        "The selected permission mode appears in the composer title",
                     )
             },
             |frame, report| {
-                let auto_edit_frame = common::frame_from_capture(&report.captures[0]);
-                let auto_edit_full = Region::full(auto_edit_frame.cols(), auto_edit_frame.rows());
+                let initial_frame = common::frame_from_capture(&report.captures[0]);
+                let initial_full = Region::full(initial_frame.cols(), initial_frame.rows());
                 assertion::assert_text_in_region(
-                    &auto_edit_frame,
-                    "] · Normal · Auto Edit",
-                    &auto_edit_full,
+                    &initial_frame,
+                    "] · Normal · Auto Edit + Auto Address Comments",
+                    &initial_full,
                 );
                 assertion::assert_text_in_region(
-                    &auto_edit_frame,
+                    &initial_frame,
                     "Shift+Tab: switch mode",
-                    &auto_edit_full,
+                    &initial_full,
+                );
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "] · Normal · Auto Edit + Auto Address Comments",
+                    &full,
+                );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify `Shift+Tab` reaches automatic review addressing without changing the
+/// draft.
+#[test]
+fn shift_tab_auto_address_mode() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("shift_tab_auto_address_mode")
+        .with_git()
+        .with_terminal_size(180, 24)
+        .setup(seed_review_ready_session_on_sessions_tab)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .wait_for_text("] · Normal · Auto Edit", 5000)
+                    .write_text("Keep this draft")
+                    .press_key("BackTab")
+                    .wait_for_text("Auto Edit + Auto Address Comments", 5000)
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "] · Normal · Auto Edit + Auto Address Comments",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "Keep this draft", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify `/mode` exposes and selects bounded focused-review automation.
+#[test]
+fn auto_address_review_mode() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("auto_address_review_mode")
+        .with_git()
+        .with_terminal_size(180, 24)
+        .setup(seed_auto_address_review_mode)
+        .zola(
+            "Automatically address review suggestions",
+            "Enable auto-edit and apply focused-review suggestions for up to three iterations.",
+            44,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("/mode")
+                    .wait_for_text("Choose editing permissions", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Auto Edit + Auto Address Comments", 3000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "auto_address_mode_option",
+                        "The mode picker explains bounded automatic review remediation",
+                    )
+                    .press_key("Enter")
+                    .wait_for_text("Auto Edit + Auto Address Comments", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "auto_address_mode_selected",
+                        "The composer shows automatic review addressing is enabled",
+                    )
+            },
+            |frame, report| {
+                let picker_frame = common::frame_from_capture(&report.captures[0]);
+                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+                assertion::assert_text_in_region(
+                    &picker_frame,
+                    "Auto Edit + Auto Address Comments",
+                    &picker_full,
+                );
+                assertion::assert_text_in_region(
+                    &picker_frame,
+                    "address focused-review suggestions up to 3 times",
+                    &picker_full,
                 );
 
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "] · Normal · Read Only", &full);
-                assertion::assert_text_in_region(frame, "Keep this draft", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "] · Normal · Auto Edit + Auto Address Comments",
+                    &full,
+                );
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify automatic focused-review remediation stops without suggestions and
+/// after three iterations through the real session runtime.
+#[test]
+fn auto_address_review_lifecycle() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("auto_address_review_lifecycle")
+        .with_git()
+        .with_terminal_size(180, 24)
+        .setup(seed_auto_address_review_lifecycle)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("Start the no-suggestions lifecycle")
+                    .press_key("Enter")
+                    .wait_for_text(
+                        "No suggestions remain after one automatic remediation.",
+                        30000,
+                    )
+                    .wait_for_stable_frame(500, 5000)
+                    .capture_labeled(
+                        "auto_address_stops_without_suggestions",
+                        "Automatic remediation stops when focused review returns no suggestions",
+                    )
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("Start the iteration-limit lifecycle")
+                    .press_key("Enter")
+                    .wait_for_text(
+                        "Fourth suggestion remains unapplied at the iteration limit.",
+                        30000,
+                    )
+                    .wait_for_stable_frame(1000, 5000)
+                    .capture_labeled(
+                        "auto_address_stops_at_iteration_limit",
+                        "Automatic remediation stops after three iterations",
+                    )
+            },
+            |frame, report| {
+                let no_suggestions_frame = common::frame_from_capture(&report.captures[0]);
+                let no_suggestions_full =
+                    Region::full(no_suggestions_frame.cols(), no_suggestions_frame.rows());
+                assertion::assert_text_in_region(
+                    &no_suggestions_frame,
+                    "No suggestions remain after one automatic remediation.",
+                    &no_suggestions_full,
+                );
+                assertion::assert_text_in_region(
+                    &no_suggestions_frame,
+                    "- None.",
+                    &no_suggestions_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(
+                    frame,
+                    "Three automatic remediation iterations completed.",
+                    &full,
+                );
+                assertion::assert_text_in_region(
+                    frame,
+                    "Fourth suggestion remains unapplied at the iteration limit.",
+                    &full,
+                );
+                assertion::assert_not_visible(
+                    frame,
+                    "Automatic remediation exceeded the iteration limit.",
+                );
             },
         )?;
 

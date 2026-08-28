@@ -273,6 +273,9 @@ pub struct App {
     /// switches, is hydrated after restart, and is ready when the user presses
     /// `f`.
     pub(crate) review_cache: HashMap<SessionId, ReviewCacheEntry>,
+    /// Counts automatic focused-review remediation turns in the current
+    /// user-initiated cycle for each session.
+    pub(crate) auto_address_review_iterations: HashMap<SessionId, u8>,
     /// Retains automatic focused-review triggers for completed sessions whose
     /// owning project is not currently loaded.
     pub(crate) deferred_auto_review_session_ids: HashSet<SessionId>,

@@ -77,6 +77,7 @@ struct FocusedReviewTarget {
 /// Action resumed after one full diff finishes loading.
 enum SessionDiffPurpose {
     ApplyFocusedReview {
+        auto_address: bool,
         cached_diff_hash: u64,
         suggestions: String,
     },
@@ -170,6 +171,7 @@ impl App {
     /// Discards every diff continuation and deferred automatic-review trigger
     /// owned by a deleted session so detached task completions remain stale.
     pub(crate) fn discard_deleted_session_diff_state(&mut self, session_id: &SessionId) {
+        self.auto_address_review_iterations.remove(session_id);
         self.pending_session_diff_requests
             .retain(|_, request| request.session_id != *session_id);
         self.deferred_auto_review_session_ids.remove(session_id);
@@ -275,6 +277,31 @@ impl App {
         cached_diff_hash: u64,
         suggestions: String,
     ) -> bool {
+        self.start_apply_review_diff_load_with_mode(
+            session_id,
+            cached_diff_hash,
+            suggestions,
+            false,
+        )
+    }
+
+    /// Starts one automatic focused-review freshness check.
+    pub(crate) fn start_auto_apply_review_diff_load(
+        &mut self,
+        session_id: &SessionId,
+        cached_diff_hash: u64,
+        suggestions: String,
+    ) -> bool {
+        self.start_apply_review_diff_load_with_mode(session_id, cached_diff_hash, suggestions, true)
+    }
+
+    fn start_apply_review_diff_load_with_mode(
+        &mut self,
+        session_id: &SessionId,
+        cached_diff_hash: u64,
+        suggestions: String,
+        auto_address: bool,
+    ) -> bool {
         if self.pending_session_diff_requests.values().any(|request| {
             request.session_id == *session_id && request.purpose.is_apply_focused_review()
         }) {
@@ -284,6 +311,7 @@ impl App {
         self.spawn_session_diff_request(
             session_id,
             SessionDiffPurpose::ApplyFocusedReview {
+                auto_address,
                 cached_diff_hash,
                 suggestions,
             },
@@ -415,11 +443,13 @@ impl App {
 
         match request.purpose {
             SessionDiffPurpose::ApplyFocusedReview {
+                auto_address,
                 cached_diff_hash,
                 suggestions,
             } => {
                 self.apply_focused_review_diff_update(
                     &update.session_id,
+                    auto_address,
                     cached_diff_hash,
                     &suggestions,
                     update.result,
@@ -445,19 +475,29 @@ impl App {
     async fn apply_focused_review_diff_update(
         &mut self,
         session_id: &SessionId,
+        auto_address: bool,
         cached_diff_hash: u64,
         suggestions: &str,
         result: Result<String, String>,
     ) {
+        let Some(current_review_text) =
+            self.review_cache
+                .get(session_id)
+                .and_then(|entry| match entry {
+                    ReviewCacheEntry::Ready { diff_hash, text }
+                        if *diff_hash == cached_diff_hash =>
+                    {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                })
+        else {
+            return;
+        };
         let review_generation_is_current = self
             .sessions
             .session_for_id(session_id)
-            .is_some_and(|session| session.status == Status::Review)
-            && matches!(
-                self.review_cache.get(session_id),
-                Some(ReviewCacheEntry::Ready { diff_hash, .. })
-                    if *diff_hash == cached_diff_hash
-            );
+            .is_some_and(|session| session.status == Status::Review);
         if !review_generation_is_current {
             return;
         }
@@ -491,11 +531,57 @@ impl App {
             return;
         }
 
-        self.reply(
-            session_id,
-            crate::app::prompt_intent::build_apply_review_prompt(suggestions),
-        )
-        .await;
+        let completed_auto_address_iterations = if auto_address {
+            let auto_address_mode_is_current = self
+                .sessions
+                .session_for_id(session_id)
+                .is_some_and(|session| {
+                    session.permission_mode
+                        == crate::domain::permission::PermissionMode::AutoEditAddressComments
+                });
+            let completed_iterations = self
+                .auto_address_review_iterations
+                .get(session_id)
+                .copied()
+                .unwrap_or(0);
+            if !auto_address_mode_is_current
+                || completed_iterations
+                    >= crate::app::prompt_intent::MAX_AUTO_ADDRESS_REVIEW_ITERATIONS
+            {
+                return;
+            }
+
+            Some(completed_iterations)
+        } else {
+            None
+        };
+
+        let prompt = crate::app::prompt_intent::build_apply_review_prompt(suggestions);
+        if let Some(completed_iterations) = completed_auto_address_iterations {
+            if !self.reply(session_id, prompt).await {
+                self.set_review_ready_output(
+                    session_id,
+                    cached_diff_hash,
+                    current_review_text.clone(),
+                );
+                self.persist_focused_review_updates(vec![FocusedReviewPersistence {
+                    diff_hash: Some(cached_diff_hash),
+                    session_id: session_id.clone(),
+                    status: FocusedReviewStatus::Ready,
+                    text: Some(current_review_text),
+                }])
+                .await;
+
+                return;
+            }
+
+            self.auto_address_review_iterations
+                .insert(session_id.clone(), completed_iterations.saturating_add(1));
+
+            return;
+        }
+
+        self.reply(session_id, prompt).await;
     }
 
     /// Discards detached diff tasks whose continuations belong to an obsolete
@@ -1590,6 +1676,207 @@ mod tests {
             }) if *cached_hash == diff_hash
         ));
         assert_eq!(app.sessions.sessions()[0].status, Status::InProgress);
+    }
+
+    #[tokio::test]
+    async fn manual_apply_completion_enqueues_remediation_turn() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = review_app().await;
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+        let current_diff = String::new();
+        let diff_hash = review::diff_content_hash(&current_diff);
+        app.review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Ready {
+                diff_hash,
+                text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
+            },
+        );
+        assert!(app.start_apply_review_diff_load(
+            &session_id,
+            diff_hash,
+            "- Fix the issue.".to_string(),
+        ));
+        let request_id = *app
+            .pending_session_diff_requests
+            .keys()
+            .next()
+            .expect("manual apply diff request should be pending");
+
+        // Act
+        app.apply_session_diff_update(SessionDiffUpdate {
+            request_id,
+            result: Ok(current_diff),
+            session_id: session_id.clone(),
+        })
+        .await;
+
+        // Assert
+        assert!(!app.auto_address_review_iterations.contains_key(&session_id));
+        assert!(app.pending_session_diff_requests.is_empty());
+        assert!(!app.review_cache.contains_key(&session_id));
+    }
+
+    #[tokio::test]
+    async fn automatic_apply_completion_counts_enqueued_remediation_turn() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = review_app().await;
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+        app.sessions.sessions_mut()[0].permission_mode =
+            crate::domain::permission::PermissionMode::AutoEditAddressComments;
+        let current_diff = String::new();
+        let diff_hash = review::diff_content_hash(&current_diff);
+        app.review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Ready {
+                diff_hash,
+                text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
+            },
+        );
+        assert!(app.start_auto_apply_review_diff_load(
+            &session_id,
+            diff_hash,
+            "- Fix the issue.".to_string(),
+        ));
+        let request_id = *app
+            .pending_session_diff_requests
+            .keys()
+            .next()
+            .expect("automatic apply diff request should be pending");
+
+        // Act
+        app.apply_session_diff_update(SessionDiffUpdate {
+            request_id,
+            result: Ok(current_diff),
+            session_id: session_id.clone(),
+        })
+        .await;
+
+        // Assert
+        assert_eq!(
+            app.auto_address_review_iterations.get(&session_id),
+            Some(&1)
+        );
+        assert!(app.pending_session_diff_requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn automatic_apply_completion_does_not_count_failed_remediation_enqueue() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = review_app().await;
+        crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+        app.sessions.sessions_mut()[0].permission_mode =
+            crate::domain::permission::PermissionMode::AutoEditAddressComments;
+        app.auto_address_review_iterations
+            .insert(session_id.clone(), 2);
+        let current_diff = String::new();
+        let diff_hash = review::diff_content_hash(&current_diff);
+        app.review_cache.insert(
+            session_id.clone(),
+            ReviewCacheEntry::Ready {
+                diff_hash,
+                text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
+            },
+        );
+        assert!(app.start_auto_apply_review_diff_load(
+            &session_id,
+            diff_hash,
+            "- Fix the issue.".to_string(),
+        ));
+        let request_id = *app
+            .pending_session_diff_requests
+            .keys()
+            .next()
+            .expect("automatic apply diff request should be pending");
+        app.sessions.session_handles_mut().remove(&session_id);
+
+        // Act
+        app.apply_session_diff_update(SessionDiffUpdate {
+            request_id,
+            result: Ok(current_diff),
+            session_id: session_id.clone(),
+        })
+        .await;
+
+        // Assert
+        assert_eq!(
+            app.auto_address_review_iterations.get(&session_id),
+            Some(&2)
+        );
+        assert!(app.pending_session_diff_requests.is_empty());
+        assert_eq!(app.sessions.sessions()[0].status, Status::Review);
+        assert!(matches!(
+            app.review_cache.get(&session_id),
+            Some(ReviewCacheEntry::Ready { diff_hash: cached_diff_hash, text })
+                if *cached_diff_hash == diff_hash && text.contains("Fix the issue")
+        ));
+        let visible_review_text = app.sessions.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::Review)
+            .map(|message| message.body.text());
+        assert!(visible_review_text.is_some_and(|text| text.contains("Fix the issue")));
+        let persisted_reviews = app
+            .services
+            .db()
+            .sessions()
+            .load_session_focused_reviews_for_project(app.active_project_id())
+            .await
+            .expect("failed to load restored focused review");
+        assert!(persisted_reviews.iter().any(|review| {
+            review.session_id == session_id.as_str()
+                && review.diff_hash == diff_hash.to_string()
+                && review.text.contains("Fix the issue")
+        }));
+    }
+
+    #[tokio::test]
+    async fn automatic_apply_completion_revalidates_mode_and_iteration_limit() {
+        // Arrange, Act, Assert
+        for (permission_mode, completed_iterations) in [
+            (crate::domain::permission::PermissionMode::AutoEdit, 0),
+            (
+                crate::domain::permission::PermissionMode::AutoEditAddressComments,
+                crate::app::prompt_intent::MAX_AUTO_ADDRESS_REVIEW_ITERATIONS,
+            ),
+        ] {
+            let (mut app, _base_dir, session_id) = review_app().await;
+            crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+            app.sessions.sessions_mut()[0].permission_mode = permission_mode;
+            app.auto_address_review_iterations
+                .insert(session_id.clone(), completed_iterations);
+            let current_diff = String::new();
+            let diff_hash = review::diff_content_hash(&current_diff);
+            app.review_cache.insert(
+                session_id.clone(),
+                ReviewCacheEntry::Ready {
+                    diff_hash,
+                    text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
+                },
+            );
+            assert!(app.start_auto_apply_review_diff_load(
+                &session_id,
+                diff_hash,
+                "- Fix the issue.".to_string(),
+            ));
+            let request_id = *app
+                .pending_session_diff_requests
+                .keys()
+                .next()
+                .expect("automatic apply diff request should be pending");
+
+            app.apply_session_diff_update(SessionDiffUpdate {
+                request_id,
+                result: Ok(current_diff),
+                session_id: session_id.clone(),
+            })
+            .await;
+
+            assert_eq!(
+                app.auto_address_review_iterations.get(&session_id),
+                Some(&completed_iterations)
+            );
+            assert_eq!(app.sessions.sessions()[0].status, Status::Review);
+        }
     }
 
     #[tokio::test]

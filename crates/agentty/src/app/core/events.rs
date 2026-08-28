@@ -1279,8 +1279,16 @@ impl App {
                         self.sessions.state_mut(),
                         review_updates,
                     );
+                    let ready_session_ids = focused_review_persistence
+                        .iter()
+                        .filter(|update| {
+                            update.status == crate::domain::review::FocusedReviewStatus::Ready
+                        })
+                        .map(|update| update.session_id.clone())
+                        .collect();
                     self.persist_focused_review_updates(focused_review_persistence)
                         .await;
+                    self.auto_address_focused_reviews(ready_session_ids);
                 }
                 AppEventEffect::PersistDeferredAutoReviewTriggers(retries) => {
                     self.persist_deferred_auto_review_retries(retries).await;
