@@ -40,7 +40,9 @@ use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
-use crate::presentation::app_mode::{DiffFocus, DiffLineComments, DiffPreview, DiffSidebarFocus};
+use crate::presentation::app_mode::{
+    DiffCommentTarget, DiffFocus, DiffLineComments, DiffPreview, DiffSidebarFocus,
+};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::settings::SettingsAction;
 use crate::runtime::mode::diff;
@@ -2514,6 +2516,30 @@ async fn apply_queued_sync_resolved_retracts_waiting_row() {
             .get(TransientMessageSlot::SyncQueue)
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn apply_turn_started_clears_saved_diff_comments() {
+    // Arrange
+    let session_folder = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_selected_session(
+        session_folder.path().to_path_buf(),
+        "",
+        Arc::new(MockTmuxClient::new()),
+    )
+    .await;
+    let mut line_comments = DiffLineComments::default();
+    line_comments.start_editing_target(DiffCommentTarget::file("src/main.rs"));
+    app.save_diff_comment_progress("session-1".into(), line_comments);
+
+    // Act
+    app.apply_app_events(AppEvent::SessionTurnStarted {
+        session_id: "session-1".into(),
+    })
+    .await;
+
+    // Assert
+    assert!(!app.diff_comment_progress.contains_key("session-1"));
 }
 
 #[tokio::test]

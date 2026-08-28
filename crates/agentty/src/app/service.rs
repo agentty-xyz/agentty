@@ -333,6 +333,7 @@ fn app_event_label(event: &AppEvent) -> &'static str {
         AppEvent::BranchPublishActionResolved { .. } => "BranchPublishActionResolved",
         AppEvent::BranchPublishActionStarted { .. } => "BranchPublishActionStarted",
         AppEvent::SessionQueuedSyncResolved { .. } => "SessionQueuedSyncResolved",
+        AppEvent::SessionTurnStarted { .. } => "SessionTurnStarted",
         AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
         AppEvent::ReviewPreparationFailed { .. } => "ReviewPreparationFailed",
         AppEvent::DeferredAutoReviewPersistenceRetry { .. } => "DeferredAutoReviewPersistenceRetry",
@@ -515,6 +516,20 @@ mod tests {
 
         // Assert
         assert_eq!(label, "SessionQueuedSyncResolved");
+    }
+
+    #[test]
+    fn app_event_label_names_turn_starts() {
+        // Arrange
+        let event = AppEvent::SessionTurnStarted {
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        let label = app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, "SessionTurnStarted");
     }
 
     #[tokio::test]

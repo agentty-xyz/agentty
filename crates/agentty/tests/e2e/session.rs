@@ -8524,19 +8524,16 @@ fn test_diff_changed_line_navigation() -> E2eResult {
     Ok(())
 }
 
-/// Verify that file and changed-line comments stay inline until one batch is
-/// submitted as the next session turn.
+/// Verify that file and changed-line comments survive navigation until one
+/// batch is submitted as the next session turn.
 #[test]
 fn test_diff_line_comments() -> E2eResult {
-    // Arrange — Ctrl+M emits Enter's carriage return consistently in PTY and VHS.
-    const ENTER_KEY: &str = "Ctrl+m";
-
     // Act, Assert
     FeatureTest::new("diff_line_comments")
         .with_git()
         .zola(
             "Comment on files and changed lines",
-            "Write file and inline diff comments, then submit them together in the next turn.",
+            "Keep file and inline diff comments across screens, then submit them together.",
             47,
         )
         .setup(|env| {
@@ -8546,88 +8543,112 @@ fn test_diff_line_comments() -> E2eResult {
             seed_line_comment_review_stub(env)?;
             seed_sessions_startup_tab(env)
         })
-        .run(
-            |scenario| {
-                let scenario = scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::open_selected_session_view())
-                    .press_key("d")
-                    .wait_for_text("main.rs", 5000)
-                    .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
-                    .wait_for_text("Enter/l: open", 5000)
-                    .wait_for_text("Shift+C: comment", 5000)
-                    .write_text("C")
-                    .wait_for_text("File comment", 5000);
-
-                enter_multiline_diff_file_comment(scenario)
-                    .wait_for_stable_frame(300, 3000)
-                    .press_key("Esc")
-                    .wait_for_text("Add regression coverage.", 3000)
-                    .capture_labeled(
-                        "whole_file_comment",
-                        "Multiline whole-file feedback appears above the selected patch",
-                    )
-                    .press_key("j")
-                    .wait_for_text("Enter: comment", 5000)
-                    .press_key(ENTER_KEY)
-                    .wait_for_text("New line 1", 5000)
-                    .write_text("Explain the entry point.")
-                    .wait_for_text("Explain the entry point.|", 3000)
-                    .press_key(ENTER_KEY)
-                    .press_key("k")
-                    .press_key("j")
-                    .wait_for_stable_frame(300, 5000)
-                    .capture_labeled(
-                        "selected_inline_comment",
-                        "Completed inline comment selected for editing",
-                    )
-                    .press_key(ENTER_KEY)
-                    .wait_for_text("Explain the entry point.|", 3000)
-                    .write_text(" Updated.")
-                    .press_key(ENTER_KEY)
-                    .press_key("j")
-                    .press_key(ENTER_KEY)
-                    .write_text("Why print review?")
-                    .wait_for_text("Why print review?|", 3000)
-                    .press_key(ENTER_KEY)
-                    .wait_for_text("Why print review?", 3000)
-                    .wait_for_stable_frame(1000, 5000)
-                    .capture_labeled(
-                        "inline_line_comments",
-                        "Multiple comments remain visible inside the diff",
-                    )
-                    .viewing_pause_ms(1500)
-                    .press_key("Esc")
-                    .wait_for_text("s: submit comments", 3000)
-                    .press_key("s")
-                    .wait_for_text("File comments:", 5000)
-                    .wait_for_text("src/main.rs: Review the whole file.", 5000)
-                    .wait_for_text("| Check the tests too.", 5000)
-                    .wait_for_text("| Add regression coverage.", 5000)
-                    .wait_for_text("Line comments:", 5000)
-                    .wait_for_text(
-                        "src/main.rs:1 [new]: Explain the entry point. Updated.",
-                        5000,
-                    )
-                    .wait_for_text("src/main.rs:2 [new]: Why print review?", 5000)
-                    .wait_for_text("Ctrl+c: stop", 5000)
-                    .wait_for_text("Line comment received.", 5000)
-                    .wait_for_text("Enter: reply", 5000)
-                    .wait_for_text("[Commit] No changes to commit.", 5000)
-                    .wait_for_text("No review findings.", 5000)
-                    .write_text("G")
-                    .wait_for_stable_frame(1000, 5000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "line_comment_submitted",
-                        "Line comment submitted in the next session turn",
-                    )
-            },
-            assert_diff_line_comments,
-        )?;
+        .run(diff_line_comments_scenario, assert_diff_line_comments)?;
 
     Ok(())
+}
+
+/// Builds the file/inline comment persistence and submission journey.
+fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
+    // Ctrl+M emits Enter's carriage return consistently in PTY and VHS.
+    const ENTER_KEY: &str = "Ctrl+m";
+
+    let scenario = scenario
+        .compose(&common::wait_for_agentty_startup())
+        .compose(&common::open_selected_session_view())
+        .press_key("d")
+        .wait_for_text("main.rs", 5000)
+        .press_key("j")
+        .wait_for_stable_frame(200, 3000)
+        .wait_for_text("Enter/l: open", 5000)
+        .wait_for_text("Shift+C: comment", 5000)
+        .write_text("C")
+        .wait_for_text("File comment", 5000);
+
+    enter_multiline_diff_file_comment(scenario)
+        .wait_for_stable_frame(300, 3000)
+        .press_key("Esc")
+        .wait_for_text("Add regression coverage.", 3000)
+        .capture_labeled(
+            "whole_file_comment",
+            "Multiline whole-file feedback appears above the selected patch",
+        )
+        .press_key("j")
+        .wait_for_text("Enter: comment", 5000)
+        .press_key(ENTER_KEY)
+        .wait_for_text("New line 1", 5000)
+        .write_text("Explain the entry point.")
+        .wait_for_text("Explain the entry point.|", 3000)
+        .press_key(ENTER_KEY)
+        .press_key("k")
+        .press_key("j")
+        .wait_for_stable_frame(300, 5000)
+        .capture_labeled(
+            "selected_inline_comment",
+            "Completed inline comment selected for editing",
+        )
+        .press_key(ENTER_KEY)
+        .wait_for_text("Explain the entry point.|", 3000)
+        .write_text(" Updated.")
+        .press_key(ENTER_KEY)
+        .press_key("j")
+        .press_key(ENTER_KEY)
+        .write_text("Why print review?")
+        .wait_for_text("Why print review?|", 3000)
+        .press_key(ENTER_KEY)
+        .wait_for_text("Why print review?", 3000)
+        .wait_for_stable_frame(1000, 5000)
+        .capture_labeled(
+            "inline_line_comments",
+            "Multiple comments remain visible inside the diff",
+        )
+        .viewing_pause_ms(1500)
+        .press_key("q")
+        .wait_for_text("Enter: reply", 5000)
+        .press_key("d")
+        .wait_for_text("main.rs", 5000)
+        .press_key("j")
+        .wait_for_text("Explain the entry point. Updated.", 5000)
+        .wait_for_stable_frame(300, 5000)
+        .capture_labeled(
+            "restored_line_comments",
+            "Diff comments survive a round trip through session chat",
+        )
+        .wait_for_text("s: submit comments", 3000)
+        .press_key("s")
+        .wait_for_text("File comments:", 5000)
+        .wait_for_text("src/main.rs: Review the whole file.", 5000)
+        .wait_for_text("| Check the tests too.", 5000)
+        .wait_for_text("| Add regression coverage.", 5000)
+        .wait_for_text("Line comments:", 5000)
+        .wait_for_text(
+            "src/main.rs:1 [new]: Explain the entry point. Updated.",
+            5000,
+        )
+        .wait_for_text("src/main.rs:2 [new]: Why print review?", 5000)
+        .wait_for_text("Ctrl+c: stop", 5000)
+        .wait_for_text("Line comment received.", 5000)
+        .wait_for_text("Enter: reply", 5000)
+        .wait_for_text("[Commit] No changes to commit.", 5000)
+        .wait_for_text("No review findings.", 5000)
+        .write_text("G")
+        .wait_for_stable_frame(1000, 5000)
+        .viewing_pause_ms(1500)
+        .capture_labeled(
+            "line_comment_submitted",
+            "Line comment submitted in the next session turn",
+        )
+        .press_key("d")
+        .wait_for_text("main.rs", 5000)
+        .press_key("j")
+        .wait_for_text("Shift+C: comment", 5000)
+        .wait_for_stable_frame(300, 5000)
+        .capture_labeled(
+            "submitted_comments_purged",
+            "Submitted comments no longer appear in the next diff view",
+        )
+        .press_key("q")
+        .wait_for_text("Line comment received.", 5000)
 }
 
 /// Enters enough file-comment rows to exercise completed-editor expansion.
@@ -8675,6 +8696,19 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
     let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
     assertion::assert_text_in_region(&diff_frame, "Explain the entry point. Updated.", &diff_full);
     assertion::assert_text_in_region(&diff_frame, "Why print review?", &diff_full);
+
+    let restored_frame = common::frame_from_capture(&report.captures[3]);
+    let restored_full = Region::full(restored_frame.cols(), restored_frame.rows());
+    assertion::assert_text_in_region(
+        &restored_frame,
+        "Explain the entry point. Updated.",
+        &restored_full,
+    );
+
+    let purged_frame = common::frame_from_capture(&report.captures[5]);
+    assertion::assert_not_visible(&purged_frame, "Explain the entry point. Updated.");
+    assertion::assert_not_visible(&purged_frame, "Why print review?");
+    assertion::assert_not_visible(&purged_frame, "s: submit comments");
 
     let full = Region::full(frame.cols(), frame.rows());
     assertion::assert_text_in_region(frame, "Line comment received.", &full);

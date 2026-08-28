@@ -178,6 +178,8 @@ pub(crate) enum AppEvent {
     BranchPublishActionStarted { session_id: SessionId },
     /// Indicates a queued session sync has either started or failed visibly.
     SessionQueuedSyncResolved { session_id: SessionId },
+    /// Indicates a session start or resume command began its turn.
+    SessionTurnStarted { session_id: SessionId },
     /// Indicates review assist output became available for a session.
     ReviewPrepared {
         diff_hash: u64,
@@ -271,6 +273,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
     pub(super) session_orchestration_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_queued_sync_resolved_ids: HashSet<SessionId>,
+    pub(super) session_turn_started_ids: HashSet<SessionId>,
     pub(super) session_personality_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_permission_mode_updates:
         HashMap<SessionId, crate::domain::permission::PermissionMode>,
@@ -407,6 +410,7 @@ impl AppEventBatch {
             || !self.session_permission_mode_updates.is_empty()
             || !self.session_progress_updates.is_empty()
             || !self.session_queued_sync_resolved_ids.is_empty()
+            || !self.session_turn_started_ids.is_empty()
             || !self.session_review_comment_snapshots.is_empty()
             || !self.session_reasoning_level_updates.is_empty()
             || !self.session_speed_mode_updates.is_empty()
@@ -493,33 +497,7 @@ impl AppEventBatch {
             AppEvent::RefreshSessions => self.should_reload_sessions = true,
             AppEvent::RefreshProjects => self.should_reload_projects = true,
             AppEvent::RefreshGitStatus => self.should_refresh_git_status = true,
-            event @ (AppEvent::AtMentionEntriesLoaded { .. }
-            | AppEvent::DiffPreviewLoaded { .. }
-            | AppEvent::SessionDiffLoaded { .. }
-            | AppEvent::SessionModelUpdated { .. }
-            | AppEvent::SessionReviewCommentSnapshotLoaded { .. }
-            | AppEvent::SessionProgressUpdated { .. }
-            | AppEvent::SyncMainCompleted { .. }
-            | AppEvent::SyncMainConflictResolutionStarted { .. }
-            | AppEvent::SessionDiffStatsUpdated { .. }
-            | AppEvent::SessionTitleGenerationFinished { .. }
-            | AppEvent::BranchPublishActionCompleted { .. }
-            | AppEvent::BranchPublishActionResolved { .. }
-            | AppEvent::BranchPublishActionStarted { .. }
-            | AppEvent::SessionQueuedSyncResolved { .. }
-            | AppEvent::ReviewPrepared { .. }
-            | AppEvent::ReviewPreparationFailed { .. }
-            | AppEvent::DeferredAutoReviewPersistenceRetry { .. }
-            | AppEvent::FocusedReviewPersistenceRetry { .. }
-            | AppEvent::SessionUpdated { .. }
-            | AppEvent::AgentResponseReceived { .. }
-            | AppEvent::StackedParentTurnCompleted { .. }
-            | AppEvent::StackedParentSyncCompleted { .. }
-            | AppEvent::StackedParentMergeCompleted { .. }
-            | AppEvent::SessionWorkflowNoticeUpdated { .. }
-            | AppEvent::SessionOrchestrationProgressUpdated { .. }
-            | AppEvent::PublishedBranchSyncUpdated { .. }
-            | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_runtime_event(event),
+            event => self.collect_runtime_event(event),
         }
     }
 
@@ -596,6 +574,7 @@ impl AppEventBatch {
             | AppEvent::BranchPublishActionResolved { .. }
             | AppEvent::BranchPublishActionStarted { .. }
             | AppEvent::SessionQueuedSyncResolved { .. }
+            | AppEvent::SessionTurnStarted { .. }
             | AppEvent::ReviewPrepared { .. }
             | AppEvent::ReviewPreparationFailed { .. }
             | AppEvent::DeferredAutoReviewPersistenceRetry { .. }
@@ -654,6 +633,9 @@ impl AppEventBatch {
             }
             AppEvent::SessionQueuedSyncResolved { session_id } => {
                 self.session_queued_sync_resolved_ids.insert(session_id);
+            }
+            AppEvent::SessionTurnStarted { session_id } => {
+                self.session_turn_started_ids.insert(session_id);
             }
             AppEvent::ReviewPrepared {
                 diff_hash,
@@ -1100,6 +1082,7 @@ impl App {
         self.apply_session_queued_sync_resolutions(std::mem::take(
             &mut event_batch.session_queued_sync_resolved_ids,
         ));
+        self.apply_session_turn_starts(std::mem::take(&mut event_batch.session_turn_started_ids));
     }
 
     /// Replaces queued review-request labels when their worker actions start.
@@ -1123,6 +1106,13 @@ impl App {
     fn apply_session_queued_sync_resolutions(&mut self, session_ids: HashSet<SessionId>) {
         for session_id in session_ids {
             self.sessions.resolve_queued_session_sync(&session_id);
+        }
+    }
+
+    /// Clears diff comment drafts when their session turn starts.
+    fn apply_session_turn_starts(&mut self, session_ids: HashSet<SessionId>) {
+        for session_id in session_ids {
+            self.clear_diff_comment_progress(&session_id);
         }
     }
 

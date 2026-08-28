@@ -1068,6 +1068,18 @@ impl SessionWorkerService {
             return None;
         }
 
+        if matches!(
+            command,
+            SessionCommand::Run {
+                request_kind: AgentRequestKind::SessionStart | AgentRequestKind::SessionResume,
+                ..
+            }
+        ) {
+            let _ = context.app_event_tx.send(AppEvent::SessionTurnStarted {
+                session_id: context.session_id.clone(),
+            });
+        }
+
         let result = Self::execute_session_command(context, one_shot_client, command).await;
         match &result {
             Ok(()) => {
@@ -6847,29 +6859,35 @@ mod tests {
             .expect("queued message should be available");
         let turn_result =
             SessionWorkerService::process_queued_message(&context, &one_shot_client, message).await;
-        let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
-            let mut sync_events = Vec::new();
-            while sync_events.len() < 2 {
-                let event = app_event_rx.recv().await.expect("missing app event");
-                if let AppEvent::PublishedBranchSyncUpdated {
-                    session_id,
-                    sync_operation_id,
-                    sync_status,
-                    ..
-                } = event
-                {
-                    sync_events.push((session_id, sync_operation_id, sync_status));
+        let (turn_started_session_id, sync_events) =
+            tokio::time::timeout(Duration::from_secs(1), async {
+                let mut sync_events = Vec::new();
+                let mut turn_started_session_id = None;
+                while sync_events.len() < 2 || turn_started_session_id.is_none() {
+                    let event = app_event_rx.recv().await.expect("missing app event");
+                    match event {
+                        AppEvent::SessionTurnStarted { session_id } => {
+                            turn_started_session_id = Some(session_id);
+                        }
+                        AppEvent::PublishedBranchSyncUpdated {
+                            session_id,
+                            sync_operation_id,
+                            sync_status,
+                            ..
+                        } => sync_events.push((session_id, sync_operation_id, sync_status)),
+                        _ => {}
+                    }
                 }
-            }
 
-            sync_events
-        })
-        .await
-        .expect("timed out waiting for sync events");
+                (turn_started_session_id, sync_events)
+            })
+            .await
+            .expect("timed out waiting for sync events");
 
         // Assert
         assert!(matches!(turn_result, Some(Ok(()))));
         assert!(queue_handle.lock().expect("queue lock").is_empty());
+        assert_eq!(turn_started_session_id.as_deref(), Some("sess1"));
         assert_eq!(sync_events[0].2, PublishedBranchSyncStatus::InProgress);
         assert_eq!(sync_events[1].2, PublishedBranchSyncStatus::Succeeded);
         assert_eq!(sync_events[0].0, "sess1");

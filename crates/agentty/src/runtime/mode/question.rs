@@ -641,6 +641,7 @@ async fn submit_response(app: &mut App, response: String) {
     // never reached the worker (for example a rejected stacked reply) so the
     // pending question is not hidden behind a stalled `InProgress` state.
     if reply_enqueued {
+        app.clear_diff_comment_progress(&session_id);
         mark_answered_session(app, &session_id, is_orchestration_proxy);
     } else {
         restore_completed_question_response(app, completed_response);

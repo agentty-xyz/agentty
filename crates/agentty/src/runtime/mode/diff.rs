@@ -76,12 +76,16 @@ pub(crate) fn enter_diff_mode(
     if let Some(review_comments) = &mut review_comments {
         review_comments.sidebar_focus = sidebar_focus;
     }
+    let line_comments = app
+        .diff_comment_progress
+        .remove(&session_id)
+        .unwrap_or_default();
 
     app.mode = AppMode::Diff {
         diff,
         file_explorer_selected_index: 0,
         focus: DiffFocus::Files,
-        line_comments: DiffLineComments::default(),
+        line_comments,
         preview: DiffPreview::default(),
         review_comments,
         restore: restore.map(Box::new),
@@ -156,11 +160,13 @@ fn handle_exit_key(app: &mut App, key: KeyEvent) -> bool {
 
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
     if let AppMode::Diff {
+        line_comments,
         restore,
         session_id,
         ..
     } = mode
     {
+        app.save_diff_comment_progress(session_id.clone(), line_comments);
         app.mode = if let Some(restore) = restore {
             restore.into_mode()
         } else {
@@ -516,6 +522,7 @@ fn open_line_comment_prompt(app: &mut App) {
         return;
     }
     let history_entries = super::session_view::session_prompt_history_entries(session);
+    app.save_diff_comment_progress(session_id.clone(), line_comments.clone());
 
     let slash_state = app.prompt_slash_state();
     let mut snapshot = restored_prompt.unwrap_or_else(|| PromptModeSnapshot {
@@ -2354,6 +2361,112 @@ mod tests {
                 focus: crate::presentation::app_mode::ChatFocus::Input,
                 ..
             } if session_id == "session-q"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_quit_saves_and_reopens_diff_comments() {
+        // Arrange
+        let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
+        let mut line_comments = DiffLineComments::default();
+        line_comments.start_editing_target(DiffLineCommentTarget::single(DiffLineCommentAnchor {
+            content: "review();".to_string(),
+            line: 1,
+            path: "src/main.rs".to_string(),
+            side: crate::presentation::app_mode::DiffLineSide::New,
+        }));
+        line_comments
+            .editing_input_mut()
+            .expect("comment should be editable")
+            .insert_text("Keep this comment");
+        line_comments.finish_editing();
+        line_comments.start_selection(0);
+        app.mode = AppMode::Diff {
+            diff: "diff output".to_string(),
+            file_explorer_selected_index: 0,
+            focus: DiffFocus::Files,
+            line_comments,
+            preview: DiffPreview::default(),
+            review_comments: None,
+            restore: None,
+            scroll_cache: None,
+            scroll_offset: 0,
+            selected_diff_line_index: 0,
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        let saved_comments = app
+            .diff_comment_progress
+            .get("session-id")
+            .expect("comments should be saved after leaving Diff mode");
+        assert_eq!(saved_comments.comments[0].input.text(), "Keep this comment");
+        assert_eq!(saved_comments.editing_index, None);
+        assert_eq!(saved_comments.selection_anchor_index, None);
+        assert_eq!(saved_comments.selected_comment_index, None);
+
+        // Act
+        enter_diff_mode(
+            &mut app,
+            "session-id",
+            "diff output".to_string(),
+            None,
+            DiffSidebarFocus::Files,
+        );
+
+        // Assert
+        assert!(app.diff_comment_progress.is_empty());
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. }
+                if line_comments.comments[0].input.text() == "Keep this comment"
+        ));
+
+        // Act
+        app.clear_diff_comment_progress("session-id");
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff {
+                line_comments,
+                scroll_cache: None,
+                ..
+            } if line_comments.comments.is_empty()
+        ));
+
+        // Arrange
+        if let AppMode::Diff { line_comments, .. } = &mut app.mode {
+            line_comments.start_editing_target(DiffCommentTarget::file("src/main.rs"));
+            line_comments
+                .editing_input_mut()
+                .expect("file comment should be editable")
+                .insert_text("Clear from help too");
+            line_comments.finish_editing();
+        }
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        );
+
+        // Act
+        app.clear_diff_comment_progress("session-id");
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Help {
+                context: HelpContext::Diff { line_comments, .. },
+                ..
+            } if line_comments.comments.is_empty()
         ));
     }
 

@@ -67,7 +67,8 @@ use crate::infra::personality::{PersonalityCatalogClient, RealPersonalityCatalog
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{self, RealTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{
-    AppMode, ChatFocus, ConfirmationViewMode, DiffReviewComments, PromptModeSnapshot,
+    AppMode, ChatFocus, ConfirmationViewMode, DiffLineComments, DiffReviewComments,
+    PromptModeSnapshot,
 };
 use crate::presentation::settings::SettingsPresentationState;
 
@@ -257,6 +258,10 @@ pub struct App {
     /// reopening the session restores the complete typed draft. Entries are
     /// consumed on restore and removed when their session is deleted.
     pub(crate) prompt_progress: HashMap<SessionId, PromptModeSnapshot>,
+    /// Saves completed file and inline comments per session while Diff mode is
+    /// closed. Entries are consumed when the diff reopens and cleared when a
+    /// turn starts or the session is deleted.
+    pub(crate) diff_comment_progress: HashMap<SessionId, DiffLineComments>,
     /// Saves partially answered clarification progress per session so
     /// already-submitted answers survive leaving question mode with `q` and
     /// reopening the session. Entries are consumed on restore and cleared
@@ -792,10 +797,12 @@ impl App {
             .update_session_focused_review(session_id, None, None, None)
             .await?;
 
-        Ok(self
-            .sessions
+        self.sessions
             .start_session(&self.services, session_id, prompt)
-            .await?)
+            .await?;
+        self.clear_diff_comment_progress(session_id);
+
+        Ok(())
     }
 
     /// Persists one staged draft message for a `Draft` session without
@@ -830,10 +837,12 @@ impl App {
             .update_session_focused_review(session_id, None, None, None)
             .await?;
 
-        Ok(self
-            .sessions
+        self.sessions
             .start_staged_session(&self.services, session_id)
-            .await?)
+            .await?;
+        self.clear_diff_comment_progress(session_id);
+
+        Ok(())
     }
 
     /// Submits a follow-up prompt for an existing session.
@@ -859,9 +868,15 @@ impl App {
             .update_session_focused_review(session_id, None, None, None)
             .await;
 
-        self.sessions
+        let enqueued = self
+            .sessions
             .reply(&self.services, session_id, prompt)
-            .await
+            .await;
+        if enqueued {
+            self.clear_diff_comment_progress(session_id);
+        }
+
+        enqueued
     }
 
     /// Queues one chat prompt for an existing `InProgress` or `Rebasing`
@@ -877,7 +892,9 @@ impl App {
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), crate::app::session::SessionError> {
         self.sessions
-            .enqueue_message(&self.services, session_id, prompt)
+            .enqueue_message(&self.services, session_id, prompt)?;
+
+        Ok(())
     }
 
     /// Returns the current wall-clock time used for render-time timers.

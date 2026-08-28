@@ -50,7 +50,8 @@ use crate::infra::clock::{Clock, RealClock};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::{self as fs, FsClient};
 use crate::presentation::app_mode::{
-    AppMode, DiffFocus, DiffLineComments, DiffPreview, HelpContext, ReviewCommentSelection,
+    AppMode, DiffCommentTarget, DiffFocus, DiffLineComments, DiffPreview, HelpContext,
+    ReviewCommentSelection,
 };
 
 /// Builds one loading focused-review entry with a stable test profile.
@@ -3268,6 +3269,10 @@ async fn test_enqueue_message_pushes_prompt_onto_in_memory_queue() {
     let session_id = app.sessions.sessions()[0].id.clone();
     wait_for_status(&mut app, &session_id, Status::Review).await;
     crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+    let mut line_comments = DiffLineComments::default();
+    line_comments.start_editing_target(DiffCommentTarget::file("src/main.rs"));
+    app.save_diff_comment_progress(session_id.clone(), line_comments);
+    let saved_line_comments = app.diff_comment_progress[&session_id].clone();
 
     // Act
     app.enqueue_message(&session_id, "queued reply")
@@ -3288,6 +3293,11 @@ async fn test_enqueue_message_pushes_prompt_onto_in_memory_queue() {
         .expect("handles present");
     let queued_len = handles.queued_messages.lock().expect("queue lock").len();
     assert_eq!(queued_len, 1);
+    assert_eq!(
+        app.diff_comment_progress.get(&session_id),
+        Some(&saved_line_comments),
+        "queueing must retain comments until the queued turn starts"
+    );
 }
 
 #[tokio::test]
