@@ -18,18 +18,19 @@ use thiserror::Error;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader};
 
 const READ_ONLY_SYSTEM_PROMPT: &str = concat!(
-    "You are operating in a read-only repository harness. When a user asks about repository ",
-    "contents, call the read tool immediately in the same response and use its result before ",
-    "answering. Never narrate, promise, or defer a future tool call. Never claim that you \
-     created, ",
+    "You are operating in a read-only repository harness. The read tool supports file, list, ",
+    "search, diff, and show actions. For change review, call diff first, then use search, file, ",
+    "list, or show for evidence. Call the tool immediately and use its result before answering. ",
+    "Never narrate, promise, or defer a future tool call. Never claim that you created, ",
     "modified, deleted, or executed files or commands because filesystem mutation and command ",
     "execution are unavailable. If asked to perform an unsupported action, state that it is ",
     "unsupported."
 );
 const READ_WRITE_SYSTEM_PROMPT: &str = concat!(
-    "You are operating in a repository harness with read and write tools. When a user asks about ",
-    "repository contents, call the read tool immediately in the same response and use its result ",
-    "before answering. When a user asks to create or modify a file, call the write tool ",
+    "You are operating in a repository harness with read and write tools. The read tool supports ",
+    "file, list, search, diff, and show actions. For change review, call diff first. When a user ",
+    "asks about repository contents, call read immediately and use its result before answering. ",
+    "When a user asks to create or modify a file, call the write tool ",
     "immediately in the same response. Never narrate, promise, or defer a future tool call. Only ",
     "claim that a file was created or modified after the write tool succeeds. File deletion and ",
     "command execution are unavailable."

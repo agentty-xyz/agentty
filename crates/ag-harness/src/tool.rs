@@ -4,11 +4,18 @@ use std::num::NonZeroU64;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Number, Value, json};
 
-const READ_DESCRIPTION: &str =
-    "Read a repository-relative file, optionally selecting a line range.";
+const READ_DESCRIPTION: &str = concat!(
+    "Inspect the repository with one bounded read-only action. Use `file` with `path` and ",
+    "optional `offset`/`limit` for worktree text; `list` with optional `path`/`limit`; ",
+    "`search` with `query` and optional `path`/`limit`; `diff` with optional `path` for ",
+    "changes from `main`; or `show` with `path`, `side` (`base` for `main` or `head`), ",
+    "and optional `offset`/`limit`."
+);
 const READ_NAME: &str = "read";
 const MAX_PATCH_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
+const MAX_QUERY_BYTES: usize = 4 * 1024;
+pub(crate) const MAX_TOOL_RESULT_BYTES: usize = 64 * 1024;
 const WRITE_DESCRIPTION: &str = concat!(
     "Apply one unified diff to one repository-relative text file. To create an empty file, use ",
     "only `--- /dev/null` and `+++ b/<path>` headers."
@@ -18,7 +25,7 @@ const WRITE_NAME: &str = "write";
 /// Built-in tool that can be enabled for a harness run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tool {
-    /// Repository-relative file reads.
+    /// Read-only repository inspection.
     Read,
     /// Repository-relative patch writes.
     Write,
@@ -44,19 +51,32 @@ impl ToolDefinition {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "path": repository_path_schema(),
+                    "action": {
+                        "type": "string",
+                        "enum": ["file", "list", "search", "diff", "show"]
+                    },
+                    "path": nullable_schema(repository_path_schema()),
+                    "query": {
+                        "type": ["string", "null"],
+                        "minLength": 1,
+                        "maxLength": MAX_QUERY_BYTES,
+                        "pattern": "^[^\\u0000]*$"
+                    },
+                    "side": {
+                        "type": ["string", "null"],
+                        "enum": ["base", "head", null]
+                    },
                     "offset": {
-                        "type": "integer",
+                        "type": ["integer", "null"],
                         "minimum": 1,
                         "maximum": u64::MAX
                     },
                     "limit": {
-                        "type": "integer",
+                        "type": ["integer", "null"],
                         "minimum": 1,
                         "maximum": u64::MAX
                     }
                 },
-                "required": ["path"],
                 "additionalProperties": false
             }),
         }
@@ -106,6 +126,12 @@ fn repository_path_schema() -> Value {
         "maxLength": MAX_PATH_BYTES,
         "pattern": "^(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+)(?:/(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+))*$"
     })
+}
+
+fn nullable_schema(mut schema: Value) -> Value {
+    schema["type"] = json!(["string", "null"]);
+
+    schema
 }
 
 /// Provider-neutral model request for one native tool invocation.
@@ -220,31 +246,117 @@ pub enum ToolCallArguments<'a> {
     Write(&'a WriteArguments),
 }
 
-/// Validated arguments for the native `read` function.
+/// Structurally validated arguments for one native read-only repository action.
 ///
-/// `path` is a non-empty repository-relative POSIX path. `offset`, when
-/// present, is a one-based line number, and `limit`, when present, is a
-/// positive maximum line count.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+/// Omitting `action` preserves the original file-read contract. The other
+/// fields are action-specific. Schema-valid field combinations rejected by an
+/// action are retained so the harness can return corrective tool feedback.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReadArguments {
-    #[serde(
-        default,
-        deserialize_with = "deserialize_optional_positive_integer",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "is_default")]
+    action: ReadAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
     limit: Option<NonZeroU64>,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_optional_positive_integer",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     offset: Option<NonZeroU64>,
-    #[serde(deserialize_with = "deserialize_repository_path")]
-    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    side: Option<ReadSide>,
+    #[serde(skip)]
+    validation_error: Option<&'static str>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadArgumentsWire {
+    #[serde(default)]
+    action: ReadAction,
+    #[serde(default, deserialize_with = "deserialize_optional_positive_integer")]
+    limit: Option<NonZeroU64>,
+    #[serde(default, deserialize_with = "deserialize_optional_positive_integer")]
+    offset: Option<NonZeroU64>,
+    #[serde(default, deserialize_with = "deserialize_optional_repository_path")]
+    path: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_query")]
+    query: Option<String>,
+    side: Option<ReadSide>,
+}
+
+impl<'de> Deserialize<'de> for ReadArguments {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let arguments = ReadArgumentsWire::deserialize(deserializer)?;
+        let validation_error = match arguments.action {
+            ReadAction::Diff
+                if arguments.limit.is_none()
+                    && arguments.offset.is_none()
+                    && arguments.query.is_none()
+                    && arguments.side.is_none() =>
+            {
+                None
+            }
+            ReadAction::File
+                if arguments.path.is_some()
+                    && arguments.query.is_none()
+                    && arguments.side.is_none() =>
+            {
+                None
+            }
+            ReadAction::List
+                if arguments.offset.is_none()
+                    && arguments.query.is_none()
+                    && arguments.side.is_none() =>
+            {
+                None
+            }
+            ReadAction::Search
+                if arguments.query.is_some()
+                    && arguments.offset.is_none()
+                    && arguments.side.is_none() =>
+            {
+                None
+            }
+            ReadAction::Show
+                if arguments.path.is_some()
+                    && arguments.side.is_some()
+                    && arguments.query.is_none() =>
+            {
+                None
+            }
+            ReadAction::Diff => Some("diff accepts only an optional path"),
+            ReadAction::File => Some("file requires a path and accepts only offset and limit"),
+            ReadAction::List => Some("list accepts only an optional path and limit"),
+            ReadAction::Search => {
+                Some("search requires a query and accepts only an optional path and limit")
+            }
+            ReadAction::Show => {
+                Some("show requires a path and side and accepts only offset and limit")
+            }
+        };
+
+        Ok(Self {
+            action: arguments.action,
+            limit: arguments.limit,
+            offset: arguments.offset,
+            path: arguments.path,
+            query: arguments.query,
+            side: arguments.side,
+            validation_error,
+        })
+    }
 }
 
 impl ReadArguments {
+    /// Returns the selected repository inspection action.
+    pub fn action(&self) -> ReadAction {
+        self.action
+    }
+
     /// Returns the optional positive maximum line count.
     pub fn limit(&self) -> Option<u64> {
         self.limit.map(NonZeroU64::get)
@@ -257,8 +369,66 @@ impl ReadArguments {
 
     /// Returns the repository-relative path to read.
     pub fn path(&self) -> &str {
-        &self.path
+        self.path.as_deref().unwrap_or("")
     }
+
+    /// Returns an optional path filter for actions that do not require a path.
+    pub fn path_filter(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Returns the literal search query for a `search` action.
+    pub fn query(&self) -> Option<&str> {
+        self.query.as_deref()
+    }
+
+    /// Returns the selected revision side for a `show` action.
+    pub fn side(&self) -> Option<ReadSide> {
+        self.side
+    }
+
+    pub(crate) fn validation_error(&self) -> Option<&'static str> {
+        self.validation_error
+    }
+}
+
+/// Read-only operation selected within the built-in `read` tool.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadAction {
+    /// Host-bound review diff.
+    Diff,
+    /// Current worktree file content.
+    #[default]
+    File,
+    /// Repository path discovery.
+    List,
+    /// Literal repository text search.
+    Search,
+    /// File content from the base or `HEAD` revision.
+    Show,
+}
+
+impl ReadAction {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Diff => "diff",
+            Self::File => "file",
+            Self::List => "list",
+            Self::Search => "search",
+            Self::Show => "show",
+        }
+    }
+}
+
+/// Revision side available to the `show` read action.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadSide {
+    /// Built-in `main` review base.
+    Base,
+    /// Current `HEAD` commit.
+    Head,
 }
 
 /// Validated arguments for the native `write` function.
@@ -286,6 +456,10 @@ impl WriteArguments {
     }
 }
 
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    value == &T::default()
+}
+
 fn deserialize_bounded_patch<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: Deserializer<'de>,
@@ -307,11 +481,47 @@ fn deserialize_optional_positive_integer<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    let number = Number::deserialize(deserializer)?;
+    let Some(number) = Option::<Number>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
     parse_positive_json_integer(&number.to_string())
         .and_then(NonZeroU64::new)
         .map(Some)
         .ok_or_else(|| de::Error::custom("number must be an integer from 1 through u64::MAX"))
+}
+
+fn deserialize_optional_repository_path<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?
+        .map(validate_repository_path)
+        .transpose()
+        .map_err(de::Error::custom)
+}
+
+fn deserialize_optional_query<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?
+        .map(validate_query)
+        .transpose()
+        .map_err(de::Error::custom)
+}
+
+fn validate_query(query: String) -> Result<String, &'static str> {
+    if query.is_empty() {
+        return Err("query must not be empty");
+    }
+    if query.len() > MAX_QUERY_BYTES {
+        return Err("query exceeds the byte limit");
+    }
+    if query.contains('\0') {
+        return Err("query must not contain NUL");
+    }
+
+    Ok(query)
 }
 
 fn parse_positive_json_integer(number: &str) -> Option<u64> {
@@ -356,25 +566,29 @@ where
     D: Deserializer<'de>,
 {
     let path = String::deserialize(deserializer)?;
+    validate_repository_path(path).map_err(de::Error::custom)
+}
+
+fn validate_repository_path(path: String) -> Result<String, &'static str> {
     if path.is_empty() {
-        return Err(de::Error::custom("path must not be empty"));
+        return Err("path must not be empty");
     }
     if path.len() > MAX_PATH_BYTES {
-        return Err(de::Error::custom("path exceeds the byte limit"));
+        return Err("path exceeds the byte limit");
     }
     if path.starts_with('/') || path.contains('\\') {
-        return Err(de::Error::custom("path must be repository-relative"));
+        return Err("path must be repository-relative");
     }
     if path.contains('\0') {
-        return Err(de::Error::custom("path must not contain NUL"));
+        return Err("path must not contain NUL");
     }
     if path
         .split('/')
         .any(|component| component.is_empty() || matches!(component, "." | ".."))
     {
-        return Err(de::Error::custom(
+        return Err(
             "path must not contain empty, current-directory, or parent-directory components",
-        ));
+        );
     }
 
     Ok(path)
@@ -396,25 +610,34 @@ mod tests {
 
         // Assert
         assert_eq!(definition.name(), "read");
-        assert_eq!(
-            definition.description(),
-            "Read a repository-relative file, optionally selecting a line range."
-        );
+        assert_eq!(definition.description(), READ_DESCRIPTION);
         assert!(validator.is_valid(&json!({ "path": "Cargo.toml" })));
+        assert!(validator.is_valid(&json!({ "action": "file", "path": "Cargo.toml" })));
         assert!(validator.is_valid(&json!({
+            "action": "file",
             "path": "crates/ag-harness/src/lib.rs",
             "offset": 1,
             "limit": 12
         })));
         assert!(validator.is_valid(&json!({
+            "action": "file",
             "path": "Cargo.toml",
             "offset": u64::MAX,
             "limit": u64::MAX
         })));
         assert!(validator.is_valid(&json!({
+            "action": "file",
             "path": "Cargo.toml",
             "offset": 1.0,
             "limit": 1e0
+        })));
+        assert!(validator.is_valid(&json!({
+            "action": "diff",
+            "path": null,
+            "query": null,
+            "side": null,
+            "offset": null,
+            "limit": null
         })));
     }
 
@@ -424,24 +647,24 @@ mod tests {
         let definition = ToolDefinition::read();
         let validator =
             Validator::new(definition.parameters()).expect("read argument schema should compile");
-        let offset_above_maximum =
-            serde_json::from_str(r#"{"path":"Cargo.toml","offset":18446744073709551616}"#)
-                .expect("out-of-range offset fixture should be valid JSON");
-        let limit_above_maximum =
-            serde_json::from_str(r#"{"path":"Cargo.toml","limit":18446744073709551616}"#)
-                .expect("out-of-range limit fixture should be valid JSON");
+        let offset_above_maximum = serde_json::from_str(
+            r#"{"action":"file","path":"Cargo.toml","offset":18446744073709551616}"#,
+        )
+        .expect("out-of-range offset fixture should be valid JSON");
+        let limit_above_maximum = serde_json::from_str(
+            r#"{"action":"file","path":"Cargo.toml","limit":18446744073709551616}"#,
+        )
+        .expect("out-of-range limit fixture should be valid JSON");
         let invalid_arguments = [
-            json!({}),
-            json!({ "path": "" }),
-            json!({ "path": "/Cargo.toml" }),
-            json!({ "path": "C:\\Cargo.toml" }),
-            json!({ "path": "../Cargo.toml" }),
-            json!({ "path": "Cargo\0.toml" }),
-            json!({ "path": "Cargo.toml", "offset": 0 }),
-            json!({ "path": "Cargo.toml", "limit": 0 }),
-            json!({ "path": "Cargo.toml", "offset": null }),
-            json!({ "path": "Cargo.toml", "limit": null }),
-            json!({ "path": "Cargo.toml", "unexpected": true }),
+            json!({ "action": "file", "path": "" }),
+            json!({ "action": "file", "path": "/Cargo.toml" }),
+            json!({ "action": "file", "path": "C:\\Cargo.toml" }),
+            json!({ "action": "file", "path": "../Cargo.toml" }),
+            json!({ "action": "file", "path": "Cargo\0.toml" }),
+            json!({ "action": "search", "query": "needle\0suffix" }),
+            json!({ "action": "file", "path": "Cargo.toml", "offset": 0 }),
+            json!({ "action": "file", "path": "Cargo.toml", "limit": 0 }),
+            json!({ "action": "file", "path": "Cargo.toml", "unexpected": true }),
             offset_above_maximum,
             limit_above_maximum,
         ];
@@ -451,6 +674,122 @@ mod tests {
 
         // Assert
         assert!(results.into_iter().all(|is_valid| !is_valid));
+    }
+
+    #[test]
+    fn read_arguments_decode_every_closed_inspection_action() {
+        // Arrange
+        let values = [
+            json!({ "action": "file", "path": "src/lib.rs" }),
+            json!({ "action": "list", "path": "src", "limit": 10 }),
+            json!({ "action": "search", "query": "Harness", "limit": 5 }),
+            json!({ "action": "diff" }),
+            json!({
+                "action": "show",
+                "side": "base",
+                "path": "src/lib.rs",
+                "offset": 2
+            }),
+        ];
+
+        // Act
+        let arguments = values.map(|value| {
+            serde_json::from_value::<ReadArguments>(value)
+                .expect("closed read action should decode")
+        });
+
+        // Assert
+        assert_eq!(arguments[0].action(), ReadAction::File);
+        assert_eq!(arguments[1].action(), ReadAction::List);
+        assert_eq!(arguments[2].action(), ReadAction::Search);
+        assert_eq!(arguments[3].action(), ReadAction::Diff);
+        assert_eq!(arguments[4].action(), ReadAction::Show);
+        assert_eq!(arguments[2].query(), Some("Harness"));
+        assert_eq!(arguments[0].query(), None);
+        assert_eq!(arguments[3].path_filter(), None);
+        assert_eq!(arguments[4].side(), Some(ReadSide::Base));
+        assert_eq!(arguments[0].side(), None);
+        assert!(
+            arguments
+                .iter()
+                .all(|arguments| arguments.validation_error().is_none())
+        );
+    }
+
+    #[test]
+    fn read_actions_have_stable_names() {
+        // Arrange
+        let actions = [
+            ReadAction::Diff,
+            ReadAction::File,
+            ReadAction::List,
+            ReadAction::Search,
+            ReadAction::Show,
+        ];
+
+        // Act
+        let names = actions.map(ReadAction::as_str);
+
+        // Assert
+        assert_eq!(names, ["diff", "file", "list", "search", "show"]);
+    }
+
+    #[test]
+    fn read_arguments_retain_schema_valid_action_rejections() {
+        // Arrange
+        let values = [
+            json!({}),
+            json!({ "action": "file" }),
+            json!({ "action": "list", "offset": 1 }),
+            json!({ "action": "search" }),
+            json!({ "action": "show", "side": "base" }),
+            json!({ "action": "diff", "query": "unexpected" }),
+        ];
+        let definition = ToolDefinition::read();
+        let validator =
+            Validator::new(definition.parameters()).expect("read argument schema should compile");
+
+        // Act
+        let arguments = values
+            .iter()
+            .cloned()
+            .map(serde_json::from_value::<ReadArguments>)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("schema-valid arguments should decode for a correctable rejection");
+
+        // Assert
+        assert!(values.iter().all(|value| validator.is_valid(value)));
+        assert!(
+            arguments
+                .iter()
+                .all(|arguments| arguments.validation_error().is_some())
+        );
+    }
+
+    #[test]
+    fn read_arguments_reject_schema_invalid_input() {
+        // Arrange
+        let values = [
+            json!({ "action": "search", "query": "" }),
+            json!({ "action": "search", "query": "needle\0suffix" }),
+            json!({ "action": "search", "query": "x".repeat(MAX_QUERY_BYTES + 1) }),
+            json!({ "action": "show", "side": "other", "path": "src/lib.rs" }),
+            json!({ "action": "unknown" }),
+        ];
+        let definition = ToolDefinition::read();
+        let validator =
+            Validator::new(definition.parameters()).expect("read argument schema should compile");
+
+        // Act
+        let errors = values
+            .iter()
+            .cloned()
+            .map(serde_json::from_value::<ReadArguments>)
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(values.iter().all(|value| !validator.is_valid(value)));
+        assert!(errors.into_iter().all(|result| result.is_err()));
     }
 
     #[test]
@@ -503,8 +842,11 @@ mod tests {
     #[test]
     fn tool_call_exposes_matching_typed_arguments_and_serialization() {
         // Arrange
-        let read_arguments = serde_json::from_value(json!({ "path": "Cargo.toml" }))
-            .expect("read arguments should decode");
+        let read_arguments = serde_json::from_value(json!({
+            "action": "file",
+            "path": "Cargo.toml"
+        }))
+        .expect("read arguments should decode");
         let write_arguments = serde_json::from_value(json!({
             "path": "src/lib.rs",
             "patch": "patch"
@@ -538,8 +880,15 @@ mod tests {
         assert_eq!(write_json, r#"{"patch":"patch","path":"src/lib.rs"}"#);
         assert_eq!(read.reasoning_content(), Some("secret"));
         assert!(format!("{read:?}").contains("[REDACTED]"));
-        assert!(matches!(read.arguments(), ToolCallArguments::Read(_)));
-        assert!(matches!(write.arguments(), ToolCallArguments::Write(_)));
+        assert!(matches!(
+            read.arguments(),
+            ToolCallArguments::Read(arguments) if arguments.path() == "Cargo.toml"
+        ));
+        assert!(matches!(
+            write.arguments(),
+            ToolCallArguments::Write(arguments)
+                if arguments.path() == "src/lib.rs" && arguments.patch() == "patch"
+        ));
     }
 
     #[test]
@@ -558,7 +907,7 @@ mod tests {
 
         // Act
         let errors = invalid_paths.map(|path| {
-            serde_json::from_value::<ReadArguments>(json!({ "path": path }))
+            serde_json::from_value::<ReadArguments>(json!({ "action": "file", "path": path }))
                 .expect_err("invalid path should be rejected")
         });
 
@@ -571,36 +920,48 @@ mod tests {
     }
 
     #[test]
-    fn read_arguments_distinguish_missing_ranges_from_null() {
+    fn read_arguments_treat_optional_null_fields_as_omitted() {
         // Arrange
-        let omitted = json!({ "path": "Cargo.toml" });
-        let explicit_null = [
-            json!({ "path": "Cargo.toml", "offset": null }),
-            json!({ "path": "Cargo.toml", "limit": null }),
+        let values = [
+            json!({ "action": "file", "path": "Cargo.toml" }),
+            json!({ "action": "file", "path": "Cargo.toml", "offset": null }),
+            json!({ "action": "file", "path": "Cargo.toml", "limit": null }),
+            json!({
+                "action": "diff",
+                "path": null,
+                "query": null,
+                "side": null,
+                "offset": null,
+                "limit": null
+            }),
         ];
 
         // Act
-        let arguments = serde_json::from_value::<ReadArguments>(omitted)
-            .expect("omitted ranges should remain optional");
-        let errors = explicit_null.map(|value| {
+        let arguments = values.map(|value| {
             serde_json::from_value::<ReadArguments>(value)
-                .expect_err("explicit null range should be rejected")
+                .expect("optional null fields should decode as omissions")
         });
 
         // Assert
-        assert_eq!(arguments.offset(), None);
-        assert_eq!(arguments.limit(), None);
         assert!(
-            errors
-                .into_iter()
-                .all(|error| !error.to_string().is_empty())
+            arguments
+                .iter()
+                .all(|arguments| arguments.offset().is_none())
         );
+        assert!(
+            arguments
+                .iter()
+                .all(|arguments| arguments.limit().is_none())
+        );
+        assert_eq!(arguments[3].action(), ReadAction::Diff);
+        assert_eq!(arguments[3].path_filter(), None);
     }
 
     #[test]
     fn read_arguments_accept_maximum_ranges() {
         // Arrange
         let value = json!({
+            "action": "file",
             "path": "Cargo.toml",
             "offset": u64::MAX,
             "limit": u64::MAX
@@ -619,13 +980,16 @@ mod tests {
     fn read_arguments_accept_integral_decimal_and_exponent_ranges() {
         // Arrange
         let values = [
-            (r#"{"path":"Cargo.toml","offset":1.0,"limit":1e0}"#, (1, 1)),
             (
-                r#"{"path":"Cargo.toml","offset":1e2,"limit":100e-2}"#,
+                r#"{"action":"file","path":"Cargo.toml","offset":1.0,"limit":1e0}"#,
+                (1, 1),
+            ),
+            (
+                r#"{"action":"file","path":"Cargo.toml","offset":1e2,"limit":100e-2}"#,
                 (100, 1),
             ),
             (
-                r#"{"path":"Cargo.toml","offset":18446744073709551615.0,"limit":18446744073709551615e0}"#,
+                r#"{"action":"file","path":"Cargo.toml","offset":18446744073709551615.0,"limit":18446744073709551615e0}"#,
                 (u64::MAX, u64::MAX),
             ),
         ];
@@ -647,11 +1011,12 @@ mod tests {
     fn read_arguments_reject_non_integral_or_out_of_range_numbers() {
         // Arrange
         let values = [
-            r#"{"path":"Cargo.toml","offset":-1}"#,
-            r#"{"path":"Cargo.toml","limit":1.5}"#,
-            r#"{"path":"Cargo.toml","limit":1e-1}"#,
-            r#"{"path":"Cargo.toml","offset":18446744073709551616}"#,
-            r#"{"path":"Cargo.toml","offset":1e999999999999999999999}"#,
+            r#"{"action":"file","path":"Cargo.toml","offset":-1}"#,
+            r#"{"action":"file","path":"Cargo.toml","limit":1.5}"#,
+            r#"{"action":"file","path":"Cargo.toml","limit":1e-1}"#,
+            r#"{"action":"file","path":"Cargo.toml","offset":18446744073709551616}"#,
+            r#"{"action":"file","path":"Cargo.toml","offset":100000000000000000000}"#,
+            r#"{"action":"file","path":"Cargo.toml","offset":1e999999999999999999999}"#,
         ];
 
         // Act

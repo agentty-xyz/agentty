@@ -18,10 +18,10 @@ use crate::model::{
     ensure_unique_tool_call_ids,
 };
 use crate::policy::Policy;
-use crate::read::{ReadError, ReadTool};
+use crate::read::{self, ReadError, ReadTool};
 use crate::schema_contract::OutputSchema;
 use crate::tool::{
-    ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments,
+    ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments,
 };
 use crate::write::{WriteError, WriteTool};
 
@@ -102,7 +102,7 @@ impl ModelRequestActivity {
     }
 }
 
-/// Sanitized details about one successful built-in tool operation.
+/// Sanitized details about one built-in tool operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ToolActivity {
@@ -118,6 +118,25 @@ pub enum ToolActivity {
         start_line: u64,
         /// Whether additional file content followed the result.
         truncated: bool,
+    },
+    /// A read-only repository inspection other than a worktree file read.
+    ReadInspection {
+        /// Selected inspection action.
+        action: crate::tool::ReadAction,
+        /// Elapsed tool-execution time.
+        duration: Duration,
+        /// Bounded path, query, or revision summary.
+        summary: String,
+    },
+    /// A model-correctable repository inspection rejection returned to the
+    /// model.
+    ReadInspectionRejected {
+        /// Selected inspection action.
+        action: crate::tool::ReadAction,
+        /// Elapsed tool-execution time.
+        duration: Duration,
+        /// Bounded path, query, or revision summary.
+        summary: String,
     },
     /// A model-correctable repository read rejection returned to the model.
     ReadRejected {
@@ -149,6 +168,8 @@ impl ToolActivity {
     pub fn duration(&self) -> Duration {
         match self {
             Self::Read { duration, .. }
+            | Self::ReadInspection { duration, .. }
+            | Self::ReadInspectionRejected { duration, .. }
             | Self::ReadRejected { duration, .. }
             | Self::Write { duration, .. }
             | Self::WriteRejected { duration, .. } => *duration,
@@ -158,18 +179,24 @@ impl ToolActivity {
     /// Returns the bounded built-in tool name.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Read { .. } | Self::ReadRejected { .. } => "read",
+            Self::Read { .. }
+            | Self::ReadInspection { .. }
+            | Self::ReadInspectionRejected { .. }
+            | Self::ReadRejected { .. } => "read",
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
         }
     }
 
-    /// Returns the repository-relative target path.
+    /// Returns the repository-relative target or bounded inspection summary.
     pub fn path(&self) -> &str {
         match self {
             Self::Read { path, .. }
             | Self::ReadRejected { path, .. }
             | Self::Write { path, .. }
             | Self::WriteRejected { path, .. } => path,
+            Self::ReadInspection { summary, .. } | Self::ReadInspectionRejected { summary, .. } => {
+                summary
+            }
         }
     }
 }
@@ -197,6 +224,28 @@ impl fmt::Display for ToolActivity {
                     format_report_duration(*duration)
                 )
             }
+            Self::ReadInspection {
+                action,
+                duration,
+                summary,
+            } => write!(
+                formatter,
+                "read {} {} (completed; {})",
+                action.as_str(),
+                sanitize_report_text(summary),
+                format_report_duration(*duration)
+            ),
+            Self::ReadInspectionRejected {
+                action,
+                duration,
+                summary,
+            } => write!(
+                formatter,
+                "read {} {} (rejected; {})",
+                action.as_str(),
+                sanitize_report_text(summary),
+                format_report_duration(*duration)
+            ),
             Self::ReadRejected { duration, path } => write!(
                 formatter,
                 "read {} (rejected; {})",
@@ -652,7 +701,9 @@ impl Harness {
                 if let Some(tool_lifecycle) = tool_lifecycle {
                     if matches!(
                         &result.1,
-                        ToolActivity::ReadRejected { .. } | ToolActivity::WriteRejected { .. }
+                        ToolActivity::ReadInspectionRejected { .. }
+                            | ToolActivity::ReadRejected { .. }
+                            | ToolActivity::WriteRejected { .. }
                     ) {
                         tool_lifecycle.failed(ToolErrorType::Execution);
                     } else {
@@ -724,24 +775,75 @@ async fn execute_tool(execution: ToolExecution<'_>) -> Result<(String, ToolActiv
     let started_at = Instant::now();
 
     match execution {
-        ToolExecution::Read(read_tool, arguments) => match read_tool.execute(arguments).await {
-            Ok(output) => {
-                let activity = ToolActivity::Read {
+        ToolExecution::Read(read_tool, arguments) => {
+            execute_read_tool(read_tool, arguments, started_at).await
+        }
+        ToolExecution::Write(write_tool, arguments) => {
+            execute_write_tool(write_tool, arguments, started_at).await
+        }
+    }
+}
+
+async fn execute_read_tool(
+    read_tool: &ReadTool,
+    arguments: &ReadArguments,
+    started_at: Instant,
+) -> Result<(String, ToolActivity), TurnError> {
+    if let Some(error) = arguments.validation_error() {
+        return reject_invalid_read_arguments(arguments, error, started_at);
+    }
+    if arguments.action() == ReadAction::File {
+        return execute_file_read(read_tool, arguments, started_at).await;
+    }
+
+    execute_repository_inspection(read_tool, arguments, started_at).await
+}
+
+fn reject_invalid_read_arguments(
+    arguments: &ReadArguments,
+    error: &str,
+    started_at: Instant,
+) -> Result<(String, ToolActivity), TurnError> {
+    let summary = arguments
+        .path_filter()
+        .or_else(|| arguments.query())
+        .unwrap_or("read");
+    let result = read::invalid_arguments_tool_result(error, summary).map_err(ReadError::from)?;
+    let activity = if arguments.action() == ReadAction::File {
+        ToolActivity::ReadRejected {
+            duration: started_at.elapsed(),
+            path: sanitize_report_text(summary),
+        }
+    } else {
+        ToolActivity::ReadInspectionRejected {
+            action: arguments.action(),
+            duration: started_at.elapsed(),
+            summary: sanitize_report_text(summary),
+        }
+    };
+
+    Ok((result, activity))
+}
+
+async fn execute_file_read(
+    read_tool: &ReadTool,
+    arguments: &ReadArguments,
+    started_at: Instant,
+) -> Result<(String, ToolActivity), TurnError> {
+    match read_tool.execute(arguments).await {
+        Ok(output) => match output.to_tool_result() {
+            Ok(result) => Ok((
+                result,
+                ToolActivity::Read {
                     duration: started_at.elapsed(),
                     end_line: output.end_line(),
                     path: sanitize_report_text(output.path()),
                     start_line: output.start_line(),
                     truncated: output.truncated(),
-                };
-                let result = output
-                    .to_tool_result()
-                    .map_err(ReadError::from)
-                    .map_err(TurnError::from)?;
-
-                Ok((result, activity))
-            }
-            Err(error) if error.is_model_correctable() => error
-                .to_tool_result(arguments.path())
+                },
+            )),
+            Err(error) => error
+                .to_tool_result(output.path())
                 .map_err(ReadError::from)
                 .map_err(TurnError::from)
                 .map(|result| {
@@ -749,41 +851,97 @@ async fn execute_tool(execution: ToolExecution<'_>) -> Result<(String, ToolActiv
                         result,
                         ToolActivity::ReadRejected {
                             duration: started_at.elapsed(),
-                            path: sanitize_report_text(arguments.path()),
+                            path: sanitize_report_text(output.path()),
                         },
                     )
                 }),
-            Err(error) => Err(error.into()),
         },
-        ToolExecution::Write(write_tool, arguments) => match write_tool.execute(arguments).await {
-            Ok(output) => {
-                let activity = ToolActivity::Write {
-                    bytes_written: output.bytes_written(),
-                    duration: started_at.elapsed(),
-                    path: sanitize_report_text(output.path()),
-                };
-                let result = output
-                    .to_tool_result()
-                    .map_err(WriteError::from)
-                    .map_err(TurnError::from)?;
+        Err(error) if error.is_model_correctable() => error
+            .to_tool_result(arguments.path())
+            .map_err(ReadError::from)
+            .map_err(TurnError::from)
+            .map(|result| {
+                (
+                    result,
+                    ToolActivity::ReadRejected {
+                        duration: started_at.elapsed(),
+                        path: sanitize_report_text(arguments.path()),
+                    },
+                )
+            }),
+        Err(error) => Err(error.into()),
+    }
+}
 
-                Ok((result, activity))
-            }
-            Err(error) if error.is_model_correctable() => error
-                .to_tool_result(arguments.path())
+async fn execute_repository_inspection(
+    read_tool: &ReadTool,
+    arguments: &ReadArguments,
+    started_at: Instant,
+) -> Result<(String, ToolActivity), TurnError> {
+    let fallback_summary = arguments
+        .path_filter()
+        .or_else(|| arguments.query())
+        .unwrap_or("read");
+    match read_tool.execute_inspection(arguments).await {
+        Ok((result, summary)) => Ok((
+            result,
+            ToolActivity::ReadInspection {
+                action: arguments.action(),
+                duration: started_at.elapsed(),
+                summary: sanitize_report_text(&summary),
+            },
+        )),
+        Err(error) if error.is_model_correctable() => error
+            .to_tool_result(fallback_summary)
+            .map_err(ReadError::from)
+            .map_err(TurnError::from)
+            .map(|result| {
+                (
+                    result,
+                    ToolActivity::ReadInspectionRejected {
+                        action: arguments.action(),
+                        duration: started_at.elapsed(),
+                        summary: sanitize_report_text(fallback_summary),
+                    },
+                )
+            }),
+        Err(error) => Err(error.into_read_error(fallback_summary.to_string()).into()),
+    }
+}
+
+async fn execute_write_tool(
+    write_tool: &WriteTool,
+    arguments: &WriteArguments,
+    started_at: Instant,
+) -> Result<(String, ToolActivity), TurnError> {
+    match write_tool.execute(arguments).await {
+        Ok(output) => {
+            let activity = ToolActivity::Write {
+                bytes_written: output.bytes_written(),
+                duration: started_at.elapsed(),
+                path: sanitize_report_text(output.path()),
+            };
+            let result = output
+                .to_tool_result()
                 .map_err(WriteError::from)
-                .map_err(TurnError::from)
-                .map(|result| {
-                    (
-                        result,
-                        ToolActivity::WriteRejected {
-                            duration: started_at.elapsed(),
-                            path: sanitize_report_text(arguments.path()),
-                        },
-                    )
-                }),
-            Err(error) => Err(error.into()),
-        },
+                .map_err(TurnError::from)?;
+
+            Ok((result, activity))
+        }
+        Err(error) if error.is_model_correctable() => error
+            .to_tool_result(arguments.path())
+            .map_err(WriteError::from)
+            .map_err(TurnError::from)
+            .map(|result| {
+                (
+                    result,
+                    ToolActivity::WriteRejected {
+                        duration: started_at.elapsed(),
+                        path: sanitize_report_text(arguments.path()),
+                    },
+                )
+            }),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -820,6 +978,7 @@ fn sanitize_report_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::io::{self, Cursor};
+    use std::path::PathBuf;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -829,6 +988,7 @@ mod tests {
     use super::*;
     use crate::file_system::MockFileSystem;
     use crate::model::ModelMessage;
+    use crate::tool::{ReadArguments, ToolDefinition, WriteArguments};
 
     fn model() -> crate::model::MockModel {
         let mut model = crate::model::MockModel::new();
@@ -847,16 +1007,38 @@ mod tests {
         .expect("schema should be valid")
     }
 
+    fn read_harness(model: impl Model + 'static, file_system: MockFileSystem) -> Harness {
+        Harness::new(model)
+            .repository("repo")
+            .allow(Tool::Read)
+            .file_system(file_system)
+    }
+
+    fn write_harness(model: impl Model + 'static, file_system: MockFileSystem) -> Harness {
+        Harness::new(model)
+            .repository("repo")
+            .allow(Tool::Write)
+            .file_system(file_system)
+    }
+
     fn read_call(id: &str) -> ToolCall {
         read_call_with_path(id, "Cargo.toml")
     }
 
     fn read_call_with_path(id: &str, path: &str) -> ToolCall {
         let arguments = serde_json::from_value::<ReadArguments>(json!({
+            "action": "file",
             "path": path,
             "limit": 1
         }))
         .expect("read arguments should be valid");
+
+        ToolCall::read(id.to_string(), arguments, None)
+    }
+
+    fn inspection_call(id: &str, arguments: Value) -> ToolCall {
+        let arguments = serde_json::from_value::<ReadArguments>(arguments)
+            .expect("inspection arguments should be valid");
 
         ToolCall::read(id.to_string(), arguments, None)
     }
@@ -900,6 +1082,10 @@ mod tests {
     }
 
     fn readable_file_system() -> MockFileSystem {
+        readable_file_system_with(b"[workspace]\nmember = true\n".to_vec())
+    }
+
+    fn readable_file_system_with(content: Vec<u8>) -> MockFileSystem {
         let mut file_system = MockFileSystem::new();
         let mut sequence = Sequence::new();
         file_system
@@ -915,11 +1101,7 @@ mod tests {
         file_system
             .expect_open_beneath()
             .times(1)
-            .returning(|_, _| {
-                Ok(Box::new(Cursor::new(
-                    b"[workspace]\nmember = true\n".to_vec(),
-                )))
-            });
+            .return_once(move |_, _| Ok(Box::new(Cursor::new(content))));
 
         file_system
     }
@@ -1070,10 +1252,7 @@ mod tests {
                     json!({ "summary": "workspace" }),
                 )))
             });
-        let harness = Harness::new(model)
-            .file_system(readable_file_system())
-            .repository("repo")
-            .allow(Tool::Read);
+        let harness = read_harness(model, readable_file_system());
 
         // Act
         let output = harness
@@ -1083,6 +1262,255 @@ mod tests {
 
         // Assert
         assert_eq!(output, json!({ "summary": "workspace" }));
+    }
+
+    #[tokio::test]
+    async fn completes_repository_inspection_round_trip() {
+        // Arrange
+        let mut model = model();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        model
+            .expect_complete_with_optional_metadata()
+            .times(2)
+            .returning(move |request| {
+                if call_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Ok(response_without_metadata(ModelResponse::ToolCall(
+                        inspection_call(
+                            "call_list",
+                            json!({ "action": "list", "path": "Cargo.toml" }),
+                        ),
+                    )));
+                }
+                assert!(matches!(
+                    &request.messages()[2],
+                    ModelMessage::ToolResult { content, .. }
+                        if serde_json::from_str::<Value>(content)
+                            .is_ok_and(|value| value["result"] == json!(["Cargo.toml"]))
+                ));
+
+                Ok(response_without_metadata(ModelResponse::Output(json!({
+                    "summary": "listed"
+                }))))
+            });
+        let harness = Harness::new(model)
+            .repository(env!("CARGO_MANIFEST_DIR"))
+            .allow(Tool::Read);
+
+        // Act
+        let outcome = harness
+            .run_report("list the manifest", object_schema())
+            .await
+            .expect("repository inspection should succeed");
+
+        // Assert
+        assert_eq!(outcome.output(), &json!({ "summary": "listed" }));
+        assert!(matches!(
+            &outcome.report().tool_calls()[0],
+            ToolActivity::ReadInspection {
+                action: ReadAction::List,
+                summary,
+                ..
+            } if summary == "Cargo.toml"
+        ));
+    }
+
+    #[tokio::test]
+    async fn returns_encoded_file_result_rejection_to_model() {
+        // Arrange
+        let mut model = model();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        model
+            .expect_complete_with_optional_metadata()
+            .times(2)
+            .returning(move |request| {
+                if call_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Ok(response_without_metadata(ModelResponse::ToolCall(
+                        read_call("call_read"),
+                    )));
+                }
+                assert!(request.messages().iter().any(|message| {
+                    matches!(
+                        message,
+                        ModelMessage::ToolResult { content, .. }
+                            if serde_json::from_str::<Value>(content).is_ok_and(|value| {
+                                value["status"] == "rejected"
+                                    && value["error"]
+                                        .as_str()
+                                        .is_some_and(|error| error.contains("exceeds the read size limit"))
+                            })
+                    )
+                }));
+
+                Ok(response_without_metadata(ModelResponse::Output(json!({
+                    "summary": "recovered"
+                }))))
+            });
+        let content = "\u{1}".repeat(16 * 1024).into_bytes();
+        let harness = read_harness(model, readable_file_system_with(content));
+
+        // Act
+        let outcome = harness
+            .run_report("read the manifest", object_schema())
+            .await
+            .expect("model should recover from an encoded-size rejection");
+
+        // Assert
+        assert_eq!(outcome.output(), &json!({ "summary": "recovered" }));
+        assert!(matches!(
+            &outcome.report().tool_calls()[0],
+            ToolActivity::ReadRejected { path, .. } if path == "Cargo.toml"
+        ));
+    }
+
+    #[tokio::test]
+    async fn returns_schema_valid_read_argument_rejections_to_model() {
+        // Arrange
+        let mut model = model();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        model
+            .expect_complete_with_optional_metadata()
+            .times(2)
+            .returning(move |request| {
+                if call_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Ok(response_without_metadata(ModelResponse::ToolCalls(vec![
+                        inspection_call("call_file", json!({})),
+                        inspection_call("call_search", json!({ "action": "search" })),
+                    ])));
+                }
+                assert!(request.messages().iter().any(|message| {
+                    matches!(
+                        message,
+                        ModelMessage::ToolResult { content, .. }
+                            if serde_json::from_str::<Value>(content).is_ok_and(|value| {
+                                value["status"] == "rejected"
+                                    && value["error"] == "file requires a path and accepts only offset and limit"
+                            })
+                    )
+                }));
+                assert!(request.messages().iter().any(|message| {
+                    matches!(
+                        message,
+                        ModelMessage::ToolResult { content, .. }
+                            if serde_json::from_str::<Value>(content).is_ok_and(|value| {
+                                value["status"] == "rejected"
+                                    && value["error"] == "search requires a query and accepts only an optional path and limit"
+                            })
+                    )
+                }));
+
+                Ok(response_without_metadata(ModelResponse::Output(json!({
+                    "summary": "recovered"
+                }))))
+            });
+        let harness = read_harness(model, MockFileSystem::new());
+
+        // Act
+        let outcome = harness
+            .run_report("read and search the repository", object_schema())
+            .await
+            .expect("model should recover from schema-portable argument rejection");
+
+        // Assert
+        assert_eq!(outcome.output(), &json!({ "summary": "recovered" }));
+        assert!(matches!(
+            &outcome.report().tool_calls()[0],
+            ToolActivity::ReadRejected { path, .. } if path == "read"
+        ));
+        assert!(matches!(
+            &outcome.report().tool_calls()[1],
+            ToolActivity::ReadInspectionRejected {
+                action: ReadAction::Search,
+                summary,
+                ..
+            } if summary == "read"
+        ));
+    }
+
+    #[tokio::test]
+    async fn returns_correctable_repository_inspection_rejection_to_model() {
+        // Arrange
+        let mut model = model();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        model
+            .expect_complete_with_optional_metadata()
+            .times(2)
+            .returning(move |request| {
+                if call_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Ok(response_without_metadata(ModelResponse::ToolCall(
+                        inspection_call(
+                            "call_show",
+                            json!({
+                                "action": "show",
+                                "path": "definitely-missing-review-file",
+                                "side": "head"
+                            }),
+                        ),
+                    )));
+                }
+                assert!(matches!(
+                    &request.messages()[2],
+                    ModelMessage::ToolResult { content, .. }
+                        if serde_json::from_str::<Value>(content)
+                            .is_ok_and(|value| value["status"] == "rejected")
+                ));
+
+                Ok(response_without_metadata(ModelResponse::Output(json!({
+                    "summary": "recovered"
+                }))))
+            });
+        let harness = Harness::new(model)
+            .repository(env!("CARGO_MANIFEST_DIR"))
+            .allow(Tool::Read);
+
+        // Act
+        let outcome = harness
+            .run_report("show the missing file", object_schema())
+            .await
+            .expect("model should recover from a rejected inspection");
+
+        // Assert
+        assert_eq!(outcome.output(), &json!({ "summary": "recovered" }));
+        assert!(matches!(
+            &outcome.report().tool_calls()[0],
+            ToolActivity::ReadInspectionRejected {
+                action: ReadAction::Show,
+                summary,
+                ..
+            } if summary == "definitely-missing-review-file"
+        ));
+    }
+
+    #[tokio::test]
+    async fn returns_repository_inspection_boundary_failure() {
+        // Arrange
+        let mut model = model();
+        model
+            .expect_complete_with_optional_metadata()
+            .times(1)
+            .returning(|_| {
+                Ok(response_without_metadata(ModelResponse::ToolCall(
+                    inspection_call("call_list", json!({ "action": "list" })),
+                )))
+            });
+        let mut file_system = MockFileSystem::new();
+        file_system
+            .expect_canonicalize()
+            .times(1)
+            .returning(|_| Err(io::Error::other("repository unavailable")));
+        file_system.expect_open_beneath().times(0);
+        let harness = read_harness(model, file_system);
+
+        // Act
+        let error = harness
+            .run("list files", object_schema())
+            .await
+            .expect_err("repository boundary failure should end the turn");
+
+        // Assert
+        assert!(matches!(
+            error,
+            TurnError::Read(ReadError::RepositoryRoot { .. })
+        ));
     }
 
     #[tokio::test]
@@ -1138,10 +1566,7 @@ mod tests {
                     b"[workspace]\nmember = true\n".to_vec(),
                 )))
             });
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo")
-            .allow(Tool::Read);
+        let harness = read_harness(model, file_system);
 
         // Act
         let outcome = harness
@@ -1195,16 +1620,12 @@ mod tests {
         file_system.expect_open_beneath().times(0);
         let events = Arc::new(Mutex::new(Vec::new()));
         let observed_events = Arc::clone(&events);
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo")
-            .allow(Tool::Read)
-            .with_lifecycle_observer(move |event| {
-                observed_events
-                    .lock()
-                    .expect("event recorder should not be poisoned")
-                    .push(event);
-            });
+        let harness = read_harness(model, file_system).with_lifecycle_observer(move |event| {
+            observed_events
+                .lock()
+                .expect("event recorder should not be poisoned")
+                .push(event);
+        });
 
         // Act
         let outcome = harness
@@ -1214,10 +1635,10 @@ mod tests {
 
         // Assert
         assert_eq!(outcome.output(), &json!({ "summary": "recovered" }));
-        assert!(matches!(
-            outcome.report().tool_calls(),
-            [ToolActivity::ReadRejected { path, .. }] if path == "Cargo.toml"
-        ));
+        assert_eq!(outcome.report().tool_calls().len(), 1);
+        let activity = &outcome.report().tool_calls()[0];
+        assert_eq!(activity.name(), "read");
+        assert_eq!(activity.path(), "Cargo.toml");
         let events = events
             .lock()
             .expect("event recorder should not be poisoned");
@@ -1336,57 +1757,72 @@ mod tests {
     #[test]
     fn tool_activity_display_formats_every_outcome_safely() {
         // Arrange
-        let empty_read = ToolActivity::Read {
+        let read = ToolActivity::Read {
             duration: Duration::ZERO,
             end_line: None,
             path: "empty\n\u{1b}]52;c;Y2xpcGJvYXJk\u{7}.txt".to_string(),
-            start_line: 3,
+            start_line: 1,
             truncated: false,
         };
-        let read = ToolActivity::Read {
-            duration: Duration::from_millis(3),
-            end_line: Some(7),
-            path: "input.txt".to_string(),
-            start_line: 2,
-            truncated: true,
+        let inspection = ToolActivity::ReadInspection {
+            action: crate::tool::ReadAction::List,
+            duration: Duration::from_millis(1),
+            summary: ".".to_string(),
+        };
+        let rejected_inspection = ToolActivity::ReadInspectionRejected {
+            action: crate::tool::ReadAction::Search,
+            duration: Duration::from_millis(1),
+            summary: "needle".to_string(),
         };
         let rejected_read = ToolActivity::ReadRejected {
-            duration: Duration::from_millis(1),
-            path: "missing.txt".to_string(),
+            duration: Duration::from_millis(2),
+            path: "missing.rs".to_string(),
         };
         let write = ToolActivity::Write {
-            bytes_written: 12,
-            duration: Duration::from_millis(2),
-            path: "output.txt".to_string(),
+            bytes_written: 4,
+            duration: Duration::from_millis(3),
+            path: "src/lib.rs".to_string(),
         };
-        let rejected = ToolActivity::WriteRejected {
-            duration: Duration::from_millis(1),
-            path: "blocked.txt".to_string(),
+        let rejected_write = ToolActivity::WriteRejected {
+            duration: Duration::from_millis(4),
+            path: "src/main.rs".to_string(),
         };
 
         // Act
         let displays = [
-            empty_read.to_string(),
             read.to_string(),
+            inspection.to_string(),
+            rejected_inspection.to_string(),
             rejected_read.to_string(),
             write.to_string(),
-            rejected.to_string(),
+            rejected_write.to_string(),
         ];
 
         // Assert
         assert_eq!(
             displays,
             [
-                "read empty\u{fffd}\u{fffd}]52;c;Y2xpcGJvYXJk\u{fffd}.txt (line 3; <1 ms)",
-                "read input.txt (lines 2-7, truncated; 3 ms)",
-                "read missing.txt (rejected; 1 ms)",
-                "write output.txt (12 bytes; 2 ms)",
-                "write blocked.txt (rejected; 1 ms)",
+                "read empty\u{fffd}\u{fffd}]52;c;Y2xpcGJvYXJk\u{fffd}.txt (line 1; <1 ms)",
+                "read list . (completed; 1 ms)",
+                "read search needle (rejected; 1 ms)",
+                "read missing.rs (rejected; 2 ms)",
+                "write src/lib.rs (4 bytes; 3 ms)",
+                "write src/main.rs (rejected; 4 ms)",
             ]
         );
-        assert_eq!(rejected_read.duration(), Duration::from_millis(1));
+        assert_eq!(inspection.duration(), Duration::from_millis(1));
+        assert_eq!(inspection.path(), ".");
+        assert_eq!(rejected_inspection.duration(), Duration::from_millis(1));
+        assert_eq!(rejected_inspection.path(), "needle");
+        assert_eq!(rejected_read.duration(), Duration::from_millis(2));
         assert_eq!(rejected_read.name(), "read");
-        assert_eq!(rejected_read.path(), "missing.txt");
+        assert_eq!(rejected_read.path(), "missing.rs");
+        assert_eq!(write.duration(), Duration::from_millis(3));
+        assert_eq!(write.name(), "write");
+        assert_eq!(write.path(), "src/lib.rs");
+        assert_eq!(rejected_write.duration(), Duration::from_millis(4));
+        assert_eq!(rejected_write.name(), "write");
+        assert_eq!(rejected_write.path(), "src/main.rs");
     }
 
     #[test]
@@ -1597,10 +2033,7 @@ mod tests {
                     "summary": "workspace"
                 }))))
             });
-        let harness = Harness::new(model)
-            .file_system(readable_file_system())
-            .repository("repo")
-            .allow(Tool::Read);
+        let harness = read_harness(model, readable_file_system());
 
         // Act
         let outcome = harness
@@ -1632,22 +2065,13 @@ mod tests {
         assert_eq!(activity.name(), "read");
         assert_eq!(activity.path(), "Cargo\u{fffd}.toml\u{fffd}");
         assert!(activity.duration() <= outcome.report().duration());
-        assert!(matches!(
-            activity,
-            ToolActivity::Read {
-                end_line: Some(1),
-                start_line: 1,
-                truncated: true,
-                ..
-            }
-        ));
     }
 
     #[test]
     fn write_activity_exposes_only_sanitized_summary() {
         // Arrange
         let activity = ToolActivity::Write {
-            bytes_written: 42,
+            bytes_written: 5,
             duration: Duration::from_millis(3),
             path: "src/lib.rs".to_string(),
         };
@@ -1656,13 +2080,6 @@ mod tests {
         assert_eq!(activity.name(), "write");
         assert_eq!(activity.path(), "src/lib.rs");
         assert_eq!(activity.duration(), Duration::from_millis(3));
-        assert!(matches!(
-            activity,
-            ToolActivity::Write {
-                bytes_written: 42,
-                ..
-            }
-        ));
 
         let rejected = ToolActivity::WriteRejected {
             duration: Duration::from_millis(2),
@@ -1695,11 +2112,8 @@ mod tests {
             });
         let events = Arc::new(Mutex::new(Vec::new()));
         let observed_events = Arc::clone(&events);
-        let harness = Harness::new(model)
-            .file_system(readable_file_system())
-            .repository("repo")
-            .allow(Tool::Read)
-            .with_lifecycle_observer(move |event| {
+        let harness =
+            read_harness(model, readable_file_system()).with_lifecycle_observer(move |event| {
                 observed_events
                     .lock()
                     .expect("event recorder should not be poisoned")
@@ -1729,26 +2143,6 @@ mod tests {
         let event_debug = format!("{events:?}");
         assert!(!event_debug.contains("sensitive prompt"));
         assert!(!event_debug.contains("[workspace]"));
-    }
-
-    #[tokio::test]
-    async fn requires_repository_when_read_is_allowed() {
-        // Arrange
-        let mut model = model();
-        model.expect_complete_with_optional_metadata().times(0);
-        let harness = Harness::new(model)
-            .allow(Tool::Read)
-            .with_lifecycle_observer(|_| {});
-
-        // Act
-        let error = harness
-            .run("inspect", object_schema())
-            .await
-            .expect_err("read should require a repository root");
-
-        // Assert
-        assert!(matches!(&error, TurnError::RepositoryRequired));
-        assert_eq!(error.error_type(), TurnErrorType::RepositoryRequired);
     }
 
     #[tokio::test]
@@ -1807,10 +2201,7 @@ mod tests {
                 expected.as_deref() == Some(b"old\n".as_slice()) && content == b"new\n"
             })
             .returning(|_, _, _, _| Ok(()));
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo")
-            .allow(Tool::Write);
+        let harness = write_harness(model, file_system);
 
         // Act
         let output = harness
@@ -1857,10 +2248,7 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(Box::new(Cursor::new(b"old\n".to_vec()))));
         file_system.expect_replace_beneath().times(0);
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo")
-            .allow(Tool::Write);
+        let harness = write_harness(model, file_system);
 
         // Act
         let output = harness
@@ -1892,10 +2280,7 @@ mod tests {
             .expect_canonicalize()
             .times(1)
             .returning(|_| Err(io::Error::new(io::ErrorKind::NotFound, "missing root")));
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo")
-            .allow(Tool::Write);
+        let harness = write_harness(model, file_system);
 
         // Act
         let error = harness
@@ -1904,15 +2289,12 @@ mod tests {
             .expect_err("write boundary failure should end turn");
 
         // Assert
-        assert!(matches!(
-            &error,
-            TurnError::Write(WriteError::RepositoryRoot { .. })
-        ));
+        assert!(matches!(&error, TurnError::Write(_)));
         assert_eq!(error.error_type(), TurnErrorType::Tool);
     }
 
     #[tokio::test]
-    async fn rejects_write_call_when_policy_denies_write() {
+    async fn rejects_disabled_write_call() {
         // Arrange
         let mut model = model();
         model
@@ -1932,9 +2314,7 @@ mod tests {
         file_system.expect_canonicalize().times(0);
         file_system.expect_open_beneath().times(0);
         file_system.expect_replace_beneath().times(0);
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo");
+        let harness = Harness::new(model);
 
         // Act
         let error = harness
@@ -1950,7 +2330,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_tool_call_when_policy_denies_read() {
+    async fn rejects_disabled_read_call() {
         // Arrange
         let mut model = model();
         model
@@ -1966,10 +2346,7 @@ mod tests {
         let mut file_system = MockFileSystem::new();
         file_system.expect_canonicalize().times(0);
         file_system.expect_open_beneath().times(0);
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo")
-            .with_lifecycle_observer(|_| {});
+        let harness = Harness::new(model).with_lifecycle_observer(|_| {});
 
         // Act
         let error = harness
@@ -1997,10 +2374,7 @@ mod tests {
                     read_call("call_read"),
                 )))
             });
-        let harness = Harness::new(model)
-            .file_system(readable_file_system())
-            .repository("repo")
-            .allow(Tool::Read)
+        let harness = read_harness(model, readable_file_system())
             .max_tool_calls(NonZeroUsize::new(1).expect("limit should be non-zero"))
             .with_lifecycle_observer(|_| {});
 
@@ -2031,10 +2405,7 @@ mod tests {
         let mut file_system = MockFileSystem::new();
         file_system.expect_canonicalize().times(0);
         file_system.expect_open_beneath().times(0);
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo")
-            .allow(Tool::Read)
+        let harness = read_harness(model, file_system)
             .max_tool_calls(NonZeroUsize::new(1).expect("limit should be non-zero"));
 
         // Act
@@ -2070,10 +2441,7 @@ mod tests {
         file_system.expect_canonicalize().times(0);
         file_system.expect_open_beneath().times(0);
         file_system.expect_replace_beneath().times(0);
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo")
-            .allow(Tool::Write)
+        let harness = write_harness(model, file_system)
             .max_tool_calls(NonZeroUsize::new(1).expect("limit should be non-zero"));
 
         // Act
@@ -2110,10 +2478,7 @@ mod tests {
         file_system.expect_canonicalize().times(0);
         file_system.expect_open_beneath().times(0);
         file_system.expect_replace_beneath().times(0);
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo")
-            .allow(Tool::Write);
+        let harness = write_harness(model, file_system);
 
         // Act
         let error = harness
@@ -2180,11 +2545,7 @@ mod tests {
             .expect_canonicalize()
             .times(1)
             .returning(|_| Err(io::Error::new(io::ErrorKind::NotFound, "missing root")));
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo")
-            .allow(Tool::Read)
-            .with_lifecycle_observer(|_| {});
+        let harness = read_harness(model, file_system).with_lifecycle_observer(|_| {});
 
         // Act
         let error = harness
@@ -2193,10 +2554,7 @@ mod tests {
             .expect_err("filesystem failure should end the turn");
 
         // Assert
-        assert!(matches!(
-            &error,
-            TurnError::Read(ReadError::RepositoryRoot { .. })
-        ));
+        assert!(matches!(&error, TurnError::Read(_)));
         assert_eq!(error.error_type(), TurnErrorType::Tool);
     }
 
@@ -2211,10 +2569,7 @@ mod tests {
         let mut file_system = MockFileSystem::new();
         file_system.expect_canonicalize().times(0);
         file_system.expect_open_beneath().times(0);
-        let harness = Harness::new(model)
-            .file_system(file_system)
-            .repository("repo")
-            .with_lifecycle_observer(|_| {});
+        let harness = Harness::new(model).with_lifecycle_observer(|_| {});
 
         // Act
         let error = harness

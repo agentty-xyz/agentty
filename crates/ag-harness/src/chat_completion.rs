@@ -1300,6 +1300,81 @@ mod tests {
     }
 
     #[test]
+    fn decodes_schema_valid_read_rejection_for_tool_feedback() {
+        // Arrange
+        let schema = schema_contract::OutputSchema::new(serde_json::json!({
+            "type": "object"
+        }))
+        .expect("schema should be valid");
+        let request =
+            model::ModelRequest::new("inspect", schema).with_tool(tool::ToolDefinition::read());
+        let calls = vec![ChatCompletionToolCall {
+            function: serde_json::json!({
+                "name": "read",
+                "arguments": r#"{"action":"search"}"#
+            }),
+            id: "call_search".to_string(),
+            kind: "function".to_string(),
+        }];
+
+        // Act
+        let response = ChatCompletionBackend::decode_tool_call(
+            &request,
+            None,
+            None,
+            calls,
+            model::CompletionMetadata::new("tool_calls".to_string(), None, None, None, None),
+        );
+
+        // Assert
+        assert!(matches!(
+            response,
+            GeneratedResponse::ToolCall { ref call, .. }
+                if call.read_arguments().is_some_and(|arguments| {
+                    arguments.validation_error()
+                        == Some("search requires a query and accepts only an optional path and limit")
+                })
+        ));
+    }
+
+    #[test]
+    fn rejects_nul_search_query_as_invalid_tool_arguments() {
+        // Arrange
+        let schema = schema_contract::OutputSchema::new(serde_json::json!({
+            "type": "object"
+        }))
+        .expect("schema should be valid");
+        let request =
+            model::ModelRequest::new("inspect", schema).with_tool(tool::ToolDefinition::read());
+        let calls = vec![ChatCompletionToolCall {
+            function: serde_json::json!({
+                "name": "read",
+                "arguments": r#"{"action":"search","query":"needle\u0000suffix"}"#
+            }),
+            id: "call_search".to_string(),
+            kind: "function".to_string(),
+        }];
+
+        // Act
+        let response = ChatCompletionBackend::decode_tool_call(
+            &request,
+            None,
+            None,
+            calls,
+            model::CompletionMetadata::new("tool_calls".to_string(), None, None, None, None),
+        );
+
+        // Assert
+        assert!(matches!(
+            response,
+            GeneratedResponse::Failed {
+                error: model::ModelError::InvalidToolArguments { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn decodes_multiple_advertised_tool_calls() {
         // Arrange
         let schema = schema_contract::OutputSchema::new(serde_json::json!({
