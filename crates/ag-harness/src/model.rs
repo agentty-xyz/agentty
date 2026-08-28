@@ -666,7 +666,10 @@ impl CompletionUsage {
 /// Provider-neutral output from one model request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelResponse {
-    /// Terminal, locally schema-validated model output.
+    /// Terminal structured model output.
+    ///
+    /// [`ModelClient`] and [`crate::Harness`] validate this value locally
+    /// against the request schema before returning it to applications.
     Output(Value),
     /// One validated native function call requiring application handling.
     ToolCall(tool::ToolCall),
@@ -677,7 +680,7 @@ pub enum ModelResponse {
 }
 
 impl ModelResponse {
-    /// Returns parsed, schema-validated terminal output, when present.
+    /// Returns terminal structured output, when present.
     pub fn output(&self) -> Option<&Value> {
         match self {
             Self::Output(output) => Some(output),
@@ -1340,7 +1343,7 @@ mod tests {
     }
 
     #[test]
-    fn response_exposes_validated_output() {
+    fn response_exposes_terminal_output() {
         // Arrange
         let value = json!({ "name": "Ada" });
 

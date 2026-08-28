@@ -80,7 +80,18 @@ impl OutputSchema {
 
         let value = serde_json::from_str(output)
             .map_err(|error| OutputValidationError::InvalidJson(bounded_diagnostic(error)))?;
-        if let Err(error) = self.validator.validate(&value) {
+        self.validate(&value)?;
+
+        Ok(value)
+    }
+
+    pub(crate) fn validate_value(&self, output: &Value) -> Result<(), OutputValidationError> {
+        ensure_content_size(&output.to_string())?;
+        self.validate(output)
+    }
+
+    fn validate(&self, value: &Value) -> Result<(), OutputValidationError> {
+        if let Err(error) = self.validator.validate(value) {
             let path = match error.instance_path().as_str() {
                 "" => "$".to_string(),
                 path => bounded_diagnostic(path),
@@ -92,7 +103,7 @@ impl OutputSchema {
             });
         }
 
-        Ok(value)
+        Ok(())
     }
 }
 
@@ -436,6 +447,22 @@ mod tests {
         // Act
         let error = schema
             .parse_and_validate(&output)
+            .expect_err("oversized output should fail");
+
+        // Assert
+        assert_eq!(error, OutputValidationError::TooLarge);
+    }
+
+    #[test]
+    fn rejects_oversized_structured_value() {
+        // Arrange
+        let schema =
+            OutputSchema::new(json!({ "type": "string" })).expect("schema should be valid");
+        let output = Value::String("x".repeat(RESPONSE_CONTENT_LIMIT_BYTES));
+
+        // Act
+        let error = schema
+            .validate_value(&output)
             .expect_err("oversized output should fail");
 
         // Assert

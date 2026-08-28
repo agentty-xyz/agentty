@@ -1866,6 +1866,12 @@ mod tests {
     async fn test_d_key_in_chat_focus_keeps_prompt_when_diff_empty() {
         // Arrange — prompt mode with chat focused over an unchanged worktree.
         let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
+        let mut mock_git_client = ag_git::MockGitClient::new();
+        mock_git_client
+            .expect_diff()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        install_mock_git_client(&mut app, mock_git_client);
         press_prompt_key(&mut app, KeyCode::Tab).await;
 
         // Act

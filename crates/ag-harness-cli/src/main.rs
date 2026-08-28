@@ -1012,7 +1012,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_rejects_model_output_without_a_message() {
+    async fn chat_rejects_model_output_that_violates_schema() {
         // Arrange
         let harness = Harness::new(FixedModel(json!({"unexpected": true})));
         let mut session = harness.chat(chat_schema().expect("chat schema should compile"));
@@ -1026,13 +1026,19 @@ mod tests {
             Some("question".to_string()),
             input,
             &mut output,
-            ChatMode::NonInteractive,
+            ChatMode::OneShot,
         )
         .await
-        .expect_err("missing message output should fail");
+        .expect_err("schema-invalid output should fail");
 
         // Assert
-        assert!(matches!(error, CliError::MissingMessage));
+        assert!(matches!(
+            error,
+            CliError::Turn(ag_harness::TurnError::Model(
+                ag_harness::ModelError::SchemaViolation { path, .. }
+            )) if path == "$"
+        ));
+        assert_eq!(output, [] as [u8; 0]);
     }
 
     #[tokio::test]

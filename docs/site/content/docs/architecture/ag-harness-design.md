@@ -63,7 +63,9 @@ applications store supported clients behind `dyn Model`. `ModelClient` implement
 boundary, owns request-duration telemetry, and validates every response against the
 request's `OutputSchema`. Provider request execution remains private so applications
 cannot bypass this lifecycle. `ModelClient` validates and retains the provider and model
-identity during construction, before any request starts.
+identity during construction, before any request starts. `Harness` independently
+validates every terminal `ModelResponse::Output` against the same schema, so injected
+`Model` implementations cannot bypass the application-facing output contract.
 
 `ModelWithMetadata` guarantees completion metadata and automatically implements the
 optional metadata path on `Model`; response-only `Model` implementations remain valid.
@@ -194,7 +196,9 @@ The model contract requires provider-neutral structured output:
 - The caller supplies the expected JSON shape as a provider-independent schema.
 - Each adapter uses the strongest structured-output mechanism its provider supports and
   returns raw assistant text. The shared `ModelClient` lifecycle parses and validates
-  the returned JSON against the caller's schema.
+  the returned JSON against the caller's schema. `Harness` validates terminal values
+  again as the final application-facing trust boundary, including values returned by
+  custom `Model` implementations.
 - Provider-specific request fields remain inside the adapter. For Qwen, the adapter uses
   JSON Object mode and performs schema validation in the harness because Qwen guarantees
   valid JSON, not schema conformance.

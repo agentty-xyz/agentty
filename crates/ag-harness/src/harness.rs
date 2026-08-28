@@ -571,6 +571,16 @@ impl Harness {
                 return Err(error.into());
             }
         };
+        if let Some(output) = response.output()
+            && let Err(error) = request.schema().validate_value(output)
+        {
+            let error = ModelError::from(error);
+            if let Some(model_lifecycle) = model_lifecycle {
+                model_lifecycle.failed(error.error_type(), error.http_status());
+            }
+
+            return Err(error.into());
+        }
         let response_type = response.response_type();
         let activity = ModelRequestActivity {
             completion: completion.as_ref().map(sanitized_completion_metadata),
@@ -1514,6 +1524,57 @@ mod tests {
             TurnError::Model(ModelError::InvalidResponse)
         ));
         assert_eq!(recovered.output(), &json!({"summary": "recovered"}));
+    }
+
+    #[tokio::test]
+    async fn rejects_schema_invalid_output_from_injected_model() {
+        // Arrange
+        let mut model = model();
+        model
+            .expect_complete_with_optional_metadata()
+            .times(1)
+            .returning(|_| {
+                Ok(response_without_metadata(ModelResponse::Output(json!({
+                    "summary": 42
+                }))))
+            });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observed_events = Arc::clone(&events);
+        let harness = Harness::new(model).with_lifecycle_observer(move |event| {
+            observed_events
+                .lock()
+                .expect("event recorder should not be poisoned")
+                .push(event);
+        });
+
+        // Act
+        let error = harness
+            .run("inspect", object_schema())
+            .await
+            .expect_err("schema-invalid custom output should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            TurnError::Model(ModelError::SchemaViolation { path, .. }) if path == "/summary"
+        ));
+        let events = events
+            .lock()
+            .expect("event recorder should not be poisoned");
+        assert!(matches!(
+            events[2].kind(),
+            crate::LifecycleEventKind::ModelRequestFailed {
+                error_type: crate::ModelErrorType::InvalidOutput,
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[3].kind(),
+            crate::LifecycleEventKind::TurnFailed {
+                error_type: TurnErrorType::Model(crate::ModelErrorType::InvalidOutput),
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
