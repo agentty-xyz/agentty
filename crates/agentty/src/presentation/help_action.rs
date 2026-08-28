@@ -790,6 +790,11 @@ pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
             "Start visual changed-row selection",
         ));
         actions.push(HelpAction::new(
+            "comment newline",
+            "Alt/Shift+Enter",
+            "Insert a newline in the diff comment",
+        ));
+        actions.push(HelpAction::new(
             "save comment",
             "Enter/Esc",
             "Finish the diff comment",
@@ -958,11 +963,7 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
         context.line_comment_state,
         DiffLineCommentFooterState::Editing
     ) {
-        return vec![HelpAction::new(
-            "save comment",
-            "Enter/Esc",
-            "Finish the diff comment",
-        )];
+        return diff_comment_editing_actions();
     }
     if matches!(
         context.line_comment_state,
@@ -991,6 +992,18 @@ pub(crate) fn diff_footer_actions(context: DiffFooterContext) -> Vec<HelpAction>
     actions.push(HelpAction::new("help", "?", "Help"));
 
     actions
+}
+
+/// Returns compact actions for the active multiline diff comment editor.
+fn diff_comment_editing_actions() -> Vec<HelpAction> {
+    vec![
+        HelpAction::new(
+            "newline",
+            "Alt/Shift+Enter",
+            "Insert a newline in the diff comment",
+        ),
+        HelpAction::new("save comment", "Enter/Esc", "Finish the diff comment"),
+    ]
 }
 
 /// Builds the shared diff-comment submission action for every Diff pane.
@@ -2249,6 +2262,7 @@ mod tests {
                 "J/K/Up/Down",
                 "Shift+C",
                 "Shift+V",
+                "Alt/Shift+Enter",
                 "Enter/Esc",
                 "s",
                 "Space",
@@ -2353,7 +2367,7 @@ mod tests {
         .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(editing_keys, ["Enter/Esc"]);
+        assert_eq!(editing_keys, ["Alt/Shift+Enter", "Enter/Esc"]);
     }
 
     #[test]

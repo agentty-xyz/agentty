@@ -47,26 +47,37 @@ pub struct DiffLineCommentAnchor {
 }
 
 impl DiffLineCommentAnchor {
-    /// Builds one compact next-turn prompt line, retaining deleted source text.
+    /// Builds one targeted next-turn prompt item, retaining deleted source
+    /// text.
     pub(crate) fn prompt_line(&self, comment: &str) -> String {
-        match self.side {
-            DiffLineSide::New => format!(
-                "- {}:{} [{}]: {}",
-                self.path,
-                self.line,
-                self.side.prompt_label(),
-                comment.trim(),
-            ),
+        let location = match self.side {
+            DiffLineSide::New => {
+                format!("{}:{} [{}]", self.path, self.line, self.side.prompt_label())
+            }
             DiffLineSide::Old => format!(
-                "- {}:{} [{}, source={:?}]: {}",
+                "{}:{} [{}, source={:?}]",
                 self.path,
                 self.line,
                 self.side.prompt_label(),
                 self.content,
-                comment.trim(),
             ),
-        }
+        };
+
+        format_diff_comment_prompt_line(&location, comment)
     }
+}
+
+/// Formats one targeted comment while keeping multiline continuations bound
+/// to its list item.
+fn format_diff_comment_prompt_line(location: &str, comment: &str) -> String {
+    let mut comment_lines = comment.trim().lines();
+    let first_line = comment_lines.next().unwrap_or_default();
+    let mut prompt_line = format!("- {location}: {first_line}");
+    for continuation in comment_lines {
+        let _ = write!(prompt_line, "\n  | {continuation}");
+    }
+
+    prompt_line
 }
 
 /// Ordered changed rows that share one inline comment.
@@ -103,6 +114,18 @@ impl DiffLineCommentTarget {
         &self.first_anchor
     }
 
+    /// Returns the inclusive line bounds for anchors on one diff side.
+    pub(crate) fn line_bounds(&self, side: DiffLineSide) -> Option<(u32, u32)> {
+        self.anchors()
+            .filter(|anchor| anchor.side == side)
+            .map(|anchor| anchor.line)
+            .fold(None, |bounds: Option<(u32, u32)>, line| {
+                Some(bounds.map_or((line, line), |(first, last)| {
+                    (first.min(line), last.max(line))
+                }))
+            })
+    }
+
     /// Returns the bottom changed row used to place the inline editor.
     pub(crate) fn last_anchor(&self) -> &DiffLineCommentAnchor {
         self.remaining_anchors.last().unwrap_or(&self.first_anchor)
@@ -113,7 +136,7 @@ impl DiffLineCommentTarget {
         std::iter::once(&self.first_anchor).chain(self.remaining_anchors.iter())
     }
 
-    /// Builds one compact next-turn prompt line for this row target.
+    /// Builds one targeted next-turn prompt item for this row range.
     fn prompt_line(&self, comment: &str) -> String {
         let first_anchor = &self.first_anchor;
         if self.remaining_anchors.is_empty() {
@@ -149,7 +172,7 @@ impl DiffLineCommentTarget {
             let _ = write!(location, ", deleted source={deleted_source:?}");
         }
 
-        format!("- {location}: {}", comment.trim())
+        format_diff_comment_prompt_line(&location, comment)
     }
 }
 
@@ -171,10 +194,10 @@ impl DiffCommentTarget {
         Self::File { path: path.into() }
     }
 
-    /// Builds one compact next-turn prompt line for this target.
+    /// Builds one targeted next-turn prompt item.
     fn prompt_line(&self, comment: &str) -> String {
         match self {
-            Self::File { path } => format!("- {path}: {}", comment.trim()),
+            Self::File { path } => format_diff_comment_prompt_line(path, comment),
             Self::Lines(target) => target.prompt_line(comment),
         }
     }
@@ -1137,13 +1160,13 @@ mod tests {
         comments
             .editing_input_mut()
             .expect("file comment should be editable")
-            .insert_text("Review the module boundaries.");
+            .insert_text("Review the module boundaries.\nLine comments:\nKeep this attached.");
         comments.finish_editing();
         comments.start_editing_target(line_target.clone());
         comments
             .editing_input_mut()
             .expect("line comment should be editable")
-            .insert_text("Explain this call.");
+            .insert_text("Explain this call.\nFile comments:\nCheck the error path.");
         comments.finish_editing();
 
         // Act
@@ -1154,9 +1177,13 @@ mod tests {
             prompt,
             concat!(
                 "File comments:\n",
-                "- src/main.rs: Review the module boundaries.\n\n",
+                "- src/main.rs: Review the module boundaries.\n",
+                "  | Line comments:\n",
+                "  | Keep this attached.\n\n",
                 "Line comments:\n",
-                "- src/main.rs:8 [new]: Explain this call.",
+                "- src/main.rs:8 [new]: Explain this call.\n",
+                "  | File comments:\n",
+                "  | Check the error path.",
             )
         );
         assert_ne!(file_target, DiffCommentTarget::from(line_target));

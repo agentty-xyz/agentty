@@ -457,7 +457,9 @@ fn handle_line_comment_edit_key(app: &mut App, key: KeyEvent) -> bool {
         return false;
     }
 
-    if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
+    if key.code == KeyCode::Esc
+        || (input_key::is_enter_key(key.code) && !input_key::should_insert_newline(key))
+    {
         let previous_count = line_comments.comments.len();
         line_comments.finish_editing();
         if line_comments.comments.len() != previous_count {
@@ -466,8 +468,7 @@ fn handle_line_comment_edit_key(app: &mut App, key: KeyEvent) -> bool {
 
         return true;
     }
-    if let Some(command) =
-        input_key::command_for_key(key, input_key::InputCapabilities::SINGLE_LINE)
+    if let Some(command) = input_key::command_for_key(key, input_key::InputCapabilities::MULTILINE)
         && let Some(input) = line_comments.editing_input_mut()
     {
         input.apply(command);
@@ -476,7 +477,8 @@ fn handle_line_comment_edit_key(app: &mut App, key: KeyEvent) -> bool {
     true
 }
 
-/// Inserts pasted text into the active single-line diff comment editor.
+/// Inserts normalized pasted text into the active multiline diff comment
+/// editor.
 pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
     let AppMode::Diff { line_comments, .. } = &mut app.mode else {
         return;
@@ -485,7 +487,7 @@ pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
         return;
     };
 
-    input.insert_text(&input_key::normalize_single_line_pasted_text(pasted_text));
+    input.insert_text(&input_key::normalize_pasted_text(pasted_text));
 }
 
 /// Replaces Diff mode with one next-turn prompt containing every comment.
@@ -3424,7 +3426,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_paste_inserts_first_line_into_active_diff_comment() {
+    async fn test_handle_paste_preserves_multiline_diff_comment() {
         // Arrange
         let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
         let diff = "diff --git a/src/main.rs b/src/main.rs\n+review();\n";
@@ -3442,7 +3444,58 @@ mod tests {
         assert!(matches!(
             &app.mode,
             AppMode::Diff { line_comments, .. }
-                if line_comments.comments[0].input.text() == "first line"
+                if line_comments.comments[0].input.text() == "first line\nsecond line"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_modified_enter_inserts_diff_comment_newline() {
+        // Arrange
+        let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
+        let diff = "diff --git a/src/main.rs b/src/main.rs\n+review();\n";
+        app.mode = diff_mode_fixture(diff, 1, DiffFocus::Content, DiffPreview::default());
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+        );
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('B'), KeyModifiers::SHIFT),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. }
+                if line_comments.is_editing()
+                    && line_comments.comments[0].input.text() == "A\nB"
+        ));
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff { line_comments, .. } if !line_comments.is_editing()
         ));
     }
 

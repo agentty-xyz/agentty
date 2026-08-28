@@ -825,7 +825,7 @@ mod tests {
         assert!(matches!(
             &app.mode,
             AppMode::Diff { line_comments, .. }
-                if line_comments.comments[0].input.text() == "first line"
+                if line_comments.comments[0].input.text() == "first line\nsecond line"
         ));
     }
 
