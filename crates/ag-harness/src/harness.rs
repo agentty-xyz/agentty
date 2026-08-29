@@ -1561,20 +1561,21 @@ mod tests {
         let events = events
             .lock()
             .expect("event recorder should not be poisoned");
-        assert!(matches!(
-            events[2].kind(),
+        assert_eq!(events.len(), 4);
+        assert!(events.iter().any(|event| matches!(
+            event.kind(),
             crate::LifecycleEventKind::ModelRequestFailed {
                 error_type: crate::ModelErrorType::InvalidOutput,
                 ..
             }
-        ));
-        assert!(matches!(
-            events[3].kind(),
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event.kind(),
             crate::LifecycleEventKind::TurnFailed {
                 error_type: TurnErrorType::Model(crate::ModelErrorType::InvalidOutput),
                 ..
             }
-        ));
+        )));
     }
 
     #[tokio::test]
