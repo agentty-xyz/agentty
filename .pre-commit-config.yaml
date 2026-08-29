@@ -201,7 +201,7 @@ repos:
         stages: [manual]
       - id: test-agentty-e2e
         name: cargo nextest agentty e2e
-        description: Postsubmit-only `agentty` integration tests from `crates/agentty/tests`.
+        description: Agentty integration tests from `crates/agentty/tests`.
         entry: >-
           env TESTTY_GIF_MODE=check cargo nextest run --locked --profile ci -p agentty
           --test showcase --test protocol_compliance_e2e --test e2e
