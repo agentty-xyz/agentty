@@ -171,9 +171,12 @@ fn session_metadata_base_text(
     let speed = session_speed_display(session)
         .map(|speed_mode| format!("  Speed: {speed_mode}"))
         .unwrap_or_default();
+    let response_style = session_response_style_display(session)
+        .map(|response_style| format!("  Style: {response_style}"))
+        .unwrap_or_default();
     format!(
         "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Agent: {}  Model: \
-         {}  Reasoning: {}{speed}  Tokens: {input_tokens}/{output_tokens}",
+         {}  Reasoning: {}{speed}{response_style}  Tokens: {input_tokens}/{output_tokens}",
         session.size,
         session.agent.kind(),
         session.agent.model().as_str(),
@@ -195,16 +198,27 @@ pub(crate) fn session_speed_display(session: &Session) -> Option<&'static str> {
     Some(session.speed_mode.name())
 }
 
-/// Formats the response-speed and permission indicators shown in the prompt
-/// input title.
+/// Returns a non-default response-style label for compact status surfaces.
+fn session_response_style_display(session: &Session) -> Option<&'static str> {
+    (session.response_style != crate::domain::agent::ResponseStyle::Balanced)
+        .then(|| session.response_style.name())
+}
+
+/// Formats the response-style, response-speed, and permission indicators shown
+/// in the prompt input title.
 pub(crate) fn prompt_session_status(session: &Session) -> String {
     let speed_mode = session_speed_display(session);
     let permission_mode = session.permission_mode.display_label();
+    let response_style = session_response_style_display(session);
 
-    speed_mode.map_or_else(
-        || permission_mode.to_string(),
-        |speed_mode| format!("{speed_mode} · {permission_mode}"),
-    )
+    match (response_style, speed_mode) {
+        (None, None) => permission_mode.to_string(),
+        (None, Some(speed_mode)) => format!("{speed_mode} · {permission_mode}"),
+        (Some(response_style), None) => format!("{response_style} · {permission_mode}"),
+        (Some(response_style), Some(speed_mode)) => {
+            format!("{response_style} · {speed_mode} · {permission_mode}")
+        }
+    }
 }
 
 /// Builds the compact session-view footer.
@@ -606,6 +620,27 @@ mod tests {
         // Assert
         assert!(metadata_text.contains("Reasoning: high  Tokens:"));
         assert!(!metadata_text.contains("Speed:"));
+    }
+
+    #[test]
+    fn test_session_metadata_and_prompt_status_show_non_default_response_style() {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.response_style = crate::domain::agent::ResponseStyle::Detailed;
+
+        // Act
+        let prompt_status_without_speed = prompt_session_status(&session);
+        session.agent = crate::domain::agent::AgentSelection::new(
+            crate::domain::agent::AgentKind::Codex,
+            AgentModel::Gpt56Sol,
+        );
+        let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
+        let prompt_status = prompt_session_status(&session);
+
+        // Assert
+        assert!(metadata_text.contains("Style: Detailed"));
+        assert_eq!(prompt_status_without_speed, "Detailed · Auto Edit");
+        assert_eq!(prompt_status, "Detailed · Normal · Auto Edit");
     }
 
     #[test]

@@ -1049,6 +1049,23 @@ impl App {
         Ok(())
     }
 
+    /// Persists and applies a response style for a session.
+    ///
+    /// # Errors
+    /// Returns an error if persistence fails.
+    pub async fn set_session_response_style(
+        &mut self,
+        session_id: &str,
+        response_style: crate::domain::agent::ResponseStyle,
+    ) -> Result<(), AppError> {
+        self.sessions
+            .set_session_response_style(&self.services, session_id, response_style)
+            .await?;
+        self.process_pending_app_events().await;
+
+        Ok(())
+    }
+
     /// Persists and applies a provider permission mode for a session.
     ///
     /// # Errors

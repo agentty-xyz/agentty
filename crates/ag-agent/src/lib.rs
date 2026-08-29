@@ -43,4 +43,4 @@ pub use model::agent::{
     resolve_prompt_model_agent_kind, selectable_models_for_agent_kinds,
 };
 pub use model::permission::PermissionMode;
-pub use model::session::{SessionDiffState, SessionStats, SpeedMode};
+pub use model::session::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};

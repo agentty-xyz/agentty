@@ -879,6 +879,28 @@ fn seed_review_ready_session_on_sessions_tab(
     Ok(())
 }
 
+/// Seeds a review-ready session with Detailed response style selected so the
+/// semantic run and GIF replay remain idempotent.
+fn seed_detailed_response_style_session(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_on_sessions_tab(env)?;
+
+    let runtime = common::seed_runtime()?;
+    runtime.block_on(async {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_response_style(
+                "review-shortcut-0001",
+                agentty::domain::agent::ResponseStyle::Detailed,
+            )
+            .await
+    })?;
+
+    Ok(())
+}
+
 /// Seeds the review-ready feature session with automatic addressing already
 /// selected so semantic execution and GIF replay remain idempotent.
 fn seed_auto_address_review_mode(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -2871,7 +2893,7 @@ if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
-printf '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{BARE_LAYOUT_ANSWER_TEXT}"}}]}}}}\n'
+printf '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{{\\"answer\\":\\"{BARE_LAYOUT_ANSWER_TEXT}\\",\\"questions\\":[]}}"}}]}}}}\n'
 printf '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{BARE_LAYOUT_ANSWER_TEXT}\",\"questions\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n'
 "#
     );
@@ -5462,9 +5484,10 @@ fn review_request_creation_queues_during_running_turn() -> E2eResult {
                 assertion::assert_not_visible(&started_frame, "≡ review request —");
 
                 let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "[Review Request] Created PR", &full);
                 assertion::assert_text_in_region(
                     frame,
-                    "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42",
+                    "https://github.com/agentty-xyz/agentty/pull/42",
                     &full,
                 );
                 assertion::assert_not_visible(frame, "≡ review request —");
@@ -10398,6 +10421,68 @@ fn session_speed_mode_selection() -> E2eResult {
                     &full,
                 );
                 assertion::assert_not_visible(frame, "· Fast");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify `/style` exposes response-detail choices and persists the selected
+/// style visibly in the current session.
+#[test]
+fn test_session_response_style() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_response_style")
+        .with_git()
+        .with_terminal_size(180, 24)
+        .setup(seed_detailed_response_style_session)
+        .zola(
+            "Session response style",
+            "Choose concise, balanced, or detailed responses for each session.",
+            42,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .wait_for_text("· Detailed · Normal · Auto Edit", 5000)
+                    .write_text("/style")
+                    .wait_for_text("/style", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("/style Response style", 3000)
+                    .wait_for_text("Concise", 3000)
+                    .wait_for_text("Detailed", 3000)
+                    .capture_labeled(
+                        "response_style_picker",
+                        "Response style picker explains all three choices",
+                    )
+                    .press_key("Enter")
+                    .wait_for_text("· Detailed · Normal · Auto Edit", 5000)
+                    .wait_for_text("Style: Detailed", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "detailed_style_selected",
+                        "Header and composer show the detailed response style",
+                    )
+            },
+            |frame, report| {
+                let picker_frame = common::frame_from_capture(&report.captures[0]);
+                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+                assertion::assert_text_in_region(&picker_frame, "Concise", &picker_full);
+                assertion::assert_text_in_region(&picker_frame, "Balanced", &picker_full);
+                assertion::assert_text_in_region(&picker_frame, "Detailed", &picker_full);
+                assertion::assert_text_in_region(
+                    &picker_frame,
+                    "Thorough decisions, trade-offs, effects, and verification.",
+                    &picker_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "· Detailed · Normal · Auto Edit", &full);
+                assertion::assert_text_in_region(frame, "Style: Detailed", &full);
             },
         )?;
 

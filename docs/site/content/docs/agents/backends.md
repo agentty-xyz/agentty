@@ -159,6 +159,10 @@ shared Gemini model ids remain tied to the selected Gemini or Antigravity provid
 Stored defaults that point at an unavailable backend fall back to the first available
 backend default.
 
+The separate `Default Response Style` setting applies to every backend and initializes
+new sessions as `Concise`, `Balanced`, or `Detailed`. Existing sessions retain their
+stored style.
+
 <a id="backends-reasoning-level"></a> Smart reasoning becomes the default for new
 sessions, Fast reasoning is used for title and commit-message utility prompts, and
 Review reasoning is used for focused review assists. A session-specific `/reasoning`
@@ -215,6 +219,12 @@ locally available backends.
 
 You can also switch the reasoning level for the current session with the `/reasoning`
 slash command. The picker preselects the current effective reasoning level.
+
+Use `/style` with any backend to choose concise, balanced, or detailed answers for the
+current session. Agentty persists the preference and adds provider-neutral guidance to
+each interactive turn. Explicit user instructions about length or format take
+precedence, and the guidance never replaces required protocol fields, safety details, or
+verification. One-shot utility prompts are unchanged.
 
 Claude and Codex sessions also expose `/speed`. Choose Normal for standard provider
 routing or Fast for lower latency at higher provider cost. Agentty persists the choice

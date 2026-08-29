@@ -2,7 +2,8 @@ use tracing::warn;
 
 use crate::app::AppServices;
 use crate::domain::agent::{
-    self, AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
+    self, AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
+    ResponseStyle, SpeedMode,
 };
 use crate::domain::setting::{
     DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH, DEFAULT_ORCHESTRATION_PARALLELISM,
@@ -259,6 +260,8 @@ pub struct SettingsManager {
     pub default_review_selection: AgentSelection,
     /// Default response speed used by review workflows.
     pub default_review_speed_mode: SpeedMode,
+    /// Default response style used when creating new sessions.
+    pub default_response_style: ResponseStyle,
     /// Default reasoning level used when creating new sessions.
     pub default_smart_reasoning_level: ReasoningLevel,
     /// Default agent/model selection used when creating new sessions.
@@ -300,7 +303,6 @@ impl SettingsManager {
             &available_agent_kinds,
         )
         .await;
-
         let default_fast_agent = load_default_fast_agent_selection_from_repositories(
             &repositories,
             Some(project_id),
@@ -308,7 +310,6 @@ impl SettingsManager {
             &available_agent_kinds,
         )
         .await;
-
         let default_review_agent = load_model_selection_setting(
             &repositories,
             Some(project_id),
@@ -343,6 +344,8 @@ impl SettingsManager {
             default_review_agent,
         )
         .await;
+        let default_response_style =
+            load_default_response_style_setting_from_repositories(&repositories, project_id).await;
 
         let launch_configuration = repositories
             .settings()
@@ -379,6 +382,7 @@ impl SettingsManager {
             default_review_reasoning_level: default_review.reasoning_level,
             default_review_selection: default_review.selection,
             default_review_speed_mode: default_review.speed_mode,
+            default_response_style,
             default_smart_reasoning_level: default_smart.reasoning_level,
             default_smart_selection: default_smart.selection,
             default_smart_speed_mode: default_smart.speed_mode,
@@ -415,6 +419,7 @@ impl SettingsManager {
             default_review_reasoning_level: self.default_review_reasoning_level,
             default_review_selection: self.default_review_selection,
             default_review_speed_mode: self.default_review_speed_mode,
+            default_response_style: self.default_response_style,
             default_smart_reasoning_level: self.default_smart_reasoning_level,
             default_smart_selection: self.default_smart_selection,
             default_smart_speed_mode: self.default_smart_speed_mode,
@@ -455,6 +460,10 @@ impl SettingsManager {
                 self.default_review_selection = selection;
                 self.default_review_speed_mode = speed_mode;
                 self.persist_default_review_model_setting().await;
+            }
+            SettingsOperation::DefaultResponseStyle(value) => {
+                self.default_response_style = value;
+                self.persist_default_response_style_setting().await;
             }
             SettingsOperation::DefaultSmartSelection {
                 reasoning_level,
@@ -497,6 +506,19 @@ impl SettingsManager {
                 self.project_id,
                 SettingName::LaunchConfiguration,
                 &self.launch_configuration,
+            )
+            .await;
+    }
+
+    /// Persists the default response style used by new sessions.
+    async fn persist_default_response_style_setting(&self) {
+        let _ = self
+            .repositories
+            .settings()
+            .upsert_project_setting(
+                self.project_id,
+                SettingName::DefaultResponseStyle,
+                self.default_response_style.as_str(),
             )
             .await;
     }
@@ -903,6 +925,18 @@ async fn load_theme_setting_from_repositories(repositories: &AppRepositories) ->
         .unwrap_or_default()
 }
 
+/// Loads the project response style, falling back when storage is unavailable.
+async fn load_default_response_style_setting_from_repositories(
+    repositories: &AppRepositories,
+    project_id: i64,
+) -> ResponseStyle {
+    repositories
+        .settings()
+        .load_project_response_style(project_id, SettingName::DefaultResponseStyle)
+        .await
+        .unwrap_or_default()
+}
+
 /// Loads and bounds the global orchestration concurrency cap.
 async fn load_orchestration_parallelism_setting_from_repositories(
     repositories: &AppRepositories,
@@ -1017,6 +1051,7 @@ mod tests {
                     default_review_reasoning_level: ReasoningLevel::XHigh,
                     default_review_selection: default_selection,
                     default_review_speed_mode: SpeedMode::Normal,
+                    default_response_style: ResponseStyle::Balanced,
                     default_smart_reasoning_level: ReasoningLevel::High,
                     default_smart_selection: default_selection,
                     default_smart_speed_mode: SpeedMode::Normal,
@@ -2044,7 +2079,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_wraps_to_launch_configurations_row_from_theme_row() {
+    fn previous_wraps_to_default_response_style_row_from_theme_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -2057,7 +2092,7 @@ mod tests {
                 .presentation
                 .snapshot(&manager.view)
                 .selected_row_index,
-            Some(7)
+            Some(8)
         );
     }
 
@@ -2082,7 +2117,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows.len(), 8);
+        assert_eq!(rows.len(), 9);
         assert_eq!(rows[0].0, "Theme");
         assert_eq!(rows[1].0, "Orchestrator Parallelism");
         assert_eq!(rows[2].0, "Auto-approve Research");
@@ -2092,6 +2127,7 @@ mod tests {
         assert_eq!(rows[5].0, "Default Review Model");
         assert_eq!(rows[6].0, "Coauthored by Agentty");
         assert_eq!(rows[7].0, "Launch Configurations");
+        assert_eq!(rows[8].0, "Default Response Style");
     }
 
     #[test]
@@ -2108,12 +2144,13 @@ mod tests {
         assert_eq!(global_rows[0].0, "Theme");
         assert_eq!(global_rows[1].0, "Orchestrator Parallelism");
         assert_eq!(global_rows[2].0, "Auto-approve Research");
-        assert_eq!(project_rows.len(), 5);
+        assert_eq!(project_rows.len(), 6);
         assert_eq!(project_rows[0].0, "Default Smart Model");
         assert_eq!(project_rows[1].0, "Default Fast Model");
         assert_eq!(project_rows[2].0, "Default Review Model");
         assert_eq!(project_rows[3].0, "Coauthored by Agentty");
         assert_eq!(project_rows[4].0, "Launch Configurations");
+        assert_eq!(project_rows[5].0, "Default Response Style");
     }
 
     #[test]
@@ -2630,6 +2667,35 @@ mod tests {
                 .await
                 .expect("failed to load coauthor setting"),
             Some("true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn selector_dropdown_selects_default_response_style_and_persists_value() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = settings_manager(&services, project_id).await;
+        select_row(&mut manager, 8);
+
+        // Act
+        manager.handle_enter();
+        manager.next_selector_dropdown_option();
+        manager.select_selector_dropdown_option().await;
+
+        // Assert
+        assert_eq!(
+            manager.settings().default_response_style,
+            ResponseStyle::Detailed
+        );
+        assert!(!manager.is_selector_dropdown_open());
+        assert_eq!(
+            services
+                .db()
+                .settings()
+                .get_project_setting(project_id, SettingName::DefaultResponseStyle)
+                .await
+                .expect("failed to load response style setting"),
+            Some("detailed".to_string())
         );
     }
 

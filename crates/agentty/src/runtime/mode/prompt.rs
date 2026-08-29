@@ -11,7 +11,7 @@ use crate::app::prompt_intent::{
     PromptApplyOutcome, PromptCancellation, PromptImagePaste, PromptSessionMode, PromptSubmission,
     PromptWorkflowOutcome,
 };
-use crate::domain::agent::{AgentKind, ReasoningLevel, SpeedMode};
+use crate::domain::agent::{AgentKind, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::input::{InputCommand, InputEffect, InputState};
 use crate::domain::permission::PermissionMode;
@@ -817,6 +817,7 @@ async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext)
 
 /// Executes the selected slash-command action from presentation-owned state.
 async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContext) {
+    let session_id = &prompt_context.session_id;
     let session_agent_kind = app
         .session_at(prompt_context.session_index)
         .map_or(AgentKind::Codex, |session| session.agent.kind());
@@ -827,15 +828,14 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             input.text(),
             slash_state,
             session_agent_kind,
-            app.prompt_apply_command_is_available_for_session(&prompt_context.session_id),
+            app.prompt_apply_command_is_available_for_session(session_id),
         ),
         _ => None,
     };
-
     match selection {
         Some(PromptSuggestionSelection::Command("/apply")) => {
             let outcome = app
-                .apply_focused_review(&prompt_context.session_id, prompt_context.session_index)
+                .apply_focused_review(session_id, prompt_context.session_index)
                 .await;
             apply_prompt_apply_outcome(app, outcome).await;
         }
@@ -848,10 +848,11 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         Some(PromptSuggestionSelection::Command("/speed")) => {
             open_prompt_speed_stage(app, prompt_context.session_index);
         }
+        Some(PromptSuggestionSelection::Command("/style")) => {
+            open_prompt_response_style_stage(app, prompt_context.session_index);
+        }
         Some(PromptSuggestionSelection::Command("/personality")) => {
-            let personalities = app
-                .list_prompt_personalities(&prompt_context.session_id)
-                .await;
+            let personalities = app.list_prompt_personalities(session_id).await;
             let selected_personality_id = app
                 .session_at(prompt_context.session_index)
                 .and_then(|session| session.personality_id.as_deref());
@@ -886,7 +887,7 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         }
         Some(PromptSuggestionSelection::Model(selected_agent)) => {
             clear_prompt_slash_input(app).await;
-            app.update_prompt_session_model(&prompt_context.session_id, selected_agent)
+            app.update_prompt_session_model(session_id, selected_agent)
                 .await;
         }
         Some(PromptSuggestionSelection::Mode(permission_mode)) => {
@@ -895,17 +896,22 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         }
         Some(PromptSuggestionSelection::Personality(personality)) => {
             clear_prompt_slash_input(app).await;
-            app.update_prompt_session_personality(&prompt_context.session_id, personality)
+            app.update_prompt_session_personality(session_id, personality)
                 .await;
         }
         Some(PromptSuggestionSelection::Reasoning(reasoning_level)) => {
             clear_prompt_slash_input(app).await;
-            app.update_prompt_session_reasoning_level(&prompt_context.session_id, reasoning_level)
+            app.update_prompt_session_reasoning_level(session_id, reasoning_level)
                 .await;
         }
         Some(PromptSuggestionSelection::Speed(speed_mode)) => {
             clear_prompt_slash_input(app).await;
-            app.update_prompt_session_speed_mode(&prompt_context.session_id, speed_mode)
+            app.update_prompt_session_speed_mode(session_id, speed_mode)
+                .await;
+        }
+        Some(PromptSuggestionSelection::Style(response_style)) => {
+            clear_prompt_slash_input(app).await;
+            app.update_prompt_session_response_style(session_id, response_style)
                 .await;
         }
         None => {}
@@ -977,6 +983,23 @@ fn open_prompt_reasoning_stage(app: &mut App, session_index: usize) {
 
     if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
         slash_state.stage = PromptSlashStage::Reasoning;
+        slash_state.selected_agent = None;
+        slash_state.selected_index = selected_index;
+    }
+}
+
+/// Opens `/style` with the current session preference preselected.
+fn open_prompt_response_style_stage(app: &mut App, session_index: usize) {
+    let selected_response_style = app
+        .session_at(session_index)
+        .map_or_else(ResponseStyle::default, |session| session.response_style);
+    let selected_index = ResponseStyle::ALL
+        .iter()
+        .position(|response_style| *response_style == selected_response_style)
+        .unwrap_or(0);
+
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+        slash_state.stage = PromptSlashStage::Style;
         slash_state.selected_agent = None;
         slash_state.selected_index = selected_index;
     }
@@ -2453,6 +2476,7 @@ mod tests {
                 "/model",
                 "/personality",
                 "/reasoning",
+                "/style",
                 "/speed"
             ]
         );
@@ -2971,6 +2995,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_style_slash_submit_sets_preference_and_resets_input() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/style", None).await;
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.stage = PromptSlashStage::Style;
+            slash_state.selected_index = 2;
+        }
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.process_pending_app_events().await;
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, slash_state, .. }
+                if input.is_empty() && *slash_state == PromptSlashState::default()
+        ));
+        assert_eq!(
+            app.sessions.sessions()[0].response_style,
+            ResponseStyle::Detailed
+        );
+    }
+
+    #[tokio::test]
     async fn test_speed_slash_submit_enables_fast_mode_and_compatible_model() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/speed", None).await;
@@ -3101,6 +3151,24 @@ mod tests {
         // Assert
         if let AppMode::Prompt { slash_state, .. } = &app.mode {
             assert_eq!(slash_state.stage, PromptSlashStage::Reasoning);
+            assert_eq!(slash_state.selected_agent, None);
+            assert_eq!(slash_state.selected_index, 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_prefills_response_style_selection() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/style", None).await;
+        app.sessions.sessions_mut()[0].response_style = ResponseStyle::Detailed;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        if let AppMode::Prompt { slash_state, .. } = &app.mode {
+            assert_eq!(slash_state.stage, PromptSlashStage::Style);
             assert_eq!(slash_state.selected_agent, None);
             assert_eq!(slash_state.selected_index, 2);
         }

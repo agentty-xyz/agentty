@@ -257,6 +257,7 @@ impl SessionFixtureBuilder {
                 prompt: String::new(),
                 queued_messages: Vec::new(),
                 reasoning_level_override: None,
+                response_style: crate::domain::agent::ResponseStyle::default(),
                 published_upstream_ref: None,
                 questions: Vec::new(),
                 review_request: None,

@@ -935,7 +935,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_settings_previous_key_wraps_to_launch_configuration_row() {
+    async fn test_settings_previous_key_wraps_to_default_response_style_row() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         app.tabs.set(Tab::Settings);
@@ -954,7 +954,7 @@ mod tests {
             app.settings_presentation
                 .snapshot(&app.settings.view())
                 .selected_row_index,
-            Some(7)
+            Some(8)
         );
     }
 

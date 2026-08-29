@@ -2926,6 +2926,7 @@ mod tests {
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                response_style: ag_agent::ResponseStyle::default(),
                 role: Some("Orchestrator"),
                 speed_mode: SpeedMode::Normal,
                 status: "Review",
@@ -3042,6 +3043,7 @@ mod tests {
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                response_style: ag_agent::ResponseStyle::default(),
                 role: Some("OrchestrationWorker"),
                 speed_mode: SpeedMode::Normal,
                 status: "Review",
@@ -6557,33 +6559,7 @@ mod tests {
                 .await
                 .expect("failed to claim existing task")
         );
-        database
-            .sessions()
-            .insert_session_with_agent(PersistedSessionCreation {
-                agent: "codex",
-                base_branch: "main",
-                id: "child-protocol",
-                is_draft: false,
-                model: AgentKind::Codex.default_model().as_str(),
-                orchestration_task_id: Some(tasks[0].id),
-                parent_session_id: None,
-                permission_mode: ag_agent::PermissionMode::AutoEdit,
-                personality_id: None,
-                project_id,
-                reasoning_level: ReasoningLevel::default(),
-                role: Some("OrchestrationWorker"),
-                speed_mode: SpeedMode::Normal,
-                status: "Review",
-            })
-            .await
-            .expect("failed to insert managed child");
-        assert!(
-            database
-                .orchestrations()
-                .link_orchestration_task_child(tasks[0].id, "child-protocol")
-                .await
-                .expect("failed to link existing task")
-        );
+        insert_managed_child(&database, project_id, tasks[0].id, "child-protocol").await;
         database
             .orchestrations()
             .update_orchestration_task_status(
@@ -7219,6 +7195,7 @@ mod tests {
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                response_style: ag_agent::ResponseStyle::default(),
                 role: None,
                 speed_mode: SpeedMode::Normal,
                 status: "InProgress",

@@ -10,7 +10,7 @@ use crate::app::diff_content_hash;
 use crate::app::{App, AppError, ReviewCacheEntry};
 #[cfg(test)]
 use crate::domain::agent::{AgentKind, AgentModel};
-use crate::domain::agent::{AgentSelection, ReasoningLevel, SpeedMode};
+use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::permission::PermissionMode;
 use crate::domain::personality::PersonalitySummary;
@@ -380,6 +380,26 @@ impl App {
                 reasoning_level = ?reasoning_level,
                 error = %error,
                 "failed to update session reasoning level from prompt slash command"
+            );
+        }
+    }
+
+    /// Persists one slash-selected response style and logs any failure with
+    /// session context.
+    pub(crate) async fn update_prompt_session_response_style(
+        &mut self,
+        session_id: &SessionId,
+        response_style: ResponseStyle,
+    ) {
+        if let Err(error) = self
+            .set_session_response_style(session_id, response_style)
+            .await
+        {
+            warn!(
+                session_id = %session_id,
+                response_style = ?response_style,
+                error = %error,
+                "failed to update session response style from prompt slash command"
             );
         }
     }
@@ -954,6 +974,21 @@ mod tests {
 
         // Act
         app.update_prompt_session_speed_mode(&missing_session_id, SpeedMode::Normal)
+            .with_subscriber(crate::test_support::TestSubscriber)
+            .await;
+
+        // Assert
+        assert!(app.sessions.sessions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn prompt_response_style_update_ignores_missing_session() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let missing_session_id = SessionId::from("missing-session");
+
+        // Act
+        app.update_prompt_session_response_style(&missing_session_id, ResponseStyle::Concise)
             .with_subscriber(crate::test_support::TestSubscriber)
             .await;
 

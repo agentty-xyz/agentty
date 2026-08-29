@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub use ag_agent::{SessionDiffState, SessionStats, SpeedMode};
+pub use ag_agent::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};
 pub use ag_session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, SessionRole,
     SessionStatus as Status, activity_day_key_with_offset,
@@ -285,6 +285,8 @@ pub struct Session {
     /// Session-scoped reasoning override selected through prompt slash
     /// commands.
     pub reasoning_level_override: Option<ReasoningLevel>,
+    /// Presentation style requested for future model responses.
+    pub response_style: ResponseStyle,
     /// Upstream reference recorded after the latest successful branch publish,
     /// for example `origin/wt/session-id`.
     pub published_upstream_ref: Option<String>,
@@ -2601,6 +2603,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             prompt: String::new(),
             queued_messages: Vec::new(),
             reasoning_level_override: None,
+            response_style: crate::domain::agent::ResponseStyle::default(),
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,
@@ -2694,6 +2697,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             prompt: String::new(),
             queued_messages: Vec::new(),
             reasoning_level_override: None,
+            response_style: crate::domain::agent::ResponseStyle::default(),
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
             questions: Vec::new(),
             review_request: None,
@@ -2741,6 +2745,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             prompt: String::new(),
             queued_messages: Vec::new(),
             reasoning_level_override: None,
+            response_style: crate::domain::agent::ResponseStyle::default(),
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,
@@ -2788,6 +2793,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             prompt: String::new(),
             queued_messages: Vec::new(),
             reasoning_level_override: None,
+            response_style: crate::domain::agent::ResponseStyle::default(),
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,

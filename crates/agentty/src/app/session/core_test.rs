@@ -32,7 +32,8 @@ use crate::app::review::{review_failure_message, review_loading_message};
 use crate::app::session::SessionLoadInput;
 use crate::app::{App, AppEvent, ReviewCacheEntry, SyncSessionStartError, Tab};
 use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle,
+    SpeedMode,
 };
 use crate::domain::permission::PermissionMode;
 use crate::domain::selection::SelectionState;
@@ -750,6 +751,7 @@ fn add_manual_session_with_status(
         prompt: prompt.to_string(),
         queued_messages: Vec::new(),
         reasoning_level_override: None,
+        response_style: crate::domain::agent::ResponseStyle::default(),
         published_upstream_ref: None,
         questions: Vec::new(),
         review_request: None,
@@ -814,6 +816,7 @@ fn test_session_manager_with_clock(
             prompt: String::new(),
             queued_messages: Vec::new(),
             reasoning_level_override,
+            response_style: crate::domain::agent::ResponseStyle::default(),
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,
@@ -1215,6 +1218,26 @@ fn test_apply_session_reasoning_level_updated_updates_only_matching_session() {
     assert_eq!(
         session_manager.state.sessions[0].reasoning_level_override,
         Some(ReasoningLevel::Medium)
+    );
+}
+
+#[test]
+/// Ensures response-style reducer updates only the matching in-memory session
+/// snapshot and leaves unrelated sessions untouched.
+fn test_apply_session_response_style_updated_updates_only_matching_session() {
+    // Arrange
+    let mut session_manager = test_session_manager("session-id", None);
+
+    // Act
+    session_manager.apply_session_response_style_updated("other-session", ResponseStyle::Detailed);
+    let style_after_non_matching_update = session_manager.state.sessions[0].response_style;
+    session_manager.apply_session_response_style_updated("session-id", ResponseStyle::Concise);
+
+    // Assert
+    assert_eq!(style_after_non_matching_update, ResponseStyle::Balanced);
+    assert_eq!(
+        session_manager.state.sessions[0].response_style,
+        ResponseStyle::Concise
     );
 }
 

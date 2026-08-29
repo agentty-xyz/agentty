@@ -17,7 +17,7 @@ use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
-use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel};
+use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, SessionRole, Status};
 use crate::domain::session_message::SessionTranscript;
@@ -194,6 +194,7 @@ pub(super) async fn run_channel_turn(
         }
     };
     let reasoning_level = load_session_reasoning_level(&context.db, &context.session_id).await;
+    let response_style = load_session_response_style(&context.db, &context.session_id).await;
     let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
     let continuation = load_turn_continuation(context, replay_transcript).await;
     let ResolvedTurnPersonality {
@@ -218,6 +219,7 @@ pub(super) async fn run_channel_turn(
         prompt: agent_prompt,
         reasoning_level,
         request_kind: request_kind.clone(),
+        response_style,
         speed_mode,
     };
 
@@ -615,6 +617,17 @@ pub(super) async fn load_session_reasoning_level(
         .unwrap_or_default()
 }
 
+/// Loads the response style for one session context.
+pub(super) async fn load_session_response_style(
+    db: &AppRepositories,
+    session_id: &str,
+) -> ResponseStyle {
+    db.sessions()
+        .load_session_response_style(session_id)
+        .await
+        .unwrap_or_default()
+}
+
 /// Loads the response-speed preference for one session context.
 pub(super) async fn load_session_speed_mode(
     db: &AppRepositories,
@@ -936,6 +949,7 @@ mod tests {
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                response_style: ag_agent::ResponseStyle::default(),
                 role: Some("OrchestrationResearcher"),
                 speed_mode: crate::domain::agent::SpeedMode::Normal,
                 status: "InProgress",
@@ -980,6 +994,35 @@ mod tests {
             result,
             Err(SessionError::Db(DbError::Query(sqlx::Error::PoolClosed)))
         ));
+    }
+
+    #[tokio::test]
+    async fn response_style_load_returns_persisted_value_and_defaults_missing_sessions() {
+        // Arrange
+        let repositories = AppRepositories::in_memory().await.expect("db should open");
+        let project_id = repositories
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        repositories
+            .sessions()
+            .insert_session("worker", "gpt-5.6-sol", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert worker session");
+        repositories
+            .sessions()
+            .update_session_response_style("worker", ResponseStyle::Concise)
+            .await
+            .expect("failed to persist response style");
+
+        // Act
+        let persisted_style = load_session_response_style(&repositories, "worker").await;
+        let missing_style = load_session_response_style(&repositories, "missing").await;
+
+        // Assert
+        assert_eq!(persisted_style, ResponseStyle::Concise);
+        assert_eq!(missing_style, ResponseStyle::Balanced);
     }
 
     #[tokio::test]

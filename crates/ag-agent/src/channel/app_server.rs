@@ -67,6 +67,13 @@ impl AgentChannel for AppServerAgentChannel {
         let client = Arc::clone(&self.client);
         let kind = self.kind;
         Box::pin(async move {
+            let mut req = req;
+            req.prompt = agent::apply_response_style_prompt(
+                req.prompt,
+                req.request_kind.protocol_profile(),
+                req.response_style,
+            )
+            .map_err(|error| AgentError::Backend(error.to_string()))?;
             let continuation = req.continuation.into_parts();
             let request = AppServerTurnRequest {
                 folder: req.folder,
@@ -301,6 +308,7 @@ mod tests {
             prompt: "Do something".into(),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            response_style: crate::ResponseStyle::default(),
             speed_mode: crate::model::session::SpeedMode::default(),
         }
     }

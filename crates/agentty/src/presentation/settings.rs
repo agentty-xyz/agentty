@@ -1,6 +1,6 @@
 //! Presentation-owned settings screen state and input translation.
 
-use crate::domain::agent::{AgentSelection, ReasoningLevel, SpeedMode};
+use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::input::{InputCommand, InputState};
 use crate::domain::selection::SelectionState;
 use crate::domain::setting::MAX_ORCHESTRATION_PARALLELISM;
@@ -18,6 +18,7 @@ pub(crate) struct SettingsView {
     pub(crate) default_review_reasoning_level: ReasoningLevel,
     pub(crate) default_review_selection: AgentSelection,
     pub(crate) default_review_speed_mode: SpeedMode,
+    pub(crate) default_response_style: ResponseStyle,
     pub(crate) default_smart_reasoning_level: ReasoningLevel,
     pub(crate) default_smart_selection: AgentSelection,
     pub(crate) default_smart_speed_mode: SpeedMode,
@@ -42,6 +43,7 @@ pub(crate) enum SettingsOperation {
         selection: AgentSelection,
         speed_mode: SpeedMode,
     },
+    DefaultResponseStyle(ResponseStyle),
     DefaultSmartSelection {
         reasoning_level: ReasoningLevel,
         selection: AgentSelection,
@@ -743,6 +745,9 @@ fn settings_operation_for_primary_selector(
         (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
             Some(SettingsOperation::IncludeCoauthoredByAgentty(value))
         }
+        (SettingRow::DefaultResponseStyle, SettingSelectorValue::ResponseStyle(value)) => {
+            Some(SettingsOperation::DefaultResponseStyle(value))
+        }
         (SettingRow::OrchestrationParallelism, SettingSelectorValue::Parallelism(value)) => {
             Some(SettingsOperation::OrchestrationParallelism(value))
         }
@@ -765,6 +770,7 @@ enum SettingRow {
     DefaultSmartModel,
     DefaultFastModel,
     DefaultReviewModel,
+    DefaultResponseStyle,
     IncludeCoauthoredByAgentty,
     LaunchConfiguration,
     OrchestrationParallelism,
@@ -772,7 +778,7 @@ enum SettingRow {
 }
 
 impl SettingRow {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Theme,
         Self::OrchestrationParallelism,
         Self::AutoApproveOrchestrationResearch,
@@ -781,18 +787,20 @@ impl SettingRow {
         Self::DefaultReviewModel,
         Self::IncludeCoauthoredByAgentty,
         Self::LaunchConfiguration,
+        Self::DefaultResponseStyle,
     ];
     const GLOBAL: [Self; 3] = [
         Self::Theme,
         Self::OrchestrationParallelism,
         Self::AutoApproveOrchestrationResearch,
     ];
-    const PROJECT: [Self; 5] = [
+    const PROJECT: [Self; 6] = [
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
         Self::IncludeCoauthoredByAgentty,
         Self::LaunchConfiguration,
+        Self::DefaultResponseStyle,
     ];
     const ROW_COUNT: usize = Self::ALL.len();
 
@@ -816,6 +824,7 @@ impl SettingRow {
             Self::DefaultSmartModel => "Default Smart Model",
             Self::DefaultFastModel => "Default Fast Model",
             Self::DefaultReviewModel => "Default Review Model",
+            Self::DefaultResponseStyle => "Default Response Style",
             Self::IncludeCoauthoredByAgentty => "Coauthored by Agentty",
             Self::LaunchConfiguration => "Launch Configurations",
             Self::OrchestrationParallelism => "Orchestrator Parallelism",
@@ -994,6 +1003,9 @@ impl SettingSelectorOption {
             (SettingRow::DefaultReviewModel, SettingSelectorValue::ModelSelection(selection)) => {
                 view.default_review_selection == selection
             }
+            (SettingRow::DefaultResponseStyle, SettingSelectorValue::ResponseStyle(value)) => {
+                view.default_response_style == value
+            }
             (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
                 view.include_coauthored_by_agentty == value
             }
@@ -1012,6 +1024,7 @@ enum SettingSelectorValue {
     LastUsedModel,
     ModelSelection(AgentSelection),
     Parallelism(u8),
+    ResponseStyle(ResponseStyle),
     Theme(ColorTheme),
 }
 
@@ -1082,6 +1095,14 @@ fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<Setting
         SettingRow::DefaultFastModel | SettingRow::DefaultReviewModel => {
             model_selector_options(view)
         }
+        SettingRow::DefaultResponseStyle => ResponseStyle::ALL
+            .iter()
+            .copied()
+            .map(|value| SettingSelectorOption {
+                label: value.name().to_string(),
+                value: SettingSelectorValue::ResponseStyle(value),
+            })
+            .collect(),
         SettingRow::LaunchConfiguration => Vec::new(),
         SettingRow::OrchestrationParallelism => (1..=MAX_ORCHESTRATION_PARALLELISM)
             .map(|value| SettingSelectorOption {
@@ -1162,6 +1183,7 @@ fn display_value_for_row(view: &SettingsView, row: SettingRow) -> String {
             view.default_review_reasoning_level,
             view.default_review_speed_mode,
         ),
+        SettingRow::DefaultResponseStyle => view.default_response_style.name().to_string(),
         SettingRow::IncludeCoauthoredByAgentty => {
             bool_setting_display(view.include_coauthored_by_agentty)
         }
@@ -1275,6 +1297,7 @@ mod tests {
                 AgentModel::ClaudeOpus5,
             ),
             default_review_speed_mode: SpeedMode::Normal,
+            default_response_style: ResponseStyle::Balanced,
             default_smart_reasoning_level: ReasoningLevel::High,
             default_smart_selection: smart_selection,
             default_smart_speed_mode: SpeedMode::Normal,

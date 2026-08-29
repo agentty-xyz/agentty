@@ -29,7 +29,9 @@ pub use backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandR
 pub use instruction::normalize_instruction_conversation_id;
 pub(crate) use instruction::{InstructionDeliveryMode, plan_app_server_instruction_delivery};
 pub use prompt::diff_fence;
-pub(crate) use prompt::{PromptPreparationRequest, prepare_prompt_text};
+pub(crate) use prompt::{
+    PromptPreparationRequest, apply_response_style_prompt, prepare_prompt_text,
+};
 pub(crate) use provider::{
     build_command_stdin_payload, is_app_server_thought_chunk, parse_response,
     parse_stream_output_line, parse_turn_response, protocol_schema_instruction_mode,

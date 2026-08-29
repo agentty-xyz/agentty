@@ -122,6 +122,11 @@ pub(crate) enum AppEvent {
         reasoning_level: crate::domain::agent::ReasoningLevel,
         session_id: SessionId,
     },
+    /// Indicates a session response-style selection has been persisted.
+    SessionResponseStyleUpdated {
+        response_style: crate::domain::agent::ResponseStyle,
+        session_id: SessionId,
+    },
     /// Indicates a session response-speed selection has been persisted.
     SessionSpeedModeUpdated {
         session_id: SessionId,
@@ -279,6 +284,8 @@ pub(super) struct AppEventBatch {
         HashMap<SessionId, crate::domain::permission::PermissionMode>,
     pub(super) session_reasoning_level_updates:
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
+    pub(super) session_response_style_updates:
+        HashMap<SessionId, crate::domain::agent::ResponseStyle>,
     pub(super) session_speed_mode_updates: HashMap<SessionId, crate::domain::agent::SpeedMode>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_review_comment_snapshots: Vec<SessionReviewCommentSnapshotUpdate>,
@@ -413,6 +420,7 @@ impl AppEventBatch {
             || !self.session_turn_started_ids.is_empty()
             || !self.session_review_comment_snapshots.is_empty()
             || !self.session_reasoning_level_updates.is_empty()
+            || !self.session_response_style_updates.is_empty()
             || !self.session_speed_mode_updates.is_empty()
             || !self.session_diff_stats_updates.is_empty()
             || !self.session_diff_updates.is_empty()
@@ -486,6 +494,13 @@ impl AppEventBatch {
             } => {
                 self.session_reasoning_level_updates
                     .insert(session_id, reasoning_level);
+            }
+            AppEvent::SessionResponseStyleUpdated {
+                response_style,
+                session_id,
+            } => {
+                self.session_response_style_updates
+                    .insert(session_id, response_style);
             }
             AppEvent::SessionSpeedModeUpdated {
                 session_id,
@@ -595,6 +610,7 @@ impl AppEventBatch {
             | AppEvent::SessionPersonalityUpdated { .. }
             | AppEvent::SessionPermissionModeUpdated { .. }
             | AppEvent::SessionReasoningLevelUpdated { .. }
+            | AppEvent::SessionResponseStyleUpdated { .. }
             | AppEvent::SessionSpeedModeUpdated { .. }
             | AppEvent::RefreshSessions
             | AppEvent::RefreshProjects
@@ -707,6 +723,7 @@ impl AppEventBatch {
             | AppEvent::SessionPersonalityUpdated { .. }
             | AppEvent::SessionPermissionModeUpdated { .. }
             | AppEvent::SessionReasoningLevelUpdated { .. }
+            | AppEvent::SessionResponseStyleUpdated { .. }
             | AppEvent::SessionSpeedModeUpdated { .. }
             | AppEvent::RefreshSessions
             | AppEvent::RefreshProjects
@@ -1511,6 +1528,13 @@ impl App {
         {
             self.sessions
                 .apply_session_reasoning_level_updated(&session_id, reasoning_level);
+        }
+
+        for (session_id, response_style) in
+            std::mem::take(&mut event_batch.session_response_style_updates)
+        {
+            self.sessions
+                .apply_session_response_style_updated(&session_id, response_style);
         }
 
         for (session_id, speed_mode) in std::mem::take(&mut event_batch.session_speed_mode_updates)

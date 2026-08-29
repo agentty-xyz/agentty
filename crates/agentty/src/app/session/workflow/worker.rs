@@ -410,6 +410,7 @@ impl SessionWorkerRebaseAssistClient {
             prompt: TurnPrompt::from_agent_data(prompt),
             reasoning_level,
             request_kind: AgentRequestKind::UtilityPrompt,
+            response_style: agent::ResponseStyle::default(),
             speed_mode,
         };
         let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
@@ -1691,6 +1692,7 @@ mod tests {
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                response_style: ag_agent::ResponseStyle::default(),
                 role: Some("OrchestrationResearcher"),
                 speed_mode: SpeedMode::Normal,
                 status: "InProgress",
@@ -3363,6 +3365,7 @@ mod tests {
             prompt: "test".into(),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            response_style: ag_agent::ResponseStyle::default(),
             speed_mode: crate::domain::agent::SpeedMode::default(),
         };
 
@@ -3439,6 +3442,7 @@ mod tests {
             prompt: "test".into(),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            response_style: ag_agent::ResponseStyle::default(),
             speed_mode: crate::domain::agent::SpeedMode::default(),
         };
 
