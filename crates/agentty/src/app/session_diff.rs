@@ -172,9 +172,58 @@ impl App {
     /// owned by a deleted session so detached task completions remain stale.
     pub(crate) fn discard_deleted_session_diff_state(&mut self, session_id: &SessionId) {
         self.auto_address_review_iterations.remove(session_id);
+        self.diff_comment_progress.remove(session_id);
         self.pending_session_diff_requests
             .retain(|_, request| request.session_id != *session_id);
         self.deferred_auto_review_session_ids.remove(session_id);
+    }
+
+    /// Saves completed diff comments while their session's Diff mode is
+    /// closed. Interaction-only selection state is reset before restoration.
+    pub(crate) fn save_diff_comment_progress(
+        &mut self,
+        session_id: SessionId,
+        mut line_comments: DiffLineComments,
+    ) {
+        line_comments.editing_index = None;
+        line_comments.selection_anchor_index = None;
+        line_comments.selected_comment_index = None;
+        if line_comments.comments.is_empty() {
+            self.diff_comment_progress.remove(&session_id);
+
+            return;
+        }
+
+        self.diff_comment_progress.insert(session_id, line_comments);
+    }
+
+    /// Clears saved and currently displayed diff comments for one session
+    /// after a new turn starts.
+    pub(crate) fn clear_diff_comment_progress(&mut self, session_id: &str) {
+        self.diff_comment_progress.remove(session_id);
+        match &mut self.mode {
+            AppMode::Diff {
+                line_comments,
+                scroll_cache,
+                session_id: diff_session_id,
+                ..
+            } if diff_session_id == session_id => {
+                *line_comments = DiffLineComments::default();
+                *scroll_cache = None;
+            }
+            AppMode::Help {
+                context:
+                    crate::presentation::app_mode::HelpContext::Diff {
+                        line_comments,
+                        session_id: diff_session_id,
+                        ..
+                    },
+                ..
+            } if diff_session_id == session_id => {
+                *line_comments = DiffLineComments::default();
+            }
+            _ => {}
+        }
     }
 
     /// Persists and retains an automatic-review trigger for an eligible
@@ -800,7 +849,10 @@ impl App {
             diff,
             file_explorer_selected_index: 0,
             focus: DiffFocus::Files,
-            line_comments: DiffLineComments::default(),
+            line_comments: self
+                .diff_comment_progress
+                .remove(&session_id)
+                .unwrap_or_default(),
             preview: DiffPreview::default(),
             review_comments,
             restore,

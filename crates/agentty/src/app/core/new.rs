@@ -163,6 +163,7 @@ impl App {
                 crate::presentation::settings::SettingsPresentationState::default(),
             tabs: crate::app::tab::TabManager::new(initial_tab),
             prompt_progress: std::collections::HashMap::new(),
+            diff_comment_progress: std::collections::HashMap::new(),
             auto_address_review_iterations: std::collections::HashMap::new(),
             deferred_auto_review_session_ids: std::collections::HashSet::new(),
             pending_focused_review_persistence: std::collections::HashMap::new(),

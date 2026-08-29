@@ -329,12 +329,16 @@ short availability notice. Press `p` again to return to raw diff lines.
 Whole-file comments stay visible above the selected file's patch, while line and range
 comments stay beneath their source. Press `Enter` again on a completed comment to edit
 it; clearing its text and finishing removes it. Completed comments use a distinct inset
-background, while the active editor uses the stronger selection highlight. `s` combines
-all finished comments with any draft text and image attachments that were present before
-opening the diff, then submits the batch as one session turn. The chat renders file
-comments by path and inline comments by path, line or range, side, and feedback.
-Comments containing deleted lines also include their captured pre-change source text so
-the agent retains context that is absent from the worktree.
+background, while the active editor uses the stronger selection highlight. Completed
+comments survive leaving Diff mode and return when the same session's diff is reopened.
+`s` combines all finished comments with any draft text and image attachments that were
+present before opening the diff, then submits the batch as one session turn. Submission,
+or any other new turn in that session, clears the saved comments when the turn starts.
+If submission is queued behind active work, `Ctrl+C` can retract that queued message
+without losing the comments. The chat renders file comments by path and inline comments
+by path, line or range, side, and feedback. Comments containing deleted lines also
+include their captured pre-change source text so the agent retains context that is
+absent from the worktree.
 
 Read-only diffs, including `Merged` sessions, keep changed-line navigation but hide file
 and inline comment shortcuts and batch submission.

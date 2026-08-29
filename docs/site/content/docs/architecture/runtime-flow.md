@@ -848,34 +848,39 @@ orchestration paths:
   Comments sidebar immediately with a comment-loading state. The loading surface uses an
   explicit Files placeholder instead of parsing its status text as an empty diff. A
   failed interactive load restores its source mode with a transient workflow notice;
-  during managed merge cleanup, `TaskService` falls back from a repository-unavailable
-  live diff to the archived diff already persisted for that session. Other Git failures
-  remain visible diagnostics. `TaskService` resolves the session worktree remote through
-  the injected git/forge boundaries, falls back to the persisted review-request URL
-  after terminal-session worktree cleanup, and uses the matching `AppEvent` to update
-  only the still-open Diff workspace or its help overlay. Inline code context is derived
-  from the already loaded current diff. From a reply-capable session, `Space` toggles an
-  actionable thread in the evaluation batch, and `Enter` renders every selected thread
-  into one `TurnPrompt`; outdated threads include an explicit stale-anchor marker. The
-  selected forge thread IDs are recorded in turn metadata. Post-turn handling requires
-  exactly one allowlisted, nonblank outcome per selected thread and rejects an
-  incomplete or duplicated batch before any forge mutation. Accepted outcomes, their
-  original replies, and random per-thread reply tokens commit in the same SQLite
-  transaction as the completed-turn metadata before auto-commit starts. A failed
-  auto-commit prevents the published-branch push and discards the selected batch before
-  a later turn can push unrelated changes. Successful auto-commit binds each newly
-  inserted operation to the full fix commit SHA. After every successful push, the worker
-  requires that commit to exactly match pushed `HEAD`; later descendants and rewritten
-  commits are discarded before forge access. An operation whose commit binding was
-  interrupted remains pending and is replaceable by a fresh agent turn, while a bound
-  operation continues to retain its original reply. Immediately before a forge reply,
-  the worker marks the durable operation as posting. Recovery trusts a matching
-  tokenized reply only when that flag is set, which closes the reply-success/crash
-  window without treating a collaborator-authored imitation as Agentty's audit reply.
-  The row is deleted after the requested forge effects finish. Bound operations retain
-  the first accepted reply when a later agent turn reports a different one. The worker
-  resolves only `fixed` operations through `ReviewRequestClient`; `no_change_needed`
-  operations remain open, and failed commits or pushes never mutate forge thread state.
+  completed file and inline comment drafts move into a per-session app-state cache when
+  Diff mode closes, move back into `AppMode::Diff` when it reopens, and are discarded
+  when that session starts a new turn. A queued comment batch remains cached until its
+  worker dequeues it, so retracting the queued message with `Ctrl+C` preserves the
+  comments; during managed merge cleanup, `TaskService` falls back from a
+  repository-unavailable live diff to the archived diff already persisted for that
+  session. Other Git failures remain visible diagnostics. `TaskService` resolves the
+  session worktree remote through the injected git/forge boundaries, falls back to the
+  persisted review-request URL after terminal-session worktree cleanup, and uses the
+  matching `AppEvent` to update only the still-open Diff workspace or its help overlay.
+  Inline code context is derived from the already loaded current diff. From a
+  reply-capable session, `Space` toggles an actionable thread in the evaluation batch,
+  and `Enter` renders every selected thread into one `TurnPrompt`; outdated threads
+  include an explicit stale-anchor marker. The selected forge thread IDs are recorded in
+  turn metadata. Post-turn handling requires exactly one allowlisted, nonblank outcome
+  per selected thread and rejects an incomplete or duplicated batch before any forge
+  mutation. Accepted outcomes, their original replies, and random per-thread reply
+  tokens commit in the same SQLite transaction as the completed-turn metadata before
+  auto-commit starts. A failed auto-commit prevents the published-branch push and
+  discards the selected batch before a later turn can push unrelated changes. Successful
+  auto-commit binds each newly inserted operation to the full fix commit SHA. After
+  every successful push, the worker requires that commit to exactly match pushed `HEAD`;
+  later descendants and rewritten commits are discarded before forge access. An
+  operation whose commit binding was interrupted remains pending and is replaceable by a
+  fresh agent turn, while a bound operation continues to retain its original reply.
+  Immediately before a forge reply, the worker marks the durable operation as posting.
+  Recovery trusts a matching tokenized reply only when that flag is set, which closes
+  the reply-success/crash window without treating a collaborator-authored imitation as
+  Agentty's audit reply. The row is deleted after the requested forge effects finish.
+  Bound operations retain the first accepted reply when a later agent turn reports a
+  different one. The worker resolves only `fixed` operations through
+  `ReviewRequestClient`; `no_change_needed` operations remain open, and failed commits
+  or pushes never mutate forge thread state.
 
 ## Persistence and Recovery Boundaries
 

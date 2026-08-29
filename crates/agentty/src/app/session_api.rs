@@ -806,6 +806,7 @@ impl App {
 
             return Err(send_error);
         }
+        self.clear_diff_comment_progress(target_session_id);
         if let Some((session_orchestration_id, _)) = question_relay {
             self.services
                 .db()
@@ -1197,6 +1198,8 @@ fn managed_session_error(session_id: &SessionId, action: &str) -> ApiSessionErro
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use ag_agent::{
         AgentKind, AgentModel, AgentRequestKind, AgentSelection, AppServerTurnResponse,
         MockAppServerClient, PermissionMode,
@@ -1208,6 +1211,7 @@ mod tests {
     use crate::domain::session::Status;
     use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
     use crate::infra::db::PersistedOrchestrationTask;
+    use crate::presentation::app_mode::{DiffCommentTarget, DiffLineComments};
 
     async fn request_session_creation(
         app: &mut App,
@@ -1842,7 +1846,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_backend_accepts_one_durable_coordinator_turn() {
+    async fn runtime_backend_coordinator_turn_clears_diff_comments() {
         // Arrange
         let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
         let project_id = app.active_project_id();
@@ -1861,6 +1865,14 @@ mod tests {
             &session_id,
             SessionStatus::Review,
         );
+        let mut line_comments = DiffLineComments::default();
+        line_comments.start_editing_target(DiffCommentTarget::file("src/main.rs"));
+        line_comments
+            .editing_input_mut()
+            .expect("controller diff comment should be editable")
+            .insert_text("Review the controller change");
+        line_comments.finish_editing();
+        app.save_diff_comment_progress(session_id.clone(), line_comments);
 
         // Act
         let review_request_error = request_review_request(&mut app, session_id.clone())
@@ -1877,6 +1889,14 @@ mod tests {
         )
         .await
         .expect("coordinator turn should be accepted");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while app.diff_comment_progress.contains_key(&session_id) {
+                app.process_pending_app_events().await;
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("coordinator turn should clear saved diff comments when it starts");
         let messages = app
             .services
             .db()
@@ -1892,6 +1912,7 @@ mod tests {
                 "Orchestrator sessions cannot publish review requests".to_string()
             )
         );
+        assert!(!app.diff_comment_progress.contains_key(&session_id));
         assert!(messages.iter().all(|message| {
             message.kind != SessionMessageKind::UserPrompt.to_string()
                 || message.content != "Summarize the worker results"

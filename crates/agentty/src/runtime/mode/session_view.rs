@@ -1212,7 +1212,7 @@ mod tests {
     };
     use crate::domain::turn_prompt::TurnPrompt;
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
-    use crate::presentation::app_mode::PromptModeSnapshot;
+    use crate::presentation::app_mode::{DiffCommentTarget, DiffLineComments, PromptModeSnapshot};
     use crate::presentation::prompt::PromptSlashState;
     use crate::runtime::mode::session_output_metric;
     use crate::ui::component::session_output::SessionOutputLineContext;
@@ -4157,6 +4157,10 @@ mod tests {
             queued_message(0, "first queued"),
             queued_message(1, "second queued"),
         ];
+        let mut line_comments = DiffLineComments::default();
+        line_comments.start_editing_target(DiffCommentTarget::file("src/main.rs"));
+        app.save_diff_comment_progress(session_id.clone().into(), line_comments);
+        let saved_line_comments = app.diff_comment_progress[session_id.as_str()].clone();
 
         // Act — first Ctrl+C while the queue is non-empty.
         end_in_progress_turn(&mut app, &session_id).await;
@@ -4200,6 +4204,11 @@ mod tests {
                 .expect("cancel token lock")
                 .is_cancelled(),
             "cancel_token must not be cancelled when only a queued message is popped"
+        );
+        assert_eq!(
+            app.diff_comment_progress.get(session_id.as_str()),
+            Some(&saved_line_comments),
+            "retracting a queued message must preserve its diff comments"
         );
     }
 

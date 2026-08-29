@@ -151,6 +151,7 @@ impl App {
         if !enqueued {
             return ReviewCommentResolutionOutcome::KeepReviewComments;
         }
+        self.clear_diff_comment_progress(session_id);
 
         // Reply enqueueing cannot reorder the exclusively borrowed session state,
         // so the validated index remains stable across the awaited operation.
