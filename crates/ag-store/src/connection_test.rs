@@ -3038,6 +3038,7 @@ async fn test_defer_session_focused_review_requires_eligible_existing_session() 
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
+            response_style: ag_agent::ResponseStyle::default(),
             role: Some("Orchestrator"),
             speed_mode: SpeedMode::Normal,
             status: "Review",

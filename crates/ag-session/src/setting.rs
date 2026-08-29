@@ -34,6 +34,8 @@ pub enum SettingName {
     DefaultReviewReasoningLevel,
     /// Persists the response speed paired with the review-model default.
     DefaultReviewSpeedMode,
+    /// Persists the default response style for newly created sessions.
+    DefaultResponseStyle,
     /// Persists the provider that owns the smart-model default.
     DefaultSmartAgent,
     /// Persists the project or global smart-model selection.
@@ -70,6 +72,7 @@ impl SettingName {
             Self::DefaultReviewModel => "DefaultReviewModel",
             Self::DefaultReviewReasoningLevel => "DefaultReviewReasoningLevel",
             Self::DefaultReviewSpeedMode => "DefaultReviewSpeedMode",
+            Self::DefaultResponseStyle => "DefaultResponseStyle",
             Self::DefaultSmartAgent => "DefaultSmartAgent",
             Self::DefaultSmartModel => "DefaultSmartModel",
             Self::DefaultSmartReasoningLevel => "DefaultSmartReasoningLevel",
@@ -121,6 +124,7 @@ mod tests {
                 SettingName::DefaultReviewSpeedMode,
                 "DefaultReviewSpeedMode",
             ),
+            (SettingName::DefaultResponseStyle, "DefaultResponseStyle"),
             (SettingName::DefaultSmartAgent, "DefaultSmartAgent"),
             (SettingName::DefaultSmartModel, "DefaultSmartModel"),
             (
@@ -166,6 +170,7 @@ mod tests {
             SettingName::DefaultReviewModel,
             SettingName::DefaultReviewReasoningLevel,
             SettingName::DefaultReviewSpeedMode,
+            SettingName::DefaultResponseStyle,
             SettingName::DefaultSmartAgent,
             SettingName::DefaultSmartModel,
             SettingName::DefaultSmartReasoningLevel,

@@ -325,12 +325,14 @@ flowchart LR
    `.agents/agents` directory. The worker compares the resolved prompt fingerprint with
    the last successfully applied personality and prepares an active, updated, cleared,
    or unchanged personality payload.
-1. `workflow/turn.rs` loads the session's permission, reasoning, and speed preferences,
-   then builds a `TurnRequest`, including those settings and the personality payload. A
-   pre-provider setup failure cleans prompt attachments, appends the error to the
-   transcript, and runs the ordinary turn finalizer so resumed sessions do not remain
-   `InProgress`. Otherwise it calls `AgentChannel::run_turn()`, which streams
-   `TurnEvent` values (loader updates) and returns a `TurnResult`.
+1. `workflow/turn.rs` loads the session's permission, reasoning, response-style, and
+   speed preferences, then builds a `TurnRequest`, including those settings and the
+   personality payload. At the channel boundary, interactive session prompts receive
+   provider-neutral style guidance; one-shot utility prompts bypass it. A pre-provider
+   setup failure cleans prompt attachments, appends the error to the transcript, and
+   runs the ordinary turn finalizer so resumed sessions do not remain `InProgress`.
+   Otherwise it calls `AgentChannel::run_turn()`, which streams `TurnEvent` values
+   (loader updates) and returns a `TurnResult`.
 1. `workflow/post_turn.rs` appends the final assistant transcript output, then
    `TurnPersistence::apply(...)` transactionally stores the question payload,
    token-usage deltas, and provider conversation markers.

@@ -3,6 +3,87 @@
 use std::fmt;
 use std::str::FromStr;
 
+/// Preferred amount of detail in user-facing session responses.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ResponseStyle {
+    /// Keep responses compact while retaining essential results and caveats.
+    Concise,
+    /// Balance brevity with enough context to understand and verify the result.
+    #[default]
+    Balanced,
+    /// Explain decisions, trade-offs, effects, and verification thoroughly.
+    Detailed,
+}
+
+impl ResponseStyle {
+    /// Stable selector ordering.
+    pub const ALL: [Self; 3] = [Self::Concise, Self::Balanced, Self::Detailed];
+
+    /// Stable persisted identifier for this response style.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Concise => "concise",
+            Self::Balanced => "balanced",
+            Self::Detailed => "detailed",
+        }
+    }
+
+    /// User-visible selector label for this response style.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Concise => "Concise",
+            Self::Balanced => "Balanced",
+            Self::Detailed => "Detailed",
+        }
+    }
+
+    /// User-visible explanation of this response style.
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Concise => "Compact answers with essential results, caveats, and verification.",
+            Self::Balanced => "Enough context to understand and verify without exhaustive detail.",
+            Self::Detailed => "Thorough decisions, trade-offs, effects, and verification.",
+        }
+    }
+
+    /// Agent-facing guidance for this response style.
+    pub(crate) const fn prompt_instruction(self) -> &'static str {
+        match self {
+            Self::Concise => {
+                "Lead with the outcome. Keep the final answer compact, omit routine narration, and \
+                 retain essential caveats and verification."
+            }
+            Self::Balanced => {
+                "Lead with the outcome. Provide enough context to understand decisions and verify \
+                 the result without exhaustive detail."
+            }
+            Self::Detailed => {
+                "Lead with the outcome. Explain decisions, trade-offs, affected behavior, and \
+                 verification thoroughly without repetition."
+            }
+        }
+    }
+}
+
+impl fmt::Display for ResponseStyle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ResponseStyle {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "concise" => Ok(Self::Concise),
+            "balanced" => Ok(Self::Balanced),
+            "detailed" => Ok(Self::Detailed),
+            _ => Err(format!("Unknown response style: {value}")),
+        }
+    }
+}
+
 /// Response-speed preference applied to one agent session.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum SpeedMode {
@@ -132,6 +213,53 @@ impl SessionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_style_round_trips_persisted_values() {
+        // Arrange, Act, Assert
+        for response_style in ResponseStyle::ALL {
+            assert_eq!(
+                response_style.as_str().parse::<ResponseStyle>(),
+                Ok(response_style)
+            );
+            assert_eq!(response_style.to_string(), response_style.as_str());
+        }
+    }
+
+    #[test]
+    fn response_style_rejects_unknown_persisted_value() {
+        // Arrange, Act
+        let result = "verbose".parse::<ResponseStyle>();
+
+        // Assert
+        assert_eq!(result, Err("Unknown response style: verbose".to_string()));
+    }
+
+    #[test]
+    fn response_style_exposes_stable_labels_and_descriptions() {
+        // Arrange, Act
+        let values = ResponseStyle::ALL
+            .map(|response_style| (response_style.name(), response_style.description()));
+
+        // Assert
+        assert_eq!(
+            values,
+            [
+                (
+                    "Concise",
+                    "Compact answers with essential results, caveats, and verification."
+                ),
+                (
+                    "Balanced",
+                    "Enough context to understand and verify without exhaustive detail."
+                ),
+                (
+                    "Detailed",
+                    "Thorough decisions, trade-offs, effects, and verification."
+                ),
+            ]
+        );
+    }
 
     #[test]
     fn speed_mode_round_trips_persisted_values() {

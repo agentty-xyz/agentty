@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT response_style FROM session WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "response_style",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "response_style"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ad4a6f6d6a185999734fe11b367e5f913cb519f038fc87e647c4733abff944c1"
+}

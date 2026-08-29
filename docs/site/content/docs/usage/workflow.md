@@ -818,6 +818,7 @@ with `j` / `k` or `Up` / `Down`.
 | `/model`       | Switch the model for the current session.                     |
 | `/personality` | Choose an agent personality for the current session.          |
 | `/reasoning`   | Override the reasoning level for the current session.         |
+| `/style`       | Choose concise, balanced, or detailed responses.              |
 | `/speed`       | Choose normal or fast responses for this session.             |
 
 `/apply` requires a completed focused review (`f` key). `/mode` stores a session-scoped
@@ -845,6 +846,16 @@ sessions to `claude-opus-5` and Codex Spark sessions to `gpt-5.6-sol` without ch
 the project default model. Returning to Normal does not change the selected model.
 Selecting a model that does not support Fast resets the session to Normal before the
 model changes.
+
+`/style` is available for every backend. `Concise` keeps the answer compact while
+retaining essential results, caveats, and verification; `Balanced` provides enough
+context to understand and verify the result without exhaustive detail; and `Detailed`
+explains decisions, trade-offs, effects, and verification thoroughly. The selection is
+stored with the session and applied to following user turns. Non-default `Concise` and
+`Detailed` selections are also shown in the session header and composer title. An
+explicit length or format request in the prompt takes precedence. Style guidance changes
+presentation only: it does not alter tool access, protocol output, safety requirements,
+or utility prompts such as title generation.
 
 `/personality` scans `.agents/agents/*/agent.md` in the session worktree when the picker
 opens. Agentty does not scan the global `~/.agents` directory. Each enabled definition
@@ -876,19 +887,23 @@ accepted candidate, draft, or commit-derived title.
 
 ## Settings Scope
 
-<a id="usage-settings-scope"></a> Settings for models, reasoning, response speed, commit
-trailers, and launch configurations are stored per active project. `Theme` and
-`Orchestrator Parallelism` are global. Parallelism defaults to three workers and accepts
-values from one through eight. The Settings tab renders these scopes as
-`Global settings` and `'<project>' settings`. Rows with fixed choices open dropdowns;
-use `j` / `k` to move through options. Smart, Fast, and Review first ask for a model and
-reasoning level. Claude and Codex then offer a response-speed dropdown with `Normal` and
-`Fast`; Gemini and Antigravity save after reasoning because they do not support speed
-control. Each role persists its independent model, reasoning, and speed defaults. Smart
-supplies defaults for new sessions, Fast supplies title and commit-message utility
-prompts, and Review supplies focused review assists. Selecting `Fast` also applies the
-same compatible-model adjustment used by `/speed`: Claude uses `claude-opus-5`, and
-Codex Spark uses `gpt-5.6-sol`.
+<a id="usage-settings-scope"></a> Settings for models, reasoning, response speed,
+response style, commit trailers, and launch configurations are stored per active
+project. `Theme` and `Orchestrator Parallelism` are global. Parallelism defaults to
+three workers and accepts values from one through eight. The Settings tab renders these
+scopes as `Global settings` and `'<project>' settings`. Rows with fixed choices open
+dropdowns; use `j` / `k` to move through options. Smart, Fast, and Review first ask for
+a model and reasoning level. Claude and Codex then offer a response-speed dropdown with
+`Normal` and `Fast`; Gemini and Antigravity save after reasoning because they do not
+support speed control. Each role persists its independent model, reasoning, and speed
+defaults. Smart supplies defaults for new sessions, Fast supplies title and
+commit-message utility prompts, and Review supplies focused review assists. Selecting
+`Fast` also applies the same compatible-model adjustment used by `/speed`: Claude uses
+`claude-opus-5`, and Codex Spark uses `gpt-5.6-sol`.
+
+`Default Response Style` supplies the initial style for new sessions. Changing the
+project default does not rewrite existing sessions; use `/style` to update an active
+session.
 
 The `Launch Configurations` row opens a command-list editor instead of a multiline text
 field. Use `a` to add an entry, `e` or `Enter` to edit the selected entry, `d` to delete

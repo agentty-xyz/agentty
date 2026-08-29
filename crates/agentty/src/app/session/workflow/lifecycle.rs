@@ -21,7 +21,7 @@ use super::{
 use crate::app::session::{SessionCreationKind, SessionCreationSettings, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, setting};
 use crate::domain::agent::{
-    AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
+    AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle, SpeedMode,
 };
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
@@ -694,6 +694,7 @@ impl SessionManager {
                 personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
+                response_style: creation_settings.response_style,
                 role: Some(&session_role),
                 speed_mode: creation_settings.speed_mode,
                 status: &status,
@@ -902,6 +903,7 @@ impl SessionManager {
                 personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
+                response_style: creation_settings.response_style,
                 role: Some(&session_role),
                 speed_mode: creation_settings.speed_mode,
                 status: &status,
@@ -1868,6 +1870,32 @@ impl SessionManager {
 
         services.emit_app_event(AppEvent::SessionReasoningLevelUpdated {
             reasoning_level,
+            session_id: SessionId::from(session_id),
+        });
+
+        Ok(())
+    }
+
+    /// Updates and persists the response style for a single session.
+    ///
+    /// # Errors
+    /// Returns an error if the session is missing or persistence fails.
+    pub async fn set_session_response_style(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        response_style: ResponseStyle,
+    ) -> Result<(), SessionError> {
+        self.session_index_or_err(session_id)?;
+
+        services
+            .db()
+            .sessions()
+            .update_session_response_style(session_id, response_style)
+            .await?;
+
+        services.emit_app_event(AppEvent::SessionResponseStyleUpdated {
+            response_style,
             session_id: SessionId::from(session_id),
         });
 
@@ -3257,6 +3285,11 @@ impl SessionManager {
             .settings()
             .load_project_reasoning_level(project_id, SettingName::DefaultSmartReasoningLevel)
             .await?;
+        let response_style = services
+            .db()
+            .settings()
+            .load_project_response_style(project_id, SettingName::DefaultResponseStyle)
+            .await?;
         let speed_mode = services
             .db()
             .settings()
@@ -3275,6 +3308,7 @@ impl SessionManager {
             permission_mode: PermissionMode::AutoEdit,
             personality_id: None,
             reasoning_level,
+            response_style,
             role: crate::domain::session::SessionRole::Worker,
             speed_mode,
         })
@@ -4280,6 +4314,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_session_creation_settings_uses_project_response_style_default() {
+        // Arrange
+        let database = AppRepositories::in_memory().await.expect("db should open");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to upsert project");
+        database
+            .settings()
+            .upsert_project_setting(
+                project_id,
+                SettingName::DefaultResponseStyle,
+                ResponseStyle::Detailed.as_str(),
+            )
+            .await
+            .expect("failed to persist response style default");
+        let services = test_services(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+        let session = test_session("Prompt", Status::Review, Some("Title"), "");
+        let mut session_manager = session_manager_with_one_session(session);
+
+        // Act
+        let creation_settings = session_manager
+            .resolve_session_creation_settings(&services, project_id, None)
+            .await
+            .expect("session creation settings should resolve");
+
+        // Assert
+        assert_eq!(creation_settings.response_style, ResponseStyle::Detailed);
+    }
+
+    #[tokio::test]
     /// Ensures `set_session_reasoning_level()` persists the level and
     /// emits the matching reducer event.
     async fn test_set_session_reasoning_level_persists_level_and_emits_event() {
@@ -4313,6 +4383,44 @@ mod tests {
             emitted_event,
             AppEvent::SessionReasoningLevelUpdated {
                 reasoning_level: ReasoningLevel::High,
+                session_id: "session-id".into(),
+            }
+        );
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    /// Ensures `set_session_response_style()` persists the preference and
+    /// emits the matching reducer event.
+    async fn test_set_session_response_style_persists_style_and_emits_event() {
+        // Arrange
+        let session = test_session("Prompt", Status::Review, Some("Title"), "");
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let (services, mut event_rx) = test_services_with_event_receiver(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        session_manager
+            .set_session_response_style(&services, "session-id", ResponseStyle::Detailed)
+            .await
+            .expect("response style update should succeed");
+        let persisted_response_style = database
+            .sessions()
+            .load_session_response_style("session-id")
+            .await
+            .expect("response style should load");
+        let emitted_event = event_rx.try_recv().expect("expected style update event");
+
+        // Assert
+        assert_eq!(persisted_response_style, ResponseStyle::Detailed);
+        assert_eq!(
+            emitted_event,
+            AppEvent::SessionResponseStyleUpdated {
+                response_style: ResponseStyle::Detailed,
                 session_id: "session-id".into(),
             }
         );

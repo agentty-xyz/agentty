@@ -6,7 +6,8 @@ use std::path::PathBuf;
 pub use ag_protocol::render_prompt_text_for_agent;
 
 use crate::domain::agent::{
-    self, AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, SpeedMode,
+    self, AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle,
+    SpeedMode,
 };
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
@@ -51,6 +52,8 @@ pub enum PromptSuggestionSelection {
     Personality(Option<PersonalitySummary>),
     /// Session-scoped reasoning selection chosen during `/reasoning`.
     Reasoning(ReasoningLevel),
+    /// Session-scoped response style chosen during `/style`.
+    Style(ResponseStyle),
     /// Session-scoped response-speed selection chosen during `/speed`.
     Speed(SpeedMode),
 }
@@ -375,6 +378,8 @@ pub enum PromptSlashStage {
     Personality,
     /// Selecting a session-specific reasoning level override.
     Reasoning,
+    /// Selecting a session-specific response style.
+    Style,
     /// Selecting a session-specific response-speed preference.
     Speed,
 }
@@ -901,6 +906,10 @@ fn build_slash_suggestion_list(
             "/reasoning Level (j/k move, Enter select)",
             reasoning_suggestion_items(),
         ),
+        PromptSlashStage::Style => (
+            "/style Response style (j/k move, Enter select)",
+            response_style_suggestion_items(),
+        ),
         PromptSlashStage::Speed => (
             "/speed Mode (j/k move, Enter select)",
             speed_suggestion_items(),
@@ -1005,6 +1014,14 @@ fn selected_slash_action(
 
             Some(PromptSuggestionSelection::Reasoning(selected_reasoning))
         }
+        PromptSlashStage::Style => {
+            let styles = ResponseStyle::ALL;
+            let selected_style = styles[slash_state
+                .selected_index
+                .min(styles.len().saturating_sub(1))];
+
+            Some(PromptSuggestionSelection::Style(selected_style))
+        }
         PromptSlashStage::Speed => {
             let options = SpeedMode::ALL;
             let selected_speed_mode = options
@@ -1048,6 +1065,7 @@ fn command_description(command: &str) -> &'static str {
         "/model" => "Choose an agent and model for this session.",
         "/personality" => "List: .agents/agents/. Choose a personality for this session.",
         "/reasoning" => "Override the reasoning level for this session.",
+        "/style" => "Control how concise or detailed responses are.",
         "/speed" => "Choose normal or fast responses for this session.",
         _ => "Prompt slash command.",
     }
@@ -1066,6 +1084,7 @@ fn prompt_slash_commands(
         "/model",
         "/personality",
         "/reasoning",
+        "/style",
         "/speed",
     ];
     if !allow_apply_command {
@@ -1143,6 +1162,20 @@ fn reasoning_suggestion_items() -> Vec<PromptSuggestionItem> {
             badge: None,
             detail: Some(reasoning_level.description().to_string()),
             label: reasoning_level.name().to_string(),
+            metadata: None,
+        })
+        .collect()
+}
+
+/// Returns the render-ready dropdown rows for `/style`.
+fn response_style_suggestion_items() -> Vec<PromptSuggestionItem> {
+    ResponseStyle::ALL
+        .iter()
+        .copied()
+        .map(|response_style| PromptSuggestionItem {
+            badge: None,
+            detail: Some(response_style.description().to_string()),
+            label: response_style.name().to_string(),
             metadata: None,
         })
         .collect()
@@ -2054,7 +2087,14 @@ mod tests {
         // Assert
         assert_eq!(
             labels,
-            vec!["/mode", "/model", "/personality", "/reasoning", "/speed"]
+            vec![
+                "/mode",
+                "/model",
+                "/personality",
+                "/reasoning",
+                "/style",
+                "/speed"
+            ]
         );
         assert_eq!(suggestion_list.selected_index, 0);
     }
@@ -2076,7 +2116,7 @@ mod tests {
                 .iter()
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["/mode", "/model", "/personality", "/reasoning"]
+            vec!["/mode", "/model", "/personality", "/reasoning", "/style"]
         );
     }
 
@@ -2093,5 +2133,54 @@ mod tests {
 
         // Assert
         assert_eq!(selection, Some(PromptSuggestionSelection::Command("/mode")));
+    }
+
+    #[test]
+    fn test_style_stage_lists_descriptions_and_returns_selected_style() {
+        // Arrange
+        let slash_state = PromptSlashState {
+            selected_index: 2,
+            stage: PromptSlashStage::Style,
+            ..PromptSlashState::default()
+        };
+
+        // Act
+        let suggestion_list =
+            build_prompt_slash_suggestion_list("/style", &slash_state, AgentKind::Codex, false)
+                .expect("expected style suggestions");
+        let selection =
+            resolve_prompt_slash_selection("/style", &slash_state, AgentKind::Codex, false);
+
+        // Assert
+        assert_eq!(
+            suggestion_list.title,
+            "/style Response style (j/k move, Enter select)"
+        );
+        assert_eq!(
+            suggestion_list
+                .items
+                .iter()
+                .map(|item| (item.label.as_str(), item.detail.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "Concise",
+                    Some("Compact answers with essential results, caveats, and verification.")
+                ),
+                (
+                    "Balanced",
+                    Some("Enough context to understand and verify without exhaustive detail.")
+                ),
+                (
+                    "Detailed",
+                    Some("Thorough decisions, trade-offs, effects, and verification.")
+                ),
+            ]
+        );
+        assert_eq!(suggestion_list.selected_index, 2);
+        assert_eq!(
+            selection,
+            Some(PromptSuggestionSelection::Style(ResponseStyle::Detailed))
+        );
     }
 }

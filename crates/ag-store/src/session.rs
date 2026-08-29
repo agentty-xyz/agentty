@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use ag_agent::{
-    self as agent, AgentKind, AgentModel, PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
+    self as agent, AgentKind, AgentModel, PermissionMode, ReasoningLevel, ResponseStyle,
+    SessionStats, SpeedMode,
 };
 use ag_session::{FocusedReviewStatus, SessionMessageKind};
 use async_trait::async_trait;
@@ -74,6 +75,8 @@ pub struct PersistedSessionCreation<'a> {
     pub project_id: i64,
     /// Reasoning level captured from the project default at creation.
     pub reasoning_level: ReasoningLevel,
+    /// Response style captured from the project default at creation.
+    pub response_style: ResponseStyle,
     /// Persisted session role, or `None` for the default worker role.
     pub role: Option<&'a str>,
     /// Response-speed preference captured for the session.
@@ -142,6 +145,8 @@ pub struct SessionRow {
     pub questions: Option<String>,
     /// Persisted session-specific reasoning override, when present.
     pub reasoning_level_override: Option<String>,
+    /// Persisted session response style.
+    pub response_style: String,
     /// Joined forge review-request metadata, when present and complete.
     pub review_request: Option<SessionReviewRequestRow>,
     /// Persisted session role string, or `None` for the default worker role.
@@ -203,6 +208,8 @@ pub struct SessionListRow {
     pub published_upstream_ref: Option<String>,
     /// Persisted session-specific reasoning override, when present.
     pub reasoning_level_override: Option<String>,
+    /// Persisted session response style.
+    pub response_style: String,
     /// Joined forge review-request metadata, when present and complete.
     pub review_request: Option<SessionReviewRequestRow>,
     /// Persisted session role string, or `None` for the default worker role.
@@ -457,6 +464,10 @@ pub trait SessionRepository: Send + Sync {
         session_id: &str,
     ) -> Result<ReasoningLevel, DbError>;
 
+    /// Loads the persisted session response style.
+    async fn load_session_response_style(&self, session_id: &str)
+    -> Result<ResponseStyle, DbError>;
+
     /// Loads the persisted provider permission mode for future turns.
     async fn load_session_permission_mode(
         &self,
@@ -584,6 +595,13 @@ pub trait SessionRepository: Send + Sync {
         &self,
         id: &str,
         reasoning_level: ReasoningLevel,
+    ) -> Result<(), DbError>;
+
+    /// Updates the persisted session response style.
+    async fn update_session_response_style(
+        &self,
+        id: &str,
+        response_style: ResponseStyle,
     ) -> Result<(), DbError>;
 
     /// Updates the persisted provider permission mode for future turns.
@@ -754,6 +772,7 @@ struct SessionRowMetadata {
     project_id: Option<i64>,
     published_upstream_ref: Option<String>,
     reasoning_level_override: Option<String>,
+    response_style: String,
     role: Option<String>,
     size: String,
     speed_mode: String,
@@ -792,6 +811,7 @@ impl SessionRowMetadata {
             published_upstream_ref: self.published_upstream_ref,
             questions,
             reasoning_level_override: self.reasoning_level_override,
+            response_style: self.response_style,
             review_request,
             role: self.role,
             size: self.size,
@@ -827,6 +847,7 @@ impl SessionRowMetadata {
             project_id: self.project_id,
             published_upstream_ref: self.published_upstream_ref,
             reasoning_level_override: self.reasoning_level_override,
+            response_style: self.response_style,
             review_request,
             role: self.role,
             size: self.size,
@@ -863,6 +884,7 @@ struct SessionJoinRow {
     published_upstream_ref: Option<String>,
     questions: Option<String>,
     reasoning_level_override: Option<String>,
+    response_style: String,
     review_request_display_id: Option<String>,
     review_request_forge_kind: Option<String>,
     review_request_last_refreshed_at: Option<i64>,
@@ -945,6 +967,7 @@ impl SessionJoinRow {
             published_upstream_ref,
             questions,
             reasoning_level_override,
+            response_style,
             review_request_display_id,
             review_request_forge_kind,
             review_request_last_refreshed_at,
@@ -982,6 +1005,7 @@ impl SessionJoinRow {
             project_id,
             published_upstream_ref,
             reasoning_level_override,
+            response_style,
             role,
             size,
             speed_mode,
@@ -1254,6 +1278,7 @@ WHERE id = ?
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                response_style: ResponseStyle::default(),
                 role: None,
                 speed_mode: SpeedMode::Normal,
                 status,
@@ -1288,6 +1313,7 @@ WHERE id = ?
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                response_style: ResponseStyle::default(),
                 role: None,
                 speed_mode: SpeedMode::Normal,
                 status,
@@ -1321,6 +1347,7 @@ WHERE id = ?
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                response_style: ResponseStyle::default(),
                 role: None,
                 speed_mode: SpeedMode::Normal,
                 status,
@@ -1345,6 +1372,7 @@ WHERE id = ?
             personality_id,
             project_id,
             reasoning_level,
+            response_style,
             role,
             speed_mode,
             status,
@@ -1365,6 +1393,7 @@ WHERE id = ?
                 personality_id,
                 project_id,
                 reasoning_level,
+                response_style,
                 role,
                 speed_mode,
                 status,
@@ -1402,6 +1431,7 @@ SELECT session.base_branch AS base_branch,
        session.project_id,
        session.prompt AS prompt,
        session.reasoning_level AS reasoning_level_override,
+       session.response_style AS response_style,
        session.speed_mode AS speed_mode,
        session.published_upstream_ref,
        session.questions,
@@ -1479,6 +1509,7 @@ SELECT session.base_branch AS base_branch,
        session.project_id,
        session.prompt AS prompt,
        session.reasoning_level AS reasoning_level_override,
+       session.response_style AS response_style,
        session.speed_mode AS speed_mode,
        session.published_upstream_ref,
        session.questions,
@@ -1540,6 +1571,7 @@ SELECT session.base_branch AS base_branch,
        session.project_id,
        '' AS "prompt!: String",
        session.reasoning_level AS reasoning_level_override,
+       session.response_style AS response_style,
        session.speed_mode AS speed_mode,
        session.published_upstream_ref,
        NULL AS "questions: String",
@@ -1812,6 +1844,22 @@ WHERE id = ?
 
         Ok(value
             .and_then(|value| value.parse::<ReasoningLevel>().ok())
+            .unwrap_or_default())
+    }
+
+    async fn load_session_response_style(
+        &self,
+        session_id: &str,
+    ) -> Result<ResponseStyle, DbError> {
+        let value = sqlx::query_scalar!(
+            r"SELECT response_style FROM session WHERE id = ?",
+            session_id
+        )
+        .fetch_optional(&self.0)
+        .await?;
+
+        Ok(value
+            .and_then(|value| value.parse::<ResponseStyle>().ok())
             .unwrap_or_default())
     }
 
@@ -2386,6 +2434,30 @@ WHERE id = ?
         Ok(())
     }
 
+    async fn update_session_response_style(
+        &self,
+        id: &str,
+        response_style: ResponseStyle,
+    ) -> Result<(), DbError> {
+        let now = self.now();
+
+        sqlx::query!(
+            r#"
+UPDATE session
+SET response_style = ?,
+    updated_at = ?
+WHERE id = ?
+            "#,
+            response_style.as_str(),
+            now,
+            id
+        )
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
     async fn update_session_permission_mode(
         &self,
         id: &str,
@@ -2731,6 +2803,8 @@ struct InsertSessionRow<'a> {
     project_id: i64,
     /// Reasoning level captured from the project default at creation.
     reasoning_level: ReasoningLevel,
+    /// Response style captured from the project default at creation.
+    response_style: ResponseStyle,
     /// Persisted session role, or `None` for the default worker role.
     role: Option<&'a str>,
     /// Response-speed preference captured for the session.
@@ -2758,6 +2832,7 @@ async fn insert_session_with_draft_mode(
         personality_id,
         project_id,
         reasoning_level,
+        response_style,
         role,
         speed_mode,
         status,
@@ -2779,6 +2854,7 @@ INSERT INTO session (
     personality_id,
     project_id,
     reasoning_level,
+    response_style,
     role,
     speed_mode,
     orchestration_task_id,
@@ -2786,7 +2862,7 @@ INSERT INTO session (
     created_at,
     updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ",
     )
     .bind(id)
@@ -2802,6 +2878,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     .bind(personality_id)
     .bind(project_id)
     .bind(reasoning_level.as_str())
+    .bind(response_style.as_str())
     .bind(role)
     .bind(speed_mode.as_str())
     .bind(orchestration_task_id)
@@ -2913,6 +2990,7 @@ mod tests {
                 published_upstream_ref: Some("origin/session-a".to_string()),
                 questions: Some("Question text".to_string()),
                 reasoning_level_override: None,
+                response_style: "balanced".to_string(),
                 review_request_display_id: Some("#42".to_string()),
                 review_request_forge_kind: Some("GitHub".to_string()),
                 review_request_last_refreshed_at: Some(456),
@@ -3406,6 +3484,45 @@ WHERE id = ?
     }
 
     #[tokio::test]
+    async fn test_session_response_style_defaults_and_round_trips_updates() {
+        // Arrange
+        let (database, _) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .sessions()
+            .insert_session("session-a", "gpt-5.6-sol", "main", "Draft", project_id)
+            .await
+            .expect("failed to insert session");
+        let default_style = database
+            .sessions()
+            .load_session_response_style("session-a")
+            .await
+            .expect("default style should load");
+
+        // Act
+        database
+            .sessions()
+            .update_session_response_style("session-a", ResponseStyle::Detailed)
+            .await
+            .expect("style update should persist");
+        let updated_style = database
+            .sessions()
+            .load_session_response_style("session-a")
+            .await
+            .expect("updated style should load");
+
+        // Assert
+        assert_eq!(default_style, ResponseStyle::Balanced);
+        assert_eq!(updated_style, ResponseStyle::Detailed);
+    }
+
+    #[tokio::test]
     async fn test_load_sessions_uses_created_at_to_break_updated_at_ties() {
         // Arrange
         let (database, pool) = AppRepositories::in_memory_with_pool()
@@ -3466,6 +3583,11 @@ WHERE id IN ('a-older', 'z-newer')
             .expect("db should open");
         let (source_reset_row, source_review_request) =
             seed_fork_snapshot_source(&database, &pool).await;
+        database
+            .sessions()
+            .update_session_response_style("source-session", ResponseStyle::Detailed)
+            .await
+            .expect("source response style should persist");
 
         // Act
         database
@@ -3511,6 +3633,7 @@ WHERE id IN ('a-older', 'z-newer')
         );
         assert_fork_reset_state(fork_row, &fork_reset_row, fork_review_request.as_ref());
         assert_eq!(fork_permission_mode, PermissionMode::ReadOnly);
+        assert_eq!(fork_row.response_style, ResponseStyle::Detailed.as_str());
     }
 
     #[tokio::test]

@@ -4,7 +4,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ag_agent::{ReasoningLevel, SpeedMode, parse_persisted_session_agent_model};
+use ag_agent::{ReasoningLevel, ResponseStyle, SpeedMode, parse_persisted_session_agent_model};
 use ag_protocol::QuestionItem;
 use ag_session::{
     AnswerQuestionsRequest, CoordinatorMessageRequest, CoordinatorMessageVisibility,
@@ -918,6 +918,7 @@ impl App {
                 permission_mode: source.settings.permission_mode,
                 personality_id: source.settings.personality_id,
                 reasoning_level: source.settings.reasoning_level,
+                response_style: source.settings.response_style,
                 role: SessionRole::Worker,
                 speed_mode: source.settings.speed_mode,
             },
@@ -1071,6 +1072,10 @@ fn build_api_session(
         .map_err(|error| ApiSessionError::InvalidData(format!("session `{}`: {error}", row.id)))?
         .unwrap_or_default();
     let speed_mode = row.speed_mode.parse::<SpeedMode>().unwrap_or_default();
+    let response_style = row
+        .response_style
+        .parse::<ResponseStyle>()
+        .unwrap_or_default();
     let messages = message_rows
         .into_iter()
         .map(api_message_from_row)
@@ -1100,6 +1105,7 @@ fn build_api_session(
             personality_id: row.personality_id,
             project_id,
             reasoning_level,
+            response_style,
             role,
             speed_mode,
         },
@@ -1577,6 +1583,7 @@ mod tests {
                 r#"[{"text":"Which target?","options":["main","develop"]}]"#.to_string(),
             ),
             reasoning_level_override: Some("xhigh".to_string()),
+            response_style: "detailed".to_string(),
             review_request: Some(SessionReviewRequestRow {
                 display_id: "#42".to_string(),
                 forge_kind: "GitHub".to_string(),

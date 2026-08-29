@@ -9,7 +9,8 @@ use tracing::warn;
 use super::{draft, session_folder};
 use crate::app::{SessionManager, orchestration};
 use crate::domain::agent::{
-    AgentModel, AgentSelection, ReasoningLevel, SpeedMode, parse_persisted_session_agent_model,
+    AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
+    parse_persisted_session_agent_model,
 };
 use crate::domain::permission::PermissionMode;
 use crate::domain::question::QuestionItem;
@@ -71,6 +72,7 @@ struct LoadedSessionInput {
     permission_mode: PermissionMode,
     project_name: String,
     reasoning_level_override: Option<ReasoningLevel>,
+    response_style: ResponseStyle,
     review_request: Option<ReviewRequest>,
     role: SessionRole,
     row: SessionListRow,
@@ -328,6 +330,10 @@ impl SessionManager {
             .as_deref()
             .and_then(|value| value.parse::<ReasoningLevel>().ok());
         let speed_mode = row.speed_mode.parse::<SpeedMode>().unwrap_or_default();
+        let response_style = row
+            .response_style
+            .parse::<ResponseStyle>()
+            .unwrap_or_default();
         let (session_queued_messages, session_queued_actions) =
             Self::loaded_queue_snapshots(handles.get(&session_id));
         let (role, orchestration_metadata) =
@@ -342,6 +348,7 @@ impl SessionManager {
             permission_mode,
             project_name: (*project_name).to_string(),
             reasoning_level_override,
+            response_style,
             review_request: parse_review_request(&row),
             role,
             row,
@@ -497,6 +504,7 @@ impl SessionManager {
             prompt: input.session_prompt,
             queued_messages: input.session_queued_messages,
             reasoning_level_override: input.reasoning_level_override,
+            response_style: input.response_style,
             published_upstream_ref: input.row.published_upstream_ref,
             questions: input.session_questions,
             review_request: input.review_request,
@@ -2115,6 +2123,7 @@ WHERE id = ?
             personality_id: None,
             project_id: Some(1),
             reasoning_level_override: None,
+            response_style: "balanced".to_string(),
             published_upstream_ref: None,
             review_request: Some(SessionReviewRequestRow {
                 display_id: "#42".to_string(),

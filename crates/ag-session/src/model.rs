@@ -8,7 +8,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use ag_agent::{AgentSelection, ReasoningLevel};
-pub use ag_agent::{PermissionMode, SpeedMode};
+pub use ag_agent::{PermissionMode, ResponseStyle, SpeedMode};
 pub use ag_forge::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
 use ag_protocol::QuestionItem;
 use serde::de::{self, Deserializer};
@@ -428,6 +428,8 @@ pub struct SessionSettings {
     pub project_id: i64,
     /// Session-scoped reasoning level.
     pub reasoning_level: ReasoningLevel,
+    /// Session-scoped response style.
+    pub response_style: ResponseStyle,
     /// Role this session plays in a multi-session workflow.
     pub role: SessionRole,
     /// Session-scoped response-speed preference.

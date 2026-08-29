@@ -130,6 +130,13 @@ impl AgentChannel for CliAgentChannel {
         let backend = Arc::clone(&self.backend);
 
         Box::pin(async move {
+            let mut req = req;
+            req.prompt = agent::apply_response_style_prompt(
+                req.prompt,
+                req.request_kind.protocol_profile(),
+                req.response_style,
+            )
+            .map_err(|error| AgentError::Backend(error.to_string()))?;
             let prompt_text = req.prompt.agent_text();
             let build_request = build_command_request(&req, &prompt_text);
             let observer = CliTurnObserver {
@@ -358,6 +365,7 @@ mod tests {
             prompt: "Write a test".into(),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            response_style: crate::ResponseStyle::default(),
             speed_mode: crate::model::session::SpeedMode::default(),
         }
     }
@@ -556,6 +564,7 @@ mod tests {
             prompt: TurnPrompt::from("Review @src/main.rs"),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
+            response_style: crate::ResponseStyle::default(),
             speed_mode: crate::model::session::SpeedMode::default(),
         };
         let prompt_text = request.prompt.agent_text();

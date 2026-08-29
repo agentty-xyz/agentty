@@ -955,6 +955,7 @@ mod tests {
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
+                response_style: ag_agent::ResponseStyle::default(),
                 role: Some("OrchestrationResearcher"),
                 speed_mode: SpeedMode::Normal,
                 status: "InProgress",

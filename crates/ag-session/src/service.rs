@@ -244,7 +244,9 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
-    use ag_agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
+    use ag_agent::{
+        AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
+    };
     use ag_forge::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
 
     use super::*;
@@ -434,6 +436,7 @@ mod tests {
                 personality_id: Some("reviewer".to_string()),
                 project_id: 7,
                 reasoning_level: ReasoningLevel::High,
+                response_style: ResponseStyle::Balanced,
                 role: SessionRole::Worker,
                 speed_mode: SpeedMode::Normal,
             },

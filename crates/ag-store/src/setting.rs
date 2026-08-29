@@ -1,6 +1,6 @@
 //! Setting-scoped persistence adapters and query helpers.
 
-use ag_agent::{ReasoningLevel, SpeedMode};
+use ag_agent::{ReasoningLevel, ResponseStyle, SpeedMode};
 use ag_session::SettingName;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
@@ -30,6 +30,13 @@ pub trait SettingRepository: Send + Sync {
         project_id: i64,
         name: SettingName,
     ) -> Result<ReasoningLevel, DbError>;
+
+    /// Loads the project-scoped default response style.
+    async fn load_project_response_style(
+        &self,
+        project_id: i64,
+        name: SettingName,
+    ) -> Result<ResponseStyle, DbError>;
 
     /// Loads one project-scoped response-speed setting.
     async fn load_project_speed_mode(
@@ -139,6 +146,21 @@ WHERE name = ?
         Ok(reasoning_level)
     }
 
+    async fn load_project_response_style(
+        &self,
+        project_id: i64,
+        name: SettingName,
+    ) -> Result<ResponseStyle, DbError> {
+        let setting_value = self.get_project_setting(project_id, name).await?;
+
+        let response_style = setting_value
+            .as_deref()
+            .and_then(|value| value.parse::<ResponseStyle>().ok())
+            .unwrap_or_default();
+
+        Ok(response_style)
+    }
+
     async fn load_project_speed_mode(
         &self,
         project_id: i64,
@@ -230,10 +252,57 @@ SET value = excluded.value
 
 #[cfg(test)]
 mod tests {
-    use ag_agent::AgentModel;
+    use ag_agent::{AgentModel, ResponseStyle};
 
     use super::*;
     use crate::AppRepositories;
+
+    #[tokio::test]
+    async fn project_response_style_loads_persisted_value_and_defaults_invalid_values() {
+        // Arrange
+        let repositories = AppRepositories::in_memory().await.expect("db should open");
+        let project_id = repositories
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
+            .await
+            .expect("failed to insert project");
+        let missing_style = repositories
+            .settings()
+            .load_project_response_style(project_id, SettingName::DefaultResponseStyle)
+            .await
+            .expect("missing style should load");
+        repositories
+            .settings()
+            .upsert_project_setting(
+                project_id,
+                SettingName::DefaultResponseStyle,
+                ResponseStyle::Detailed.as_str(),
+            )
+            .await
+            .expect("detailed style should persist");
+
+        // Act
+        let detailed_style = repositories
+            .settings()
+            .load_project_response_style(project_id, SettingName::DefaultResponseStyle)
+            .await
+            .expect("detailed style should load");
+        repositories
+            .settings()
+            .upsert_project_setting(project_id, SettingName::DefaultResponseStyle, "invalid")
+            .await
+            .expect("invalid fixture should persist");
+        let invalid_style = repositories
+            .settings()
+            .load_project_response_style(project_id, SettingName::DefaultResponseStyle)
+            .await
+            .expect("invalid style should default");
+
+        // Assert
+        assert_eq!(missing_style, ResponseStyle::Balanced);
+        assert_eq!(detailed_style, ResponseStyle::Detailed);
+        assert_eq!(invalid_style, ResponseStyle::Balanced);
+    }
 
     #[tokio::test]
     /// Verifies project setting batches roll back when any setting write fails.

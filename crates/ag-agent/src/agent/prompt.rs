@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ag_protocol::{
-    ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPromptAttachment,
+    ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt, TurnPromptAttachment,
     TurnPromptContentPart, prepend_protocol_instructions as protocol_prepend_instructions,
     prepend_protocol_refresh_reminder as protocol_prepend_refresh_reminder,
     split_turn_prompt_content,
@@ -14,6 +14,7 @@ use askama::Template;
 use super::backend::{AgentBackendError, BuildCommandRequest};
 use super::instruction::InstructionDeliveryMode;
 use crate::channel::PersonalityPromptUpdate;
+use crate::model::session::ResponseStyle;
 
 /// Askama view model for rendering resume prompts with prior transcript text.
 #[derive(Template)]
@@ -33,6 +34,16 @@ struct PersonalityPromptTemplate<'a> {
     heading: &'a str,
     /// Personality instructions or clearing guidance.
     personality: &'a str,
+    /// Remaining turn prompt content.
+    prompt: &'a str,
+}
+
+/// Askama view model for placing response-style guidance before a turn.
+#[derive(Template)]
+#[template(path = "response_style_prompt.md", escape = "none")]
+struct ResponseStylePromptTemplate<'a> {
+    /// Guidance corresponding to the selected response style.
+    instruction: &'a str,
     /// Remaining turn prompt content.
     prompt: &'a str,
 }
@@ -162,6 +173,24 @@ pub(crate) fn build_cli_prompt_text(
         schema_instruction_mode,
         workspace_root: request.folder,
     })
+}
+
+/// Prepends response-style guidance to interactive session turns.
+pub(crate) fn apply_response_style_prompt(
+    mut prompt: TurnPrompt,
+    protocol_profile: ProtocolRequestProfile,
+    response_style: ResponseStyle,
+) -> Result<TurnPrompt, AgentBackendError> {
+    if protocol_profile == ProtocolRequestProfile::SessionTurn {
+        let prompt_text = prompt.agent_text();
+        let template = ResponseStylePromptTemplate {
+            instruction: response_style.prompt_instruction(),
+            prompt: &prompt_text,
+        };
+        prompt.text = render_template("response_style_prompt.md", &template)?;
+    }
+
+    Ok(prompt)
 }
 
 /// Builds a full prompt payload to stream over stdin for CLI providers.
@@ -394,6 +423,58 @@ mod tests {
     /// Collapses rendered prompt whitespace for semantic assertions.
     fn normalize_prompt(prompt: &str) -> String {
         prompt.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn response_style_prompt_wraps_session_turns_and_preserves_attachments() {
+        // Arrange
+        let attachment = TurnPromptAttachment {
+            local_image_path: PathBuf::from("/tmp/example.png"),
+            placeholder: "[Image #1]".to_string(),
+        };
+
+        // Act
+        let prompts = ResponseStyle::ALL.map(|response_style| {
+            apply_response_style_prompt(
+                TurnPrompt {
+                    attachments: vec![attachment.clone()],
+                    text: "Explain [Image #1]".to_string(),
+                    text_source: ag_protocol::TurnPromptTextSource::UserPrompt,
+                },
+                ProtocolRequestProfile::SessionTurn,
+                response_style,
+            )
+            .expect("response style prompt should render")
+        });
+
+        // Assert
+        for (prompt, response_style) in prompts.iter().zip(ResponseStyle::ALL) {
+            assert!(prompt.text.starts_with("# Response Style\n\n"));
+            assert!(prompt.text.contains(response_style.prompt_instruction()));
+            assert!(prompt.text.ends_with("Explain [Image #1]"));
+            assert_eq!(prompt.attachments, vec![attachment.clone()]);
+            assert_eq!(
+                prompt.text_source,
+                ag_protocol::TurnPromptTextSource::UserPrompt
+            );
+        }
+    }
+
+    #[test]
+    fn response_style_prompt_leaves_utility_prompts_unchanged() {
+        // Arrange
+        let prompt = TurnPrompt::from_agent_data("Generate a title".to_string());
+
+        // Act
+        let styled_prompt = apply_response_style_prompt(
+            prompt.clone(),
+            ProtocolRequestProfile::UtilityPrompt,
+            ResponseStyle::Detailed,
+        )
+        .expect("utility prompt should remain valid");
+
+        // Assert
+        assert_eq!(styled_prompt, prompt);
     }
 
     #[test]

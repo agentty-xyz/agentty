@@ -23,9 +23,9 @@ pub use message::{
     normalized_message_content, stored_message_content,
 };
 pub use model::{
-    ForgeKind, PermissionMode, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session,
-    SessionId, SessionRole, SessionSettings, SessionStatus, SpeedMode,
-    activity_day_key_with_offset,
+    ForgeKind, PermissionMode, ResponseStyle, ReviewRequest, ReviewRequestState,
+    ReviewRequestSummary, Session, SessionId, SessionRole, SessionSettings, SessionStatus,
+    SpeedMode, activity_day_key_with_offset,
 };
 pub use orchestration::{
     IntegrationApproach, MAX_AUTOMATED_REVIEW_ITERATIONS, OrchestrationPlanTask,

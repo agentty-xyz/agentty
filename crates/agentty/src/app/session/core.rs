@@ -18,7 +18,7 @@ pub(crate) use super::workflow::task::{
 use super::workflow::worker::SessionWorkerService;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppServices, SessionState, setting};
-use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
+use crate::domain::agent::{AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
@@ -55,6 +55,8 @@ pub(crate) struct SessionCreationSettings {
     pub(crate) personality_id: Option<String>,
     /// Session-scoped reasoning level.
     pub(crate) reasoning_level: ReasoningLevel,
+    /// Session-scoped response style.
+    pub(crate) response_style: ResponseStyle,
     /// Role assigned to the new session.
     pub(crate) role: crate::domain::session::SessionRole,
     /// Session-scoped response-speed preference.
@@ -478,6 +480,23 @@ impl SessionManager {
             .find(|session| session.id == session_id)
         {
             session.reasoning_level_override = Some(reasoning_level);
+        }
+    }
+
+    /// Applies one persisted response-style update to the matching in-memory
+    /// session snapshot.
+    pub(crate) fn apply_session_response_style_updated(
+        &mut self,
+        session_id: &str,
+        response_style: ResponseStyle,
+    ) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.response_style = response_style;
         }
     }
 

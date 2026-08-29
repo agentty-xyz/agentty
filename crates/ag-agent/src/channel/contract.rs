@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use crate::model::agent::ReasoningLevel;
 use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
+use crate::model::session::{ResponseStyle, SpeedMode};
 
 /// Boxed async result used by [`AgentChannel`] trait methods.
 pub type AgentFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -270,6 +270,8 @@ pub struct TurnRequest {
     /// Canonical request kind that drives transport behavior and protocol
     /// semantics for this turn.
     pub request_kind: AgentRequestKind,
+    /// Preferred amount of detail in user-facing session responses.
+    pub response_style: ResponseStyle,
     /// Response-speed preference for the turn.
     pub speed_mode: SpeedMode,
 }
