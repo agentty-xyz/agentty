@@ -134,6 +134,8 @@ workflows.
 
 Apply the smallest documentation update matching the change:
 
+- Keep documentation short and conceptual unless detailed implementation documentation
+  is explicitly requested.
 - Keep Rust doc comments current for touched public APIs and related elements.
 - Update `docs/site/content/docs/` for user-visible behavior and
   `docs/site/content/docs/architecture/` for ownership, boundaries, or runtime flow.
