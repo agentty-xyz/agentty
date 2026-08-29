@@ -704,6 +704,27 @@ impl<'a> SessionOutput<'a> {
         )
     }
 
+    /// Builds borrowed paint lines only for transcript rows in the viewport.
+    ///
+    /// The cached lines are already wrapped to the output width, so handing
+    /// the full transcript back to `Paragraph` would rebuild borrowed line and
+    /// span vectors for every off-screen row on each scroll frame. Slicing
+    /// before borrowing keeps paint preparation proportional to terminal
+    /// height while retaining `Paragraph`'s established cell semantics.
+    fn visible_paint_lines<'line>(
+        output_area: Rect,
+        lines: &'line [Line<'static>],
+        final_scroll: u16,
+    ) -> Vec<Line<'line>> {
+        let inner_area = Self::session_output_inner_area(output_area);
+        let first_visible_index = usize::from(final_scroll).min(lines.len());
+        let last_visible_index = first_visible_index
+            .saturating_add(usize::from(inner_area.height))
+            .min(lines.len());
+
+        text_util::borrowed_paint_lines(&lines[first_visible_index..last_visible_index])
+    }
+
     /// Returns the width used to wrap output while leaving padding before the
     /// scrollbar in the final panel column.
     fn scrollbar_layout_area(output_area: Rect) -> Rect {
@@ -785,14 +806,12 @@ impl Component for SessionOutput<'_> {
             })
             .collect::<Vec<_>>();
 
-        let paint_lines = text_util::borrowed_paint_lines(&layout.lines);
-        let paragraph = Paragraph::new(paint_lines)
-            .block(
-                Block::default()
-                    .borders(session_format::session_output_panel_borders())
-                    .border_style(session_format::session_output_panel_border_style(status)),
-            )
-            .scroll((final_scroll, 0));
+        let paint_lines = Self::visible_paint_lines(output_area, &layout.lines, final_scroll);
+        let paragraph = Paragraph::new(paint_lines).block(
+            Block::default()
+                .borders(session_format::session_output_panel_borders())
+                .border_style(session_format::session_output_panel_border_style(status)),
+        );
 
         f.render_widget(paragraph, output_area);
 
@@ -823,11 +842,7 @@ impl Component for SessionOutput<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
-
-    use ratatui::layout::Alignment;
-    use ratatui::style::{Color, Style};
-    use ratatui::text::Span;
+    use ratatui::style::Color;
 
     use super::*;
     use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -1764,26 +1779,25 @@ mod tests {
     }
 
     #[test]
-    fn test_borrowed_paint_lines_reuse_cached_span_content() {
+    fn test_visible_paint_lines_skip_rows_outside_viewport() {
         // Arrange
-        let cached_lines = [Line {
-            alignment: Some(Alignment::Center),
-            spans: vec![Span {
-                content: Cow::Owned("cached span text".to_string()),
-                style: Style::default(),
-            }],
-            style: Style::default(),
-        }];
+        let cached_lines = [
+            Line::from("hidden before viewport"),
+            Line::from("visible first row"),
+            Line::from("visible second row"),
+            Line::from("hidden after viewport"),
+        ];
 
         // Act
-        let paint_lines = text_util::borrowed_paint_lines(&cached_lines);
+        let paint_lines =
+            SessionOutput::visible_paint_lines(Rect::new(0, 0, 30, 4), &cached_lines, 1);
+        let rendered_text = paint_lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(paint_lines[0].alignment, Some(Alignment::Center));
-        assert!(matches!(
-            paint_lines[0].spans[0].content,
-            Cow::Borrowed("cached span text")
-        ));
+        assert_eq!(rendered_text, ["visible first row", "visible second row"]);
     }
 
     #[test]
