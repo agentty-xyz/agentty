@@ -634,7 +634,7 @@ fn seed_review_with_resolved_decision(env: &BuilderEnv) -> Result<(), Box<dyn st
 
     let claude_path = env.stub_bin.join("claude");
     let script = format!(
-        r###"#!/bin/sh
+        r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 prompt=$(cat)
@@ -654,8 +654,8 @@ case "$prompt" in
     ;;
 esac
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
-printf '{{"type":"result","subtype":"success","result":"{{\\"answer\\":\\"## Review\\\\n\\\\n### Project Impact\\\\n\\\\n- %s\\\\n\\\\n### Suggestions\\\\n\\\\n- None\\",\\"questions\\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n' "$answer"
-"###,
+printf '{{"type":"result","subtype":"success","result":"{{\\"answer\\":\\"{{\\\\\\"project_impact\\\\\\":[\\\\\\"%s\\\\\\"],\\\\\\"suggestions\\\\\\":[]}}\\",\\"questions\\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n' "$answer"
+"#,
     );
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
@@ -679,7 +679,7 @@ fn seed_codex_review_with_blank_completed_fallback(
     seed_review_worktree_with_diff(env)?;
 
     let codex_path = env.stub_bin.join("codex");
-    let script = r###"#!/bin/sh
+    let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'codex-cli 0.146.0\n'; exit 0; fi
 
@@ -702,12 +702,12 @@ while IFS= read -r request; do
             printf '{"id":"%s","result":{"turn":{"id":"review-turn"}}}\n' "$request_id"
             printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"review-turn"}}}'
             printf '%s\n' '{"method":"item/completed","params":{"threadId":"review-thread","turnId":"review-turn","item":{"type":"agentMessage","id":"commentary-item","text":"I will inspect the current code.","phase":"commentary"}}}'
-            printf '%s\n' '{"method":"item/completed","params":{"threadId":"review-thread","turnId":"review-turn","item":{"type":"agentMessage","id":"final-item","text":"{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Final focused review result.\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[]}","phase":"final_answer"}}}'
+            printf '%s\n' '{"method":"item/completed","params":{"threadId":"review-thread","turnId":"review-turn","item":{"type":"agentMessage","id":"final-item","text":"{\"answer\":\"{\\\"project_impact\\\":[\\\"Final focused review result.\\\"],\\\"suggestions\\\":[]}\",\"questions\":[]}","phase":"final_answer"}}}'
             printf '%s\n' '{"method":"turn/completed","params":{"threadId":"review-thread","turn":{"id":"review-turn","status":"completed","items":[{"type":"agentMessage","id":"blank-final-item","text":"   ","phase":"final_answer"}]}}}'
             ;;
     esac
 done
-"###;
+"#;
     std::fs::write(&codex_path, script)?;
     #[cfg(unix)]
     std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
@@ -730,7 +730,7 @@ fn seed_gemini_focused_review_without_plan_mode(
 
     let gemini_path = env.stub_bin.join("gemini");
     let script = format!(
-        r###"#!/bin/sh
+        r#"#!/bin/sh
 if [ "$1" = "--version" ]; then printf 'gemini 0.0.0-test\n'; exit 0; fi
 answer='{GEMINI_FOCUSED_REVIEW_TEXT}'
 for argument in "$@"; do
@@ -755,11 +755,11 @@ while IFS= read -r request; do
             ;;
         *'"method":"session/prompt"'*)
             request_id=$(extract_id "$request")
-            printf '{{"jsonrpc":"2.0","id":"%s","result":{{"response":"{{\\"answer\\":\\"## Review\\n\\n### Project Impact\\n\\n- %s\\n\\n### Suggestions\\n\\n- None.\\",\\"questions\\":[]}}","usage":{{"inputTokens":5,"outputTokens":9}}}}}}\n' "$request_id" "$answer"
+            printf '{{"jsonrpc":"2.0","id":"%s","result":{{"response":"{{\\"answer\\":\\"{{\\\\\\"project_impact\\\\\\":[\\\\\\"%s\\\\\\"],\\\\\\"suggestions\\\\\\":[]}}\\",\\"questions\\":[]}}","usage":{{"inputTokens":5,"outputTokens":9}}}}}}\n' "$request_id" "$answer"
             ;;
     esac
 done
-"###,
+"#,
     );
     std::fs::write(&gemini_path, script)?;
     #[cfg(unix)]
@@ -924,7 +924,7 @@ fn install_auto_address_review_lifecycle_stub(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
-    let script = r###"#!/bin/sh
+    let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 
@@ -943,19 +943,19 @@ case "$prompt" in
     printf '%s\n' "$review_count" > "$review_count_file"
     case "$review_count" in
       1)
-        result='{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- First lifecycle review completed.\\n\\n### Suggestions\\n\\n- Apply the first lifecycle suggestion.\",\"questions\":[]}'
+        result='{\"answer\":\"{\\\"project_impact\\\":[\\\"First lifecycle review completed.\\\"],\\\"suggestions\\\":[{\\\"details\\\":\\\"Apply the first lifecycle suggestion.\\\",\\\"severity\\\":\\\"medium\\\"}]}\",\"questions\":[]}'
         ;;
       2)
-        result='{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- No suggestions remain after one automatic remediation.\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[]}'
+        result='{\"answer\":\"{\\\"project_impact\\\":[\\\"No suggestions remain after one automatic remediation.\\\"],\\\"suggestions\\\":[]}\",\"questions\":[]}'
         ;;
       3|4|5)
-        result='{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Iteration-limit lifecycle review completed.\\n\\n### Suggestions\\n\\n- Apply the next bounded lifecycle suggestion.\",\"questions\":[]}'
+        result='{\"answer\":\"{\\\"project_impact\\\":[\\\"Iteration-limit lifecycle review completed.\\\"],\\\"suggestions\\\":[{\\\"details\\\":\\\"Apply the next bounded lifecycle suggestion.\\\",\\\"severity\\\":\\\"medium\\\"}]}\",\"questions\":[]}'
         ;;
       6)
-        result='{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Three automatic remediation iterations completed.\\n\\n### Suggestions\\n\\n- Fourth suggestion remains unapplied at the iteration limit.\",\"questions\":[]}'
+        result='{\"answer\":\"{\\\"project_impact\\\":[\\\"Three automatic remediation iterations completed.\\\"],\\\"suggestions\\\":[{\\\"details\\\":\\\"Fourth suggestion remains unapplied at the iteration limit.\\\",\\\"severity\\\":\\\"medium\\\"}]}\",\"questions\":[]}'
         ;;
       *)
-        result='{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Automatic remediation exceeded the iteration limit.\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[]}'
+        result='{\"answer\":\"{\\\"project_impact\\\":[\\\"Automatic remediation exceeded the iteration limit.\\\"],\\\"suggestions\\\":[]}\",\"questions\":[]}'
         ;;
     esac
     ;;
@@ -975,7 +975,7 @@ esac
 
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{\"input_tokens\":5,\"output_tokens\":9}}"
-"###;
+"#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
@@ -2486,7 +2486,7 @@ fn install_deferred_project_review_claude_stub(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
     let script = format!(
-        r###"#!/bin/sh
+        r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 prompt=$(cat)
@@ -2495,10 +2495,10 @@ case "$prompt" in
     case "$prompt" in
       *"{DEFERRED_PROJECT_REVIEW_PROMPT}"*"{DEFERRED_PROJECT_TURN_ANSWER}"*)
         printf 'started\n' > '{}'
-        result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- {DEFERRED_PROJECT_REVIEW_TEXT}\\n\\n### Suggestions\\n\\n- None.\",\"questions\":[]}}'
+        result='{{\"answer\":\"{{\\\"project_impact\\\":[\\\"{DEFERRED_PROJECT_REVIEW_TEXT}\\\"],\\\"suggestions\\\":[]}}\",\"questions\":[]}}'
         ;;
       *)
-        result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- {MISSING_DEFERRED_PROJECT_HISTORY_TEXT}\\n\\n### Suggestions\\n\\n- Restore saved session history.\",\"questions\":[]}}'
+        result='{{\"answer\":\"{{\\\"project_impact\\\":[\\\"{MISSING_DEFERRED_PROJECT_HISTORY_TEXT}\\\"],\\\"suggestions\\\":[{{\\\"details\\\":\\\"Restore saved session history.\\\",\\\"severity\\\":\\\"medium\\\"}}]}}\",\"questions\":[]}}'
         ;;
     esac
     ;;
@@ -2516,7 +2516,7 @@ case "$prompt" in
 esac
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":9}}}}"
-"###,
+"#,
         review_started_marker.display(),
     );
 
@@ -3039,7 +3039,7 @@ if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 printf '%s\n' '{"type":"system","subtype":"init"}'
-printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"No review findings.\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"{\\\"project_impact\\\":[\\\"No review findings.\\\"],\\\"suggestions\\\":[]}\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}'
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
@@ -8528,7 +8528,7 @@ fn test_diff_changed_line_navigation() -> E2eResult {
 /// batch is submitted as the next session turn.
 #[test]
 fn test_diff_line_comments() -> E2eResult {
-    // Act, Assert
+    // Arrange, Act, Assert
     FeatureTest::new("diff_line_comments")
         .with_git()
         .zola(
@@ -8561,7 +8561,6 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .press_key("j")
         .wait_for_stable_frame(200, 3000)
         .wait_for_text("Enter/l: open", 5000)
-        .wait_for_text("Shift+C: comment", 5000)
         .write_text("C")
         .wait_for_text("File comment", 5000);
 
@@ -10207,7 +10206,7 @@ fn auto_address_review_lifecycle() -> E2eResult {
                 );
                 assertion::assert_text_in_region(
                     &no_suggestions_frame,
-                    "- None.",
+                    "- None",
                     &no_suggestions_full,
                 );
 

@@ -238,14 +238,14 @@ fn seed_orchestration_review_worktrees(env: &BuilderEnv) -> E2eResult {
 fn install_auto_review_claude_stub(env: &BuilderEnv) -> E2eResult {
     let claude_path = env.stub_bin.join("claude");
     let script = format!(
-        r###"#!/bin/sh
+        r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 input=$(cat)
 case "$input" in
   *"Review the Git diff for display in a terminal UI."*)
     sleep 30
-    result='{{\"answer\":\"## Review\\n\\n### Project Impact\\n\\n- Managed worker review completed.\\n\\n### Suggestions\\n\\n- None\",\"questions\":[]}}'
+    result='{{\"answer\":\"{{\\\"project_impact\\\":[\\\"Managed worker review completed.\\\"],\\\"suggestions\\\":[]}}\",\"questions\":[]}}'
     ;;
   *)
     result='{{\"answer\":\"{CONTROLLER_REVISION_RESPONSE}\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"verification_verdicts\":[]}}'
@@ -253,7 +253,7 @@ case "$input" in
 esac
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '{{"type":"result","subtype":"success","result":"%s","usage":{{"input_tokens":5,"output_tokens":9}}}}\n' "$result"
-"###,
+"#,
     );
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]

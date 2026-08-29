@@ -4,6 +4,7 @@
 use serde_json::Value;
 
 use super::model::{AgentResponse, questions_field_description, subtasks_field_description};
+use super::review::FocusedReview;
 
 /// Selects how a provider transport lists `required` schema properties.
 ///
@@ -54,6 +55,22 @@ pub fn agent_response_output_schema_json(required_policy: SchemaRequiredPolicy) 
     let schema = agent_response_output_schema(required_policy);
 
     stringify_schema_json(&schema)
+}
+
+/// Returns a pretty-printed JSON Schema string for focused-review prompt
+/// instructions.
+///
+/// Focused review uses the shared top-level [`AgentResponse`] transport and
+/// carries this request-specific object inside `answer`. Embedding the
+/// self-descriptive schema in the utility prompt keeps its structured fields
+/// explicit without adding focused-review-only fields to every agent turn.
+pub fn focused_review_json_schema_json() -> String {
+    let schema = schemars::schema_for!(FocusedReview);
+    let mut schema_value = serde_json::to_value(schema).unwrap_or(Value::Null);
+
+    inject_additional_properties_false(&mut schema_value);
+
+    stringify_schema_json(&schema_value)
 }
 
 /// Returns the self-descriptive JSON Schema for the response payload.
@@ -499,6 +516,43 @@ mod tests {
 
         // Assert
         assert_eq!(parsed_schema, schema_value);
+    }
+
+    #[test]
+    fn focused_review_json_schema_describes_structured_findings() {
+        // Arrange / Act
+        let schema_json = focused_review_json_schema_json();
+        let schema: Value =
+            serde_json::from_str(&schema_json).expect("focused review schema should parse");
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("focused review properties should exist");
+        let suggestion_properties =
+            schema_definition_properties(&schema, "FocusedReviewSuggestion");
+
+        // Assert
+        assert_eq!(
+            schema.get("title").and_then(Value::as_str),
+            Some("FocusedReview")
+        );
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        assert!(properties.contains_key("project_impact"));
+        assert!(properties.contains_key("suggestions"));
+        assert_eq!(
+            suggestion_properties.get("additionalProperties"),
+            None,
+            "definition properties should contain only fields"
+        );
+        assert!(suggestion_properties.contains_key("details"));
+        assert!(suggestion_properties.contains_key("severity"));
+        assert_eq!(
+            schema["$defs"]["FocusedReviewSuggestion"]["additionalProperties"],
+            Value::Bool(false)
+        );
     }
 
     #[test]
