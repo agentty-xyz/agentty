@@ -19,6 +19,8 @@ flowchart LR
     H --> M["Muse"]
     H --> K["Kimi"]
     H --> Q["Qwen"]
+    H --> X["Codex"]
+    X --> A["ChatGPT endpoint"]
 ```
 
 ## Core features
@@ -46,6 +48,29 @@ agentty/
 The crates separate the public API, protocol types, runtime behavior, and interactive
 CLI. A provider-neutral model contract keeps Muse, Kimi, Qwen, and future adapters
 behind the same structured-output and tool-calling boundary.
+
+### Codex subscription backend
+
+Codex is a separate `ModelClient` backend because it uses ChatGPT OAuth and the ChatGPT
+Codex Responses endpoint rather than an API-key endpoint. Applications construct it
+through `Codex` and `CodexConfig`, outside the API-key-oriented `ModelProvider` catalog.
+The experimental backend reads `CODEX_HOME/auth.json`, falling back to
+`~/.codex/auth.json`, and accepts only `chatgpt` auth. It ignores a compatibility API
+key stored alongside OAuth tokens but rejects `api_key` mode. It sends the access token
+and resolved account ID to the pinned `https://chatgpt.com/backend-api/codex/responses`
+URL with redirects disabled and both credential headers marked sensitive. The endpoint
+is not configurable, preventing token disclosure to another host. ID-token claims supply
+missing account IDs and required FedRAMP routing. Authentication opens and inspects one
+nonblocking file handle on Tokio's blocking pool and rejects malformed tokens,
+non-regular files, and files larger than 64 KiB before sending a request. Each client
+binds to its first account ID, accepting refreshed tokens only for that account.
+
+Requests are stateless and streaming, translate system messages into Responses
+instructions, and require strict object-schema output. Incremental decoding enforces
+request, idle, wire, event, and decoded-content limits and terminates on
+`response.completed`. The backend does not refresh OAuth tokens and rejects harness tool
+definitions. It is unofficial and must only be used where the account, workspace, plan,
+and applicable OpenAI terms permit.
 
 ## Session management
 

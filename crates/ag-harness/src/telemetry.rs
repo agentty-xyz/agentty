@@ -45,6 +45,7 @@ pub(crate) const ERROR_TOOL_CALL_LIMIT: &str = "tool_call_limit";
 pub(crate) const ERROR_TOOL_DENIED: &str = "tool_denied";
 pub(crate) const ERROR_TOOL_EXECUTION: &str = "tool_execution_error";
 pub(crate) const ERROR_REPOSITORY_REQUIRED: &str = "repository_required";
+pub(crate) const ERROR_UNSUPPORTED_CAPABILITY: &str = "unsupported_capability";
 pub(crate) const ERROR_UNSUPPORTED_OUTPUT: &str = "unsupported_output";
 pub(crate) const INSTRUMENTATION_SCOPE: &str = "ag-harness";
 pub(crate) const OPERATION_CHAT: &str = "chat";
@@ -54,6 +55,7 @@ pub(crate) const OUTPUT_JSON: &str = "json";
 pub(crate) const PROVIDER_ALIBABA_CLOUD: &str = "alibaba_cloud";
 pub(crate) const PROVIDER_META: &str = "meta";
 pub(crate) const PROVIDER_MOONSHOT_AI: &str = "moonshot_ai";
+pub(crate) const PROVIDER_OPENAI: &str = "openai";
 pub(crate) const TOKEN_BOUNDARIES: [f64; 14] = [
     1.0,
     4.0,

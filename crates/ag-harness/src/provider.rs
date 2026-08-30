@@ -1,6 +1,7 @@
 //! Provider-specific model adapters.
 
 mod catalog;
+mod codex;
 mod kimi;
 mod muse;
 mod qwen;
@@ -8,6 +9,8 @@ mod qwen;
 pub use catalog::{
     ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError,
 };
+pub(crate) use codex::CodexBackend;
+pub use codex::{Codex, CodexConfig};
 pub(crate) use kimi::POLICY as KIMI_POLICY;
 pub use kimi::{KIMI_K2_6, KimiConfig};
 pub(crate) use muse::POLICY as MUSE_POLICY;

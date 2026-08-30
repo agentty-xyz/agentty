@@ -41,8 +41,10 @@ mod tests {
     use super::*;
     use crate::chat_completion::{
         ChatCompletion, ChatCompletionBackend, ChatCompletionClient, ChatCompletionError,
-        ChatCompletionRequest, ERROR_BODY_LIMIT_BYTES, RESPONSE_ENVELOPE_LIMIT_BYTES,
-        STRUCTURED_OUTPUT_INSTRUCTION, SUCCESS_BODY_LIMIT_BYTES,
+        ChatCompletionRequest, STRUCTURED_OUTPUT_INSTRUCTION,
+    };
+    use crate::transport::{
+        ERROR_BODY_LIMIT_BYTES, RESPONSE_ENVELOPE_LIMIT_BYTES, SUCCESS_BODY_LIMIT_BYTES,
     };
     use crate::{model, schema_contract, tool};
 
@@ -572,7 +574,7 @@ mod tests {
         // Assert
         assert!(matches!(
             output,
-            crate::chat_completion::GeneratedResponse::Output { output, .. }
+            crate::model::GeneratedResponse::Output { output, .. }
                 if output == r#"{"name":"Ada"}"#
         ));
     }

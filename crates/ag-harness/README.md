@@ -45,6 +45,27 @@ construct a provider client from its standard environment variables. The catalog
 known model identifiers, credential variables, endpoint variables, and provider defaults
 so applications do not need provider-specific construction branches.
 
+For ChatGPT-subscription-backed Codex, install the `codex` executable and authenticate
+it with ChatGPT before constructing the model directly:
+
+```rust
+use ag_harness::{Codex, CodexConfig, Harness};
+
+let model_name = std::env::var("CODEX_MODEL")?;
+let model = Codex::new(CodexConfig::new(model_name))?;
+let output = Harness::new(model).run(prompt, output_schema).await?;
+```
+
+This experimental v0 reads ChatGPT OAuth credentials from `CODEX_HOME/auth.json` (or
+`~/.codex/auth.json`) and sends a streaming Responses request directly to the ChatGPT
+Codex endpoint. It rejects API-key authentication rather than silently incurring API
+charges. The endpoint is unofficial and may change; use it only where the account,
+workspace, plan, and applicable OpenAI terms permit. The adapter does not refresh OAuth
+tokens, so reauthenticate with Codex after an expired-token response. Set `CODEX_MODEL`
+only to a model verified for the account and the `ag-harness` originator; API model
+availability does not establish routing through this unofficial endpoint. Harness tool
+definitions are not supported by this v0 adapter.
+
 Attach `with_lifecycle_observer()` to receive ordered metadata-only lifecycle events.
 After installing an OpenTelemetry meter provider, attach `LifecycleMetrics::new()` to
 project standard agent and client-side tool metrics. Use `LifecycleObserverSet` to send

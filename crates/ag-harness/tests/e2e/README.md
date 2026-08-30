@@ -4,6 +4,16 @@ These ignored tests make live requests to model providers and are excluded from 
 workspace test execution. Run them manually from the repository root with the required
 provider credentials.
 
+## Codex
+
+Authenticate the `codex` executable with ChatGPT first. This routing smoke test probes
+`gpt-5.6-luna` with the `ag-harness` originator; model availability depends on the
+account and is not implied by API availability.
+
+```sh
+cargo test --locked -p ag-harness --test e2e codex::test_codex_luna_with_ag_harness_originator -- --exact --ignored --nocapture
+```
+
 ## Kimi
 
 ```sh

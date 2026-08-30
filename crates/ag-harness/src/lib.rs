@@ -17,6 +17,7 @@ mod schema_contract;
 mod telemetry;
 mod tool;
 mod trace;
+mod transport;
 mod write;
 
 pub use file_system::{FileSystem, LocalFileSystem};
@@ -33,9 +34,9 @@ pub use model::{
     ModelWithMetadata,
 };
 pub use provider::{
-    KIMI_K2_6, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, ModelConfiguration,
-    ModelConfigurationError, ModelProvider, ModelProviderParseError, Muse, MuseConfig, QWEN_PLUS,
-    QwenConfig,
+    Codex, CodexConfig, KIMI_K2_6, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR,
+    ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError, Muse,
+    MuseConfig, QWEN_PLUS, QwenConfig,
 };
 pub use read::{ReadError, ReadOutput};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
