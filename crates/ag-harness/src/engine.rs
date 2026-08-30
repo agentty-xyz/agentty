@@ -35,7 +35,15 @@ impl Engine<'_> {
         request: ModelRequest,
         turn_id: Option<LifecycleId>,
         journal: Option<WriteJournal>,
-    ) -> Result<(TurnOutcome, Vec<ModelMessage>, Option<String>), TurnError> {
+    ) -> Result<
+        (
+            TurnOutcome,
+            Vec<ModelMessage>,
+            Option<String>,
+            Option<String>,
+        ),
+        TurnError,
+    > {
         let started_at = Instant::now();
         let (mut request, read_tool, write_tool) = self.prepare_request(request, journal)?;
         let mut completed_tool_calls = 0_usize;
@@ -47,6 +55,7 @@ impl Engine<'_> {
             let (
                 response,
                 activities,
+                provider_context,
                 provider_session_id,
                 native_resume_rejected,
                 reasoning_content,
@@ -55,6 +64,9 @@ impl Engine<'_> {
                 .await?;
             if native_resume_rejected || provider_session_id.is_some() {
                 request.set_provider_session_id(provider_session_id);
+            }
+            if provider_context.is_some() {
+                request.set_provider_context(provider_context);
             }
             model_request_index = model_request_index
                 .saturating_add(u64::try_from(activities.len()).unwrap_or(u64::MAX));
@@ -66,10 +78,12 @@ impl Engine<'_> {
                     let report = TurnReport::new(started_at.elapsed(), model_requests, tool_calls);
 
                     let provider_session_id = request.provider_session_id().map(str::to_string);
+                    let provider_context = request.provider_context().map(str::to_string);
 
                     return Ok((
                         TurnOutcome::new(output, report),
                         request.into_messages(),
+                        provider_context,
                         provider_session_id,
                     ));
                 }
@@ -191,6 +205,7 @@ impl Engine<'_> {
             ModelResponse,
             Vec<ModelRequestActivity>,
             Option<String>,
+            Option<String>,
             bool,
             Option<String>,
         ),
@@ -201,13 +216,16 @@ impl Engine<'_> {
             .complete_model_attempt(request.clone(), model_request_index, turn_id)
             .await
         {
-            Ok((response, activity, provider_session_id, reasoning_content)) => Ok((
-                response,
-                vec![activity],
-                provider_session_id,
-                false,
-                reasoning_content,
-            )),
+            Ok((response, activity, provider_context, provider_session_id, reasoning_content)) => {
+                Ok((
+                    response,
+                    vec![activity],
+                    provider_context,
+                    provider_session_id,
+                    false,
+                    reasoning_content,
+                ))
+            }
             Err(ModelAttemptError {
                 duration,
                 error: ModelError::ResumeUnavailable,
@@ -224,15 +242,20 @@ impl Engine<'_> {
                     .complete_model_attempt(replay_request, replay_index, turn_id)
                     .await
                 {
-                    Ok((response, replay_activity, provider_session_id, reasoning_content)) => {
-                        Ok((
-                            response,
-                            vec![rejected_activity, replay_activity],
-                            provider_session_id,
-                            true,
-                            reasoning_content,
-                        ))
-                    }
+                    Ok((
+                        response,
+                        replay_activity,
+                        provider_context,
+                        provider_session_id,
+                        reasoning_content,
+                    )) => Ok((
+                        response,
+                        vec![rejected_activity, replay_activity],
+                        provider_context,
+                        provider_session_id,
+                        true,
+                        reasoning_content,
+                    )),
                     Err(failure) => Err(ResumeFailure::Replay {
                         source: failure.error,
                     }
@@ -260,6 +283,7 @@ impl Engine<'_> {
             ModelRequestActivity,
             Option<String>,
             Option<String>,
+            Option<String>,
         ),
         ModelAttemptError,
     > {
@@ -272,19 +296,20 @@ impl Engine<'_> {
             Some(model_lifecycle) => model_lifecycle.scope(operation).await,
             None => operation.await,
         };
-        let (response, completion, provider_session_id, reasoning_content) = match completion {
-            Ok(completion) => completion.into_parts(),
-            Err(error) => {
-                if let Some(model_lifecycle) = model_lifecycle {
-                    model_lifecycle.failed(error.error_type(), error.http_status());
-                }
+        let (response, completion, provider_context, provider_session_id, reasoning_content) =
+            match completion {
+                Ok(completion) => completion.into_parts(),
+                Err(error) => {
+                    if let Some(model_lifecycle) = model_lifecycle {
+                        model_lifecycle.failed(error.error_type(), error.http_status());
+                    }
 
-                return Err(ModelAttemptError {
-                    duration: started_at.elapsed(),
-                    error,
-                });
-            }
-        };
+                    return Err(ModelAttemptError {
+                        duration: started_at.elapsed(),
+                        error,
+                    });
+                }
+            };
         if let Some(output) = response.output()
             && let Err(error) = request.schema().validate_value(output)
         {
@@ -308,7 +333,13 @@ impl Engine<'_> {
             model_lifecycle.completed(completion, response_type);
         }
 
-        Ok((response, activity, provider_session_id, reasoning_content))
+        Ok((
+            response,
+            activity,
+            provider_context,
+            provider_session_id,
+            reasoning_content,
+        ))
     }
 
     async fn execute_tool_call(

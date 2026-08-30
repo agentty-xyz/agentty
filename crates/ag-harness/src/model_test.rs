@@ -700,6 +700,10 @@ fn classifies_model_errors_with_stable_telemetry_values() {
     );
     assert_eq!(ModelErrorType::InvalidResponse.as_str(), "invalid_response");
     assert_eq!(
+        ModelErrorType::UnsupportedCapability.as_str(),
+        "unsupported_capability"
+    );
+    assert_eq!(
         ModelErrorType::UnsupportedOutput.as_str(),
         "unsupported_output"
     );

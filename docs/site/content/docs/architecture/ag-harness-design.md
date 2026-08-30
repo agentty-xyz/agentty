@@ -40,6 +40,36 @@ selects a trusted Git executable outside the worktree. The companion CLI discove
 suitable executable or accepts `--git-executable`; the library never searches `PATH`.
 Repository tools enforce path containment and exclude Git metadata.
 
+## Codex subscription backend
+
+Codex uses a separate model backend because it authenticates with ChatGPT OAuth and
+calls the ChatGPT Codex Responses endpoint instead of an API-key endpoint. Applications
+construct it through `Codex` and `CodexConfig`, outside the API-key-oriented
+`ModelProvider` catalog.
+
+The experimental backend reads `CODEX_HOME/auth.json`, falling back to
+`~/.codex/auth.json`, and accepts only `chatgpt` authentication. It ignores a
+compatibility API key stored alongside OAuth tokens but rejects API-key mode. The
+endpoint is pinned, redirects are disabled, and credential headers are marked sensitive.
+ID-token claims supply missing account IDs and required FedRAMP routing. Authentication
+opens and inspects one nonblocking file handle on Tokio's blocking pool and rejects
+malformed tokens, non-regular files, and files larger than 64 KiB. Each client binds to
+its first account ID and accepts refreshed tokens only for that account.
+
+HTTP requests are stateless and streaming, translate system messages into Responses
+instructions, forward the turn's reasoning effort, and require strict object-schema
+output. The adapter requests encrypted reasoning items and retains them as opaque replay
+state beside each validated assistant message, preserving the Responses item-pairing
+contract across durable turns. Replay state includes a one-way account fingerprint so a
+resumed turn verifies the active ChatGPT workspace before sending retained prompts. The
+same fingerprint is stored on the session outside evictable history, so restart remains
+account-bound even when the latest replay item exceeds the history budget. Incremental
+decoding enforces request, idle, wire, event, output, and replay-state limits, prefers
+phase-aware completed items over aggregate text deltas, and terminates on
+`response.completed`. The backend does not refresh OAuth tokens and rejects harness tool
+definitions. It is unofficial and must only be used where the account, workspace, plan,
+and applicable OpenAI terms permit.
+
 ## Per-turn options
 
 `Harness::run_once_with_options` and `Session::send_with_options` accept a complete

@@ -250,7 +250,7 @@ impl Database {
         continuation: Option<&str>,
     ) -> Result<(), SessionError> {
         let owner = active_turn_owner(self, session_id, turn_position).await;
-        crate::store::SessionStore::complete_turn(self, &owner, messages, continuation).await
+        crate::store::SessionStore::complete_turn(self, &owner, messages, None, continuation).await
     }
 
     pub(crate) async fn fail_turn(

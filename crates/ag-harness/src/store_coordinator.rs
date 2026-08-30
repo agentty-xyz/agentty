@@ -137,11 +137,12 @@ impl SessionStore for AdmittedStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
+        provider_context: Option<&str>,
+        provider_session_id: Option<&str>,
     ) -> Result<(), SessionError> {
         self.settled(
             self.store
-                .complete_turn(owner, messages, continuation)
+                .complete_turn(owner, messages, provider_context, provider_session_id)
                 .await,
         )
     }

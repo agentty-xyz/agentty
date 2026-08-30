@@ -69,6 +69,13 @@ repos:
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|crates/ag-harness/(src/.*\.rs|tests/benchmark/.*\.rs))$
         pass_filenames: false
+      - id: cargo-check-ag-harness-e2e
+        name: cargo check ag-harness e2e
+        description: Compile-check the manual ag-harness live provider tests without executing them.
+        entry: cargo check -q --locked -p ag-harness --test e2e
+        language: system
+        files: (^|/)(Cargo\.toml|Cargo\.lock|crates/ag-harness/(src/.*\.rs|tests/e2e/.*\.rs))$
+        pass_filenames: false
       - id: clippy
         name: clippy
         description: Run strict clippy across all Rust targets and features, failing on warnings.
@@ -82,6 +89,13 @@ repos:
         entry: cargo clippy -q --locked -p ag-harness --test benchmark -- -D warnings
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|crates/ag-harness/(src/.*\.rs|tests/benchmark/.*\.rs))$
+        pass_filenames: false
+      - id: clippy-ag-harness-e2e
+        name: clippy ag-harness e2e
+        description: Lint the manual ag-harness live provider tests without executing them.
+        entry: cargo clippy -q --locked -p ag-harness --test e2e -- -D warnings
+        language: system
+        files: (^|/)(Cargo\.toml|Cargo\.lock|crates/ag-harness/(src/.*\.rs|tests/e2e/.*\.rs))$
         pass_filenames: false
       - id: test-workspace
         name: cargo nextest workspace

@@ -59,6 +59,7 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
                 &database,
                 candidate,
                 &[ModelMessage::Assistant("discard".into())],
+                None,
                 None
             )
             .await,

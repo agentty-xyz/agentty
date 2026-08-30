@@ -1,12 +1,12 @@
 use std::io::{self, Write};
 
-use ag_harness::{ModelClient, ModelRequest, OutputSchema};
+use ag_harness::{Model, ModelRequest, OutputSchema};
 use serde_json::{Value, json};
 
 use crate::DynError;
 
 /// Requests and prints the validated greeting shared by provider checks.
-pub(crate) async fn request(client: ModelClient, provider_name: &str) -> Result<(), DynError> {
+pub(crate) async fn request(model: impl Model, provider_name: &str) -> Result<(), DynError> {
     let schema = json!({
         "type": "object",
         "properties": {
@@ -19,7 +19,7 @@ pub(crate) async fn request(client: ModelClient, provider_name: &str) -> Result<
         "additionalProperties": false
     });
     let schema = OutputSchema::new(schema)?;
-    let response = client
+    let response = model
         .complete(ModelRequest::new(
             "Return a JSON greeting with the message set to hello.",
             schema,

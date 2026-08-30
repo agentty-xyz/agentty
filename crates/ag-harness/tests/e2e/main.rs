@@ -2,6 +2,7 @@
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
+mod codex;
 #[path = "support/greeting.rs"]
 mod greeting;
 mod kimi;

@@ -9,19 +9,17 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+pub(crate) use crate::model::GeneratedResponse;
+#[cfg(test)]
+pub(crate) use crate::transport::RESPONSE_ENVELOPE_LIMIT_BYTES;
+pub(crate) use crate::transport::{ERROR_BODY_LIMIT_BYTES, SUCCESS_BODY_LIMIT_BYTES};
 use crate::{model, schema_contract, tool};
 
-pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
-const JSON_STRING_MAX_EXPANSION: usize = 6;
 const MAX_RATE_LIMIT_RETRIES: usize = 5;
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_TRANSPORT_RETRIES: usize = 1;
-pub(crate) const RESPONSE_ENVELOPE_LIMIT_BYTES: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_mins(1);
 const RETRY_DELAY: Duration = Duration::from_secs(1);
-pub(crate) const SUCCESS_BODY_LIMIT_BYTES: usize = schema_contract::RESPONSE_CONTENT_LIMIT_BYTES
-    * JSON_STRING_MAX_EXPANSION
-    + RESPONSE_ENVELOPE_LIMIT_BYTES;
 pub(crate) const STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
     "Return only one JSON object. The object must validate against this JSON Schema. ",
     "Do not include Markdown fences or any other text.\n\nJSON Schema:\n",
@@ -80,33 +78,6 @@ pub(crate) enum ReasoningFormat {
         disable_supported: bool,
         preserve_reasoning: bool,
     },
-}
-
-/// Provider-neutral result of decoding one Chat Completions choice.
-pub(crate) enum GeneratedResponse {
-    Failed {
-        error: model::ModelError,
-        metadata: model::CompletionMetadata,
-    },
-    Output {
-        metadata: model::CompletionMetadata,
-        output: String,
-        reasoning_content: Option<String>,
-    },
-    ToolCall {
-        call: tool::ToolCall,
-        metadata: model::CompletionMetadata,
-    },
-    ToolCalls {
-        calls: Vec<tool::ToolCall>,
-        metadata: model::CompletionMetadata,
-    },
-}
-
-impl GeneratedResponse {
-    fn failed(error: model::ModelError, metadata: model::CompletionMetadata) -> Self {
-        Self::Failed { error, metadata }
-    }
 }
 
 /// Shared structured-output backend for OpenAI-compatible Chat Completions
@@ -182,6 +153,7 @@ impl ChatCompletionBackend {
                 Some(output) => GeneratedResponse::Output {
                     metadata,
                     output,
+                    provider_context: None,
                     reasoning_content: self
                         .policy
                         .structured_output

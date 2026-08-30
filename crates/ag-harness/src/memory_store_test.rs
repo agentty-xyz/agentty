@@ -119,7 +119,7 @@ async fn creation_and_unknown_owner_errors_leave_state_unchanged() {
         .await
         .expect("idempotent missing cleanup");
     let empty = TurnOwner::new(store.identity().clone(), "session".to_string(), 0, vec![0]);
-    assert!(store.complete_turn(&empty, &[], None).await.is_err());
+    assert!(store.complete_turn(&empty, &[], None, None).await.is_err());
     store
         .interrupt(&empty)
         .await
@@ -155,7 +155,12 @@ async fn foreign_owners_cannot_mutate_and_foreign_acquisition_does_not_reserve()
         turn.owner().token().to_vec(),
     );
     assert!(store.renew(&foreign).await.is_err());
-    assert!(store.complete_turn(&foreign, &[], None).await.is_err());
+    assert!(
+        store
+            .complete_turn(&foreign, &[], None, None)
+            .await
+            .is_err()
+    );
     assert!(
         store
             .fail_turn(&foreign, &TurnError::Model(ModelError::InvalidResponse))
@@ -257,7 +262,7 @@ async fn bounded_projection_keeps_complete_groups_and_canonical_records() {
             .await
             .expect("turn");
         store
-            .complete_turn(turn.owner(), &[], Some("native"))
+            .complete_turn(turn.owner(), &[], None, Some("native"))
             .await
             .expect("complete");
     }
@@ -339,7 +344,7 @@ async fn allocation_exhaustion_and_invalid_snapshots_never_reserve() {
         Vec::<WriteRecord>::new()
     );
     store
-        .complete_turn(turn.owner(), &[], Some("native"))
+        .complete_turn(turn.owner(), &[], None, Some("native"))
         .await
         .expect("complete");
     store
@@ -370,6 +375,7 @@ async fn comparison_compatibility_matches_sqlite_without_live_repository_access(
             options().with_comparison_base(ComparisonBase::fixture("removed-repository"));
         let changed =
             options().with_comparison_base(ComparisonBase::fixture("different-repository"));
+        let mut expected_context = None;
 
         // Act / Assert
         for (current, expected) in [
@@ -382,11 +388,13 @@ async fn comparison_compatibility_matches_sqlite_without_live_repository_access(
                 .begin_turn(store.clone(), "comparison", "prompt", current)
                 .await
                 .expect("acquire");
+            assert_eq!(turn.provider_context.as_deref(), expected_context);
             assert_eq!(turn.provider_session_id.as_deref(), expected);
             store
-                .complete_turn(turn.owner(), &[], Some("native"))
+                .complete_turn(turn.owner(), &[], Some("provider-account"), Some("native"))
                 .await
                 .expect("complete");
+            expected_context = Some("provider-account");
         }
     }
 }
@@ -405,7 +413,7 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
                 .await
                 .expect("first");
             store
-                .complete_turn(first.owner(), &[], Some("native"))
+                .complete_turn(first.owner(), &[], Some("provider-account"), Some("native"))
                 .await
                 .expect("complete first");
             let old = store
@@ -420,7 +428,12 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
             // Act
             expire();
             assert!(store.renew(old.owner()).await.is_err());
-            assert!(store.complete_turn(old.owner(), &[], None).await.is_err());
+            assert!(
+                store
+                    .complete_turn(old.owner(), &[], None, None)
+                    .await
+                    .is_err()
+            );
             assert!(
                 store
                     .fail_turn(old.owner(), &TurnError::Model(ModelError::InvalidResponse))
@@ -455,7 +468,12 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
                 .await
                 .expect("recover acquisition");
             store
-                .complete_turn(next.owner(), &[], Some("successor"))
+                .complete_turn(
+                    next.owner(),
+                    &[],
+                    Some("provider-account"),
+                    Some("successor"),
+                )
                 .await
                 .expect("complete successor");
             store.interrupt(old.owner()).await.expect("stale interrupt");
@@ -470,6 +488,7 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
 
             // Assert
             let loaded = store.load_session("expiry").await.expect("history");
+            assert_eq!(loaded.provider_context.as_deref(), Some("provider-account"));
             assert_eq!(loaded.provider_session_id.as_deref(), Some("successor"));
             assert_eq!(loaded.turns.len(), 2);
             assert_ne!(old.owner(), next.owner());
