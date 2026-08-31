@@ -54,11 +54,13 @@ mod tests {
             &self,
             request: ChatCompletionRequest<'_>,
         ) -> Result<Option<ChatCompletion>, ChatCompletionError> {
-            let (api_key, endpoint, payload) = request.into_parts();
-            assert_eq!(api_key, "stub-key");
-            assert_eq!(endpoint, "https://stub.example/v1/chat/completions");
-            assert_eq!(payload["model"], "qwen-stub");
-            assert_eq!(payload["response_format"]["type"], "json_object");
+            assert_eq!(request.api_key(), "stub-key");
+            assert_eq!(
+                request.endpoint(),
+                "https://stub.example/v1/chat/completions"
+            );
+            assert_eq!(request.payload()["model"], "qwen-stub");
+            assert_eq!(request.payload()["response_format"]["type"], "json_object");
 
             Ok(Some(ChatCompletion::new(
                 "stop".to_string(),
