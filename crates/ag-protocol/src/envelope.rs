@@ -5,7 +5,7 @@ use std::path::Path;
 use askama::Template;
 
 use super::model::ProtocolRequestProfile;
-use super::schema::agent_response_json_schema_json;
+use super::schema::protocol_json_schema_json;
 
 const PROTOCOL_INSTRUCTIONS_MARKER: &str = "Structured response protocol:";
 const PROTOCOL_REFRESH_REMINDER_MARKER: &str = "Protocol refresh reminder:";
@@ -64,7 +64,7 @@ pub fn prepend_protocol_instructions(
         return render_template("protocol_instruction_policy_prompt.md", &template);
     }
 
-    let response_json_schema = agent_response_json_schema_json();
+    let response_json_schema = protocol_json_schema_json(profile);
     let template = ProtocolInstructionPromptTemplate {
         prompt,
         protocol_usage_instructions: &protocol_usage_instructions,
@@ -111,7 +111,21 @@ pub fn prepend_protocol_refresh_reminder(
 /// through the standard prompt pipeline without being double-wrapped.
 #[must_use]
 pub fn build_protocol_repair_prompt(parse_error: &str, malformed_response: &str) -> String {
-    let response_json_schema = agent_response_json_schema_json();
+    build_protocol_repair_prompt_for_profile(
+        ProtocolRequestProfile::UtilityPrompt,
+        parse_error,
+        malformed_response,
+    )
+}
+
+/// Builds a repair prompt for the schema selected by `profile`.
+#[must_use]
+pub fn build_protocol_repair_prompt_for_profile(
+    profile: ProtocolRequestProfile,
+    parse_error: &str,
+    malformed_response: &str,
+) -> String {
+    let response_json_schema = protocol_json_schema_json(profile);
     let response_preview = truncate_preview(malformed_response, REPAIR_RESPONSE_PREVIEW_MAX_CHARS);
     let template = ProtocolRepairPromptTemplate {
         parse_error,
@@ -170,6 +184,11 @@ struct ProtocolInstructionSessionTurnUsageTemplate;
 #[template(path = "protocol_instruction_utility_prompt_usage.md", escape = "none")]
 struct ProtocolInstructionUtilityPromptUsageTemplate;
 
+/// Askama view model for direct focused-review protocol usage instructions.
+#[derive(Template)]
+#[template(path = "protocol_instruction_focused_review_usage.md", escape = "none")]
+struct ProtocolInstructionFocusedReviewUsageTemplate;
+
 /// Askama view model for session-turn refresh instructions.
 #[derive(Template)]
 #[template(path = "protocol_refresh_session_turn_instruction.md", escape = "none")]
@@ -185,6 +204,13 @@ struct ProtocolRefreshUtilityPromptInstructionTemplate;
 
 /// Renders the protocol usage instructions for one request profile.
 fn render_protocol_usage_instructions(profile: ProtocolRequestProfile) -> String {
+    if matches!(profile, ProtocolRequestProfile::FocusedReview) {
+        return render_template(
+            "protocol_instruction_focused_review_usage.md",
+            &ProtocolInstructionFocusedReviewUsageTemplate,
+        );
+    }
+
     if matches!(profile, ProtocolRequestProfile::SessionTurn) {
         return render_template(
             "protocol_instruction_session_turn_usage.md",
@@ -200,6 +226,13 @@ fn render_protocol_usage_instructions(profile: ProtocolRequestProfile) -> String
 
 /// Renders the compact protocol refresh instructions for one request profile.
 fn render_protocol_refresh_instructions(profile: ProtocolRequestProfile) -> String {
+    if matches!(profile, ProtocolRequestProfile::FocusedReview) {
+        return render_template(
+            "protocol_instruction_focused_review_usage.md",
+            &ProtocolInstructionFocusedReviewUsageTemplate,
+        );
+    }
+
     if matches!(profile, ProtocolRequestProfile::SessionTurn) {
         return render_template(
             "protocol_refresh_session_turn_instruction.md",
@@ -507,6 +540,25 @@ mod tests {
     }
 
     #[test]
+    fn test_prepend_protocol_refresh_reminder_uses_focused_review_profile() {
+        // Arrange
+        let prompt = "Repair the focused review";
+
+        // Act
+        let rendered_prompt = prepend_protocol_refresh_reminder(
+            prompt,
+            ProtocolRequestProfile::FocusedReview,
+            test_workspace_root(),
+        );
+        let normalized_prompt = normalize_prompt(&rendered_prompt);
+
+        // Assert
+        assert!(rendered_prompt.contains("return the review object directly"));
+        assert!(normalized_prompt.contains("do not wrap the object in `answer`"));
+        assert!(rendered_prompt.ends_with(prompt));
+    }
+
+    #[test]
     /// Repair prompt renders with the parse error and a response preview.
     fn test_build_protocol_repair_prompt_includes_error_and_preview() {
         // Arrange
@@ -522,6 +574,24 @@ mod tests {
         assert!(repair_prompt.contains("Structured response protocol:"));
         assert!(repair_prompt.contains("Authoritative JSON Schema:"));
         assert!(repair_prompt.contains("\"answer\""));
+    }
+
+    #[test]
+    fn focused_review_repair_prompt_uses_direct_review_schema() {
+        // Arrange
+        let malformed_response = r#"{"project_impact":[],"suggestions":[]} trailing"#;
+
+        // Act
+        let repair_prompt = build_protocol_repair_prompt_for_profile(
+            ProtocolRequestProfile::FocusedReview,
+            "trailing characters",
+            malformed_response,
+        );
+
+        // Assert
+        assert!(repair_prompt.contains("\"title\": \"FocusedReview\""));
+        assert!(repair_prompt.contains("\"project_impact\""));
+        assert!(!repair_prompt.contains("\"answer\""));
     }
 
     #[test]

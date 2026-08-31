@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Structured result returned by a focused-review utility prompt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(
     title = "FocusedReview",
     description = "Structured focused-review result. Project impact describes the overall effect \
@@ -57,6 +58,7 @@ impl FocusedReview {
 
 /// One actionable focused-review finding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(
     title = "FocusedReviewSuggestion",
     description = "One actionable high- or medium-severity finding scoped to the reviewed diff."

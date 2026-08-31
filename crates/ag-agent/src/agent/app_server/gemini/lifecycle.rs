@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use ag_protocol::{TurnPrompt, TurnPromptAttachment, TurnPromptContentPart};
+use ag_protocol::{
+    ProtocolRequestProfile, TurnPrompt, TurnPromptAttachment, TurnPromptContentPart,
+};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AGENT_METHOD_NAMES, ContentBlock, ImageContent, InitializeRequest, InitializeResponse,
@@ -148,7 +150,8 @@ fn bootstrap_response_timeout(
 ) -> std::time::Duration {
     if matches!(
         request_kind,
-        crate::channel::AgentRequestKind::UtilityPrompt
+        crate::channel::AgentRequestKind::FocusedReview
+            | crate::channel::AgentRequestKind::UtilityPrompt
     ) {
         app_server_transport::TURN_TIMEOUT
     } else {
@@ -310,6 +313,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
     session_id: &str,
     permission_mode: PermissionMode,
     prompt: impl Into<TurnPrompt>,
+    protocol_profile: ProtocolRequestProfile,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
 ) -> Result<(String, u64, u64), AppServerError> {
     let prompt = prompt.into();
@@ -359,6 +363,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
                 assistant_message = stream_parser::select_preferred_assistant_message(
                     &assistant_message,
                     prompt_completion.assistant_message.as_deref(),
+                    protocol_profile,
                 );
 
                 return Ok((
@@ -871,6 +876,7 @@ mod tests {
             "session-1",
             PermissionMode::ReadOnly,
             "Inspect the architecture",
+            ProtocolRequestProfile::SessionTurn,
             stream_tx,
         )
         .await;

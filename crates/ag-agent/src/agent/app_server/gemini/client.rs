@@ -1,6 +1,6 @@
 //! Gemini ACP client orchestration.
 
-use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
+use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use tokio::sync::mpsc;
 
 use super::super::client::{ProviderRuntimeClient, RuntimeClientProvider, RuntimeClientRuntime};
@@ -52,6 +52,7 @@ impl RuntimeClientProvider for GeminiRuntimeProvider {
     fn run_turn<'scope>(
         runtime: &'scope mut Self::Runtime,
         prompt: &'scope TurnPrompt,
+        protocol_profile: ProtocolRequestProfile,
         _reasoning_level: ReasoningLevel,
         _speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
@@ -62,6 +63,7 @@ impl RuntimeClientProvider for GeminiRuntimeProvider {
                 &runtime.state.session_id,
                 runtime.state.permission_mode,
                 prompt,
+                protocol_profile,
                 stream_tx,
             )
             .await
@@ -184,6 +186,7 @@ mod tests {
         let result = GeminiRuntimeProvider::run_turn(
             &mut runtime,
             &prompt,
+            ProtocolRequestProfile::SessionTurn,
             ReasoningLevel::default(),
             SpeedMode::Fast,
             stream_tx,

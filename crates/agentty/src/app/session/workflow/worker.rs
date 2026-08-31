@@ -144,6 +144,10 @@ impl SessionCommand {
                 ..
             } => "reply",
             Self::Run {
+                request_kind: AgentRequestKind::FocusedReview,
+                ..
+            } => "focused_review",
+            Self::Run {
                 request_kind: AgentRequestKind::UtilityPrompt,
                 ..
             } => "utility_prompt",
@@ -1964,18 +1968,34 @@ mod tests {
                 ),
             },
         };
+        let focused_review_command = SessionCommand::Run {
+            operation_id: "op-focused-review".to_string(),
+            request_kind: AgentRequestKind::FocusedReview,
+            replay_transcript: None,
+            prompt: "prompt".into(),
+            turn_metadata: TurnMetadata {
+                published_upstream_ref: None,
+                review_comment_thread_ids: Vec::new(),
+                session_agent: AgentSelection::new(
+                    crate::domain::agent::AgentKind::Claude,
+                    AgentModel::ClaudeSonnet5,
+                ),
+            },
+        };
 
         // Act
         let review_request_kind = review_request_command.kind();
         let start_kind = start_command.kind();
         let resume_kind = resume_command.kind();
         let account_read_kind = account_read_command.kind();
+        let focused_review_kind = focused_review_command.kind();
 
         // Assert
         assert_eq!(review_request_kind, "create_review_request");
         assert_eq!(start_kind, "start_prompt");
         assert_eq!(resume_kind, "reply");
         assert_eq!(account_read_kind, "account_read");
+        assert_eq!(focused_review_kind, "focused_review");
     }
 
     #[test]

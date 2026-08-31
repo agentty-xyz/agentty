@@ -1,6 +1,6 @@
 //! Antigravity persistent-runtime client orchestration.
 
-use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
+use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use tokio::sync::mpsc;
 
 use super::super::client::{ProviderRuntimeClient, RuntimeClientProvider, RuntimeClientRuntime};
@@ -46,6 +46,7 @@ impl RuntimeClientProvider for AntigravityRuntimeProvider {
     fn run_turn<'scope>(
         runtime: &'scope mut Self::Runtime,
         prompt: &'scope TurnPrompt,
+        _protocol_profile: ProtocolRequestProfile,
         _reasoning_level: ReasoningLevel,
         _speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
@@ -213,6 +214,7 @@ mod tests {
         let result = AntigravityRuntimeProvider::run_turn(
             &mut runtime,
             &request.prompt,
+            ProtocolRequestProfile::SessionTurn,
             ReasoningLevel::Low,
             SpeedMode::Fast,
             stream_tx,

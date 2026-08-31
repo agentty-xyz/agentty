@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
+use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use tokio::sync::mpsc;
 
 use crate::app_server::{
@@ -35,6 +35,7 @@ pub(crate) trait RuntimeClientProvider: Send + Sync + 'static {
     fn run_turn<'scope>(
         runtime: &'scope mut Self::Runtime,
         prompt: &'scope TurnPrompt,
+        protocol_profile: ProtocolRequestProfile,
         reasoning_level: ReasoningLevel,
         speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
@@ -82,6 +83,7 @@ impl<Provider: RuntimeClientProvider> ProviderRuntimeClient<Provider> {
     ) -> Result<AppServerTurnResponse, AppServerError> {
         let stream_tx = stream_tx.clone();
         let reasoning_level = request.reasoning_level;
+        let protocol_profile = request.request_kind.protocol_profile();
         let speed_mode = request.speed_mode;
 
         app_server::run_turn_with_restart_retry(
@@ -103,7 +105,14 @@ impl<Provider: RuntimeClientProvider> ProviderRuntimeClient<Provider> {
             move |runtime, prompt| {
                 let stream_tx = stream_tx.clone();
 
-                Provider::run_turn(runtime, prompt, reasoning_level, speed_mode, stream_tx)
+                Provider::run_turn(
+                    runtime,
+                    prompt,
+                    protocol_profile,
+                    reasoning_level,
+                    speed_mode,
+                    stream_tx,
+                )
             },
             RuntimeClientRuntime::shutdown_runtime,
         )
@@ -214,6 +223,7 @@ mod tests {
         fn run_turn<'scope>(
             _runtime: &'scope mut Self::Runtime,
             _prompt: &'scope TurnPrompt,
+            _protocol_profile: ProtocolRequestProfile,
             _reasoning_level: ReasoningLevel,
             _speed_mode: SpeedMode,
             _stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,

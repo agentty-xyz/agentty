@@ -25,6 +25,8 @@ pub trait LiveTranscript: fmt::Debug + Send + Sync {
 /// Turn initiation mode for [`TurnRequest`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentRequestKind {
+    /// Runs one focused code review with a direct structured review response.
+    FocusedReview,
     /// Starts a fresh interactive session turn with no prior context.
     SessionStart,
     /// Resumes an interactive session turn.
@@ -45,6 +47,7 @@ impl AgentRequestKind {
     pub fn protocol_profile(&self) -> ProtocolRequestProfile {
         match self {
             Self::SessionStart | Self::SessionResume => ProtocolRequestProfile::SessionTurn,
+            Self::FocusedReview => ProtocolRequestProfile::FocusedReview,
             Self::UtilityPrompt | Self::AccountRead => ProtocolRequestProfile::UtilityPrompt,
         }
     }
@@ -499,6 +502,18 @@ mod tests {
 
         // Assert
         assert_eq!(protocol_profile, ProtocolRequestProfile::UtilityPrompt);
+    }
+
+    #[test]
+    fn focused_review_request_uses_focused_review_protocol_profile() {
+        // Arrange
+        let request_kind = AgentRequestKind::FocusedReview;
+
+        // Act
+        let protocol_profile = request_kind.protocol_profile();
+
+        // Assert
+        assert_eq!(protocol_profile, ProtocolRequestProfile::FocusedReview);
     }
 
     #[test]

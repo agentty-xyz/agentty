@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use ag_protocol::{AgentResponse, TurnPrompt, build_protocol_repair_prompt};
+use ag_protocol::{AgentResponse, TurnPrompt, build_protocol_repair_prompt_for_profile};
 use tokio::sync::mpsc;
 
 use crate::agent::cli::error;
@@ -215,7 +215,8 @@ async fn parse_or_repair_cli_response(
         "Protocol parse error; retrying schema repair for {kind}."
     )));
 
-    let repair_prompt = build_protocol_repair_prompt(&parse_error, content);
+    let repair_prompt =
+        build_protocol_repair_prompt_for_profile(protocol_profile, &parse_error, content);
 
     let repair_content = execute_cli_repair_turn(backend.as_ref(), kind, req, &repair_prompt)
         .await

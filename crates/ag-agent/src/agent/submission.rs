@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_protocol::{
-    AgentResponse, build_protocol_repair_prompt, format_protocol_parse_debug_details,
-    parse_agent_response_strict,
+    AgentResponse, ProtocolRequestProfile, build_protocol_repair_prompt_for_profile,
+    format_protocol_parse_debug_details, parse_protocol_response_strict,
 };
 use async_trait::async_trait;
 
@@ -167,6 +167,7 @@ async fn submit_one_shot_with_app_server_client(
     clear_child_pid_slot(request.child_pid.as_deref());
 
     let session_id = format!("one-shot-{}", uuid::Uuid::new_v4());
+    let protocol_profile = request.request_kind.protocol_profile();
     let (stream_tx, _stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let turn_request = AppServerTurnRequest {
         folder: request.folder.clone(),
@@ -201,20 +202,21 @@ async fn submit_one_shot_with_app_server_client(
         }
     };
 
-    let parse_result = match parse_one_shot_response(&turn_result.assistant_message) {
-        Ok(response) => Ok((response, 0, 0)),
-        Err(parse_error) => {
-            attempt_one_shot_app_server_repair(
-                app_server_client,
-                &parse_error,
-                &turn_result.assistant_message,
-                request,
-                &session_id,
-                turn_result.provider_conversation_id.as_deref(),
-            )
-            .await
-        }
-    };
+    let parse_result =
+        match parse_one_shot_response(&turn_result.assistant_message, protocol_profile) {
+            Ok(response) => Ok((response, 0, 0)),
+            Err(parse_error) => {
+                attempt_one_shot_app_server_repair(
+                    app_server_client,
+                    &parse_error,
+                    &turn_result.assistant_message,
+                    request,
+                    &session_id,
+                    turn_result.provider_conversation_id.as_deref(),
+                )
+                .await
+            }
+        };
 
     app_server_client.shutdown_session(session_id).await;
     clear_child_pid_slot(child_pid.as_deref());
@@ -246,27 +248,34 @@ async fn submit_one_shot_with_backend(
     backend: &dyn AgentBackend,
     request: OneShotRequest,
 ) -> Result<OneShotSubmission, String> {
+    let protocol_profile = request.request_kind.protocol_profile();
     let parsed_response =
         execute_one_shot_command(backend, &request.prompt, request.clone()).await?;
-    let (agent_response, repair_stats) = match parse_one_shot_response(&parsed_response.content) {
-        Ok(response) => (response, None),
-        Err(parse_error) => {
-            let repair_prompt =
-                build_protocol_repair_prompt(&parse_error, &parsed_response.content);
-            let repair_response = execute_one_shot_command(backend, &repair_prompt, request)
-                .await
-                .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
+    let (agent_response, repair_stats) =
+        match parse_one_shot_response(&parsed_response.content, protocol_profile) {
+            Ok(response) => (response, None),
+            Err(parse_error) => {
+                let repair_prompt = build_protocol_repair_prompt_for_profile(
+                    protocol_profile,
+                    &parse_error,
+                    &parsed_response.content,
+                );
+                let repair_response = execute_one_shot_command(backend, &repair_prompt, request)
+                    .await
+                    .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
 
-            let response = parse_one_shot_response(&repair_response.content).map_err(|error| {
-                format!(
-                    "{parse_error}\nrepair retry also failed: {error}\nrepair_response:\n{}",
-                    repair_response.content
-                )
-            })?;
+                let response = parse_one_shot_response(&repair_response.content, protocol_profile)
+                    .map_err(|error| {
+                        format!(
+                            "{parse_error}\nrepair retry also failed: \
+                             {error}\nrepair_response:\n{}",
+                            repair_response.content
+                        )
+                    })?;
 
-            (response, Some(repair_response.stats))
-        }
-    };
+                (response, Some(repair_response.stats))
+            }
+        };
 
     let mut stats = parsed_response.stats;
     if let Some(repair) = repair_stats {
@@ -286,8 +295,11 @@ async fn submit_one_shot_with_backend(
 /// Returns an error when the response is empty or not valid protocol JSON. The
 /// error carries the parse reason and derived diagnostics only, never the
 /// provider payload itself.
-fn parse_one_shot_response(content: &str) -> Result<AgentResponse, String> {
-    parse_agent_response_strict(content).map_err(|error| {
+fn parse_one_shot_response(
+    content: &str,
+    protocol_profile: ProtocolRequestProfile,
+) -> Result<AgentResponse, String> {
+    parse_protocol_response_strict(content, protocol_profile).map_err(|error| {
         format!(
             "One-shot agent output did not match the required JSON schema: \
              {error}\ndebug_details:\n{}",
@@ -317,7 +329,9 @@ async fn attempt_one_shot_app_server_repair(
     session_id: &str,
     provider_conversation_id: Option<&str>,
 ) -> Result<(AgentResponse, u64, u64), String> {
-    let repair_prompt = build_protocol_repair_prompt(parse_error, malformed_response);
+    let protocol_profile = request.request_kind.protocol_profile();
+    let repair_prompt =
+        build_protocol_repair_prompt_for_profile(protocol_profile, parse_error, malformed_response);
 
     let (repair_stream_tx, _repair_stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let repair_turn_request = AppServerTurnRequest {
@@ -341,12 +355,13 @@ async fn attempt_one_shot_app_server_repair(
         .await
         .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
 
-    let response = parse_one_shot_response(&repair_result.assistant_message).map_err(|error| {
-        format!(
-            "{parse_error}\nrepair retry also failed: {error}\nrepair_response:\n{}",
-            repair_result.assistant_message
-        )
-    })?;
+    let response = parse_one_shot_response(&repair_result.assistant_message, protocol_profile)
+        .map_err(|error| {
+            format!(
+                "{parse_error}\nrepair retry also failed: {error}\nrepair_response:\n{}",
+                repair_result.assistant_message
+            )
+        })?;
 
     Ok((
         response,
@@ -836,6 +851,63 @@ mod tests {
         assert_eq!(
             response.response.answers(),
             vec!["Repaired title".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn focused_review_repairs_trailing_text_with_direct_review_schema() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let call_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().times(2).returning({
+            let counter = Arc::clone(&call_counter);
+
+            move |request| {
+                assert_eq!(request.request_kind, &AgentRequestKind::FocusedReview);
+                let call_number = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+                if call_number == 0 {
+                    return Ok(mock_shell_command(
+                        r#"{"project_impact":[],"suggestions":[]} trailing text"#,
+                        "",
+                        0,
+                    ));
+                }
+
+                assert!(request.prompt.contains("\"title\": \"FocusedReview\""));
+                assert!(!request.prompt.contains("\"answer\""));
+
+                Ok(mock_shell_command(
+                    r#"{"project_impact":["Review repaired."],"suggestions":[]}"#,
+                    "",
+                    0,
+                ))
+            }
+        });
+
+        // Act
+        let response = submit_one_shot_with_backend(
+            &backend,
+            OneShotRequest {
+                agent_kind: AgentKind::Claude,
+                child_pid: None,
+                folder: temp_directory.path().to_path_buf(),
+                model: AgentModel::ClaudeSonnet5,
+                permission_mode: PermissionMode::ReadOnly,
+                prompt: "Review the diff".to_string(),
+                request_kind: AgentRequestKind::FocusedReview,
+                reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
+            },
+        )
+        .await
+        .expect("focused review repair should succeed");
+
+        // Assert
+        assert_eq!(
+            response.response.answer,
+            r#"{"project_impact":["Review repaired."],"suggestions":[]}"#
         );
     }
 

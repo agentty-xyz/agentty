@@ -2,7 +2,8 @@
 
 use serde_json::Value;
 
-use super::model::{AgentResponse, AgentResponseParseError};
+use super::model::{AgentResponse, AgentResponseParseError, ProtocolRequestProfile};
+use super::review::{FocusedReview, FocusedReviewSeverity};
 
 /// Top-level keys the protocol recognizes in a structured response payload.
 const PROTOCOL_KEYS: &[&str] = &[
@@ -79,6 +80,77 @@ pub fn parse_agent_response_strict(raw: &str) -> Result<AgentResponse, AgentResp
              object found"
         ),
     })
+}
+
+/// Parses one response against the schema selected for its request profile.
+///
+/// Focused reviews arrive as direct [`FocusedReview`] objects so native
+/// provider schemas can enforce their fields. The validated object is
+/// normalized back into `AgentResponse::answer` for existing application
+/// consumers.
+///
+/// # Errors
+/// Returns [`AgentResponseParseError`] when the response is empty or does not
+/// match the profile's structured response schema.
+pub fn parse_protocol_response_strict(
+    raw: &str,
+    profile: ProtocolRequestProfile,
+) -> Result<AgentResponse, AgentResponseParseError> {
+    if !matches!(profile, ProtocolRequestProfile::FocusedReview) {
+        return parse_agent_response_strict(raw);
+    }
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AgentResponseParseError::Empty);
+    }
+
+    let review = serde_json::from_str::<FocusedReview>(trimmed).map_err(|error| {
+        AgentResponseParseError::InvalidFormat {
+            reason: format!("focused review parse failed ({error})"),
+        }
+    })?;
+    let answer = focused_review_answer(review);
+
+    Ok(AgentResponse::plain(answer))
+}
+
+/// Serializes a validated focused review through infallible JSON values.
+fn focused_review_answer(review: FocusedReview) -> String {
+    let project_impact = review
+        .project_impact
+        .into_iter()
+        .map(Value::String)
+        .collect();
+    let suggestions = review
+        .suggestions
+        .into_iter()
+        .map(|suggestion| {
+            let severity = match suggestion.severity {
+                FocusedReviewSeverity::High => "high",
+                FocusedReviewSeverity::Medium => "medium",
+            };
+
+            Value::Object(
+                [
+                    ("details".to_string(), Value::String(suggestion.details)),
+                    ("severity".to_string(), Value::String(severity.to_string())),
+                ]
+                .into_iter()
+                .collect(),
+            )
+        })
+        .collect();
+
+    Value::Object(
+        [
+            ("project_impact".to_string(), Value::Array(project_impact)),
+            ("suggestions".to_string(), Value::Array(suggestions)),
+        ]
+        .into_iter()
+        .collect(),
+    )
+    .to_string()
 }
 
 /// Builds one multi-line debug report for a protocol parsing failure.
@@ -361,6 +433,78 @@ mod tests {
             response.expect("response should parse").answer,
             "Here is my analysis."
         );
+    }
+
+    #[test]
+    fn parse_protocol_response_strict_normalizes_direct_focused_review() {
+        // Arrange
+        let raw = concat!(
+            r#"{"project_impact":["Improves reliability."],"suggestions":["#,
+            r#"{"details":"Fix this.","severity":"high"},"#,
+            r#"{"details":"Improve that.","severity":"medium"}]}"#,
+        );
+
+        // Act
+        let response = parse_protocol_response_strict(raw, ProtocolRequestProfile::FocusedReview)
+            .expect("focused review should parse");
+
+        // Assert
+        assert_eq!(response, AgentResponse::plain(raw));
+    }
+
+    #[test]
+    fn parse_protocol_response_strict_rejects_empty_focused_review() {
+        // Arrange
+        let raw = "  \n ";
+
+        // Act
+        let error = parse_protocol_response_strict(raw, ProtocolRequestProfile::FocusedReview)
+            .expect_err("empty focused review should fail");
+
+        // Assert
+        assert_eq!(error, AgentResponseParseError::Empty);
+    }
+
+    #[test]
+    fn parse_protocol_response_strict_rejects_focused_review_trailing_text() {
+        // Arrange
+        let raw = r#"{"project_impact":[],"suggestions":[]} trailing text"#;
+
+        // Act
+        let error = parse_protocol_response_strict(raw, ProtocolRequestProfile::FocusedReview)
+            .expect_err("trailing text should require protocol repair");
+
+        // Assert
+        assert!(error.to_string().contains("trailing characters"));
+    }
+
+    #[test]
+    fn parse_protocol_response_strict_rejects_unknown_focused_review_field() {
+        // Arrange
+        let raw = r#"{"project_impact":[],"suggestions":[],"summary":"extra"}"#;
+
+        // Act
+        let error = parse_protocol_response_strict(raw, ProtocolRequestProfile::FocusedReview)
+            .expect_err("unknown focused-review field should require protocol repair");
+
+        // Assert
+        assert!(error.to_string().contains("unknown field `summary`"));
+    }
+
+    #[test]
+    fn parse_protocol_response_strict_rejects_unknown_suggestion_field() {
+        // Arrange
+        let raw = concat!(
+            r#"{"project_impact":[],"suggestions":[{"#,
+            r#""details":"Fix this.","severity":"medium","path":"src/lib.rs"}]}"#,
+        );
+
+        // Act
+        let error = parse_protocol_response_strict(raw, ProtocolRequestProfile::FocusedReview)
+            .expect_err("unknown suggestion field should require protocol repair");
+
+        // Assert
+        assert!(error.to_string().contains("unknown field `path`"));
     }
 
     #[test]
