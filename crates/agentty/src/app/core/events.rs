@@ -21,12 +21,16 @@ use app::review::{
 };
 use tracing::warn;
 
-use super::state::{App, SyncPopupContext, SyncReviewRequestTaskResult, UpdateStatus};
+use super::state::{App, SyncReviewRequestTaskResult, UpdateStatus};
 use crate::app::session::{
-    SessionTaskService, StatusTransition, SyncMainOutcome, SyncSessionStartError, TurnAppliedState,
+    SessionTaskService, StatusTransition, SyncSessionStartError, TurnAppliedState,
 };
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{self, SessionRuntimeCommand, sync_message};
+use crate::app::sync::{
+    ProjectSyncContext, ProjectSyncPhase, ProjectSyncStatus, SyncMainCompletion,
+    SyncMainReviewUpdate,
+};
+use crate::app::{self, SessionRuntimeCommand};
 use crate::domain::agent::AgentCliInfo;
 use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
@@ -155,11 +159,12 @@ pub(crate) enum AppEvent {
         session_id: SessionId,
     },
     /// Indicates completion of a list-mode sync workflow.
-    SyncMainCompleted {
-        result: Result<SyncMainOutcome, SyncSessionStartError>,
-    },
+    SyncMainCompleted { completion: SyncMainCompletion },
     /// Indicates list-mode sync is resolving rebase conflicts.
-    SyncMainConflictResolutionStarted { conflicted_files: Vec<String> },
+    SyncMainConflictResolutionStarted {
+        conflicted_files: Vec<String>,
+        operation: ProjectSyncContext,
+    },
     /// Indicates recomputed diff-derived metadata for one session.
     SessionDiffStatsUpdated {
         diff_stats: SessionDiffStats,
@@ -304,8 +309,8 @@ pub(super) struct AppEventBatch {
     /// persistence.
     pub(super) should_reload_sessions: bool,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
-    pub(super) sync_main_conflicted_files: Option<Vec<String>>,
-    pub(super) sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
+    pub(super) sync_main_completion: Option<SyncMainCompletion>,
+    pub(super) sync_main_conflict: Option<(ProjectSyncContext, Vec<String>)>,
     pub(super) update_status: Option<UpdateStatus>,
 }
 
@@ -429,8 +434,8 @@ impl AppEventBatch {
             || !self.stacked_parent_merge_child_rebases.is_empty()
             || !self.stacked_parent_syncs_completed.is_empty()
             || !self.stacked_parent_turns_completed.is_empty()
-            || self.sync_main_conflicted_files.is_some()
-            || self.sync_main_result.is_some();
+            || self.sync_main_conflict.is_some()
+            || self.sync_main_completion.is_some();
         let mut after_snapshot_effects = (!self.review_updates.is_empty())
             .then(|| AppEventEffect::ApplyReviewUpdates(std::mem::take(&mut self.review_updates)))
             .into_iter()
@@ -559,18 +564,14 @@ impl AppEventBatch {
                 request_id,
                 result,
                 session_id,
-            } => {
-                self.session_review_comment_snapshots
-                    .push(SessionReviewCommentSnapshotUpdate {
-                        request_id,
-                        result,
-                        session_id,
-                    });
+            } => self.collect_session_review_comment_snapshot(request_id, result, session_id),
+            AppEvent::SyncMainCompleted { completion } => {
+                self.collect_sync_main_completed(completion);
             }
-            AppEvent::SyncMainCompleted { result } => self.collect_sync_main_completed(result),
-            AppEvent::SyncMainConflictResolutionStarted { conflicted_files } => {
-                self.sync_main_conflicted_files = Some(conflicted_files);
-            }
+            AppEvent::SyncMainConflictResolutionStarted {
+                conflicted_files,
+                operation,
+            } => self.collect_sync_main_conflict(operation, conflicted_files),
             AppEvent::SessionDiffStatsUpdated {
                 diff_stats,
                 session_id,
@@ -772,16 +773,37 @@ impl AppEventBatch {
         });
     }
 
-    /// Stores the latest default-branch sync result for this reducer batch.
-    fn collect_sync_main_completed(
+    /// Stores one completed linked review-comment snapshot load.
+    fn collect_session_review_comment_snapshot(
         &mut self,
-        result: Result<SyncMainOutcome, SyncSessionStartError>,
+        request_id: u64,
+        result: Result<ag_forge::ReviewCommentSnapshot, String>,
+        session_id: SessionId,
     ) {
-        if result.is_ok() {
+        self.session_review_comment_snapshots
+            .push(SessionReviewCommentSnapshotUpdate {
+                request_id,
+                result,
+                session_id,
+            });
+    }
+
+    /// Stores the latest default-branch sync result for this reducer batch.
+    fn collect_sync_main_completed(&mut self, completion: SyncMainCompletion) {
+        if completion.result.is_ok() {
             self.should_refresh_git_status = true;
         }
 
-        self.sync_main_result = Some(result);
+        self.sync_main_completion = Some(completion);
+    }
+
+    /// Stores the latest explicit sync conflict phase for this reducer batch.
+    fn collect_sync_main_conflict(
+        &mut self,
+        operation: ProjectSyncContext,
+        conflicted_files: Vec<String>,
+    ) {
+        self.sync_main_conflict = Some((operation, conflicted_files));
     }
 
     /// Stores one branch-publish action result for this reducer batch.
@@ -1019,8 +1041,8 @@ impl App {
                 .await;
         }
 
-        if let Some(conflicted_files) = event_batch.sync_main_conflicted_files.as_deref() {
-            self.apply_sync_main_conflict_resolution_started(conflicted_files);
+        if let Some((operation, conflicted_files)) = event_batch.sync_main_conflict.as_ref() {
+            self.apply_sync_main_conflict_resolution_started(operation, conflicted_files);
         }
 
         self.sync_touched_sessions(&event_batch.session_ids);
@@ -1060,11 +1082,6 @@ impl App {
         self.start_or_defer_auto_reviews(&auto_review_session_ids)
             .await;
         app::review::hydrate_review_transients(&self.review_cache, self.sessions.state_mut());
-
-        if let Some(sync_main_result) = event_batch.sync_main_result {
-            let sync_popup_context = self.sync_popup_context();
-            self.mode = Self::sync_main_popup_mode(sync_main_result, &sync_popup_context);
-        }
 
         self.handle_merge_queue_progress(&event_batch.session_ids, &previous_session_states)
             .await;
@@ -1154,12 +1171,113 @@ impl App {
             self.publish_sync_context();
         }
 
-        if let Some(Ok(sync_main_outcome)) = event_batch.sync_main_result.as_mut() {
-            let default_branch = sync_main_outcome.default_branch.clone();
-            sync_main_outcome.deferred_merged_session_ids = self
-                .finalize_merged_sessions_after_main_sync(&default_branch)
-                .await;
+        if let Some(completion) = event_batch.sync_main_completion.take() {
+            self.apply_sync_main_completion(completion).await;
         }
+    }
+
+    /// Applies one terminal sync result now or defers project-scoped
+    /// reconciliation until its project becomes active again.
+    async fn apply_sync_main_completion(&mut self, mut completion: SyncMainCompletion) {
+        if !self.is_latest_project_sync_operation(&completion.operation) {
+            return;
+        }
+
+        if self.projects.active_project_id() == completion.operation.project_id {
+            self.reconcile_project_sync_completion(&mut completion)
+                .await;
+            self.set_project_sync_terminal_status(&completion);
+        } else {
+            self.set_project_sync_terminal_status(&completion);
+            self.pending_project_sync_completions
+                .insert(completion.operation.project_id, completion);
+        }
+
+        self.resume_base_checkout_work().await;
+    }
+
+    /// Reconciles a completed sync that was deferred across a project switch.
+    pub(super) async fn apply_pending_project_sync_completion(&mut self) {
+        let project_id = self.projects.active_project_id();
+        let Some(mut completion) = self.pending_project_sync_completions.remove(&project_id) else {
+            return;
+        };
+        if !self.is_latest_project_sync_operation(&completion.operation) {
+            return;
+        }
+
+        self.reconcile_project_sync_completion(&mut completion)
+            .await;
+        self.set_project_sync_terminal_status(&completion);
+        self.refresh_sessions_now().await;
+    }
+
+    /// Returns whether an operation is still the newest request for its
+    /// project. Missing entries support startup state and injected test
+    /// completions that predate an in-memory request.
+    fn is_latest_project_sync_operation(&self, operation: &ProjectSyncContext) -> bool {
+        self.latest_project_sync_operation_ids
+            .get(&operation.project_id)
+            .is_none_or(|operation_id| *operation_id == operation.operation_id)
+    }
+
+    /// Applies review results and merged-session finalization to the owning
+    /// project's loaded session snapshot.
+    async fn reconcile_project_sync_completion(&mut self, completion: &mut SyncMainCompletion) {
+        let Ok(sync_main_outcome) = &mut completion.result else {
+            return;
+        };
+
+        let review_request_updates = std::mem::take(&mut completion.review_request_updates);
+        let did_apply_review_updates = !review_request_updates.is_empty();
+        for SyncMainReviewUpdate { result, session_id } in review_request_updates {
+            self.apply_review_request_status_update(ReviewRequestStatusUpdate {
+                generation: self.sync_handle.current_generation(),
+                result,
+                session_id,
+            })
+            .await;
+        }
+        if did_apply_review_updates {
+            self.publish_sync_context();
+        }
+
+        let default_branch = sync_main_outcome.default_branch.clone();
+        sync_main_outcome.deferred_merged_session_ids = self
+            .finalize_merged_sessions_after_main_sync(&default_branch)
+            .await;
+    }
+
+    /// Replaces the matching running status with a compact terminal phase.
+    fn set_project_sync_terminal_status(&mut self, completion: &SyncMainCompletion) {
+        let status = self
+            .project_sync_status
+            .get_or_insert_with(|| ProjectSyncStatus {
+                context: completion.operation.clone(),
+                phase: ProjectSyncPhase::Running,
+            });
+        if status.context.operation_id != completion.operation.operation_id
+            || status.context.project_id != completion.operation.project_id
+        {
+            return;
+        }
+
+        status.phase = match &completion.result {
+            Ok(outcome) => ProjectSyncPhase::Complete {
+                deferred_session_count: outcome.deferred_merged_session_ids.len(),
+                pulled_commits: outcome.pulled_commits,
+                pushed_commits: outcome.pushed_commits,
+                resolved_conflict_count: outcome.resolved_conflict_files.len(),
+            },
+            Err(error @ SyncSessionStartError::MainHasUncommittedChanges { .. }) => {
+                ProjectSyncPhase::Blocked {
+                    message: error.detail_message(),
+                }
+            }
+            Err(error @ SyncSessionStartError::Other(_)) => ProjectSyncPhase::Failed {
+                message: Self::sync_failure_message(error),
+            },
+        };
     }
 
     /// Applies completed linked-session comment loads only while the matching
@@ -1462,22 +1580,25 @@ impl App {
             .collect()
     }
 
-    /// Updates the loading sync popup with the current conflict-resolution
-    /// status when the user is still viewing that in-progress sync.
-    fn apply_sync_main_conflict_resolution_started(&mut self, conflicted_files: &[String]) {
-        if !matches!(
-            self.mode,
-            AppMode::SyncBlockedPopup {
-                is_loading: true,
-                ..
-            }
-        ) {
+    /// Updates non-modal sync progress for the matching live operation.
+    fn apply_sync_main_conflict_resolution_started(
+        &mut self,
+        operation: &ProjectSyncContext,
+        conflicted_files: &[String],
+    ) {
+        let Some(status) = self.project_sync_status.as_mut() else {
+            return;
+        };
+        if status.context.operation_id != operation.operation_id
+            || status.context.project_id != operation.project_id
+            || !status.is_running()
+        {
             return;
         }
 
-        let sync_popup_context = self.sync_popup_context();
-        self.mode =
-            Self::sync_main_conflict_resolution_popup_mode(conflicted_files, &sync_popup_context);
+        status.phase = ProjectSyncPhase::ResolvingConflicts {
+            conflicted_file_count: conflicted_files.len(),
+        };
     }
 
     /// Updates the last-seen session-handle versions and returns whether any
@@ -2458,130 +2579,6 @@ impl App {
         review_request_created_notice_text(review_request)
     }
 
-    /// Builds final sync popup mode from background sync completion result.
-    ///
-    /// Authentication-related push failures are normalized to actionable
-    /// authorization guidance so users can recover quickly.
-    pub(super) fn sync_main_popup_mode(
-        sync_main_result: Result<SyncMainOutcome, SyncSessionStartError>,
-        sync_popup_context: &SyncPopupContext,
-    ) -> AppMode {
-        match sync_main_result {
-            Ok(sync_main_outcome) => AppMode::SyncBlockedPopup {
-                project_name: Some(sync_popup_context.project_name.clone()),
-                default_branch: Some(sync_popup_context.default_branch.clone()),
-                is_loading: false,
-                message: Self::sync_success_message(&sync_main_outcome),
-                title: "Sync complete".to_string(),
-            },
-            Err(sync_error @ SyncSessionStartError::MainHasUncommittedChanges { .. }) => {
-                AppMode::SyncBlockedPopup {
-                    project_name: Some(sync_popup_context.project_name.clone()),
-                    default_branch: Some(sync_popup_context.default_branch.clone()),
-                    is_loading: false,
-                    message: sync_error.detail_message(),
-                    title: "Sync blocked".to_string(),
-                }
-            }
-            Err(sync_error @ SyncSessionStartError::Other(_)) => AppMode::SyncBlockedPopup {
-                project_name: Some(sync_popup_context.project_name.clone()),
-                default_branch: Some(sync_popup_context.default_branch.clone()),
-                is_loading: false,
-                message: Self::sync_failure_message(&sync_error),
-                title: "Sync failed".to_string(),
-            },
-        }
-    }
-
-    /// Builds the in-progress sync popup shown while conflicts are being
-    /// resolved.
-    pub(super) fn sync_main_conflict_resolution_popup_mode(
-        conflicted_files: &[String],
-        sync_popup_context: &SyncPopupContext,
-    ) -> AppMode {
-        AppMode::SyncBlockedPopup {
-            project_name: Some(sync_popup_context.project_name.clone()),
-            default_branch: Some(sync_popup_context.default_branch.clone()),
-            is_loading: true,
-            message: Self::sync_conflict_resolution_message(conflicted_files),
-            title: "Resolving conflicts".to_string(),
-        }
-    }
-
-    /// Returns loading-state copy for assisted sync conflict resolution.
-    fn sync_conflict_resolution_message(conflicted_files: &[String]) -> String {
-        let file_list = conflicted_files
-            .iter()
-            .map(|file| format!("- {file}"))
-            .collect::<Vec<String>>()
-            .join("\n");
-
-        format!("Resolving conflicts during sync.\n\nConflicted files:\n{file_list}")
-    }
-
-    /// Builds success copy for sync completion with pull/push/conflict metrics
-    /// rendered as markdown sections with empty lines separating pull, push,
-    /// and conflict blocks.
-    fn sync_success_message(sync_main_outcome: &SyncMainOutcome) -> String {
-        let pulled_summary = Self::sync_commit_summary("pulled", sync_main_outcome.pulled_commits);
-        let pulled_titles =
-            Self::sync_pulled_commit_titles_summary(&sync_main_outcome.pulled_commit_titles);
-        let pushed_titles =
-            Self::sync_pushed_commit_titles_summary(&sync_main_outcome.pushed_commit_titles);
-        let pushed_summary = Self::sync_commit_summary("pushed", sync_main_outcome.pushed_commits);
-        let conflict_summary =
-            Self::sync_conflict_summary(&sync_main_outcome.resolved_conflict_files);
-
-        let mut message = sync_message::format_sync_success_message(
-            &pulled_summary,
-            &pulled_titles,
-            &pushed_summary,
-            &pushed_titles,
-            &conflict_summary,
-        );
-        if !sync_main_outcome.deferred_merged_session_ids.is_empty() {
-            let session_ids = sync_main_outcome
-                .deferred_merged_session_ids
-                .iter()
-                .map(|session_id| format!("- `{session_id}`"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            message.push_str(
-                "\n\n## Merged sessions still waiting\nThese sessions could not be archived or \
-                 restacked. Review their workflow warning, then retry the sync:\n",
-            );
-            message.push_str(&session_ids);
-        }
-
-        message
-    }
-
-    /// Returns pulled commit titles formatted as an indented list.
-    fn sync_pulled_commit_titles_summary(pulled_commit_titles: &[String]) -> String {
-        if pulled_commit_titles.is_empty() {
-            return String::new();
-        }
-
-        pulled_commit_titles
-            .iter()
-            .map(|title| format!("  - {title}"))
-            .collect::<Vec<String>>()
-            .join("\n")
-    }
-
-    /// Returns pushed commit titles formatted as an indented list.
-    fn sync_pushed_commit_titles_summary(pushed_commit_titles: &[String]) -> String {
-        if pushed_commit_titles.is_empty() {
-            return String::new();
-        }
-
-        pushed_commit_titles
-            .iter()
-            .map(|title| format!("  - {title}"))
-            .collect::<Vec<String>>()
-            .join("\n")
-    }
-
     /// Returns sync failure copy with actionable guidance for auth failures.
     ///
     /// Authentication failures show a dismiss-only message so users can fix
@@ -2597,25 +2594,6 @@ impl App {
             detected_forge_kind_from_git_push_error(&detail_message),
             "run sync again",
         )
-    }
-
-    /// Returns one brief pull/push sentence fragment for sync completion.
-    fn sync_commit_summary(direction: &str, commit_count: Option<u32>) -> String {
-        match commit_count {
-            Some(1) => format!("1 commit {direction}"),
-            Some(commit_count) => format!("{commit_count} commits {direction}"),
-            None => format!("commits {direction}: unknown"),
-        }
-    }
-
-    /// Returns one brief conflict-resolution sentence fragment for sync
-    /// completion.
-    fn sync_conflict_summary(resolved_conflict_files: &[String]) -> String {
-        if resolved_conflict_files.is_empty() {
-            return "no conflicts fixed".to_string();
-        }
-
-        format!("conflicts fixed: {}", resolved_conflict_files.join(", "))
     }
 }
 
@@ -3029,6 +3007,12 @@ mod tests {
         let panic_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
             event_batch.collect_workflow_event(AppEvent::SyncMainConflictResolutionStarted {
                 conflicted_files: Vec::new(),
+                operation: ProjectSyncContext {
+                    default_branch: "main".to_string(),
+                    operation_id: 1,
+                    project_id: 1,
+                    project_name: "agentty".to_string(),
+                },
             });
         }));
 

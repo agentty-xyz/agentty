@@ -1,8 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::App;
-#[cfg(test)]
-use crate::app::sync_message::format_sync_success_message;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::EventResult;
 
@@ -148,35 +146,5 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(matches!(app.mode, AppMode::SyncBlockedPopup { .. }));
-    }
-
-    #[test]
-    fn test_format_sync_success_message_includes_markdown_sections() {
-        // Arrange
-        let pulled_summary = "2 commits pulled";
-        let pulled_titles = "  - Add audit log indexing\n  - Fix merge conflict prompt wording";
-        let pushed_summary = "1 commit pushed";
-        let pushed_titles = "  - Polish sync popup alignment";
-        let conflict_summary = "conflicts fixed: src/lib.rs";
-
-        // Act
-        let formatted_message = format_sync_success_message(
-            pulled_summary,
-            pulled_titles,
-            pushed_summary,
-            pushed_titles,
-            conflict_summary,
-        );
-
-        // Assert
-        assert!(formatted_message.starts_with(
-            "Successfully synchronized with its upstream.\n\n## 1. 2 commits pulled\n  - Add \
-             audit log indexing\n",
-        ));
-        assert!(
-            formatted_message
-                .contains("\n\n## 2. 1 commit pushed\n  - Polish sync popup alignment",)
-        );
-        assert!(formatted_message.contains("\n\n## 3. conflicts fixed: src/lib.rs"));
     }
 }

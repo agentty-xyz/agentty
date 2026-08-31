@@ -40,7 +40,7 @@ const REVIEW_SYNC_FAILURE_NOTICE_THRESHOLD: u32 = 3;
 /// retries.
 const REVIEW_SYNC_MAX_BACKOFF_PASSES: u64 = 7;
 
-/// Starts project sync work and emits completion events for list-mode popups.
+/// Starts project sync work and emits operation-scoped progress events.
 #[cfg_attr(test, mockall::automock)]
 pub(crate) trait SyncMainRunner: Send + Sync {
     /// Starts sync for one project and emits one
@@ -48,10 +48,9 @@ pub(crate) trait SyncMainRunner: Send + Sync {
     fn start_sync_main(
         &self,
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
-        default_branch: Option<String>,
-        git_client: Arc<dyn GitClient>,
+        operation: ProjectSyncContext,
         session_model: AgentModel,
-        working_dir: PathBuf,
+        sync_context: SyncContext,
     );
 }
 
@@ -74,19 +73,19 @@ impl SyncMainRunner for OrchestratorSyncMainRunner {
     fn start_sync_main(
         &self,
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
-        default_branch: Option<String>,
-        git_client: Arc<dyn GitClient>,
+        operation: ProjectSyncContext,
         session_model: AgentModel,
-        working_dir: PathBuf,
+        sync_context: SyncContext,
     ) {
         // Fire-and-forget: the orchestrator only stops at app shutdown.
-        let _ = self.command_tx.send(SyncCommand::SyncMain(SyncMainRequest {
-            app_event_tx,
-            default_branch,
-            git_client,
-            session_model,
-            working_dir,
-        }));
+        let _ = self
+            .command_tx
+            .send(SyncCommand::SyncMain(Box::new(SyncMainRequest {
+                app_event_tx,
+                operation,
+                session_model,
+                sync_context,
+            })));
     }
 }
 
@@ -130,6 +129,15 @@ impl SyncHandle {
     /// events to discard completions computed from stale targets.
     pub(crate) fn current_generation(&self) -> u64 {
         self.context_tx.borrow().generation
+    }
+
+    /// Returns one immutable snapshot for an explicitly requested sync.
+    ///
+    /// Unlike recurring polling, a manual sync must keep using the project
+    /// selected when the user pressed `s`, even if the visible project changes
+    /// before the queued command runs.
+    pub(crate) fn context_snapshot(&self) -> SyncContext {
+        self.context_tx.borrow().clone()
     }
 
     /// Builds the production sync-main runner backed by this handle's
@@ -198,6 +206,10 @@ pub(crate) struct SyncContext {
     /// Active project branch, or `None` when the project has no git branch
     /// and polling should be skipped.
     pub(crate) project_branch_name: Option<String>,
+    /// Stable identifier of the project that owns this context.
+    pub(crate) project_id: i64,
+    /// User-visible project name captured with this context.
+    pub(crate) project_name: String,
     /// Forge boundary used for review-request refreshes.
     pub(crate) review_request_client: Arc<dyn ReviewRequestClient>,
     /// Review-request refresh targets for active sessions.
@@ -215,7 +227,8 @@ impl SyncContext {
     /// so refresh-timestamp churn on linked review requests does not bump the
     /// generation on every successful pass.
     fn same_polling_inputs(&self, other: &SyncContext) -> bool {
-        self.project_branch_name == other.project_branch_name
+        self.project_id == other.project_id
+            && self.project_branch_name == other.project_branch_name
             && self.working_dir == other.working_dir
             && self.session_git_status_targets == other.session_git_status_targets
             && review_target_polling_keys(&self.review_request_sync_targets)
@@ -228,21 +241,95 @@ pub(crate) enum SyncCommand {
     /// Runs one immediate read-only status refresh pass.
     RefreshNow,
     /// Runs the user-triggered mutating main-branch sync.
-    SyncMain(SyncMainRequest),
+    SyncMain(Box<SyncMainRequest>),
 }
 
 /// Inputs for one user-triggered main-branch sync.
 pub(crate) struct SyncMainRequest {
     /// Event sender used to emit [`AppEvent::SyncMainCompleted`].
     pub(crate) app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    /// Default branch reported by the active project context.
-    pub(crate) default_branch: Option<String>,
-    /// Git boundary used for the pull/rebase/push phases.
-    pub(crate) git_client: Arc<dyn GitClient>,
+    /// Immutable user-request identity and display context.
+    pub(crate) operation: ProjectSyncContext,
     /// Model used for agent-assisted conflict resolution.
     pub(crate) session_model: AgentModel,
-    /// Project working directory the sync runs in.
-    pub(crate) working_dir: PathBuf,
+    /// Immutable project and review-target snapshot captured at enqueue time.
+    pub(crate) sync_context: SyncContext,
+}
+
+/// Stable identity and display context for one explicit project sync.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProjectSyncContext {
+    /// Branch updated by this operation.
+    pub(crate) default_branch: String,
+    /// Monotonic app-local operation identifier used to reject stale events.
+    pub(crate) operation_id: u64,
+    /// Project that owns the target checkout and any follow-up reconciliation.
+    pub(crate) project_id: i64,
+    /// User-visible project label retained across project switches.
+    pub(crate) project_name: String,
+}
+
+/// Current user-visible phase of the latest explicit project sync.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ProjectSyncPhase {
+    /// Pull/rebase/push and preflight work is running.
+    Running,
+    /// Assisted conflict resolution is running for the reported file count.
+    ResolvingConflicts { conflicted_file_count: usize },
+    /// The project branch was synchronized successfully.
+    Complete {
+        deferred_session_count: usize,
+        pulled_commits: Option<u32>,
+        pushed_commits: Option<u32>,
+        resolved_conflict_count: usize,
+    },
+    /// A recoverable project policy prevented sync from starting.
+    Blocked { message: String },
+    /// Git, authentication, or assisted conflict resolution failed.
+    Failed { message: String },
+}
+
+/// Non-modal project sync state rendered independently from the active app
+/// mode.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProjectSyncStatus {
+    /// Immutable project and operation identity.
+    pub(crate) context: ProjectSyncContext,
+    /// Latest accepted lifecycle phase.
+    pub(crate) phase: ProjectSyncPhase,
+}
+
+impl ProjectSyncStatus {
+    /// Returns whether another base-checkout operation must wait.
+    pub(crate) fn is_running(&self) -> bool {
+        matches!(
+            self.phase,
+            ProjectSyncPhase::Running | ProjectSyncPhase::ResolvingConflicts { .. }
+        )
+    }
+}
+
+/// One review refresh computed from the project snapshot owned by a manual
+/// sync.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SyncMainReviewUpdate {
+    pub(crate) result: Result<SyncReviewRequestTaskResult, String>,
+    pub(crate) session_id: SessionId,
+}
+
+/// Terminal payload for one operation-scoped project sync.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SyncMainCompletion {
+    pub(crate) operation: ProjectSyncContext,
+    pub(crate) result: Result<session::SyncMainOutcome, session::SyncSessionStartError>,
+    pub(crate) review_request_updates: Vec<SyncMainReviewUpdate>,
+}
+
+/// Event channel and operation identity used by assisted sync progress.
+#[derive(Clone)]
+pub(crate) struct SyncMainEventContext {
+    pub(crate) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    pub(crate) operation: ProjectSyncContext,
 }
 
 /// Per-session git-status polling target for one active session branch.
@@ -367,7 +454,7 @@ impl SyncOrchestrator {
 
                     match command {
                         SyncCommand::RefreshNow => self.run_refresh_pass(true).await,
-                        SyncCommand::SyncMain(request) => self.run_sync_main(request).await,
+                        SyncCommand::SyncMain(request) => self.run_sync_main(*request).await,
                     }
                     tick.reset();
                 }
@@ -452,7 +539,9 @@ impl SyncOrchestrator {
     /// merged or closed sessions. Targets in failure backoff are skipped
     /// until their retry pass.
     async fn run_review_request_pass(&mut self, context: &SyncContext) {
-        let updates = self.collect_review_request_pass_updates(context).await;
+        let updates = self
+            .collect_review_request_pass_updates(context, true)
+            .await;
 
         self.emit_review_request_pass_updates(context, updates);
     }
@@ -465,13 +554,14 @@ impl SyncOrchestrator {
     async fn collect_review_request_pass_updates(
         &mut self,
         context: &SyncContext,
+        reject_stale_context: bool,
     ) -> Vec<ReviewRequestPassUpdate> {
         let review_pass_index = self.review_pass_index;
         self.review_pass_index = self.review_pass_index.wrapping_add(1);
         let mut updates = Vec::new();
 
         for review_request_sync_target in &context.review_request_sync_targets {
-            if self.context_is_stale(context) {
+            if reject_stale_context && self.context_is_stale(context) {
                 return updates;
             }
             if self.is_target_backed_off(&review_request_sync_target.session_id, review_pass_index)
@@ -488,7 +578,7 @@ impl SyncOrchestrator {
             )
             .await;
 
-            if self.context_is_stale(context) {
+            if reject_stale_context && self.context_is_stale(context) {
                 return updates;
             }
 
@@ -532,29 +622,44 @@ impl SyncOrchestrator {
     async fn run_sync_main(&mut self, request: SyncMainRequest) {
         let SyncMainRequest {
             app_event_tx,
-            default_branch,
-            git_client,
+            operation,
             session_model,
-            working_dir,
+            sync_context,
         } = request;
 
-        let context = self.context_rx.borrow().clone();
-        let review_request_updates = self.collect_review_request_pass_updates(&context).await;
+        let review_request_updates = self
+            .collect_review_request_pass_updates(&sync_context, false)
+            .await;
 
         let result = session::SessionManager::sync_main_for_project(
-            default_branch,
-            working_dir,
-            Some(app_event_tx.clone()),
-            git_client,
+            sync_context.project_branch_name.clone(),
+            sync_context.working_dir.clone(),
+            Some(SyncMainEventContext {
+                app_event_tx: app_event_tx.clone(),
+                operation: operation.clone(),
+            }),
+            Arc::clone(&sync_context.git_client),
             session_model,
         )
         .await;
-        if result.is_ok() {
-            self.emit_review_request_pass_updates(&context, review_request_updates);
-        }
+        let review_request_updates = result.is_ok().then(|| {
+            review_request_updates
+                .into_iter()
+                .map(|update| SyncMainReviewUpdate {
+                    result: update.result,
+                    session_id: update.target.session_id,
+                })
+                .collect()
+        });
 
         // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = app_event_tx.send(AppEvent::SyncMainCompleted { result });
+        let _ = app_event_tx.send(AppEvent::SyncMainCompleted {
+            completion: SyncMainCompletion {
+                operation,
+                result,
+                review_request_updates: review_request_updates.unwrap_or_default(),
+            },
+        });
     }
 
     /// Returns whether the app published a newer context since this pass
@@ -927,11 +1032,191 @@ mod tests {
             generation,
             git_client: Arc::new(MockGitClient::new()),
             project_branch_name: Some("main".to_string()),
+            project_id: 1,
+            project_name: "agentty".to_string(),
             review_request_client: Arc::new(MockReviewRequestClient::new()),
             review_request_sync_targets,
             session_git_status_targets: Vec::new(),
             working_dir: PathBuf::from("/tmp/project"),
         }
+    }
+
+    /// Builds one explicit-sync operation fixture.
+    fn project_sync_context() -> ProjectSyncContext {
+        ProjectSyncContext {
+            default_branch: "main".to_string(),
+            operation_id: 7,
+            project_id: 1,
+            project_name: "agentty".to_string(),
+        }
+    }
+
+    #[test]
+    /// Only active phases hold the base-checkout operation guard.
+    fn project_sync_status_is_running_only_for_active_phases() {
+        // Arrange
+        let mut status = ProjectSyncStatus {
+            context: project_sync_context(),
+            phase: ProjectSyncPhase::Running,
+        };
+
+        // Act / Assert
+        assert!(status.is_running());
+        status.phase = ProjectSyncPhase::ResolvingConflicts {
+            conflicted_file_count: 1,
+        };
+        assert!(status.is_running());
+        status.phase = ProjectSyncPhase::Complete {
+            deferred_session_count: 0,
+            pulled_commits: Some(0),
+            pushed_commits: Some(0),
+            resolved_conflict_count: 0,
+        };
+        assert!(!status.is_running());
+    }
+
+    #[tokio::test]
+    /// The production runner forwards manual requests through the live
+    /// orchestrator queue and emits an operation-scoped terminal event.
+    async fn orchestrator_runner_forwards_manual_sync_request() {
+        // Arrange
+        let mut sync_context = sync_context_fixture(0, Vec::new());
+        sync_context.project_branch_name = None;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let sync_handle = SyncHandle::spawn(app_event_tx.clone(), sync_context.clone());
+        let runner = sync_handle.sync_main_runner();
+        let operation = project_sync_context();
+
+        // Act
+        runner.start_sync_main(
+            app_event_tx,
+            operation.clone(),
+            AgentModel::Gemini37Flash,
+            sync_context,
+        );
+        let event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("manual sync should complete")
+            .expect("orchestrator should emit a completion");
+
+        // Assert
+        assert!(matches!(
+            event,
+            AppEvent::SyncMainCompleted {
+                completion: SyncMainCompletion {
+                    operation: completed_operation,
+                    result: Err(_),
+                    ..
+                }
+            } if completed_operation == operation
+        ));
+    }
+
+    #[tokio::test]
+    /// Successful manual syncs preserve their captured review results and
+    /// emit them only with the matching project operation.
+    async fn run_sync_main_emits_captured_review_updates_after_success() {
+        // Arrange
+        let working_dir = PathBuf::from("/tmp/project");
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client.expect_repo_url().once().returning(|_| {
+            Box::pin(async {
+                Err(GitError::CommandFailed {
+                    command: "git remote get-url origin".to_string(),
+                    stderr: "not a git repository".to_string(),
+                })
+            })
+        });
+        let repo_root = working_dir.clone();
+        mock_git_client
+            .expect_find_git_repo_root()
+            .once()
+            .returning(move |_| {
+                let repo_root = repo_root.clone();
+                Box::pin(async move { Some(repo_root) })
+            });
+        mock_git_client
+            .expect_is_worktree_clean()
+            .once()
+            .returning(|_| Box::pin(async { Ok(true) }));
+        let mut ahead_behind_calls = 0_u8;
+        mock_git_client
+            .expect_get_ahead_behind()
+            .times(2)
+            .returning(move |_| {
+                ahead_behind_calls = ahead_behind_calls.saturating_add(1);
+                let status = if ahead_behind_calls == 1 {
+                    (1, 2)
+                } else {
+                    (0, 0)
+                };
+
+                Box::pin(async move { Ok(status) })
+            });
+        mock_git_client
+            .expect_list_upstream_commit_titles()
+            .once()
+            .returning(|_| Box::pin(async { Ok(vec!["remote fix".to_string()]) }));
+        mock_git_client
+            .expect_pull_rebase()
+            .once()
+            .returning(|_| Box::pin(async { Ok(ag_git::PullRebaseResult::Completed) }));
+        mock_git_client
+            .expect_list_local_commit_titles()
+            .once()
+            .returning(|_| Box::pin(async { Ok(vec!["local work".to_string()]) }));
+        mock_git_client
+            .expect_push_current_branch()
+            .once()
+            .returning(|_| Box::pin(async { Ok("origin/main".to_string()) }));
+        let git_client: Arc<dyn GitClient> = Arc::new(mock_git_client);
+        let sync_context = SyncContext {
+            git_client: Arc::clone(&git_client),
+            review_request_sync_targets: vec![review_request_sync_target("session-1", None)],
+            working_dir,
+            ..sync_context_fixture(0, Vec::new())
+        };
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let (_command_tx, command_rx) = mpsc::unbounded_channel();
+        let (_context_tx, context_rx) = watch::channel(sync_context.clone());
+        let mut orchestrator = SyncOrchestrator {
+            app_event_tx: app_event_tx.clone(),
+            command_rx,
+            context_rx,
+            review_pass_index: 0,
+            review_sync_failures: HashMap::new(),
+            tick_index: 0,
+        };
+        let operation = project_sync_context();
+
+        // Act
+        orchestrator
+            .run_sync_main(SyncMainRequest {
+                app_event_tx,
+                operation: operation.clone(),
+                session_model: AgentModel::Gemini37Flash,
+                sync_context,
+            })
+            .await;
+        let event = app_event_rx
+            .recv()
+            .await
+            .expect("manual sync should emit a completion");
+
+        // Assert
+        assert!(matches!(
+            event,
+            AppEvent::SyncMainCompleted {
+                completion: SyncMainCompletion {
+                    operation: completed_operation,
+                    result: Ok(_),
+                    review_request_updates,
+                }
+            } if completed_operation == operation
+                && review_request_updates.len() == 1
+                && review_request_updates[0].session_id.as_str() == "session-1"
+                && review_request_updates[0].result.is_err()
+        ));
     }
 
     #[test]

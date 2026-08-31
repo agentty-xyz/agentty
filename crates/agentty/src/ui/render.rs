@@ -7,7 +7,7 @@ use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{Tab, UpdateStatus};
+use crate::app::{ProjectSyncStatus, Tab, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
@@ -71,6 +71,8 @@ pub struct RenderContext<'a> {
     pub project_table_state: &'a mut TableState,
     /// Project rows available for rendering.
     pub projects: &'a [ProjectListItem],
+    /// Latest explicit project-sync lifecycle state.
+    pub(crate) project_sync_status: Option<&'a ProjectSyncStatus>,
     /// Focused-review state for the visible session, projected from the app
     /// cache for this render pass.
     pub session_review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
@@ -157,6 +159,7 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
             context.mode,
         ))
         .fyi_rotation_index(context.status_bar_fyi_rotation_index)
+        .project_sync_status(context.project_sync_status.cloned())
         .update_status(context.update_status.cloned())
         .render(f, status_bar_area);
     render_footer_bar(

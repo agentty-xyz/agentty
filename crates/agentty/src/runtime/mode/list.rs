@@ -277,7 +277,9 @@ mod tests {
     use crossterm::event::KeyModifiers;
 
     use super::*;
-    use crate::app::{AppEvent, MockSyncMainRunner, SyncMainOutcome, SyncSessionStartError};
+    use crate::app::{
+        AppEvent, MockSyncMainRunner, ProjectSyncPhase, SyncMainOutcome, SyncSessionStartError,
+    };
     use crate::domain::question::QuestionItem;
     use crate::domain::theme::ColorTheme;
     use crate::presentation::app_mode::PromptModeSnapshot;
@@ -327,9 +329,13 @@ mod tests {
         mock_sync_main_runner
             .expect_start_sync_main()
             .times(1)
-            .returning(move |app_event_tx, _, _, _, _| {
+            .returning(move |app_event_tx, operation, _, _| {
                 let _ = app_event_tx.send(AppEvent::SyncMainCompleted {
-                    result: result.clone(),
+                    completion: crate::app::SyncMainCompletion {
+                        operation,
+                        result: result.clone(),
+                        review_request_updates: Vec::new(),
+                    },
                 });
             });
         app.sync_main_runner = std::sync::Arc::new(mock_sync_main_runner);
@@ -1583,26 +1589,20 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(app.mode, AppMode::List));
         assert!(matches!(
-            app.mode,
-            AppMode::SyncBlockedPopup {
-                is_loading: true,
-                ref title,
-                ..
-            } if title == "Sync in progress"
+            app.project_sync_status.as_ref().map(|status| &status.phase),
+            Some(ProjectSyncPhase::Running)
         ));
 
         // Act
         app.process_pending_app_events().await;
 
         // Assert
+        assert!(matches!(app.mode, AppMode::List));
         assert!(matches!(
-            app.mode,
-            AppMode::SyncBlockedPopup {
-                is_loading: false,
-                ref title,
-                ..
-            } if title == "Sync failed"
+            app.project_sync_status.as_ref().map(|status| &status.phase),
+            Some(ProjectSyncPhase::Failed { message }) if message == "missing upstream"
         ));
     }
 
@@ -1625,31 +1625,62 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(app.mode, AppMode::List));
         assert!(matches!(
-            app.mode,
-            AppMode::SyncBlockedPopup {
-                is_loading: true,
-                ref title,
-                ..
-            } if title == "Sync in progress"
+            app.project_sync_status.as_ref().map(|status| &status.phase),
+            Some(ProjectSyncPhase::Running)
         ));
 
         // Act
         app.process_pending_app_events().await;
 
         // Assert
+        assert!(matches!(app.mode, AppMode::List));
         assert!(matches!(
-            app.mode,
-            AppMode::SyncBlockedPopup {
-                is_loading: false,
-                ref title,
-                ..
-            } if title == "Sync failed"
+            app.project_sync_status.as_ref().map(|status| &status.phase),
+            Some(ProjectSyncPhase::Failed { message }) if message == "missing upstream"
         ));
     }
 
     #[tokio::test]
-    async fn test_handle_sync_key_uses_project_name_and_branch_in_popup_message() {
+    async fn test_handle_sync_key_coalesces_duplicate_running_requests() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+        let mut mock_sync_main_runner = MockSyncMainRunner::new();
+        mock_sync_main_runner
+            .expect_start_sync_main()
+            .times(1)
+            .returning(|_, _, _, _| {});
+        app.sync_main_runner = std::sync::Arc::new(mock_sync_main_runner);
+        let sync_key = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE);
+
+        // Act
+        handle(&mut app, sync_key)
+            .await
+            .expect("failed to handle first sync key");
+        let operation_id = app
+            .project_sync_status
+            .as_ref()
+            .expect("sync should be running")
+            .context
+            .operation_id;
+        handle(&mut app, sync_key)
+            .await
+            .expect("failed to handle duplicate sync key");
+
+        // Assert
+        assert_eq!(
+            app.project_sync_status
+                .as_ref()
+                .expect("sync should remain running")
+                .context
+                .operation_id,
+            operation_id
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_sync_key_uses_captured_project_name_and_branch() {
         // Arrange
         let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
         mock_sync_main_completion(
@@ -1671,6 +1702,10 @@ mod tests {
             None,
             base_dir.path().to_path_buf(),
         );
+        let mut sync_context = app.sync_handle.context_snapshot();
+        sync_context.project_branch_name = Some("develop".to_string());
+        sync_context.project_name.clone_from(&expected_project_name);
+        app.sync_handle.publish_context(sync_context);
 
         // Act
         let event_result = handle(
@@ -1682,36 +1717,27 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(matches!(
-            app.mode,
-            AppMode::SyncBlockedPopup {
-                is_loading: true,
-                ref title,
-                ..
-            } if title == "Sync in progress"
-        ));
+        assert!(matches!(app.mode, AppMode::List));
 
         // Act
         app.process_pending_app_events().await;
 
         // Assert
+        let status = app
+            .project_sync_status
+            .as_ref()
+            .expect("sync status should remain visible");
+        assert_eq!(status.context.default_branch, "develop");
+        assert_eq!(status.context.project_name, expected_project_name);
         assert!(matches!(
-            app.mode,
-            AppMode::SyncBlockedPopup {
-                ref default_branch,
-                is_loading: false,
-                ref title,
-                ref message,
-                ref project_name,
-            } if title == "Sync blocked"
-                && default_branch.as_deref() == Some("develop")
-                && message.contains("cannot run while `develop` has uncommitted changes")
-                && project_name.as_deref() == Some(expected_project_name.as_str())
+            &status.phase,
+            ProjectSyncPhase::Blocked { message }
+                if message.contains("cannot run while `develop` has uncommitted changes")
         ));
     }
 
     #[tokio::test]
-    async fn test_handle_sync_key_opens_popup_when_main_has_uncommitted_changes() {
+    async fn test_handle_sync_key_shows_blocked_status_for_uncommitted_main() {
         // Arrange
         let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
         mock_sync_main_completion(
@@ -1731,30 +1757,17 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(matches!(
-            app.mode,
-            AppMode::SyncBlockedPopup {
-                is_loading: true,
-                ref title,
-                ..
-            } if title == "Sync in progress"
-        ));
+        assert!(matches!(app.mode, AppMode::List));
 
         // Act
         app.process_pending_app_events().await;
 
         // Assert
+        assert!(matches!(app.mode, AppMode::List));
         assert!(matches!(
-            app.mode,
-            AppMode::SyncBlockedPopup {
-                ref default_branch,
-                is_loading: false,
-                ref title,
-                ref message,
-                ref project_name,
-            } if title == "Sync blocked" && message.contains("cannot run while `main` has uncommitted changes")
-                && default_branch.as_deref() == Some("main")
-                && project_name.is_some()
+            app.project_sync_status.as_ref().map(|status| &status.phase),
+            Some(ProjectSyncPhase::Blocked { message })
+                if message.contains("cannot run while `main` has uncommitted changes")
         ));
     }
 }

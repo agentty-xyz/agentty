@@ -1,6 +1,6 @@
 //! App state definitions and workflow glue for the app core module.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -27,7 +27,10 @@ use app::service::AppServices;
 use app::session::SessionManager;
 use app::session_runtime::SessionRuntime;
 use app::setting::SettingsManager;
-use app::sync::SyncMainRunner;
+use app::sync::{
+    ProjectSyncContext, ProjectSyncPhase, ProjectSyncStatus, SyncMainCompletion, SyncMainRequest,
+    SyncMainRunner,
+};
 use app::tab::TabManager;
 use app::{sync, task};
 use session::StatusTransition;
@@ -94,13 +97,6 @@ pub enum UpdateStatus {
         /// Version whose installation failed.
         version: String,
     },
-}
-
-/// Immutable context displayed in sync-main popup content.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct SyncPopupContext {
-    pub(super) default_branch: String,
-    pub(super) project_name: String,
 }
 
 /// Source-session context needed to create a seeded continuation draft.
@@ -290,6 +286,15 @@ pub struct App {
     /// Tracks background session-diff loads by request generation so stale
     /// completions cannot change the active mode or review generation.
     pub(crate) pending_session_diff_requests: HashMap<u64, PendingSessionDiffRequest>,
+    /// Records the newest explicit sync operation requested for each project
+    /// so delayed completions cannot apply superseded reconciliation work.
+    pub(crate) latest_project_sync_operation_ids: HashMap<i64, u64>,
+    /// Retains completed sync reconciliation until its owning project is
+    /// active.
+    pub(crate) pending_project_sync_completions: HashMap<i64, SyncMainCompletion>,
+    /// Retains explicit sync requests for other projects while one sync or a
+    /// base-checkout merge owns the foreground mutation slot.
+    pub(crate) pending_project_sync_requests: VecDeque<SyncMainRequest>,
     /// Owns project selection state, project metadata, and git status
     /// snapshots.
     pub(crate) projects: ProjectManager,
@@ -300,6 +305,8 @@ pub struct App {
     pub(crate) sessions: SessionRuntime,
     /// Runs sync-to-main workflows behind an injectable boundary.
     pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
+    /// Latest non-modal explicit project-sync lifecycle state.
+    pub(crate) project_sync_status: Option<ProjectSyncStatus>,
     /// Owns the active-project sync orchestrator command and context
     /// channels.
     pub(crate) sync_handle: sync::SyncHandle,
@@ -323,6 +330,8 @@ pub struct App {
     pub(crate) last_seen_session_update_versions: HashMap<SessionId, u64>,
     /// Stores the current auto-update progress state when an update is running.
     pub(crate) update_status: Option<UpdateStatus>,
+    /// Monotonic identifier assigned to the next explicit project sync.
+    pub(crate) next_sync_operation_id: u64,
 }
 
 impl App {
@@ -534,6 +543,7 @@ impl App {
         }
         self.reload_projects().await;
         self.refresh_sessions_now().await;
+        self.apply_pending_project_sync_completion().await;
         self.resume_deferred_auto_reviews(recoverable_focused_review_session_ids);
 
         Ok(())
@@ -544,6 +554,7 @@ impl App {
     /// # Errors
     /// Returns an error if worktree or persistence setup fails.
     pub async fn create_session(&mut self) -> Result<String, AppError> {
+        self.ensure_project_checkout_available(self.projects.active_project_id())?;
         let session_id = self
             .sessions
             .create_session(&self.projects, &self.services)
@@ -559,6 +570,7 @@ impl App {
     /// # Errors
     /// Returns an error if worktree or persistence setup fails.
     pub async fn create_draft_session(&mut self) -> Result<String, AppError> {
+        self.ensure_project_checkout_available(self.projects.active_project_id())?;
         let base_branch = self
             .projects
             .git_branch()
@@ -790,6 +802,13 @@ impl App {
         session_id: &str,
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), AppError> {
+        if self
+            .sessions
+            .session_for_id(session_id)
+            .is_some_and(Session::is_draft_session)
+        {
+            self.ensure_project_checkout_available(self.projects.active_project_id())?;
+        }
         self.clear_review_output(session_id);
         self.services
             .db()
@@ -827,9 +846,11 @@ impl App {
     /// the stack has no other active branch work.
     ///
     /// # Errors
-    /// Returns an error if the session is missing, has no staged drafts, or
-    /// stack consistency or launch enqueueing fails.
+    /// Returns an error if the project checkout is unavailable, the session is
+    /// missing, has no staged drafts, or stack consistency or launch enqueueing
+    /// fails.
     pub async fn start_staged_session(&mut self, session_id: &str) -> Result<(), AppError> {
+        self.ensure_project_checkout_available(self.projects.active_project_id())?;
         self.clear_review_output(session_id);
         self.services
             .db()
@@ -1465,6 +1486,7 @@ impl App {
     /// Returns an error if session is not mergeable, queueing fails, or
     /// immediate merge start fails while the queue is idle.
     pub async fn merge_session(&mut self, session_id: &str) -> Result<(), AppError> {
+        self.ensure_project_checkout_available(self.projects.active_project_id())?;
         if self.merge_queue.is_queued_or_active(session_id) {
             return Ok(());
         }
@@ -1493,6 +1515,7 @@ impl App {
     /// Returns an error if focused-review persistence cannot be cleared before
     /// sync starts, or if session sync cannot start.
     pub async fn rebase_session(&mut self, session_id: &str) -> Result<(), AppError> {
+        self.ensure_project_checkout_available(self.projects.active_project_id())?;
         let should_clear_pending_review = matches!(
             self.review_cache.get(session_id),
             Some(ReviewCacheEntry::Loading { .. })
@@ -1513,31 +1536,143 @@ impl App {
         Ok(())
     }
 
-    /// Starts selected-project branch sync in the background and immediately
-    /// opens a loading popup with project and branch context.
+    /// Starts selected-project branch sync without changing the active mode.
+    ///
+    /// Duplicate requests are coalesced while the same project operation is
+    /// running. The immutable sync context prevents later navigation or a
+    /// project switch from redirecting queued Git and review work.
     pub(crate) fn start_sync_main(&mut self) {
-        let sync_popup_context = self.sync_popup_context();
-        self.mode = AppMode::SyncBlockedPopup {
-            project_name: Some(sync_popup_context.project_name.clone()),
-            default_branch: Some(sync_popup_context.default_branch),
-            is_loading: true,
-            message: Self::sync_loading_message(),
-            title: "Sync in progress".to_string(),
+        let sync_context = self.sync_handle.context_snapshot();
+        if self.project_sync_status.as_ref().is_some_and(|status| {
+            status.is_running() && status.context.project_id == sync_context.project_id
+        }) || self
+            .pending_project_sync_requests
+            .iter()
+            .any(|request| request.operation.project_id == sync_context.project_id)
+        {
+            return;
+        }
+
+        let request = self.new_sync_main_request(sync_context);
+        if self
+            .project_sync_status
+            .as_ref()
+            .is_some_and(ProjectSyncStatus::is_running)
+        {
+            self.pending_project_sync_requests.push_back(request);
+
+            return;
+        }
+        if self.merge_queue.has_work() {
+            self.project_sync_status = Some(ProjectSyncStatus {
+                context: request.operation,
+                phase: ProjectSyncPhase::Blocked {
+                    message: "a merge is active or queued; try again after it finishes".to_string(),
+                },
+            });
+            self.mark_dirty();
+
+            return;
+        }
+
+        self.dispatch_sync_main_request(request);
+    }
+
+    /// Captures one immutable request for the currently selected project.
+    fn new_sync_main_request(&mut self, sync_context: sync::SyncContext) -> SyncMainRequest {
+        let operation_id = self.next_sync_operation_id;
+        self.next_sync_operation_id = self.next_sync_operation_id.saturating_add(1);
+        self.latest_project_sync_operation_ids
+            .insert(sync_context.project_id, operation_id);
+        self.pending_project_sync_completions
+            .remove(&sync_context.project_id);
+        let operation = ProjectSyncContext {
+            default_branch: sync_context
+                .project_branch_name
+                .clone()
+                .unwrap_or_else(|| "not detected".to_string()),
+            operation_id,
+            project_id: sync_context.project_id,
+            project_name: sync_context.project_name.clone(),
         };
 
-        let app_event_tx = self.services.event_sender();
-        let default_branch = self.projects.git_branch().map(str::to_string);
-        let working_dir = self.projects.working_dir().to_path_buf();
-        let git_client = self.services.git_client();
-        let session_model = self.sessions.default_session_model();
+        SyncMainRequest {
+            app_event_tx: self.services.event_sender(),
+            operation,
+            session_model: self.sessions.default_session_model(),
+            sync_context,
+        }
+    }
+
+    /// Starts one request after the foreground mutation slot is reserved.
+    fn dispatch_sync_main_request(&mut self, request: SyncMainRequest) {
+        self.project_sync_status = Some(ProjectSyncStatus {
+            context: request.operation.clone(),
+            phase: ProjectSyncPhase::Running,
+        });
+        self.mark_dirty();
 
         self.sync_main_runner.start_sync_main(
-            app_event_tx,
-            default_branch,
-            git_client,
-            session_model,
-            working_dir,
+            request.app_event_tx,
+            request.operation,
+            request.session_model,
+            request.sync_context,
         );
+    }
+
+    /// Starts the oldest queued project sync when base-checkout mutation is
+    /// idle.
+    fn start_next_project_sync_from_queue(&mut self) {
+        if self
+            .project_sync_status
+            .as_ref()
+            .is_some_and(ProjectSyncStatus::is_running)
+            || self.merge_queue.has_work()
+        {
+            return;
+        }
+        let Some(request) = self.pending_project_sync_requests.pop_front() else {
+            return;
+        };
+
+        self.dispatch_sync_main_request(request);
+    }
+
+    /// Gives pending merges priority, then resumes queued project sync work.
+    pub(super) async fn resume_base_checkout_work(&mut self) {
+        if self
+            .project_sync_status
+            .as_ref()
+            .is_some_and(ProjectSyncStatus::is_running)
+        {
+            return;
+        }
+        if self.merge_queue.has_work() {
+            // Best-effort: merge queue progression failures are surfaced in session output.
+            let _ = self.start_next_merge_from_queue(false).await;
+        }
+
+        self.start_next_project_sync_from_queue();
+    }
+
+    /// Rejects base-checkout operations that could race the active project
+    /// sync.
+    pub(crate) fn ensure_project_checkout_available(
+        &self,
+        project_id: i64,
+    ) -> Result<(), AppError> {
+        let Some(sync_status) = self
+            .project_sync_status
+            .as_ref()
+            .filter(|status| status.is_running() && status.context.project_id == project_id)
+        else {
+            return Ok(());
+        };
+
+        Err(AppError::Workflow(format!(
+            "Project `{}` is synchronizing `{}`; try this base-branch operation again after sync",
+            sync_status.context.project_name, sync_status.context.default_branch,
+        )))
     }
 
     /// Starts review assist generation for one session using the
@@ -1699,6 +1834,8 @@ impl App {
             generation: 0,
             git_client: services.git_client(),
             project_branch_name: projects.git_branch().map(str::to_string),
+            project_id: projects.active_project_id(),
+            project_name: projects.project_name().to_string(),
             review_request_client: services.review_request_client(),
             review_request_sync_targets: Self::review_request_sync_targets(sessions),
             session_git_status_targets: Self::session_git_status_targets(sessions),
@@ -2094,6 +2231,12 @@ impl App {
         if self.merge_queue.has_active() {
             return Ok(());
         }
+        if self
+            .ensure_project_checkout_available(self.projects.active_project_id())
+            .is_err()
+        {
+            return Ok(());
+        }
 
         while let Some(next_session_id) = self.merge_queue.pop_next() {
             match self
@@ -2149,8 +2292,7 @@ impl App {
             previous_session_states,
         );
         if progress == MergeQueueProgress::StartNext {
-            // Best-effort: merge queue progression failure is handled by status events.
-            let _ = self.start_next_merge_from_queue(false).await;
+            self.resume_base_checkout_work().await;
         }
     }
 
@@ -2210,25 +2352,6 @@ impl App {
                     .as_deref()
                     .map(session::remote_branch_name_from_upstream_ref)
             })
-    }
-
-    /// Returns popup context for the currently active project sync target.
-    pub(super) fn sync_popup_context(&self) -> SyncPopupContext {
-        let default_branch = self
-            .projects
-            .git_branch()
-            .map_or_else(|| "not detected".to_string(), str::to_string);
-        let project_name = self.projects.project_name().to_string();
-
-        SyncPopupContext {
-            default_branch,
-            project_name,
-        }
-    }
-
-    /// Returns loading-state popup copy for sync-main operation.
-    pub(super) fn sync_loading_message() -> String {
-        "Synchronizing with its upstream.".to_string()
     }
 }
 

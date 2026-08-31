@@ -776,9 +776,9 @@ pub enum AppMode {
         /// Highlighted first or second option index.
         selected_confirmation_index: usize,
     },
-    /// Informational popup displayed above the list for sync outcomes,
-    /// including success and blocked/failed states, and for other list-level
-    /// action failures such as a failed project switch.
+    /// Informational popup displayed above the list for action failures such
+    /// as a failed project switch. Explicit project sync uses the non-modal
+    /// status bar instead.
     SyncBlockedPopup {
         /// Project name the reported action applies to, when the action was
         /// scoped to one project.

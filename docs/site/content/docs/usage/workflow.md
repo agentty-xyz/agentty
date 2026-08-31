@@ -60,9 +60,9 @@ no-line-context message instead of a synthetic code anchor. Each session stores 
 project's Smart reasoning default when it is created, so later default changes affect
 new sessions without relabeling existing ones.
 
-The top status bar shows the current version and update status, and rotates short
-page-scoped `FYI:` messages once per minute in the **Sessions** list and session chat
-view.
+The top status bar shows the current version, update status, and the latest explicit
+project-sync phase. Project-sync progress temporarily takes the place of the rotating
+page-scoped `FYI:` message without changing the current page or popup.
 
 The footer shows the active directory and branch. When the current branch tracks an
 upstream, the branch badge renders `local -> remote`. Inside a session, the footer
@@ -80,9 +80,17 @@ New session worktrees start from the local active base branch. If local `main` i
 `origin/main`, the session branch still starts from local `main`; run list-mode sync
 (`s`) first when you want a new session to include remote-only commits.
 
-If list-mode sync stops on rebase conflicts, the sync popup stays in its loading state
-and changes to a conflict-resolution message listing the conflicted files being handed
-to the assist agent.
+List-mode sync stays non-modal: you can navigate, switch projects, inspect sessions, and
+continue work already running in isolated session worktrees while it proceeds. Agentty
+coalesces repeated `s` presses for the same project and queues one request per other
+project in FIFO order. Operations that read or change the syncing project's base
+checkout—creating or starting a draft session, merging, and rebasing—return a retryable
+workflow error until sync finishes; other projects remain available. Existing merge work
+has priority: requesting sync while a merge is active or queued reports retryable
+guidance in the status bar, and a queued merge rechecks the sync guard before it starts.
+If the sync stops on rebase conflicts, the status bar reports the number of files handed
+to the assist agent. Completion, blocked preflight, and failure summaries remain in that
+bar instead of opening a popup.
 
 ## Session Lifecycle
 
@@ -722,9 +730,9 @@ After the user manually syncs the review request's local target branch, Agentty 
 the session to **Done**, archives it, cleans up its worktree in the background, and
 persists restack work for any stacked children. A failed sync or a sync of another
 branch leaves the session and its stack unchanged. Interrupted child restacks can resume
-after restart. If restack intent or archival cannot be persisted, the sync popup lists
-the session that remains in **Merged** so the user can inspect its workflow warning and
-retry safely. A closed request still moves an editable session to **Canceled**.
+after restart. If restack intent or archival cannot be persisted, the sync status counts
+the sessions that remain in **Merged** so the user can inspect their workflow warnings
+and retry safely. A closed request still moves an editable session to **Canceled**.
 
 When both a stacked parent and child review request have already merged, syncing the
 parent's local target branch moves both sessions to **Done**. This also applies while

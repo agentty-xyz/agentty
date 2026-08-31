@@ -304,6 +304,8 @@ impl App {
         request: CreateSessionRequest,
     ) -> Result<SessionId, ApiSessionError> {
         self.validate_api_session_request(&request).await?;
+        self.ensure_project_checkout_available(request.project_id)
+            .map_err(api_error_from_app)?;
 
         let inherited_settings = self
             .inherited_creation_settings(
@@ -1850,6 +1852,40 @@ mod tests {
             inherited_stacked_session.settings.parent_session_id,
             Some(loaded_session.id)
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_backend_rejects_session_creation_during_project_sync() {
+        // Arrange
+        let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+        let project_id = app.active_project_id();
+        app.project_sync_status = Some(crate::app::sync::ProjectSyncStatus {
+            context: crate::app::sync::ProjectSyncContext {
+                default_branch: "main".to_string(),
+                operation_id: 1,
+                project_id,
+                project_name: "agentty".to_string(),
+            },
+            phase: crate::app::sync::ProjectSyncPhase::Running,
+        });
+
+        // Act
+        let result = request_session_creation(
+            &mut app,
+            CreateSessionRequest {
+                inherit_from_session_id: None,
+                mode: CreateSessionMode::Orchestrator,
+                project_id,
+            },
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(ApiSessionError::Operation(message))
+                if message.contains("is synchronizing `main`")
+        ));
     }
 
     #[tokio::test]

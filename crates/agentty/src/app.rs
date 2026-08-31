@@ -24,7 +24,6 @@ pub mod session_state;
 pub(crate) mod setting;
 mod startup;
 mod sync;
-pub(crate) mod sync_message;
 pub(crate) mod tab;
 mod task;
 mod view;
@@ -55,6 +54,9 @@ pub(crate) use session_runtime::{
 pub use setting::SettingsManager;
 #[cfg(test)]
 pub(crate) use sync::MockSyncMainRunner;
+#[cfg(test)]
+pub(crate) use sync::{ProjectSyncContext, SyncMainCompletion};
+pub(crate) use sync::{ProjectSyncPhase, ProjectSyncStatus};
 pub use tab::{Tab, TabManager};
 pub(crate) use task::TaskService;
 pub(crate) use view::AppViewSnapshot;

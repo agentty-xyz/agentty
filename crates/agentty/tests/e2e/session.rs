@@ -8165,8 +8165,7 @@ fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
                     .press_key("q")
                     .press_key("q")
                     .press_key("s")
-                    .wait_for_text("Sync complete", 10_000)
-                    .press_key("Enter")
+                    .wait_for_text("Synced test-project/main", 10_000)
                     .wait_for_text("Done", 10_000)
                     .capture_labeled(
                         "merged_done_after_sync",
@@ -8222,8 +8221,7 @@ fn merged_stacked_reviews_complete_together_after_manual_sync() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Merged stack child", 5000)
                     .press_key("s")
-                    .wait_for_text("Sync complete", 10_000)
-                    .press_key("Enter")
+                    .wait_for_text("Synced test-project/main", 10_000)
                     .wait_for_text("Done", 10_000)
                     .capture_labeled(
                         "merged_stack_done",
@@ -8263,8 +8261,7 @@ fn merged_review_request_cleanup_does_not_block_quit() -> E2eResult {
         .compose(&common::switch_to_tab("Sessions"))
         .wait_for_text("Merged", 10_000)
         .press_key("s")
-        .wait_for_text("Sync complete", 10_000)
-        .press_key("Enter")
+        .wait_for_text("Synced test-project/main", 10_000)
         .wait_for_text("Done", 10_000)
         .compose(&common::open_quit_dialog())
         .press_key("y");
