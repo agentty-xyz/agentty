@@ -223,7 +223,7 @@ printf '%s\n' '{result_event}'
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
     }
 
     Ok(())
@@ -269,7 +269,7 @@ done
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o750))?;
     }
 
     Ok(())
@@ -292,7 +292,7 @@ fn install_agent_availability_stubs(env: &BuilderEnv) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o750))?;
     }
 
     Ok(())

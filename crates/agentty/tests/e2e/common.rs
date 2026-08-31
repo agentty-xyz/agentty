@@ -112,7 +112,7 @@ impl BuilderEnv {
                 executable_name,
             );
             std::fs::write(&stub_agent_path, stub_script)?;
-            std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+            std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o750))?;
         }
         Self::create_gemini_cli_stub(&stub_bin)?;
 
@@ -153,8 +153,8 @@ impl BuilderEnv {
                 version_path.display(),
             ),
         )?;
-        std::fs::set_permissions(&gemini_package_path, std::fs::Permissions::from_mode(0o755))?;
-        std::fs::set_permissions(&npm_path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&gemini_package_path, std::fs::Permissions::from_mode(0o750))?;
+        std::fs::set_permissions(&npm_path, std::fs::Permissions::from_mode(0o750))?;
         symlink(&gemini_package_path, &gemini_path)?;
 
         Ok(())
@@ -216,7 +216,7 @@ impl BuilderEnv {
             quote_path(binary_path),
         );
         std::fs::write(&launcher_path, launcher)?;
-        std::fs::set_permissions(&launcher_path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&launcher_path, std::fs::Permissions::from_mode(0o750))?;
 
         Ok(launcher_path)
     }

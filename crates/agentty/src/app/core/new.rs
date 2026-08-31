@@ -590,7 +590,7 @@ mod tests {
         fs::create_dir_all(&stub_bin).expect("failed to create stub bin directory");
         let codex_stub = stub_bin.join("codex");
         fs::write(&codex_stub, "#!/bin/sh\nexit 0\n").expect("failed to write codex stub");
-        fs::set_permissions(&codex_stub, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&codex_stub, fs::Permissions::from_mode(0o750))
             .expect("failed to mark codex stub executable");
         let test_binary = std::env::current_exe().expect("failed to locate test binary");
         let child_path = format!("{}:/usr/bin:/bin", stub_bin.display());

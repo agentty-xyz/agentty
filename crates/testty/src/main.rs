@@ -383,7 +383,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let script = temp.path().join("greet.sh");
         std::fs::write(&script, "#!/bin/sh\nprintf 'Hello World'\nsleep 60\n").expect("write");
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("perms");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o750)).expect("perms");
         let scenario = temp.path().join("scenario.yaml");
         std::fs::write(
             &scenario,
@@ -438,7 +438,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let script = temp.path().join("greet.sh");
         std::fs::write(&script, "#!/bin/sh\nprintf 'Hello World'\nsleep 60\n").expect("write");
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("perms");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o750)).expect("perms");
         let scenario = temp.path().join("scenario.yaml");
         std::fs::write(
             &scenario,
@@ -471,7 +471,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let script = temp.path().join("greet.sh");
         std::fs::write(&script, "#!/bin/sh\nprintf 'Hello World'\nsleep 60\n").expect("write");
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("perms");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o750)).expect("perms");
         let scenario = temp.path().join("scenario.yaml");
         std::fs::write(
             &scenario,
@@ -499,7 +499,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let script = temp.path().join("greet.sh");
         std::fs::write(&script, "#!/bin/sh\nprintf 'Hello World'\nsleep 60\n").expect("write");
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("perms");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o750)).expect("perms");
         let scenario = temp.path().join("scenario.yaml");
         std::fs::write(
             &scenario,
@@ -535,7 +535,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let script = temp.path().join("greet.sh");
         std::fs::write(&script, "#!/bin/sh\nprintf 'Hello World'\nsleep 60\n").expect("write");
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("perms");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o750)).expect("perms");
         let scenario = temp.path().join("scenario.yaml");
         std::fs::write(
             &scenario,

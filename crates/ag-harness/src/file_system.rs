@@ -1243,7 +1243,7 @@ mod tests {
         let target_path = repository.path().join("output.txt");
         let prepared_path = repository.path().join(".prepared");
         std::fs::write(&target_path, b"expected").expect("target should be written");
-        std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o751))
+        std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o750))
             .expect("target mode should be set");
         std::fs::write(&prepared_path, b"model change").expect("prepared file should be written");
         std::fs::set_permissions(&prepared_path, std::fs::Permissions::from_mode(0o600))
@@ -1280,7 +1280,7 @@ mod tests {
                 .permissions()
                 .mode()
                 & 0o777,
-            0o751
+            0o750
         );
         assert!(!prepared_path.exists());
     }
@@ -1611,7 +1611,7 @@ mod tests {
         let (parent, file_name) =
             LocalFileSystem::open_parent_beneath(repository.path(), Path::new("output.txt"))
                 .expect("target parent should open");
-        std::fs::set_permissions(repository.path(), std::fs::Permissions::from_mode(0o555))
+        std::fs::set_permissions(repository.path(), std::fs::Permissions::from_mode(0o550))
             .expect("repository should become read-only");
         let mut remove_captured = false;
 
@@ -1624,7 +1624,7 @@ mod tests {
             b"expected",
             &mut remove_captured,
         );
-        std::fs::set_permissions(repository.path(), std::fs::Permissions::from_mode(0o755))
+        std::fs::set_permissions(repository.path(), std::fs::Permissions::from_mode(0o750))
             .expect("repository permissions should be restored");
 
         // Assert

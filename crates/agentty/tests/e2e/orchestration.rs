@@ -257,7 +257,7 @@ printf '{{"type":"result","subtype":"success","result":"%s","usage":{{"input_tok
     );
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
