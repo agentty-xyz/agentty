@@ -7,6 +7,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.9] - 2026-08-31
+
+### Added
+
+- agentty: persist Concise, Balanced, and Detailed response styles per session and
+  project default, with `/style` selection and provider-neutral turn guidance.
+
+### Changed
+
+- agentty: exchange focused-review findings as structured JSON across the shared
+  protocol, provider prompts, and application UI.
+- agentty: preserve completed file and inline Diff comments across mode changes until a
+  new turn starts or the session is deleted.
+- agentty: render only visible transcript rows while preserving cached wrapping and
+  paragraph semantics.
+- ag-harness: validate all structured model output against request schemas and content
+  limits without allocating a second full-size JSON representation.
+- docs: make short, conceptual documentation the repository default.
+- quality: require Agentty E2E, diff-coverage, and coverage hooks before handoff.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.9`.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.15.8] - 2026-08-27
 
 ### Added

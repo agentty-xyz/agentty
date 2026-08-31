@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.15.8"
+version = "0.15.9"
 authors = [
   "Vladimir Minev <minev.dev@gmail.com>",
   "Andrei Agaev <andagaev@gmail.com>",
@@ -16,16 +16,16 @@ repository = "https://github.com/agentty-xyz/agentty"
 homepage = "https://github.com/agentty-xyz/agentty"
 
 [workspace.dependencies]
-ag-agent = { path = "crates/ag-agent", version = "0.15.8" }
-ag-clipboard = { path = "crates/ag-clipboard", version = "0.15.8" }
-ag-forge = { path = "crates/ag-forge", version = "0.15.8" }
-ag-git = { path = "crates/ag-git", version = "0.15.8" }
-ag-harness = { path = "crates/ag-harness", version = "0.15.8" }
-ag-protocol = { path = "crates/ag-protocol", version = "0.15.8" }
-ag-session = { path = "crates/ag-session", version = "0.15.8" }
-ag-store = { path = "crates/ag-store", version = "0.15.8" }
-ag-tui-text = { path = "crates/ag-tui-text", version = "0.15.8" }
-testty = { path = "crates/testty", version = "0.15.8" }
+ag-agent = { path = "crates/ag-agent", version = "0.15.9" }
+ag-clipboard = { path = "crates/ag-clipboard", version = "0.15.9" }
+ag-forge = { path = "crates/ag-forge", version = "0.15.9" }
+ag-git = { path = "crates/ag-git", version = "0.15.9" }
+ag-harness = { path = "crates/ag-harness", version = "0.15.9" }
+ag-protocol = { path = "crates/ag-protocol", version = "0.15.9" }
+ag-session = { path = "crates/ag-session", version = "0.15.9" }
+ag-store = { path = "crates/ag-store", version = "0.15.9" }
+ag-tui-text = { path = "crates/ag-tui-text", version = "0.15.9" }
+testty = { path = "crates/testty", version = "0.15.9" }
 async-trait = "0.1"
 agent-client-protocol = "2.0.0"
 assert_cmd = "2"
