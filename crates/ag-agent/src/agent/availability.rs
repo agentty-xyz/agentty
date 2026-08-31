@@ -557,7 +557,7 @@ mod tests {
         let temp_directory = tempdir().expect("failed to create temp dir");
         let codex_path = temp_directory.path().join("codex");
         fs::write(&codex_path, "").expect("failed to create codex executable");
-        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark codex executable");
         let path_value = env::join_paths([temp_directory.path()]).expect("valid path");
 
@@ -583,9 +583,9 @@ mod tests {
         )
         .expect("failed to create agy executable");
         fs::write(&codex_path, "").expect("failed to create codex executable");
-        fs::set_permissions(&antigravity_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&antigravity_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark agy executable");
-        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark codex executable");
         let path_value = env::join_paths([temp_directory.path()]).expect("valid path");
 
@@ -610,7 +610,7 @@ mod tests {
              ]; then printf 'agy 1.2.0\\n'; exit 0; fi\nexit 1\n",
         )
         .expect("failed to create agy executable");
-        fs::set_permissions(&antigravity_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&antigravity_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark agy executable");
         let path_value = env::join_paths([temp_directory.path()]).expect("valid path");
 
@@ -764,7 +764,7 @@ mod tests {
         let codex_path = temp_directory.path().join("codex");
         fs::write(&codex_path, "#!/bin/sh\nprintf 'codex-cli 1.2.3\\n'\n")
             .expect("failed to create codex executable");
-        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark codex executable");
         let path_value = env::join_paths([temp_directory.path()]).expect("valid path");
 
@@ -799,7 +799,7 @@ mod tests {
             version_path.display(),
         );
         fs::write(&codex_path, script).expect("failed to create codex executable");
-        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark codex executable");
         let path_value = env::join_paths([temp_directory.path()]).expect("valid path");
 
@@ -882,7 +882,7 @@ mod tests {
              ]; then printf 'codex-cli 1.2.3\\n'; exit 0; fi\nexit 1\n",
         )
         .expect("failed to create codex executable");
-        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark codex executable");
 
         // Act
@@ -930,9 +930,9 @@ mod tests {
             ),
         )
         .expect("failed to create npm executable");
-        fs::set_permissions(&gemini_package_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&gemini_package_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark Gemini executable");
-        fs::set_permissions(&npm_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&npm_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark npm executable");
         symlink(&gemini_package_path, &gemini_path).expect("failed to link Gemini executable");
         let path_value = env::join_paths([&bin_directory]).expect("valid path");
@@ -972,7 +972,7 @@ mod tests {
             ),
         )
         .expect("failed to create Gemini executable");
-        fs::set_permissions(&gemini_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&gemini_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark Gemini executable");
 
         // Act
@@ -1004,7 +1004,7 @@ mod tests {
              >&2; i=$((i + 1)); done; exit 0; fi\nexit 1\n",
         )
         .expect("failed to create noisy codex executable");
-        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark codex executable");
 
         // Act
@@ -1028,7 +1028,7 @@ mod tests {
         let codex_path = temp_directory.path().join("codex");
         fs::write(&codex_path, "#!/bin/sh\nwhile :; do :; done\n")
             .expect("failed to create hanging codex executable");
-        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o750))
             .expect("failed to mark codex executable");
 
         // Act
@@ -1063,7 +1063,7 @@ mod tests {
         let temp_directory = tempdir().expect("failed to create temp dir");
         let codex_path = temp_directory.path().join("codex");
         fs::write(&codex_path, "").expect("failed to create codex file");
-        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o644))
+        fs::set_permissions(&codex_path, fs::Permissions::from_mode(0o640))
             .expect("failed to mark codex non-executable");
         let path_value = env::join_paths([temp_directory.path()]).expect("valid path");
 

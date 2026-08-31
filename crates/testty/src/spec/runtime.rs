@@ -328,7 +328,7 @@ steps:
         let script = temp_dir.path().join("greet.sh");
         std::fs::write(&script, "#!/bin/sh\nprintf 'Hello World'\nsleep 60\n")
             .expect("write script");
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o750))
             .expect("set permissions");
 
         // Act — YAML path: parse -> lower -> run.

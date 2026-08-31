@@ -973,7 +973,7 @@ mod tests {
         let mut permissions = fs::metadata(&hook_path)
             .expect("failed to read hook metadata")
             .permissions();
-        permissions.set_mode(0o755);
+        permissions.set_mode(0o750);
         fs::set_permissions(&hook_path, permissions).expect("failed to make hook executable");
         run_git_command(temp_dir.path(), &["config", "core.hooksPath", "test-hooks"]);
 

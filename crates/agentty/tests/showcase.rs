@@ -546,7 +546,7 @@ async fn setup_feature_env(temp: &tempfile::TempDir) -> ShowcaseResult<(PathBuf,
         );
         std::fs::write(&stub_path, script)?;
         #[cfg(unix)]
-        std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o750))?;
     }
     let git_init = {
         let workdir = workdir.clone();

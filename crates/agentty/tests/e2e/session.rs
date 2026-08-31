@@ -214,7 +214,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Crea
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])?;
 
@@ -590,7 +590,7 @@ printf '{"type":"result","subtype":"success","result":"{\\"answer\\":\\"%s\\",\\
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(
         env,
@@ -659,7 +659,7 @@ printf '{{"type":"result","subtype":"success","result":"{{\\"answer\\":\\"{{\\\\
     );
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(
         env,
@@ -710,7 +710,7 @@ done
 "#;
     std::fs::write(&codex_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(
         env,
@@ -763,7 +763,7 @@ done
     );
     std::fs::write(&gemini_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&gemini_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&gemini_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(
         env,
@@ -828,7 +828,7 @@ done
 "#;
     std::fs::write(&codex_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(
         env,
@@ -1000,7 +1000,7 @@ printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(
         env,
@@ -1112,7 +1112,7 @@ done
 "#;
     std::fs::write(&antigravity_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&antigravity_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&antigravity_path, std::fs::Permissions::from_mode(0o750))?;
 
     let pre_commit_hook = env.workdir.join(".git").join("hooks").join("pre-commit");
     std::fs::write(
@@ -1120,7 +1120,7 @@ done
         "#!/bin/sh\nprintf 'resolved conflict rejected by pre-commit hook\\n' >&2\nexit 1\n",
     )?;
     #[cfg(unix)]
-    std::fs::set_permissions(&pre_commit_hook, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&pre_commit_hook, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -1189,7 +1189,7 @@ fn seed_rebase_transcript_session_with_delay(
         format!("#!/bin/sh\nsleep {delay_seconds}\n"),
     )?;
     #[cfg(unix)]
-    std::fs::set_permissions(&pre_rebase_hook, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&pre_rebase_hook, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -1277,7 +1277,7 @@ exec '{}' "$@"
     );
     std::fs::write(&git_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -1370,7 +1370,7 @@ exec '{}' "$@"
     );
     std::fs::write(&git_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o750))?;
 
     let gh_path = env.stub_bin.join("gh");
     let gh_script = r#"#!/bin/sh
@@ -1406,7 +1406,7 @@ esac
     .replace("__REVIEW_BRANCH_NAME__", review_branch_name);
     std::fs::write(&gh_path, gh_script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -1885,7 +1885,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{payload}"}}'
     std::fs::write(&claude_path, script)?;
 
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])?;
 
@@ -1911,7 +1911,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"","structured_out
     std::fs::write(&claude_path, script)?;
 
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])?;
 
@@ -1927,7 +1927,7 @@ fn seed_failing_gemini_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::err
     std::fs::write(&stub_agent_path, "#!/bin/sh\nexit 1\n")?;
 
     #[cfg(unix)]
-    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -1945,7 +1945,7 @@ fn seed_failing_antigravity_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std
     )?;
 
     #[cfg(unix)]
-    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -1963,8 +1963,8 @@ fn seed_outdated_antigravity_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn st
 
     #[cfg(unix)]
     {
-        std::fs::set_permissions(&antigravity_path, std::fs::Permissions::from_mode(0o755))?;
-        std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&antigravity_path, std::fs::Permissions::from_mode(0o750))?;
+        std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o750))?;
     }
 
     Ok(())
@@ -2046,7 +2046,7 @@ done
     std::fs::write(&stub_agent_path, script)?;
 
     #[cfg(unix)]
-    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(
         env,
@@ -2127,7 +2127,7 @@ fn seed_failing_codex_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::erro
     std::fs::write(&stub_agent_path, "#!/bin/sh\nexit 1\n")?;
 
     #[cfg(unix)]
-    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -2328,7 +2328,7 @@ printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$resul
     );
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(
         env,
@@ -2414,7 +2414,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ne
 
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
@@ -2469,7 +2469,7 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
 
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
@@ -2544,7 +2544,7 @@ printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$resul
 
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(
         env,
@@ -2587,7 +2587,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
 
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     if fail_sync_validation {
         install_sync_validation_failure_git_stub(env, &validation_failure_marker)?;
@@ -2615,7 +2615,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ne
 
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
@@ -2643,7 +2643,7 @@ exec '{}' "$@"
     );
     std::fs::write(&git_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -2675,7 +2675,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
     );
     std::fs::write(&claude_path, claude_script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|path| path.join("git"))
@@ -2694,7 +2694,7 @@ exec '{}' "$@"
     );
     std::fs::write(&git_path, git_script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o750))?;
 
     let gh_path = env.stub_bin.join("gh");
     std::fs::write(
@@ -2728,7 +2728,7 @@ esac
 "#,
     )?;
     #[cfg(unix)]
-    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
@@ -2796,7 +2796,7 @@ esac
     );
     std::fs::write(&claude_path, claude_script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -2822,7 +2822,7 @@ printf '{"type":"result","subtype":"success","result":"{\"answer\":\"%s\",\"ques
 
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
@@ -2900,7 +2900,7 @@ printf '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{BARE_LAY
 
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
 }
@@ -3047,7 +3047,7 @@ done
 "#;
     std::fs::write(&codex_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -3065,7 +3065,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"{\\\
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     seed_project_settings(
         env,
@@ -3122,7 +3122,7 @@ fi
     );
     std::fs::write(&tmux_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&tmux_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&tmux_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -3165,7 +3165,7 @@ fn seed_slow_review_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Err
     let slow_diff_driver = session_worktree.join("slow-diff.sh");
     std::fs::write(&slow_diff_driver, "#!/bin/sh\nsleep 3\nexit 1\n")?;
     #[cfg(unix)]
-    std::fs::set_permissions(&slow_diff_driver, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&slow_diff_driver, std::fs::Permissions::from_mode(0o750))?;
     let slow_diff_driver = slow_diff_driver
         .to_str()
         .ok_or("slow diff driver path must be valid UTF-8")?;
@@ -3380,7 +3380,7 @@ esac
 "#,
     )?;
     #[cfg(unix)]
-    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -3449,7 +3449,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Proc
 "#,
     )?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -3474,7 +3474,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Proc
 "#,
     )?;
     #[cfg(unix)]
-    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }
@@ -3515,7 +3515,7 @@ esac
 "#,
     )?;
     #[cfg(unix)]
-    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o750))?;
 
     install_delayed_worktree_remove_stub(env, 4)
 }
@@ -3619,7 +3619,7 @@ exec '{real_git}' "$@"
         ),
     )?;
     #[cfg(unix)]
-    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
 }

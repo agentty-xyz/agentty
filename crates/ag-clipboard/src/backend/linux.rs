@@ -403,7 +403,7 @@ mod tests {
             "#!/bin/sh\nexit \"${AGENTTY_WL_PASTE_EXIT_CODE:-0}\"\n",
         )
         .expect("wl-paste test executable should be written");
-        fs::set_permissions(&wl_paste_path, fs::Permissions::from_mode(0o755))
+        fs::set_permissions(&wl_paste_path, fs::Permissions::from_mode(0o750))
             .expect("wl-paste test executable should be executable");
         let executable_search_path = executable_search_path(temp_dir.path());
 

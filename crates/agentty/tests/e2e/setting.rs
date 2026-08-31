@@ -39,7 +39,7 @@ fn seed_gemini_settings_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::er
 
     #[cfg(unix)]
     {
-        fs::set_permissions(&stub_agent_path, fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(&stub_agent_path, fs::Permissions::from_mode(0o750))?;
     }
 
     Ok(())

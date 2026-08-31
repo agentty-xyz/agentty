@@ -2178,7 +2178,7 @@ mod tests {
         let mut permissions = fs::metadata(hook_path)
             .expect("failed to read Git hook metadata")
             .permissions();
-        permissions.set_mode(0o755);
+        permissions.set_mode(0o750);
         fs::set_permissions(hook_path, permissions).expect("failed to make Git hook executable");
     }
 
@@ -2281,7 +2281,7 @@ mod tests {
             &["rev-parse", "--git-path", "hooks/pre-commit"],
         ));
         fs::write(&hook_path, "#!/bin/sh\nexit 0\n").expect("failed to write pre-commit hook");
-        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o011))
+        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o010))
             .expect("failed to set mismatched execute permissions");
 
         // Act

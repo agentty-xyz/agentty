@@ -539,7 +539,7 @@ mod tests {
         let mut permissions = std::fs::metadata(&npm_path)
             .expect("failed to load fake npm metadata")
             .permissions();
-        permissions.set_mode(0o755);
+        permissions.set_mode(0o750);
         std::fs::set_permissions(&npm_path, permissions)
             .expect("failed to make fake npm executable");
         let current_test_binary =
