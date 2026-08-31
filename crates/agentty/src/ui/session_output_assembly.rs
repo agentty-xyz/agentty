@@ -384,16 +384,17 @@ fn append_session_tail_lines(
     review_status_message: Option<&str>,
     review_comment_resolution_message: Option<&str>,
 ) -> Option<usize> {
-    if let Some(status_line) = session_format::session_output_status_line(
+    let status_lines = session_format::session_output_status_lines(
         status,
         active_progress,
         review_status_message,
         review_comment_resolution_message,
-    ) {
+    );
+    if !status_lines.is_empty() {
         append_block_separator(lines, SessionOutputSeparator::Always);
         let active_loader_line_index =
             session_format::session_output_uses_tachyon_loader(status).then_some(lines.len());
-        lines.push(status_line);
+        lines.extend(status_lines);
 
         return active_loader_line_index;
     }

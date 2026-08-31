@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use super::core::AppEvent;
 use super::task;
 use crate::app::session_state::SessionState;
-use crate::domain::agent::{AgentSelection, ReasoningLevel, SpeedMode};
+use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::review::FocusedReviewStatus;
 use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transient_message::{
@@ -142,9 +142,8 @@ impl FocusedReviewPersistenceRetry {
     }
 }
 
-/// Prefix for the focused-review loading status while assist output is being
-/// prepared.
-const REVIEW_LOADING_MESSAGE_PREFIX: &str = "Reviewing changes with";
+/// Focused-review loading heading shown while assist output is being prepared.
+const REVIEW_LOADING_MESSAGE: &str = "Reviewing changes";
 
 /// Agent selection, reasoning effort, and response speed used for focused
 /// review generation.
@@ -169,12 +168,33 @@ pub(crate) fn review_loading_message(review_agent: ReviewAgent) -> String {
     let (review_selection, reasoning_level, speed_mode) = normalize_review_agent(review_agent);
 
     format!(
-        "{REVIEW_LOADING_MESSAGE_PREFIX} {} ({}[{}][{}])",
-        review_selection.kind(),
+        "{REVIEW_LOADING_MESSAGE}\n{} · {} · {} · {}",
+        review_agent_kind_label(review_selection.kind()),
         review_selection.model().as_str(),
-        reasoning_level.as_str(),
-        speed_mode.as_str(),
+        review_reasoning_label(reasoning_level),
+        speed_mode.name(),
     )
+}
+
+/// Returns the title-cased provider label used in focused-review metadata.
+fn review_agent_kind_label(agent_kind: AgentKind) -> &'static str {
+    match agent_kind {
+        AgentKind::Antigravity => "Antigravity",
+        AgentKind::Gemini => "Gemini",
+        AgentKind::Claude => "Claude",
+        AgentKind::Codex => "Codex",
+    }
+}
+
+/// Returns the human-readable reasoning label used in focused-review metadata.
+fn review_reasoning_label(reasoning_level: ReasoningLevel) -> &'static str {
+    match reasoning_level {
+        ReasoningLevel::Low => "Low reasoning",
+        ReasoningLevel::Medium => "Medium reasoning",
+        ReasoningLevel::High => "High reasoning",
+        ReasoningLevel::XHigh => "Extra-high reasoning",
+        ReasoningLevel::Max => "Maximum reasoning",
+    }
 }
 
 /// Formats a focused-review failure for the session output panel.
@@ -598,8 +618,49 @@ mod tests {
         // Assert
         assert_eq!(
             message,
-            "Reviewing changes with codex (gpt-5.6-sol[xhigh][fast])"
+            "Reviewing changes\nCodex · gpt-5.6-sol · Extra-high reasoning · Fast"
         );
+    }
+
+    #[test]
+    fn review_agent_kind_labels_are_title_cased() {
+        // Arrange
+        let cases = [
+            (AgentKind::Antigravity, "Antigravity"),
+            (AgentKind::Gemini, "Gemini"),
+            (AgentKind::Claude, "Claude"),
+            (AgentKind::Codex, "Codex"),
+        ];
+
+        // Act
+        let labels = cases
+            .into_iter()
+            .map(|(agent_kind, expected)| (review_agent_kind_label(agent_kind), expected))
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(labels.iter().all(|(actual, expected)| actual == expected));
+    }
+
+    #[test]
+    fn review_reasoning_labels_are_human_readable() {
+        // Arrange
+        let cases = [
+            (ReasoningLevel::Low, "Low reasoning"),
+            (ReasoningLevel::Medium, "Medium reasoning"),
+            (ReasoningLevel::High, "High reasoning"),
+            (ReasoningLevel::XHigh, "Extra-high reasoning"),
+            (ReasoningLevel::Max, "Maximum reasoning"),
+        ];
+
+        // Act
+        let labels = cases
+            .into_iter()
+            .map(|(reasoning_level, expected)| (review_reasoning_label(reasoning_level), expected))
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(labels.iter().all(|(actual, expected)| actual == expected));
     }
 
     #[test]

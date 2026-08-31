@@ -363,6 +363,7 @@ mod tests {
     use crate::presentation::app_mode::ChatFocus;
     use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
     use crate::presentation::prompt::{PromptAtMentionState, PromptSlashStage, PromptSlashState};
+    use crate::ui::icon::Icon;
     use crate::ui::input_layout::*;
     use crate::ui::prompt_format::*;
     use crate::ui::question_format::*;
@@ -1223,91 +1224,106 @@ mod tests {
     }
 
     #[test]
-    fn test_session_output_status_line_for_in_progress_includes_progress_text() {
+    fn test_session_output_status_lines_for_in_progress_include_progress_text() {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(
+        let status_lines = session_output_status_lines(
             Status::InProgress,
             Some("Inspecting changed files"),
             None,
             None,
-        )
-        .expect("in-progress sessions should render a status line");
+        );
 
         // Assert
+        assert_eq!(status_lines.len(), 1);
         assert!(
-            status_line
+            status_lines[0]
                 .to_string()
                 .contains("Working... Inspecting changed files")
         );
     }
 
     #[test]
-    fn test_session_output_status_line_for_in_progress_uses_committing_label() {
+    fn test_session_output_status_lines_for_in_progress_use_committing_label() {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(
+        let status_lines = session_output_status_lines(
             Status::InProgress,
             Some(COMMITTING_PROGRESS_LABEL),
             None,
             None,
-        )
-        .expect("in-progress sessions should render a status line");
+        );
 
         // Assert
-        assert!(status_line.to_string().contains(COMMITTING_PROGRESS_LABEL));
+        assert_eq!(status_lines.len(), 1);
         assert!(
-            !status_line
+            status_lines[0]
+                .to_string()
+                .contains(COMMITTING_PROGRESS_LABEL)
+        );
+        assert!(
+            !status_lines[0]
                 .to_string()
                 .contains(&format!("Working... {COMMITTING_PROGRESS_LABEL}"))
         );
     }
 
     #[test]
-    fn test_session_output_status_line_for_agent_review_uses_review_loader_text() {
+    fn test_session_output_status_lines_for_agent_review_use_two_line_hierarchy() {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(
+        let status_lines = session_output_status_lines(
             Status::AgentReview,
             None,
-            Some("Reviewing changes with codex (gpt-5.6-sol[xhigh][fast])"),
+            Some("Reviewing changes\nCodex · gpt-5.6-sol · Extra-high reasoning · Fast"),
             None,
-        )
-        .expect("agent-review sessions should render a status line");
+        );
 
         // Assert
-        assert!(
-            status_line
-                .to_string()
-                .contains("Reviewing changes with codex (gpt-5.6-sol[xhigh][fast])")
+        assert_eq!(status_lines.len(), 2);
+        assert_eq!(
+            status_lines[0].to_string(),
+            format!("{} Reviewing changes", Icon::TachyonLoader)
+        );
+        assert_eq!(
+            status_lines[1].to_string(),
+            "    Codex · gpt-5.6-sol · Extra-high reasoning · Fast"
+        );
+        assert_eq!(
+            status_lines[0].spans[0].style.fg,
+            Some(style::status_color(Status::AgentReview))
+        );
+        assert_eq!(
+            status_lines[1].spans[0].style.fg,
+            Some(style::palette::text_muted())
         );
     }
 
     #[test]
-    fn test_session_output_status_line_for_agent_review_uses_generic_fallback() {
+    fn test_session_output_status_lines_for_agent_review_use_generic_fallback() {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(Status::AgentReview, None, None, None)
-            .expect("agent-review sessions should render a status line");
+        let status_lines = session_output_status_lines(Status::AgentReview, None, None, None);
 
         // Assert
-        assert!(status_line.to_string().contains("Reviewing changes..."));
+        assert_eq!(status_lines.len(), 1);
+        assert!(status_lines[0].to_string().contains("Reviewing changes..."));
     }
 
     #[test]
-    fn test_session_output_status_line_for_merging_uses_status_label() {
+    fn test_session_output_status_lines_for_merging_use_status_label() {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(Status::Merging, None, None, None)
-            .expect("merging sessions should render a status line");
+        let status_lines = session_output_status_lines(Status::Merging, None, None, None);
 
         // Assert
-        assert!(status_line.to_string().contains("Merging..."));
+        assert_eq!(status_lines.len(), 1);
+        assert!(status_lines[0].to_string().contains("Merging..."));
     }
 
     #[test]

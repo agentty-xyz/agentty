@@ -561,8 +561,9 @@ fn test_orchestrator_auto_review_scope() -> E2eResult {
                     .press_key("j")
                     .compose(&common::open_selected_session_view())
                     .wait_for_text("Managed by controller-0001", 5000)
+                    .wait_for_text("Reviewing changes", 5000)
                     .wait_for_text(
-                        "Reviewing changes with claude (claude-haiku-4-5-20251001[xhigh][normal])",
+                        "Claude · claude-haiku-4-5-20251001 · Extra-high reasoning · Normal",
                         5000,
                     )
                     .capture_labeled(
@@ -588,11 +589,25 @@ fn test_orchestrator_auto_review_scope() -> E2eResult {
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
+                assertion::assert_text_in_region(frame, "Reviewing changes", &full);
                 assertion::assert_text_in_region(
                     frame,
-                    "Reviewing changes with claude (claude-haiku-4-5-20251001[xhigh][normal])",
+                    "Claude · claude-haiku-4-5-20251001 · Extra-high reasoning · Normal",
                     &full,
                 );
+                let heading_row = frame
+                    .find_text("Reviewing changes")
+                    .first()
+                    .expect("focused-review heading should be visible")
+                    .rect
+                    .row;
+                let metadata_row = frame
+                    .find_text("Claude · claude-haiku-4-5-20251001 · Extra-high reasoning · Normal")
+                    .first()
+                    .expect("focused-review metadata should be visible")
+                    .rect
+                    .row;
+                assert_eq!(metadata_row, heading_row.saturating_add(1));
             },
         )
 }
