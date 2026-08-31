@@ -1,8 +1,9 @@
-//! App-wide background task helpers for session review-comment loads, version
-//! checks, and review-assist generation.
+//! App-wide background task helpers for session review-comment loads, periodic
+//! version checks, and review-assist generation.
 //!
 //! Recurring git-status and review-request polling lives in the sync
-//! orchestrator (`app/sync.rs`); this module keeps one-shot background tasks.
+//! orchestrator (`app/sync.rs`); this module keeps the remaining background
+//! tasks.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,7 +15,10 @@ use ag_forge::{ForgeRemote, ReviewCommentAnchorSide, ReviewCommentSnapshot, Revi
 use ag_git::GitClient;
 use ag_protocol::{AgentResponse, FocusedReview, focused_review_json_schema_json};
 use askama::Template;
+use async_trait::async_trait;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
 use tracing::warn;
 
 use crate::app::error::AppError;
@@ -31,6 +35,11 @@ const AT_MENTION_LOAD_DEBOUNCE: Duration = Duration::from_millis(75);
 /// Delay before a failed focused-review persistence write is retried through
 /// the foreground event reducer.
 const FOCUSED_REVIEW_PERSISTENCE_RETRY_BASE_DELAY: Duration = Duration::from_millis(250);
+/// Interval between background checks for a newer Agentty release.
+const VERSION_CHECK_INTERVAL: Duration = Duration::from_hours(1);
+/// Test-only environment override for the version-check interval in
+/// milliseconds.
+const VERSION_CHECK_INTERVAL_MS_ENV_VAR: &str = "AGENTTY_TEST_VERSION_CHECK_INTERVAL_MS";
 /// Monotonic counter used to distinguish stale and current at-mention loads.
 static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 /// Monotonic counter used to distinguish stale review-comment loads.
@@ -41,6 +50,61 @@ static NEXT_SESSION_DIFF_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 /// Stateless helpers for app-scoped one-shot background tasks and app-server
 /// session execution.
 pub(crate) struct TaskService;
+
+/// External version lookup and package-install boundary used by the periodic
+/// update task.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+trait VersionTaskRunner: Send + Sync {
+    /// Returns the latest published Agentty version tag.
+    async fn latest_version_tag(&self) -> Option<String>;
+
+    /// Installs the latest Agentty package and reports whether it succeeded.
+    async fn run_update(&self) -> bool;
+}
+
+/// Production version task runner backed by npm/curl infrastructure.
+struct RealVersionTaskRunner {
+    external_commands_enabled: bool,
+}
+
+impl RealVersionTaskRunner {
+    /// Creates the production runner while keeping ordinary unit tests
+    /// deterministic and offline.
+    fn new() -> Self {
+        Self {
+            external_commands_enabled: !cfg!(test),
+        }
+    }
+
+    #[cfg(test)]
+    /// Creates a runner that exercises real command boundaries in an isolated
+    /// child process with a controlled `PATH`.
+    fn with_external_commands() -> Self {
+        Self {
+            external_commands_enabled: true,
+        }
+    }
+}
+
+#[async_trait]
+impl VersionTaskRunner for RealVersionTaskRunner {
+    async fn latest_version_tag(&self) -> Option<String> {
+        if !self.external_commands_enabled {
+            return None;
+        }
+
+        version::latest_npm_version_tag().await
+    }
+
+    async fn run_update(&self) -> bool {
+        if !self.external_commands_enabled {
+            return false;
+        }
+
+        version::run_npm_update().await.is_ok()
+    }
+}
 
 /// Payload needed to load comments for a linked session review request.
 pub(super) struct SessionReviewCommentSnapshotTask {
@@ -317,9 +381,9 @@ impl TaskService {
         load_review_comment_snapshot(remote, display_id, review_request_client).await
     }
 
-    /// Spawns a one-shot background check for newer `agentty` versions on
-    /// npmjs, optionally followed by an automatic `npm i -g agentty@latest`
-    /// update.
+    /// Spawns an immediate and then hourly background check for newer
+    /// `agentty` versions on npmjs, optionally followed by an automatic
+    /// `npm i -g agentty@latest` update.
     ///
     /// The task emits [`AppEvent::VersionAvailabilityUpdated`] with
     /// `Some("vX.Y.Z")` only when a newer version is detected. When
@@ -328,52 +392,90 @@ impl TaskService {
     /// `InProgress`, then `Complete` or `Failed` depending on the npm
     /// install outcome.
     ///
-    /// In tests, it emits an immediate `None` update instead of spawning the
-    /// network check so test runs stay deterministic and offline.
+    /// In tests, each check emits `None` instead of touching the network so
+    /// test runs stay deterministic and offline.
     pub(super) fn spawn_version_check_task(
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         auto_update: bool,
     ) {
-        #[cfg(test)]
-        {
-            let _ = auto_update;
-            // Fire-and-forget: receiver may be dropped during shutdown.
-            let _ = app_event_tx.send(Self::version_availability_event(None));
-        }
-
-        #[cfg(not(test))]
-        let app_event_tx = app_event_tx.clone();
-
-        #[cfg(not(test))]
-        tokio::spawn(async move {
-            let latest_version_tag = version::latest_npm_version_tag().await;
-            let version_event = Self::version_availability_event(latest_version_tag);
-
-            let newer_version = match &version_event {
-                AppEvent::VersionAvailabilityUpdated {
-                    latest_available_version: Some(version),
-                } => Some(version.clone()),
-                _ => None,
-            };
-
-            // Fire-and-forget: receiver may be dropped during shutdown.
-            let _ = app_event_tx.send(version_event);
-
-            if let Some(newer_version) = newer_version
-                && auto_update
-            {
-                Self::run_background_update(&app_event_tx, &newer_version).await;
-            }
-        });
+        std::mem::drop(Self::spawn_version_check_task_with_interval(
+            app_event_tx,
+            auto_update,
+            Self::version_check_interval(),
+            Arc::new(RealVersionTaskRunner::new()),
+        ));
     }
 
-    /// Runs `npm i -g agentty@latest` in a background blocking task and
-    /// emits update progress events.
-    #[cfg(not(test))]
+    /// Resolves the production interval with an optional E2E-only override.
+    fn version_check_interval() -> Duration {
+        let override_value = std::env::var(VERSION_CHECK_INTERVAL_MS_ENV_VAR).ok();
+
+        Self::version_check_interval_from_override(override_value.as_deref())
+    }
+
+    /// Parses a positive millisecond override or returns the hourly default.
+    fn version_check_interval_from_override(override_value: Option<&str>) -> Duration {
+        override_value
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|milliseconds| *milliseconds > 0)
+            .map_or(VERSION_CHECK_INTERVAL, Duration::from_millis)
+    }
+
+    /// Spawns recurring version checks at one caller-provided interval.
+    fn spawn_version_check_task_with_interval(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        auto_update: bool,
+        check_interval: Duration,
+        version_task_runner: Arc<dyn VersionTaskRunner>,
+    ) -> JoinHandle<()> {
+        let app_event_tx = app_event_tx.clone();
+        tokio::spawn(async move {
+            let mut completed_update_version = None;
+            let mut tick = tokio::time::interval(check_interval);
+            tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+            loop {
+                tick.tick().await;
+
+                let latest_version_tag = version_task_runner.latest_version_tag().await;
+
+                let version_event = Self::version_availability_event(latest_version_tag);
+                let newer_version = match &version_event {
+                    AppEvent::VersionAvailabilityUpdated {
+                        latest_available_version: Some(version),
+                    } => Some(version.clone()),
+                    _ => None,
+                };
+
+                // The receiver closes when the app shuts down, so there is no
+                // further work for this task to schedule.
+                if app_event_tx.send(version_event).is_err() {
+                    break;
+                }
+
+                if let Some(newer_version) = newer_version
+                    && auto_update
+                    && completed_update_version.as_deref() != Some(newer_version.as_str())
+                    && Self::run_background_update(
+                        &app_event_tx,
+                        &newer_version,
+                        version_task_runner.as_ref(),
+                    )
+                    .await
+                {
+                    completed_update_version = Some(newer_version);
+                }
+            }
+        })
+    }
+
+    /// Runs `npm i -g agentty@latest` in a bounded background task and emits
+    /// update progress events.
     async fn run_background_update(
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         newer_version: &str,
-    ) {
+        version_task_runner: &dyn VersionTaskRunner,
+    ) -> bool {
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::UpdateStatusChanged {
             update_status: UpdateStatus::InProgress {
@@ -381,23 +483,21 @@ impl TaskService {
             },
         });
 
-        let update_result = tokio::task::spawn_blocking(move || {
-            let update_runner = version::RealUpdateRunner;
-            version::run_npm_update_sync(&update_runner)
-        })
-        .await;
-
-        let update_status = match update_result {
-            Ok(Ok(_)) => UpdateStatus::Complete {
+        let update_completed = version_task_runner.run_update().await;
+        let update_status = if update_completed {
+            UpdateStatus::Complete {
                 version: newer_version.to_string(),
-            },
-            Ok(Err(_)) | Err(_) => UpdateStatus::Failed {
+            }
+        } else {
+            UpdateStatus::Failed {
                 version: newer_version.to_string(),
-            },
+            }
         };
 
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::UpdateStatusChanged { update_status });
+
+        update_completed
     }
 
     /// Spawns one background review assist generation task and emits
@@ -655,6 +755,7 @@ fn review_comment_anchor_side_order(anchor_side: ReviewCommentAnchorSide) -> u8 
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::time::Duration;
 
@@ -667,6 +768,8 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::AgentModel;
+
+    const REAL_VERSION_TASK_CHILD_ENV: &str = "AGENTTY_REAL_VERSION_TASK_CHILD";
 
     struct PanickingAgentAvailabilityProbe;
 
@@ -983,7 +1086,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Ensures test-mode version checks still emit one reducer event without
+    /// Ensures test-mode version checks emit a startup reducer event without
     /// touching the network.
     async fn spawn_version_check_task_emits_none_update_in_tests() {
         // Arrange
@@ -1006,25 +1109,276 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Ensures the version task repeats after its configured interval.
+    async fn spawn_version_check_task_repeats_on_interval() {
+        // Arrange
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let mut version_task_runner = MockVersionTaskRunner::new();
+        version_task_runner
+            .expect_latest_version_tag()
+            .return_const(None);
+        version_task_runner.expect_run_update().times(0);
+
+        // Act
+        let task = TaskService::spawn_version_check_task_with_interval(
+            &app_event_tx,
+            false,
+            Duration::from_millis(10),
+            Arc::new(version_task_runner),
+        );
+        let startup_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("timed out waiting for startup version-check event")
+            .expect("version-check task should emit a startup event");
+        let periodic_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("timed out waiting for periodic version-check event")
+            .expect("version-check task should emit a periodic event");
+
+        // Assert
+        let expected_event = AppEvent::VersionAvailabilityUpdated {
+            latest_available_version: None,
+        };
+        assert_eq!(VERSION_CHECK_INTERVAL, Duration::from_hours(1));
+        assert_eq!(startup_event, expected_event);
+        assert_eq!(periodic_event, expected_event);
+
+        drop(app_event_rx);
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("version-check task should stop after receiver closes")
+            .expect("version-check task should join cleanly");
+    }
+
+    #[test]
+    /// Ensures E2E tests can shorten the interval without changing its default.
+    fn version_check_interval_override_accepts_positive_milliseconds() {
+        // Arrange
+        let override_value = Some("25");
+
+        // Act
+        let interval = TaskService::version_check_interval_from_override(override_value);
+
+        // Assert
+        assert_eq!(interval, Duration::from_millis(25));
+    }
+
+    #[test]
+    /// Ensures missing, invalid, and zero overrides retain the hourly interval.
+    fn version_check_interval_override_rejects_invalid_values() {
+        // Arrange
+        let override_values = [None, Some("invalid"), Some("0")];
+
+        // Act
+        let intervals = override_values.map(TaskService::version_check_interval_from_override);
+
+        // Assert
+        assert_eq!(intervals, [VERSION_CHECK_INTERVAL; 3]);
+    }
+
+    #[tokio::test]
     /// Ensures the `--no-update` flag (`auto_update=false`) still emits a
     /// version availability event without triggering an update.
     async fn spawn_version_check_task_with_no_update_emits_version_event() {
         // Arrange
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let mut version_task_runner = MockVersionTaskRunner::new();
+        version_task_runner
+            .expect_latest_version_tag()
+            .return_const(Some("v999.0.0".to_string()));
+        version_task_runner.expect_run_update().times(0);
 
         // Act
-        TaskService::spawn_version_check_task(&app_event_tx, false);
+        let _task = TaskService::spawn_version_check_task_with_interval(
+            &app_event_tx,
+            false,
+            VERSION_CHECK_INTERVAL,
+            Arc::new(version_task_runner),
+        );
         let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
             .await
             .expect("timed out waiting for version-check event")
             .expect("version-check task should emit one event");
 
-        // Assert — still emits version check, no update events
+        // Assert
         assert_eq!(
             app_event,
             AppEvent::VersionAvailabilityUpdated {
-                latest_available_version: None,
+                latest_available_version: Some("v999.0.0".to_string()),
             }
+        );
+    }
+
+    #[tokio::test]
+    /// Ensures one successfully installed version is not reinstalled by the
+    /// next periodic lookup in the same process.
+    async fn version_check_task_does_not_repeat_successful_update() {
+        // Arrange
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let mut version_task_runner = MockVersionTaskRunner::new();
+        version_task_runner
+            .expect_latest_version_tag()
+            .return_const(Some("v999.0.0".to_string()));
+        version_task_runner
+            .expect_run_update()
+            .times(1)
+            .return_const(true);
+
+        // Act
+        let _task = TaskService::spawn_version_check_task_with_interval(
+            &app_event_tx,
+            true,
+            Duration::from_millis(10),
+            Arc::new(version_task_runner),
+        );
+        let mut events = Vec::new();
+        for _ in 0..4 {
+            events.push(
+                tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+                    .await
+                    .expect("timed out waiting for successful update event")
+                    .expect("version-check task should emit an event"),
+            );
+        }
+
+        // Assert
+        assert_eq!(
+            events,
+            vec![
+                AppEvent::VersionAvailabilityUpdated {
+                    latest_available_version: Some("v999.0.0".to_string()),
+                },
+                AppEvent::UpdateStatusChanged {
+                    update_status: UpdateStatus::InProgress {
+                        version: "v999.0.0".to_string(),
+                    },
+                },
+                AppEvent::UpdateStatusChanged {
+                    update_status: UpdateStatus::Complete {
+                        version: "v999.0.0".to_string(),
+                    },
+                },
+                AppEvent::VersionAvailabilityUpdated {
+                    latest_available_version: Some("v999.0.0".to_string()),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    /// Ensures a failed install remains eligible for the next hourly lookup.
+    async fn version_check_task_retries_failed_update() {
+        // Arrange
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let mut version_task_runner = MockVersionTaskRunner::new();
+        version_task_runner
+            .expect_latest_version_tag()
+            .return_const(Some("v999.0.0".to_string()));
+        version_task_runner
+            .expect_run_update()
+            .times(2)
+            .return_const(false);
+
+        // Act
+        let _task = TaskService::spawn_version_check_task_with_interval(
+            &app_event_tx,
+            true,
+            Duration::from_millis(10),
+            Arc::new(version_task_runner),
+        );
+        let mut events = Vec::new();
+        for _ in 0..6 {
+            events.push(
+                tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+                    .await
+                    .expect("timed out waiting for failed update event")
+                    .expect("version-check task should emit an event"),
+            );
+        }
+
+        // Assert
+        let failed_event = AppEvent::UpdateStatusChanged {
+            update_status: UpdateStatus::Failed {
+                version: "v999.0.0".to_string(),
+            },
+        };
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == failed_event)
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    /// Ensures the real task runner remains offline in ordinary unit tests.
+    async fn real_version_task_runner_disables_external_commands_in_tests() {
+        // Arrange
+        let version_task_runner = RealVersionTaskRunner::new();
+
+        // Act
+        let latest_version_tag = version_task_runner.latest_version_tag().await;
+        let update_completed = version_task_runner.run_update().await;
+
+        // Assert
+        assert_eq!(latest_version_tag, None);
+        assert!(!update_completed);
+    }
+
+    #[tokio::test]
+    /// Ensures the real version task runner executes its lookup and update
+    /// commands across their blocking boundaries.
+    async fn real_version_task_runner_uses_external_commands_when_enabled() {
+        if std::env::var_os(REAL_VERSION_TASK_CHILD_ENV).is_some() {
+            // Arrange
+            let version_task_runner = RealVersionTaskRunner::with_external_commands();
+
+            // Act
+            let latest_version_tag = version_task_runner.latest_version_tag().await;
+            let update_completed = version_task_runner.run_update().await;
+
+            // Assert
+            assert_eq!(latest_version_tag.as_deref(), Some("v999.0.0"));
+            assert!(update_completed);
+
+            return;
+        }
+
+        // Arrange
+        let command_dir = tempfile::tempdir().expect("failed to create fake command directory");
+        let npm_path = command_dir.path().join("npm");
+        std::fs::write(
+            &npm_path,
+            "#!/bin/sh\nif [ \"$1\" = \"view\" ]; then printf '\"999.0.0\"'; else printf \
+             'updated'; fi\n",
+        )
+        .expect("failed to write fake npm command");
+        let mut permissions = std::fs::metadata(&npm_path)
+            .expect("failed to load fake npm metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&npm_path, permissions)
+            .expect("failed to make fake npm executable");
+        let current_test_binary =
+            std::env::current_exe().expect("failed to resolve current test binary");
+
+        // Act
+        let output = tokio::process::Command::new(current_test_binary)
+            .arg("--exact")
+            .arg("app::task::tests::real_version_task_runner_uses_external_commands_when_enabled")
+            .arg("--nocapture")
+            .env("PATH", command_dir.path())
+            .env(REAL_VERSION_TASK_CHILD_ENV, "1")
+            .output()
+            .await
+            .expect("failed to run isolated version-task test");
+
+        // Assert
+        assert!(
+            output.status.success(),
+            "isolated version-task test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 
