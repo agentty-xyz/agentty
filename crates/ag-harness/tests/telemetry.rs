@@ -603,7 +603,7 @@ fn assert_secrets_absent(request: &OtlpRequest) {
                 .body
                 .windows(secret.len())
                 .any(|window| window == secret.as_bytes()),
-            "OTLP payload should not contain fixture secret {secret:?}"
+            "OTLP payload should not contain fixture secrets"
         );
     }
 }
@@ -1304,7 +1304,7 @@ fn assert_lifecycle_secrets_absent(request: &OtlpRequest) {
                 .body
                 .windows(secret.len())
                 .any(|window| window == secret.as_bytes()),
-            "OTLP payload should not contain fixture secret {secret:?}"
+            "OTLP payload should not contain fixture secrets"
         );
     }
 }

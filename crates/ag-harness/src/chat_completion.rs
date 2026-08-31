@@ -449,9 +449,19 @@ impl<'a> ChatCompletionRequest<'a> {
         }
     }
 
-    /// Consumes the request into values usable by a client implementation.
-    pub(crate) fn into_parts(self) -> (&'a str, String, Value) {
-        (self.api_key, self.endpoint, self.payload)
+    /// Returns the provider authentication token.
+    pub(crate) fn api_key(&self) -> &str {
+        self.api_key
+    }
+
+    /// Returns the provider request endpoint.
+    pub(crate) fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    /// Returns the serialized provider request body.
+    pub(crate) fn payload(&self) -> &Value {
+        &self.payload
     }
 }
 
@@ -524,16 +534,15 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
         &self,
         request: ChatCompletionRequest<'_>,
     ) -> Result<Option<ChatCompletion>, ChatCompletionError> {
-        let (api_key, endpoint, payload) = request.into_parts();
         let mut rate_limit_retries = 0_usize;
         let mut transport_retries = 0_usize;
         let mut response = loop {
             let response = self
                 .client
-                .post(&endpoint)
-                .bearer_auth(api_key)
+                .post(request.endpoint())
+                .bearer_auth(request.api_key())
                 .timeout(REQUEST_TIMEOUT)
-                .json(&payload)
+                .json(request.payload())
                 .send()
                 .await;
             let mut response = match response {
