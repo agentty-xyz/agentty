@@ -5,7 +5,7 @@ use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use ag_harness::ModelProvider;
+use ag_harness::{ModelProvider, ToolDefinition};
 use assert_cmd::cargo::cargo_bin;
 use serde_json::json;
 use testty::session::PtySessionBuilder;
@@ -13,18 +13,19 @@ use wiremock::matchers::{bearer_token, body_json, body_string_contains, method, 
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const READ_ONLY_SYSTEM_PROMPT: &str = concat!(
-    "You are operating in a read-only repository harness. When a user asks about repository ",
-    "contents, call the read tool immediately in the same response and use its result before ",
-    "answering. Never narrate, promise, or defer a future tool call. Never claim that you \
-     created, ",
+    "You are operating in a read-only repository harness. The read tool supports file, list, ",
+    "search, diff, and show actions. For change review, call diff first, then use search, file, ",
+    "list, or show for evidence. Call the tool immediately and use its result before answering. ",
+    "Never narrate, promise, or defer a future tool call. Never claim that you created, ",
     "modified, deleted, or executed files or commands because filesystem mutation and command ",
     "execution are unavailable. If asked to perform an unsupported action, state that it is ",
     "unsupported."
 );
 const READ_WRITE_SYSTEM_PROMPT: &str = concat!(
-    "You are operating in a repository harness with read and write tools. When a user asks about ",
-    "repository contents, call the read tool immediately in the same response and use its result ",
-    "before answering. When a user asks to create or modify a file, call the write tool ",
+    "You are operating in a repository harness with read and write tools. The read tool supports ",
+    "file, list, search, diff, and show actions. For change review, call diff first. When a user ",
+    "asks about repository contents, call read immediately and use its result before answering. ",
+    "When a user asks to create or modify a file, call the write tool ",
     "immediately in the same response. Never narrate, promise, or defer a future tool call. Only ",
     "claim that a file was created or modified after the write tool succeeds. File deletion and ",
     "command execution are unavailable."
@@ -50,34 +51,14 @@ fn structured_output_instruction() -> String {
 }
 
 fn read_tool() -> serde_json::Value {
+    let definition = ToolDefinition::read();
+
     json!({
         "type": "function",
         "function": {
-            "description": "Read a repository-relative file, optionally selecting a line range.",
-            "name": "read",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 4096,
-                        "pattern": "^(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+)(?:/(?:[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.[^./\\\\\\u0000][^/\\\\\\u0000]*|\\.\\.[^/\\\\\\u0000]+))*$"
-                    },
-                    "offset": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": u64::MAX
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": u64::MAX
-                    }
-                },
-                "required": ["path"],
-                "additionalProperties": false
-            }
+            "description": definition.description(),
+            "name": definition.name(),
+            "parameters": definition.parameters()
         }
     })
 }
@@ -495,7 +476,7 @@ async fn read_tool_reports_the_file_without_printing_its_contents() {
                         "type": "function",
                         "function": {
                             "name": "read",
-                            "arguments": r#"{"path":"Cargo.toml","limit":2}"#
+                                "arguments": r#"{"path":"Cargo.toml","limit":2}"#
                         }
                     }]
                 }

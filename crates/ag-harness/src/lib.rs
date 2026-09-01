@@ -1,9 +1,9 @@
 //! Lightweight, Rust-native LLM harness for application-facing agent workflows.
 //!
 //! The crate provides a provider-neutral model loop, normalized completion
-//! metadata, validated structured output, and deny-by-default repository read
-//! and patch tools. Provider and local filesystem implementations remain
-//! behind injectable boundaries.
+//! metadata, validated structured output, and deny-by-default repository
+//! inspection and patch tools. Provider and local filesystem implementations
+//! remain behind injectable boundaries.
 
 mod chat_completion;
 mod file_system;
@@ -40,6 +40,9 @@ pub use provider::{
 pub use read::{ReadError, ReadOutput};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use telemetry::LifecycleMetrics;
-pub use tool::{ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments};
+pub use tool::{
+    ReadAction, ReadArguments, ReadSide, Tool, ToolCall, ToolCallArguments, ToolDefinition,
+    WriteArguments,
+};
 pub use trace::LifecycleTraceObserver;
 pub use write::{WriteError, WriteOutput};

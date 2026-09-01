@@ -14,9 +14,9 @@ below as design targets unless they are explicitly identified as the current fou
 or marked complete in the iteration and roadmap checklists.
 
 `ag-harness` is the base layer between an application and an LLM. Rust-native,
-app-facing and lightweight. It provides just the essentials: an agent loop, three core
-tools, session management, and a typed event stream, leaving the actual product
-decisions entirely to your app.
+app-facing and lightweight. It provides just the essentials: an agent loop, an closed
+repository-tool permissions, session management, and a typed event stream, leaving the
+actual product decisions entirely to your app.
 
 ```mermaid
 flowchart LR
@@ -36,10 +36,12 @@ flowchart LR
 
 ## Core features
 
-- **Three built-in tools** - `read`, `write`, `bash`.
+- **Repository tools** - closed, bounded read and write capabilities with
+  provider-neutral JSON Schema definitions.
 - **Structured edits** - the `write` tool applies git-style diff patches and emits
   clean, targeted diffs.
-- **Permission policy** - every tool call passes a policy check.
+- **Tool permissions** - every tool call must match an explicitly enabled built-in and
+  its argument schema.
 - **Persisted sessions** - session state and required data are saved.
 
 ## Architecture
@@ -104,20 +106,35 @@ training. The Muse example defaults to the standard model and accepts an explici
 
 The current tool foundation includes:
 
-- Shared, typed `read` and `write` calls across Qwen, Kimi, and Muse.
+- Portable name-and-JSON tool calls across Qwen, Kimi, and Muse, decoded into the closed
+  built-in `read` and `write` contracts.
 - Validated multi-call responses, executed in provider order with every result retained
   in one complete assistant/tool history group.
-- Explicit repository roots and deny-by-default permissions through `Harness::allow()`.
+- Deny-by-default `Harness::allow()` selection for `Tool::Read` and `Tool::Write`.
+  Applications cannot advertise or execute arbitrary host-defined tools.
 - Bounded tool execution and continuation to schema-validated terminal output.
+- Harness-side argument-schema validation, including calls returned by injected `Model`
+  implementations, and 64 KiB result bounds.
+- One built-in `read` tool with bounded `file`, `list`, `search`, `diff`, and `show`
+  actions. In v0, `diff` and base-side `show` use the built-in `main` revision; the
+  model cannot choose another revision. Its provider-portable schema remains flat;
+  schema-valid fields rejected by a selected action return corrective tool feedback
+  instead of terminating the turn.
+- A built-in `write` tool for repository-relative patches. File access uses the
+  injectable `FileSystem`; inspection actions use fixed read-only Git commands behind a
+  private command-runner boundary. The runner uses an absolute Git executable outside
+  the configured root, clears inherited Git environment, disables configured filesystem
+  monitors, verifies canonical worktree scope, and drains subprocess streams while
+  retaining complete bounded records.
 - Model-correctable read and write rejections returned through the tool loop.
 - Descriptor-relative file access without symlink traversal.
 - One-file unified-diff writes with stale-safe atomic replacement and typed failures.
 
 The `ag-harness-cli` package ships the `ag-harness` command, which starts an in-memory
-chat with Muse, Kimi, or Qwen. Reads are scoped to `--read-dir`; writes require
-`--allow-write`. It derives provider parsing and help text from the library catalog
-while retaining command-line defaults, application prompts, terminal interaction, and
-output formatting.
+chat with Muse, Kimi, or Qwen. Reads are scoped to `--read-dir`, comparison reads use
+`main`, and writes require `--allow-write`. It derives provider parsing and help text
+from the library catalog while retaining command-line defaults, application prompts,
+terminal interaction, and output formatting.
 
 ## Session management
 
@@ -154,7 +171,7 @@ flowchart TD
     A[user prompt] --> B[assemble context]
     B --> C[call model, stream reply]
     C --> D{tool requested?}
-    D -- yes --> E[policy check → run tool]
+    D -- yes --> E[permission check → run tool]
     E --> B
     D -- no --> F[turn complete]
 ```
@@ -167,7 +184,7 @@ sequenceDiagram
     participant H as Harness
     participant App
     M->>H: write(parser.rs, patch)
-    H->>H: policy → allowed?
+    H->>H: enabled?
     H->>H: apply patch
     H-->>App: Structured diff event
     H->>M: tool result → loop continues
@@ -220,11 +237,11 @@ unstructured text.
 
 ## Permissions
 
-All tools are denied by default. Applications enable current tools explicitly:
+All tools are denied by default. Applications select only the closed built-ins:
 
 ```rust
 Harness::new(model)
-    .repository(repository_root)
+    .repository(&repository_root)
     .allow(Tool::Read)
     .allow(Tool::Write)
 ```
@@ -243,6 +260,7 @@ best cost and performance:
 
 - **Harness** - runs bounded tool calls to validated terminal JSON.
 - **Model** - provider-neutral completion boundary.
+- **Tool** - closed, deny-by-default repository capability selection.
 - **FileSystem** - injectable repository I/O boundary.
 - **Session, Turn, App** - planned persistence and event-streaming layers.
 
@@ -251,7 +269,7 @@ best cost and performance:
 - **User-facing products** (Claude Code, OpenCode, Aider): format output for humans;
   `ag-harness` emits events for apps.
 - **Minimal harnesses** ([Pi](https://pi.dev/)): TypeScript-first, no permission layer;
-  `ag-harness` is Rust-native with an enforced policy hook.
+  `ag-harness` is Rust-native with enforced built-in tool permissions.
 - **Vendor SDKs**: vendor-locked; `ag-harness` is model-agnostic.
 - **Rust model-API crates** (`rig`): abstract the model call only; `ag-harness` adds the
   loop, persisted sessions, tools, permissions.

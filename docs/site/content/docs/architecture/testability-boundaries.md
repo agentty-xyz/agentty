@@ -41,10 +41,10 @@ uses its stable operation identifier.
 
 Beyond these, narrower internal command-runner boundaries (for example
 `ForgeCommandRunner`, `GitCommandRunner`, `CompatibilityMergeRunner`,
-`TmuxCommandRunner`, `UpdateRunner`, and the provider transport traits) keep subprocess
-sequencing and retry behavior deterministic in unit tests. The runtime also accepts
-`Terminal<B: Backend>` via `run_with_backend`, enabling in-process TUI tests with
-`TestBackend`.
+`TmuxCommandRunner`, `UpdateRunner`, the `ag-harness` repository-inspection runner, and
+the provider transport traits) keep subprocess sequencing and retry behavior
+deterministic in unit tests. The runtime also accepts `Terminal<B: Backend>` via
+`run_with_backend`, enabling in-process TUI tests with `TestBackend`.
 
 The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
 private. Application workflows that submit isolated utility prompts inject
@@ -77,7 +77,10 @@ converted to `String` via `Display` because those types require `Clone` and `Eq`
 involving multiple external commands, prefer injectable trait boundaries and
 `mockall`-based tests over flaky end-to-end shell-heavy tests. Add a narrower internal
 command-runner boundary when a public orchestration trait still needs deterministic
-coverage of subprocess sequencing or retry behavior.
+coverage of subprocess sequencing or retry behavior. Repository command boundaries must
+also select executables outside repository scope, neutralize inherited process
+configuration and configured filesystem monitors, verify canonical scope, and drain
+subprocess streams into complete bounded records.
 
 Apply the same rule to filesystem discovery and path probes in `app/` and `runtime/`:
 route directory walking, `exists` checks, `canonicalize`, and file copy or persistence

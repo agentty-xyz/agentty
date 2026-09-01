@@ -8,7 +8,7 @@ Run a model with bounded repository tools and validated structured output.
 use ag_harness::{Harness, MUSE_SPARK_1_2, Muse, Tool};
 
 let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_2)?)
-    .repository(repository_root)
+    .repository(&repository_root)
     .allow(Tool::Read)
     .allow(Tool::Write);
 
@@ -18,13 +18,21 @@ let output = harness.run(prompt, output_schema).await?;
 Provide `MODEL_API_KEY`, a repository root, explicitly allowed tools, a prompt, and an
 `OutputSchema`. Expect schema-validated JSON or a typed error.
 
-Tools are denied by default and repository tools require an explicit root. `read`
-returns bounded file content; `write` applies one bounded unified diff to one text file.
-Both use the injected `FileSystem` boundary without shell commands, and the model may
-continue calling allowed tools until it returns schema-valid JSON. When a provider
-returns multiple tool calls in one response, the harness validates the complete batch,
-executes it in provider order, and records one assistant message followed by every tool
-result.
+Tools are denied by default. Applications enable the closed built-in `Tool::Read` and
+`Tool::Write` capabilities; they cannot register arbitrary model tools. The `read` tool
+offers five bounded actions: `file` reads worktree text, `list` discovers repository
+paths, `search` finds literal text, `diff` compares against `main`, and `show` reads a
+file from `main` or `HEAD`. The fixed base keeps the v0 application API to
+`.repository(root).allow(Tool::Read)` and prevents the model from selecting a revision.
+
+`write` applies one bounded unified diff to one text file. File reads and writes use the
+injectable `FileSystem`; repository inspection runs fixed read-only Git operations
+behind a private command boundary. That boundary clears inherited Git configuration,
+uses an absolute Git executable outside the configured root, disables configured
+filesystem monitors, verifies that root against Git's canonical worktree, and drains
+command streams while retaining complete bounded records. When a provider returns
+multiple tool calls in one response, the harness validates the complete batch, executes
+it in provider order, and records one assistant message followed by every tool result.
 
 Use `Harness::chat()` for sequential in-memory turns and sanitized activity reports.
 Chat history retains complete recent turns within a 256 KiB payload budget; use
