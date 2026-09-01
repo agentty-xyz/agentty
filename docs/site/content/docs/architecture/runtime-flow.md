@@ -714,7 +714,10 @@ their triggers:
   calls are bounded to 30 seconds and cancel their subprocess on timeout so one
   unavailable provider cannot retain the queue indefinitely.
 
-- **Version check** (startup): reports npm update availability.
+- **Version check** (startup and hourly): reports npm update availability and runs at
+  most one automatic install for each successfully installed version during the current
+  process. Version lookup and installation subprocesses are cancelled at bounded
+  deadlines, and failed or timed-out installs remain eligible for the next hourly check.
 
 - **Agent CLI discovery and refresh** (startup): runs bounded provider updates and
   version probes off the async runtime. Antigravity compatibility is cached with the

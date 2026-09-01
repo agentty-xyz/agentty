@@ -63,10 +63,10 @@ delete a session.
 ## Auto-Update
 
 <a id="overview-auto-update"></a> Agentty checks npmjs for newer versions at startup and
-automatically installs updates in the background. Agent backend CLIs (`agy`, `claude`,
-`codex`, and `gemini`) are also refreshed on startup when installed. See
-[Workflow](@/docs/usage/workflow.md) for status-bar details and how to disable automatic
-updates with `--no-update`.
+once every hour while running, then automatically installs updates in the background.
+Agent backend CLIs (`agy`, `claude`, `codex`, and `gemini`) are also refreshed on
+startup when installed. See [Workflow](@/docs/usage/workflow.md) for status-bar details
+and how to disable automatic updates with `--no-update`.
 
 ## Key Concepts
 

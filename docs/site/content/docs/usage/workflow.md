@@ -916,9 +916,10 @@ selector popup.
 
 ## Auto-Update
 
-<a id="usage-auto-update"></a> When Agentty launches, it checks npmjs for a newer
-version in the background. If a newer version is detected, it automatically runs
-`npm i -g agentty@latest` without blocking the UI:
+<a id="usage-auto-update"></a> Agentty checks npmjs for a newer version in the
+background when it launches and once every hour while it remains open. If a newer
+version is detected, it automatically runs `npm i -g agentty@latest` without blocking
+the UI:
 
 - **Updating to vX.Y.Z...**: The background npm install is running.
 - **Updated to vX.Y.Z — restart to use new version**: Installation succeeded; relaunch
@@ -932,8 +933,8 @@ To disable automatic updates, launch with `--no-update`:
 agentty --no-update
 ```
 
-When `--no-update` is set, Agentty still checks for newer versions and shows the manual
-update hint, but does not install automatically.
+When `--no-update` is set, Agentty still performs the startup and hourly checks and
+shows the manual update hint, but does not install automatically.
 
 Run `agentty --help` to list supported launch options or `agentty --version` to print
 the installed Agentty version. Unsupported arguments produce an error instead of

@@ -8,28 +8,6 @@ use crate::common::FeatureTest;
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
-/// Seeds the canonical project as the persisted active project.
-fn seed_active_project_setting(env: &crate::common::BuilderEnv) -> E2eResult {
-    let runtime = common::seed_runtime()?;
-
-    runtime.block_on(async {
-        let canonical_workdir = env.workdir.canonicalize()?;
-        let database = common::open_database(env).await?;
-        let project_id = database
-            .projects()
-            .upsert_project(
-                &canonical_workdir.to_string_lossy(),
-                Some("main".to_string()),
-            )
-            .await?;
-        agentty::test_support::persist_active_project_id_for_test(&database, project_id).await?;
-
-        Ok::<(), Box<dyn std::error::Error>>(())
-    })?;
-
-    Ok(())
-}
-
 /// Verify that agentty startup renders the Sessions tab when an active
 /// project already exists.
 ///
@@ -40,7 +18,7 @@ fn startup_shows_sessions_tab_for_active_project() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("startup")
         .with_git()
-        .setup(seed_active_project_setting)
+        .setup(common::seed_active_project_setting)
         .zola(
             "Startup",
             "Launch agentty and land on the session list in seconds.",

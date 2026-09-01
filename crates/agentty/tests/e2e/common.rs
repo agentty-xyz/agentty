@@ -379,6 +379,35 @@ pub(crate) fn seed_session(
     Ok(())
 }
 
+/// Seed the canonical project as active so Agentty starts on the Sessions tab.
+///
+/// # Errors
+///
+/// Returns an error if runtime creation, project canonicalization, database
+/// opening, project upsert, or active-project persistence fails.
+pub(crate) fn seed_active_project_setting(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = seed_runtime()?;
+
+    runtime.block_on(async {
+        let canonical_workdir = env.workdir.canonicalize()?;
+        let database = open_database(env).await?;
+        let project_id = database
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
+            .await?;
+        agentty::test_support::persist_active_project_id_for_test(&database, project_id).await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    Ok(())
+}
+
 /// Seed one additional never-opened Git project and start Agentty on the
 /// Sessions tab so project-switching scenarios share deterministic setup.
 ///

@@ -1,14 +1,21 @@
 //! Version discovery and auto-update helpers.
 
-use std::process::Command;
-use std::sync::Arc;
+use std::process::Stdio;
+use std::time::Duration;
 
+use async_trait::async_trait;
 use semver::Version;
 use serde::Deserialize;
+use tokio::process::Command;
+use tokio::time;
 use tracing::{debug, warn};
 
 const AGENTTY_NPM_PACKAGE: &str = "agentty";
 const NPM_REGISTRY_LATEST_URL: &str = "https://registry.npmjs.org/agentty/latest";
+/// Maximum runtime for each npm/curl version-discovery command.
+const VERSION_LOOKUP_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+/// Maximum runtime for the npm global-install command.
+const VERSION_UPDATE_COMMAND_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Typed error returned by version infrastructure operations.
 ///
@@ -23,6 +30,15 @@ pub(crate) enum VersionError {
         command: String,
         /// Human-readable detail from the underlying I/O error.
         message: String,
+    },
+
+    /// A version command exceeded its configured runtime bound.
+    #[error("`{command}` timed out after {timeout:?}")]
+    CommandTimedOut {
+        /// The program that exceeded its deadline.
+        command: String,
+        /// Configured command deadline.
+        timeout: Duration,
     },
 
     /// A version command subprocess exited with a non-zero status.
@@ -70,80 +86,82 @@ impl VersionCommandOutput {
 
 /// External command boundary for npm/curl version discovery commands.
 #[cfg_attr(test, mockall::automock)]
+#[async_trait]
 trait VersionCommandRunner: Send + Sync {
     /// Runs one command and returns normalized output for parsing.
-    fn run_command(
+    async fn run_command(
         &self,
         program: &str,
         args: Vec<String>,
+        timeout: Duration,
     ) -> Result<VersionCommandOutput, VersionError>;
 }
 
-/// Production command runner backed by [`std::process::Command`].
+/// Production command runner backed by [`tokio::process::Command`].
 struct RealVersionCommandRunner;
 
+#[async_trait]
 impl VersionCommandRunner for RealVersionCommandRunner {
-    fn run_command(
+    async fn run_command(
         &self,
         program: &str,
         args: Vec<String>,
+        timeout: Duration,
     ) -> Result<VersionCommandOutput, VersionError> {
-        let output = Command::new(program)
-            .args(&args)
-            .output()
-            .map_err(|error| VersionError::CommandSpawn {
-                command: program.to_string(),
-                message: error.to_string(),
-            })?;
-
-        Ok(VersionCommandOutput {
-            status: output.status.to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            success: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        })
+        run_version_command_with_timeout(program, args, timeout).await
     }
 }
 
-/// External command boundary for running `npm i -g agentty@latest`.
-///
-/// The production implementation shells out via [`std::process::Command`]
-/// inside `spawn_blocking`. Tests inject a [`MockUpdateRunner`] to verify
-/// the update flow without subprocess execution.
-#[cfg_attr(test, mockall::automock)]
-pub(crate) trait UpdateRunner: Send + Sync {
-    /// Runs the update command and returns combined stdout on success or a
-    /// typed version error on failure.
-    fn run_update(&self, command: &str, args: Vec<String>) -> Result<String, VersionError>;
+/// Runs one cancellable version subprocess with an explicit deadline.
+async fn run_version_command_with_timeout(
+    program: &str,
+    args: Vec<String>,
+    timeout: Duration,
+) -> Result<VersionCommandOutput, VersionError> {
+    let mut process = Command::new(program);
+    process.args(&args).stdin(Stdio::null()).kill_on_drop(true);
+
+    let output = time::timeout(timeout, process.output())
+        .await
+        .map_err(|_| VersionError::CommandTimedOut {
+            command: program.to_string(),
+            timeout,
+        })?
+        .map_err(|error| VersionError::CommandSpawn {
+            command: program.to_string(),
+            message: error.to_string(),
+        })?;
+
+    Ok(VersionCommandOutput {
+        status: output.status.to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+    })
 }
 
-/// Production update runner backed by [`std::process::Command`].
-#[cfg(not(test))]
-pub(crate) struct RealUpdateRunner;
-
-#[cfg(not(test))]
-impl UpdateRunner for RealUpdateRunner {
-    fn run_update(&self, command: &str, args: Vec<String>) -> Result<String, VersionError> {
-        let command_runner = RealVersionCommandRunner;
-        let output = command_runner.run_command(command, args)?;
-
-        output.successful_stdout(command)
-    }
+/// Runs `npm i -g agentty@latest` with a cancellable deadline.
+pub(crate) async fn run_npm_update() -> Result<String, VersionError> {
+    run_npm_update_with_runner(&RealVersionCommandRunner).await
 }
 
-/// Runs `npm i -g agentty@latest` synchronously via the provided
-/// [`UpdateRunner`].
-pub(crate) fn run_npm_update_sync(
-    update_runner: &dyn UpdateRunner,
+/// Runs the npm update through one injected command boundary.
+async fn run_npm_update_with_runner(
+    command_runner: &dyn VersionCommandRunner,
 ) -> Result<String, VersionError> {
-    update_runner.run_update(
-        "npm",
-        vec![
-            "i".to_string(),
-            "-g".to_string(),
-            "agentty@latest".to_string(),
-        ],
-    )
+    let output = command_runner
+        .run_command(
+            "npm",
+            vec![
+                "i".to_string(),
+                "-g".to_string(),
+                "agentty@latest".to_string(),
+            ],
+            VERSION_UPDATE_COMMAND_TIMEOUT,
+        )
+        .await?;
+
+    output.successful_stdout("npm")
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,34 +171,24 @@ struct NpmRegistryLatestResponse {
 
 /// Returns the latest npmjs version tag (`vX.Y.Z`) for `agentty`.
 pub async fn latest_npm_version_tag() -> Option<String> {
-    latest_npm_version_tag_with_runner(Arc::new(RealVersionCommandRunner)).await
+    latest_npm_version_tag_with_runner(&RealVersionCommandRunner).await
 }
 
 /// Runs latest-version discovery through an injected command boundary.
 async fn latest_npm_version_tag_with_runner(
-    command_runner: Arc<dyn VersionCommandRunner>,
+    command_runner: &dyn VersionCommandRunner,
 ) -> Option<String> {
-    let result = tokio::task::spawn_blocking(move || {
-        fetch_latest_npm_version_tag_sync(command_runner.as_ref())
-    })
-    .await;
+    let result = fetch_latest_npm_version_tag(command_runner).await;
 
-    latest_version_from_task_result(result)
+    latest_version_from_result(result)
 }
 
-/// Converts the blocking lookup task result while retaining diagnostics.
-fn latest_version_from_task_result(
-    result: Result<Result<String, VersionError>, tokio::task::JoinError>,
-) -> Option<String> {
+/// Converts one lookup result while retaining diagnostics.
+fn latest_version_from_result(result: Result<String, VersionError>) -> Option<String> {
     match result {
-        Ok(Ok(version_tag)) => Some(version_tag),
-        Ok(Err(error)) => {
-            warn!(%error, "Failed to discover latest npm version");
-
-            None
-        }
+        Ok(version_tag) => Some(version_tag),
         Err(error) => {
-            warn!(%error, "Latest-version task failed to join");
+            warn!(%error, "Failed to discover latest npm version");
 
             None
         }
@@ -203,33 +211,36 @@ pub(crate) fn is_newer_than_current_version(
     candidate_version > current_version
 }
 
-fn fetch_latest_npm_version_tag_sync(
+async fn fetch_latest_npm_version_tag(
     command_runner: &dyn VersionCommandRunner,
 ) -> Result<String, VersionError> {
-    match fetch_latest_version_with_npm_cli(command_runner) {
+    match fetch_latest_version_with_npm_cli(command_runner).await {
         Ok(latest_version) => return Ok(version_tag(&latest_version)),
         Err(error) => {
             debug!(%error, "npm CLI version lookup failed; trying registry fallback");
         }
     }
 
-    let latest_version = fetch_latest_version_with_registry_curl(command_runner)?;
+    let latest_version = fetch_latest_version_with_registry_curl(command_runner).await?;
 
     Ok(version_tag(&latest_version))
 }
 
-fn fetch_latest_version_with_npm_cli(
+async fn fetch_latest_version_with_npm_cli(
     command_runner: &dyn VersionCommandRunner,
 ) -> Result<Version, VersionError> {
-    let output = command_runner.run_command(
-        "npm",
-        vec![
-            "view".to_string(),
-            AGENTTY_NPM_PACKAGE.to_string(),
-            "version".to_string(),
-            "--json".to_string(),
-        ],
-    )?;
+    let output = command_runner
+        .run_command(
+            "npm",
+            vec![
+                "view".to_string(),
+                AGENTTY_NPM_PACKAGE.to_string(),
+                "version".to_string(),
+                "--json".to_string(),
+            ],
+            VERSION_LOOKUP_COMMAND_TIMEOUT,
+        )
+        .await?;
     let stdout = output.successful_stdout("npm")?;
 
     parse_npm_cli_version_response(&stdout).ok_or(VersionError::ResponseParse { provider: "npm" })
@@ -241,13 +252,16 @@ fn parse_npm_cli_version_response(response: &str) -> Option<Version> {
     parse_version(&version)
 }
 
-fn fetch_latest_version_with_registry_curl(
+async fn fetch_latest_version_with_registry_curl(
     command_runner: &dyn VersionCommandRunner,
 ) -> Result<Version, VersionError> {
-    let output = command_runner.run_command(
-        "curl",
-        vec!["-fsSL".to_string(), NPM_REGISTRY_LATEST_URL.to_string()],
-    )?;
+    let output = command_runner
+        .run_command(
+            "curl",
+            vec!["-fsSL".to_string(), NPM_REGISTRY_LATEST_URL.to_string()],
+            VERSION_LOOKUP_COMMAND_TIMEOUT,
+        )
+        .await?;
     let stdout = output.successful_stdout("curl")?;
 
     parse_registry_latest_response(&stdout).ok_or(VersionError::ResponseParse {
@@ -341,15 +355,16 @@ mod tests {
         assert_eq!(version_tag, "v0.1.14");
     }
 
-    #[test]
-    fn test_fetch_latest_npm_version_tag_sync_prefers_npm_cli_result() {
+    #[tokio::test]
+    async fn test_fetch_latest_npm_version_tag_prefers_npm_cli_result() {
         // Arrange
         let mut command_runner = MockVersionCommandRunner::new();
         command_runner
             .expect_run_command()
             .times(1)
-            .returning(|program, args| {
+            .returning(|program, args, timeout| {
                 assert_eq!(program, "npm");
+                assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
                 assert_eq!(
                     args,
                     vec![
@@ -369,21 +384,22 @@ mod tests {
             });
 
         // Act
-        let latest_version_tag = fetch_latest_npm_version_tag_sync(&command_runner);
+        let latest_version_tag = fetch_latest_npm_version_tag(&command_runner).await;
 
         // Assert
         assert_eq!(latest_version_tag.expect("lookup should succeed"), "v0.2.0");
     }
 
-    #[test]
-    fn test_fetch_latest_npm_version_tag_sync_falls_back_to_registry_curl() {
+    #[tokio::test]
+    async fn test_fetch_latest_npm_version_tag_falls_back_to_registry_curl() {
         // Arrange
         let mut command_runner = MockVersionCommandRunner::new();
         command_runner
             .expect_run_command()
             .times(1)
-            .returning(|program, args| {
+            .returning(|program, args, timeout| {
                 assert_eq!(program, "npm");
+                assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
                 assert_eq!(
                     args,
                     vec![
@@ -404,8 +420,9 @@ mod tests {
         command_runner
             .expect_run_command()
             .times(1)
-            .returning(|program, args| {
+            .returning(|program, args, timeout| {
                 assert_eq!(program, "curl");
+                assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
                 assert_eq!(
                     args,
                     vec!["-fsSL".to_string(), NPM_REGISTRY_LATEST_URL.to_string(),]
@@ -420,7 +437,7 @@ mod tests {
             });
 
         // Act
-        let latest_version_tag = fetch_latest_npm_version_tag_sync(&command_runner);
+        let latest_version_tag = fetch_latest_npm_version_tag(&command_runner).await;
 
         // Assert
         assert_eq!(
@@ -429,14 +446,60 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_fetch_latest_npm_version_tag_sync_preserves_fallback_failure() {
+    #[tokio::test]
+    async fn test_fetch_latest_npm_version_tag_falls_back_after_npm_timeout() {
+        // Arrange
+        let mut command_runner = MockVersionCommandRunner::new();
+        let mut sequence = mockall::Sequence::new();
+        command_runner
+            .expect_run_command()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|program, _, timeout| {
+                assert_eq!(program, "npm");
+                assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
+
+                Err(VersionError::CommandTimedOut {
+                    command: program.to_string(),
+                    timeout,
+                })
+            });
+        command_runner
+            .expect_run_command()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|program, _, timeout| {
+                assert_eq!(program, "curl");
+                assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
+
+                Ok(VersionCommandOutput {
+                    status: "exit status: 0".to_string(),
+                    stderr: String::new(),
+                    success: true,
+                    stdout: r#"{"version":"0.3.2"}"#.to_string(),
+                })
+            });
+
+        // Act
+        let latest_version_tag = fetch_latest_npm_version_tag(&command_runner).await;
+
+        // Assert
+        assert_eq!(
+            latest_version_tag.expect("fallback should succeed"),
+            "v0.3.2"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_latest_npm_version_tag_preserves_fallback_failure() {
         // Arrange
         let mut command_runner = MockVersionCommandRunner::new();
         command_runner
             .expect_run_command()
             .times(2)
-            .returning(|program, _| {
+            .returning(|program, _, timeout| {
+                assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
+
                 Ok(VersionCommandOutput {
                     status: "exit status: 7".to_string(),
                     stderr: format!("{program} unavailable"),
@@ -446,7 +509,8 @@ mod tests {
             });
 
         // Act
-        let error = fetch_latest_npm_version_tag_sync(&command_runner)
+        let error = fetch_latest_npm_version_tag(&command_runner)
+            .await
             .expect_err("both lookup commands should fail");
 
         // Assert
@@ -462,14 +526,16 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_fetch_latest_npm_version_tag_sync_reports_invalid_fallback_response() {
+    #[tokio::test]
+    async fn test_fetch_latest_npm_version_tag_reports_invalid_fallback_response() {
         // Arrange
         let mut command_runner = MockVersionCommandRunner::new();
         command_runner
             .expect_run_command()
             .times(2)
-            .returning(|_, _| {
+            .returning(|_, _, timeout| {
+                assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
+
                 Ok(VersionCommandOutput {
                     status: "exit status: 0".to_string(),
                     stderr: String::new(),
@@ -479,7 +545,8 @@ mod tests {
             });
 
         // Act
-        let error = fetch_latest_npm_version_tag_sync(&command_runner)
+        let error = fetch_latest_npm_version_tag(&command_runner)
+            .await
             .expect_err("invalid fallback response should fail");
 
         // Assert
@@ -492,14 +559,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_latest_npm_version_tag_uses_injected_runner_across_blocking_boundary() {
+    async fn test_latest_npm_version_tag_uses_injected_runner() {
         // Arrange
         let mut command_runner = MockVersionCommandRunner::new();
         command_runner
             .expect_run_command()
             .times(1)
-            .returning(|program, _| {
+            .returning(|program, _, timeout| {
                 assert_eq!(program, "npm");
+                assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
 
                 Ok(VersionCommandOutput {
                     status: "exit status: 0".to_string(),
@@ -510,7 +578,7 @@ mod tests {
             });
 
         // Act
-        let version_tag = latest_npm_version_tag_with_runner(Arc::new(command_runner)).await;
+        let version_tag = latest_npm_version_tag_with_runner(&command_runner).await;
 
         // Assert
         assert_eq!(version_tag.as_deref(), Some("v0.5.0"));
@@ -564,14 +632,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_fetch_latest_npm_version_tag_sync_preserves_command_errors() {
+    #[tokio::test]
+    async fn test_fetch_latest_npm_version_tag_preserves_command_errors() {
         // Arrange
         let mut command_runner = MockVersionCommandRunner::new();
         command_runner
             .expect_run_command()
             .times(2)
-            .returning(|program, _| {
+            .returning(|program, _, timeout| {
+                assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
+
                 Err(VersionError::CommandSpawn {
                     command: program.to_string(),
                     message: "not installed".to_string(),
@@ -579,7 +649,8 @@ mod tests {
             });
 
         // Act
-        let error = fetch_latest_npm_version_tag_sync(&command_runner)
+        let error = fetch_latest_npm_version_tag(&command_runner)
+            .await
             .expect_err("fallback command error should propagate");
 
         // Assert
@@ -590,8 +661,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_real_version_command_runner_captures_process_output() {
+    #[tokio::test]
+    async fn test_real_version_command_runner_captures_process_output() {
         // Arrange
         let command_runner = RealVersionCommandRunner;
 
@@ -603,7 +674,9 @@ mod tests {
                     "-c".to_string(),
                     "printf '0.4.0'; printf 'notice' >&2".to_string(),
                 ],
+                Duration::from_secs(1),
             )
+            .await
             .expect("command should run");
 
         // Assert
@@ -613,14 +686,19 @@ mod tests {
         assert!(output.status.contains('0'));
     }
 
-    #[test]
-    fn test_real_version_command_runner_reports_spawn_failure() {
+    #[tokio::test]
+    async fn test_real_version_command_runner_reports_spawn_failure() {
         // Arrange
         let command_runner = RealVersionCommandRunner;
 
         // Act
         let error = command_runner
-            .run_command("agentty-command-that-does-not-exist", Vec::new())
+            .run_command(
+                "agentty-command-that-does-not-exist",
+                Vec::new(),
+                Duration::from_secs(1),
+            )
+            .await
             .expect_err("missing command should fail");
 
         // Assert
@@ -632,24 +710,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_latest_version_task_result_preserves_optional_public_contract() {
+    async fn test_real_version_command_runner_cancels_timed_out_process() {
         // Arrange
-        let success = Ok(Ok("v1.2.3".to_string()));
-        let lookup_failure = Ok(Err(VersionError::ResponseParse { provider: "npm" }));
-        let join_handle = tokio::spawn(std::future::pending::<()>());
-        join_handle.abort();
-        let join_failure = join_handle.await;
+        let command_runner = RealVersionCommandRunner;
+        let timeout = Duration::from_millis(25);
 
         // Act
-        let successful_version = latest_version_from_task_result(success);
-        let missing_version = latest_version_from_task_result(lookup_failure);
-        let joined_version =
-            latest_version_from_task_result(join_failure.map(|()| Ok(String::new())));
+        let error = command_runner
+            .run_command(
+                "sh",
+                vec!["-c".to_string(), "exec sleep 5".to_string()],
+                timeout,
+            )
+            .await
+            .expect_err("long-running command should time out");
+
+        // Assert
+        assert!(matches!(
+            error,
+            VersionError::CommandTimedOut {
+                command,
+                timeout: actual_timeout,
+            } if command == "sh" && actual_timeout == timeout
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_latest_version_result_preserves_optional_public_contract() {
+        // Arrange
+        let success = Ok("v1.2.3".to_string());
+        let lookup_failure = Err(VersionError::ResponseParse { provider: "npm" });
+
+        // Act
+        let successful_version = latest_version_from_result(success);
+        let missing_version = latest_version_from_result(lookup_failure);
 
         // Assert
         assert_eq!(successful_version.as_deref(), Some("v1.2.3"));
         assert_eq!(missing_version, None);
-        assert_eq!(joined_version, None);
     }
 
     #[test]
@@ -689,15 +787,16 @@ mod tests {
         assert!(!invalid_candidate);
     }
 
-    #[test]
-    fn test_run_npm_update_sync_calls_npm_install_global() {
+    #[tokio::test]
+    async fn test_run_npm_update_calls_npm_install_global() {
         // Arrange
-        let mut update_runner = MockUpdateRunner::new();
-        update_runner
-            .expect_run_update()
+        let mut command_runner = MockVersionCommandRunner::new();
+        command_runner
+            .expect_run_command()
             .times(1)
-            .returning(|command, args| {
+            .returning(|command, args, timeout| {
                 assert_eq!(command, "npm");
+                assert_eq!(timeout, VERSION_UPDATE_COMMAND_TIMEOUT);
                 assert_eq!(
                     args,
                     vec![
@@ -707,39 +806,80 @@ mod tests {
                     ]
                 );
 
-                Ok("added 1 package".to_string())
+                Ok(VersionCommandOutput {
+                    status: "exit status: 0".to_string(),
+                    stderr: String::new(),
+                    success: true,
+                    stdout: "added 1 package".to_string(),
+                })
             });
 
         // Act
-        let output = run_npm_update_sync(&update_runner).expect("update should succeed");
+        let output = run_npm_update_with_runner(&command_runner)
+            .await
+            .expect("update should succeed");
 
         // Assert
         assert_eq!(output, "added 1 package");
     }
 
-    #[test]
-    fn test_run_npm_update_sync_preserves_runner_error_without_displaying_stderr() {
+    #[tokio::test]
+    async fn test_run_npm_update_preserves_runner_error_without_displaying_stderr() {
         // Arrange
-        let mut update_runner = MockUpdateRunner::new();
-        update_runner
-            .expect_run_update()
+        let mut command_runner = MockVersionCommandRunner::new();
+        command_runner
+            .expect_run_command()
             .times(1)
-            .returning(|_, _| {
-                Err(VersionError::NonZeroExit {
-                    command: "npm".to_string(),
+            .returning(|_, _, timeout| {
+                assert_eq!(timeout, VERSION_UPDATE_COMMAND_TIMEOUT);
+
+                Ok(VersionCommandOutput {
                     status: "exit status: 1".to_string(),
                     stderr: "permission denied".to_string(),
+                    success: false,
+                    stdout: String::new(),
                 })
             });
 
         // Act
-        let error = run_npm_update_sync(&update_runner).expect_err("should propagate runner error");
+        let error = run_npm_update_with_runner(&command_runner)
+            .await
+            .expect_err("should propagate runner error");
 
         // Assert
         assert_eq!(error.to_string(), "`npm` exited with status exit status: 1");
         assert!(matches!(
             error,
             VersionError::NonZeroExit { stderr, .. } if stderr == "permission denied"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_run_npm_update_preserves_timeout() {
+        // Arrange
+        let mut command_runner = MockVersionCommandRunner::new();
+        command_runner
+            .expect_run_command()
+            .times(1)
+            .returning(|command, _, timeout| {
+                Err(VersionError::CommandTimedOut {
+                    command: command.to_string(),
+                    timeout,
+                })
+            });
+
+        // Act
+        let error = run_npm_update_with_runner(&command_runner)
+            .await
+            .expect_err("timed-out update should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            VersionError::CommandTimedOut {
+                command,
+                timeout,
+            } if command == "npm" && timeout == VERSION_UPDATE_COMMAND_TIMEOUT
         ));
     }
 }

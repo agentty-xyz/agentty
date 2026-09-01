@@ -26,7 +26,8 @@ impl App {
     /// housekeeping tasks.
     ///
     /// When `auto_update` is `true`, a background `npm i -g agentty@latest`
-    /// runs automatically after detecting a newer version.
+    /// runs automatically after detecting a newer version at startup or in an
+    /// hourly follow-up check.
     ///
     /// # Errors
     /// Returns an error if startup project metadata cannot be persisted,
