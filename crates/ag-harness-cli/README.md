@@ -15,6 +15,11 @@ provider. Muse uses `MODEL_API_KEY` and the optional `MODEL_API_BASE_URL`; Kimi 
 `KIMI_API_KEY` and `KIMI_BASE_URL`; Qwen uses `DASHSCOPE_API_KEY` and
 `DASHSCOPE_BASE_URL`. `--base-url` overrides the corresponding URL variable.
 
+- **Writes** - disabled by default; use `--allow-write` to permit patches beneath the
+  selected root.
+- **Prompts** - pass an optional prompt after the model for the first turn; further
+  prompts are read from standard input.
+
 Provider names, known model identifiers, credential variables, and endpoint defaults
 come from `ag-harness`. The CLI owns argument parsing, application prompts, terminal
 interaction, and output formatting, so extending the library catalog does not require a
