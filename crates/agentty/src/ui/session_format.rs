@@ -296,18 +296,18 @@ pub fn session_output_done_line() -> Line<'static> {
     )])
 }
 
-/// Builds the active-status line shown at the end of an in-flight session
+/// Builds the active-status lines shown at the end of an in-flight session
 /// transcript.
 ///
 /// The leading glyph is stable text because the session output component
 /// applies the Tachyonfx loader animation directly to those buffer cells after
 /// the paragraph is rendered.
-pub fn session_output_status_line(
+pub fn session_output_status_lines(
     status: Status,
     active_progress: Option<&str>,
     review_status_message: Option<&str>,
     review_comment_resolution_message: Option<&str>,
-) -> Option<Line<'static>> {
+) -> Vec<Line<'static>> {
     if !matches!(
         status,
         Status::InProgress
@@ -317,7 +317,7 @@ pub fn session_output_status_line(
             | Status::Merging
             | Status::Merged
     ) {
-        return None;
+        return Vec::new();
     }
 
     let status_message = session_output_status_message(
@@ -327,10 +327,25 @@ pub fn session_output_status_line(
         review_comment_resolution_message,
     );
 
-    Some(Line::from(vec![Span::styled(
-        format!("{} {status_message}", session_output_status_icon(status)),
+    let mut source_lines = status_message.trim().lines();
+    let heading = source_lines.next().unwrap_or_default().trim();
+    let mut lines = vec![Line::from(Span::styled(
+        format!("{} {heading}", session_output_status_icon(status)),
         Style::default().fg(style::status_color(status)),
-    )]))
+    ))];
+    lines.extend(
+        source_lines
+            .map(str::trim)
+            .filter(|detail| !detail.is_empty())
+            .map(|detail| {
+                Line::from(Span::styled(
+                    format!("    {detail}"),
+                    Style::default().fg(style::palette::text_muted()),
+                ))
+            }),
+    );
+
+    lines
 }
 
 /// Builds an animated loading header followed by any indented detail rows.
