@@ -2207,7 +2207,7 @@ mod tests {
         let mut permissions = std::fs::metadata(&fake_git)
             .expect("fake Git metadata should be available")
             .permissions();
-        permissions.set_mode(0o755);
+        permissions.set_mode(0o700);
         std::fs::set_permissions(&fake_git, permissions)
             .expect("fake Git executable permissions should be installed");
         let inherited_path = std::env::var_os("PATH").expect("test PATH should be configured");
