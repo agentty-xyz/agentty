@@ -9,6 +9,10 @@ use std::str::FromStr;
 
 use url::Url;
 
+/// Prefix for the per-operation identity marker Agentty appends to review
+/// thread replies.
+pub const AGENTTY_REVIEW_REPLY_MARKER_PREFIX: &str = "<!-- agentty review resolution:";
+
 /// Shared forge family enum reused by persistence and forge adapters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ForgeKind {
@@ -234,10 +238,31 @@ impl ForgeRemote {
 /// One inline review comment emitted by a reviewer on a forge review thread.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewComment {
-    /// Reviewer login or display name.
+    /// Forge author login or display name.
     pub author: String,
-    /// Markdown body as authored by the reviewer.
+    /// Whether the forge reports that the authenticated user authored this
+    /// comment.
+    pub authored_by_current_user: bool,
+    /// Markdown body as authored on the forge.
     pub body: String,
+}
+
+impl ReviewComment {
+    /// Returns whether this comment ends with an Agentty reply marker.
+    pub fn is_agentty_reply(&self) -> bool {
+        if !self.authored_by_current_user {
+            return false;
+        }
+        let Some((reply, marker)) = self.body.rsplit_once(AGENTTY_REVIEW_REPLY_MARKER_PREFIX)
+        else {
+            return false;
+        };
+        let Some(reply_token) = marker.strip_suffix(" -->") else {
+            return false;
+        };
+
+        reply.ends_with("\n\n") && is_uuid_like(reply_token)
+    }
 }
 
 /// Diff side used to anchor one inline review-thread comment.
@@ -279,13 +304,40 @@ pub struct ReviewCommentThread {
 }
 
 impl ReviewCommentThread {
-    /// Returns whether this thread remains open for a reply and resolution.
+    /// Returns whether this thread has an unaddressed reviewer message.
     ///
     /// Outdated threads remain actionable because their forge-native thread
-    /// identifiers survive after their original line anchors become stale.
+    /// identifiers survive after their original line anchors become stale. An
+    /// unresolved thread whose latest comment is an Agentty reply becomes
+    /// actionable again when a reviewer adds a follow-up comment.
     pub fn is_actionable(&self) -> bool {
-        !self.is_resolved
+        !self.is_resolved && !self.is_addressed_by_agentty()
     }
+
+    /// Returns whether Agentty authored the latest comment on this unresolved
+    /// thread.
+    pub fn is_addressed_by_agentty(&self) -> bool {
+        !self.is_resolved
+            && self
+                .comments
+                .last()
+                .is_some_and(ReviewComment::is_agentty_reply)
+    }
+}
+
+/// Returns whether `value` has the canonical hyphenated UUID shape used for
+/// review-reply tokens.
+fn is_uuid_like(value: &str) -> bool {
+    const GROUP_LENGTHS: [usize; 5] = [8, 4, 4, 4, 12];
+
+    value
+        .split('-')
+        .map(str::as_bytes)
+        .zip(GROUP_LENGTHS)
+        .all(|(group, expected_length)| {
+            group.len() == expected_length && group.iter().all(u8::is_ascii_hexdigit)
+        })
+        && value.matches('-').count() == GROUP_LENGTHS.len() - 1
 }
 
 /// Full review-comments payload captured for one review request.
@@ -541,18 +593,73 @@ mod tests {
     }
 
     #[test]
-    fn review_comment_thread_is_actionable_when_unresolved_even_if_outdated() {
+    fn review_comment_thread_is_actionable_until_agentty_addresses_latest_feedback() {
         // Arrange
         let actionable = review_comment_thread();
         let mut resolved = review_comment_thread();
         resolved.is_resolved = true;
         let mut outdated = review_comment_thread();
         outdated.is_outdated = Some(true);
+        let mut addressed = review_comment_thread();
+        addressed.comments.push(ReviewComment {
+            author: "agentty".to_string(),
+            authored_by_current_user: true,
+            body: [
+                "No change needed.\n\n",
+                AGENTTY_REVIEW_REPLY_MARKER_PREFIX,
+                "123e4567-e89b-12d3-a456-426614174000 -->",
+            ]
+            .concat(),
+        });
+        let mut followed_up = addressed.clone();
+        followed_up.comments.push(ReviewComment {
+            author: "reviewer".to_string(),
+            authored_by_current_user: false,
+            body: "Please reconsider.".to_string(),
+        });
+        let mut reviewer_marker = review_comment_thread();
+        reviewer_marker.comments.push(ReviewComment {
+            author: "reviewer".to_string(),
+            authored_by_current_user: false,
+            body: [
+                "Please reconsider.\n\n",
+                AGENTTY_REVIEW_REPLY_MARKER_PREFIX,
+                "123e4567-e89b-12d3-a456-426614174000 -->",
+            ]
+            .concat(),
+        });
 
         // Act, Assert
         assert!(actionable.is_actionable());
         assert!(!resolved.is_actionable());
         assert!(outdated.is_actionable());
+        assert!(addressed.is_addressed_by_agentty());
+        assert!(!addressed.is_actionable());
+        assert!(!followed_up.is_addressed_by_agentty());
+        assert!(followed_up.is_actionable());
+        assert!(!reviewer_marker.is_addressed_by_agentty());
+        assert!(reviewer_marker.is_actionable());
+    }
+
+    #[test]
+    fn review_comment_rejects_malformed_agentty_reply_markers() {
+        // Arrange
+        let malformed_comments = [
+            "Ordinary comment",
+            "No separator<!-- agentty review resolution:123e4567-e89b-12d3-a456-426614174000 -->",
+            "No terminator\n\n<!-- agentty review resolution:123e4567-e89b-12d3-a456-426614174000",
+            "Bad token\n\n<!-- agentty review resolution:not-a-uuid -->",
+        ];
+
+        // Act
+        let results = malformed_comments.map(|body| ReviewComment {
+            author: "agentty".to_string(),
+            authored_by_current_user: true,
+            body: body.to_string(),
+        });
+
+        // Assert
+        assert!(results.iter().all(|comment| !comment.is_agentty_reply()));
     }
 
     #[test]

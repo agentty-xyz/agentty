@@ -289,12 +289,14 @@ mod tests {
         ReviewCommentSnapshot {
             pr_level_comments: vec![ReviewComment {
                 author: "alice".to_string(),
+                authored_by_current_user: false,
                 body: "General comment".to_string(),
             }],
             threads: vec![ReviewCommentThread {
                 anchor_side: ReviewCommentAnchorSide::New,
                 comments: vec![ReviewComment {
                     author: "bob".to_string(),
+                    authored_by_current_user: false,
                     body: "Inline comment".to_string(),
                 }],
                 id: "thread-id".to_string(),

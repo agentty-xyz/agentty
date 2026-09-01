@@ -3176,6 +3176,7 @@ fn review_comment_resolution_snapshot() -> ReviewCommentSnapshot {
             anchor_side: ReviewCommentAnchorSide::New,
             comments: vec![ReviewComment {
                 author: "reviewer".to_string(),
+                authored_by_current_user: false,
                 body: "Add validation.".to_string(),
             }],
             id: "thread-42".to_string(),

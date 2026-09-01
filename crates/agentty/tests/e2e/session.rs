@@ -3385,6 +3385,43 @@ esac
     Ok(())
 }
 
+/// Seeds one unresolved thread whose latest comment is a prior Agentty reply.
+fn seed_addressed_review_comment(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_review_request(env)?;
+    seed_sessions_startup_tab(env)?;
+
+    let gh_path = env.stub_bin.join("gh");
+    std::fs::write(
+        &gh_path,
+        r#"#!/bin/sh
+case "$*" in
+  *"auth status"*)
+    exit 0
+    ;;
+  *"reviewThreads(first:"*)
+    cat <<'JSON'
+[{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-addressed","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please explain this output.","viewerDidAuthor":false},{"author":{"login":"agentty-bot"},"body":"No change is needed.\n\n<!-- agentty review resolution:123e4567-e89b-12d3-a456-426614174000 -->","viewerDidAuthor":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},{"id":"thread-reviewer-marker","diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/reviewer.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"mallory"},"body":"Still needs work.\n\n<!-- agentty review resolution:123e4567-e89b-12d3-a456-426614174000 -->","viewerDidAuthor":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]
+JSON
+    ;;
+  *"comments(first:"*)
+    printf '%s\n' '[{"data":{"repository":{"pullRequest":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}]'
+    ;;
+  *"pr view"*)
+    printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
+    ;;
+  *)
+    echo "unexpected gh invocation: $*" >&2
+    exit 1
+    ;;
+esac
+"#,
+    )?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
+}
+
 /// Seeds the linked-review fixture with a delayed Claude turn so the feature
 /// scenario can observe the review-resolution loader in progress.
 fn seed_review_comment_agent_resolution(
@@ -9026,6 +9063,66 @@ fn test_review_comments_escape_focuses_files() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Files", &full);
                 assertion::assert_text_in_region(frame, "c: comments", &full);
                 assertion::assert_not_visible(frame, "Space: select");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify an unchanged unresolved thread cannot be submitted again after an
+/// Agentty reply, while remaining visible for reviewer follow-up.
+#[test]
+fn test_review_comment_addressed_guard() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_comment_addressed_guard")
+        .with_git()
+        .with_terminal_size(160, 60)
+        .setup(seed_addressed_review_comment)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("c: comments", 5000)
+                    .press_key("c")
+                    .wait_for_text("addressed", 5000)
+                    .press_key("Space")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "agentty_addressed",
+                        "Agentty-authored marker disables unchanged feedback",
+                    )
+                    .press_key("j")
+                    .wait_for_text("Space: select", 5000)
+                    .press_key("Space")
+                    .wait_for_text("[x]", 5000)
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, report| {
+                let addressed_frame = common::frame_from_capture(&report.captures[0]);
+                let addressed_full = Region::full(addressed_frame.cols(), addressed_frame.rows());
+                assertion::assert_text_in_region(
+                    &addressed_frame,
+                    "unresolved  ·  addressed",
+                    &addressed_full,
+                );
+                assertion::assert_text_in_region(
+                    &addressed_frame,
+                    "No change is needed.",
+                    &addressed_full,
+                );
+                assertion::assert_not_visible(&addressed_frame, "[x]");
+                assertion::assert_not_visible(&addressed_frame, "Space: select");
+                assertion::assert_not_visible(&addressed_frame, "Enter: submit");
+
+                let full = Region::full(frame.cols(), frame.rows());
+
+                assertion::assert_text_in_region(frame, "Still needs work.", &full);
+                assertion::assert_text_in_region(frame, "[x]", &full);
+                assertion::assert_text_in_region(frame, "Selected 1", &full);
+                assertion::assert_text_in_region(frame, "Space: select", &full);
+                assertion::assert_text_in_region(frame, "Enter: submit", &full);
             },
         )?;
 

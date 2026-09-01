@@ -23,9 +23,6 @@ use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::{AppRepositories, SessionReviewCommentResolutionRow};
 
-/// Prefix for the per-operation marker appended to forge replies.
-const REVIEW_COMMENT_REPLY_MARKER_PREFIX: &str = "<!-- agentty review resolution:";
-
 /// Result of ensuring one durable operation has an Agentty-authored reply.
 enum ReviewCommentReplyProgress {
     /// The durable operation proves the reply was posted.
@@ -675,7 +672,10 @@ async fn remove_review_comment_operation(
 
 /// Appends an operation-specific non-rendering identity marker to one reply.
 fn review_comment_reply_body(reply: &str, reply_token: &str) -> String {
-    format!("{reply}\n\n{REVIEW_COMMENT_REPLY_MARKER_PREFIX}{reply_token} -->")
+    format!(
+        "{reply}\n\n{}{reply_token} -->",
+        forge::AGENTTY_REVIEW_REPLY_MARKER_PREFIX
+    )
 }
 
 /// Reports that durable review-comment work could not be loaded after push.
@@ -1346,6 +1346,7 @@ mod tests {
             .comments
             .push(forge::ReviewComment {
                 author: "agentty".to_string(),
+                authored_by_current_user: true,
                 body: review_comment_reply_body("Addressed fixed.", "token-fixed"),
             });
         let mut review_request_client = MockReviewRequestClient::new();
@@ -1400,6 +1401,7 @@ mod tests {
             .comments
             .push(forge::ReviewComment {
                 author: "collaborator".to_string(),
+                authored_by_current_user: false,
                 body: review_comment_reply_body("Addressed fixed.", "token-fixed"),
             });
         let mut review_request_client = MockReviewRequestClient::new();
@@ -1753,6 +1755,7 @@ mod tests {
             .comments
             .push(forge::ReviewComment {
                 author: "agentty".to_string(),
+                authored_by_current_user: true,
                 body: review_comment_reply_body("Addressed fixed.", "token-fixed"),
             });
         let mut review_request_client = MockReviewRequestClient::new();

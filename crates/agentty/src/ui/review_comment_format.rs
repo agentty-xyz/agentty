@@ -40,12 +40,18 @@ pub(crate) fn thread_header_line(
     } else {
         ""
     };
+    let addressed_tag = if thread.is_addressed_by_agentty() {
+        "  ·  addressed"
+    } else {
+        ""
+    };
 
     Line::from(vec![
         Span::styled(anchor, anchor_style),
         Span::styled(
             format!(
-                "  ·  {side_tag}  ·  {comment_count} comments  ·  {resolution_tag}{outdated_tag}"
+                "  ·  {side_tag}  ·  {comment_count} comments  ·  \
+                 {resolution_tag}{outdated_tag}{addressed_tag}"
             ),
             Style::default().fg(style::palette::text_muted()),
         ),
@@ -118,6 +124,7 @@ mod tests {
             anchor_side: ReviewCommentAnchorSide::Old,
             comments: vec![ReviewComment {
                 author: "alice".to_string(),
+                authored_by_current_user: false,
                 body: "Please check this.".to_string(),
             }],
             id: "thread-id".to_string(),
@@ -145,6 +152,7 @@ mod tests {
             anchor_side: ReviewCommentAnchorSide::New,
             comments: vec![ReviewComment {
                 author: "alice".to_string(),
+                authored_by_current_user: false,
                 body: "Please check these lines.".to_string(),
             }],
             id: "thread-id".to_string(),
@@ -166,11 +174,45 @@ mod tests {
     }
 
     #[test]
+    fn test_thread_header_line_marks_unresolved_agentty_reply_as_addressed() {
+        // Arrange
+        let thread = ReviewCommentThread {
+            anchor_side: ReviewCommentAnchorSide::New,
+            comments: vec![ReviewComment {
+                author: "agentty".to_string(),
+                authored_by_current_user: true,
+                body: concat!(
+                    "No change needed.\n\n",
+                    "<!-- agentty review resolution:",
+                    "123e4567-e89b-12d3-a456-426614174000 -->",
+                )
+                .to_string(),
+            }],
+            id: "thread-id".to_string(),
+            is_outdated: Some(false),
+            is_resolved: false,
+            line: Some(12),
+            path: "src/lib.rs".to_string(),
+            start_line: None,
+        };
+
+        // Act
+        let line = thread_header_line(&thread, Style::default());
+
+        // Assert
+        assert_eq!(
+            line.to_string(),
+            "src/lib.rs:12  ·  new  ·  1 comments  ·  unresolved  ·  addressed"
+        );
+    }
+
+    #[test]
     fn test_append_comment_bodies_indents_markdown_under_author() {
         // Arrange
         let mut lines = Vec::new();
         let comments = vec![ReviewComment {
             author: "alice".to_string(),
+            authored_by_current_user: false,
             body: "**Looks** good.".to_string(),
         }];
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
@@ -194,6 +236,7 @@ mod tests {
         let mut lines = Vec::new();
         let comments = vec![ReviewComment {
             author: "alice".to_string(),
+            authored_by_current_user: false,
             body: concat!(
                 "<!-- hidden reviewer note -->",
                 "<p><strong>Explain</strong> this output.<br>",
@@ -226,10 +269,12 @@ mod tests {
         let comments = vec![
             ReviewComment {
                 author: "alice".to_string(),
+                authored_by_current_user: false,
                 body: "First".to_string(),
             },
             ReviewComment {
                 author: "bob".to_string(),
+                authored_by_current_user: false,
                 body: "Second".to_string(),
             },
         ];

@@ -146,14 +146,34 @@ impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>> {
-        self.operations.fetch_review_comment_snapshot_future(
-            remote,
-            display_id,
-            parse_display_id,
-            discussions_command,
-            "fetch merge-request discussions",
-            parse_review_comment_snapshot_response,
-        )
+        let operations = self.operations.clone();
+
+        Box::pin(async move {
+            let merge_request_iid = parse_display_id(&display_id)?;
+            let current_user_output = operations
+                .run_review_command(
+                    &remote,
+                    current_user_command(&remote),
+                    "fetch authenticated GitLab user",
+                )
+                .await?;
+            let current_user = map_parse_error(
+                ForgeKind::GitLab,
+                parse_current_user_response(&current_user_output.stdout),
+            )?;
+            let discussions_output = operations
+                .run_review_command(
+                    &remote,
+                    discussions_command(&remote, &merge_request_iid),
+                    "fetch merge-request discussions",
+                )
+                .await?;
+
+            map_parse_error(
+                ForgeKind::GitLab,
+                parse_review_comment_snapshot_response(&discussions_output.stdout, current_user.id),
+            )
+        })
     }
 
     fn reply_to_authenticated_thread(
@@ -411,6 +431,20 @@ fn update_metadata_command(
     gitlab_command(remote, "glab", arguments)
 }
 
+/// Builds the GitLab API request for the authenticated user identity.
+fn current_user_command(remote: &ForgeRemote) -> ForgeCommand {
+    gitlab_command(
+        remote,
+        "glab",
+        vec![
+            "api".to_string(),
+            "--hostname".to_string(),
+            remote.host.clone(),
+            "/user".to_string(),
+        ],
+    )
+}
+
 /// Builds the `glab api` command for merge-request discussions.
 fn discussions_command(remote: &ForgeRemote, merge_request_iid: &str) -> ForgeCommand {
     let encoded_project_path: String =
@@ -506,7 +540,10 @@ fn discussion_endpoint(
 }
 
 /// Parses merge-request discussions into inline threads and MR-level comments.
-fn parse_review_comment_snapshot_response(stdout: &str) -> Result<ReviewCommentSnapshot, String> {
+fn parse_review_comment_snapshot_response(
+    stdout: &str,
+    current_user_id: u64,
+) -> Result<ReviewCommentSnapshot, String> {
     let discussions: Vec<GitLabDiscussion> = serde_json::from_str(stdout)
         .map_err(|error| format!("invalid GitLab merge-request discussions response: {error}"))?;
     let mut pr_level_comments = Vec::new();
@@ -522,10 +559,16 @@ fn parse_review_comment_snapshot_response(stdout: &str) -> Result<ReviewCommentS
             continue;
         }
 
-        if let Some(thread) = review_comment_thread_from_discussion(&discussion.id, &notes) {
+        if let Some(thread) =
+            review_comment_thread_from_discussion(&discussion.id, &notes, current_user_id)
+        {
             threads.push(thread);
         } else {
-            pr_level_comments.extend(notes.drain(..).map(review_comment_from_note));
+            pr_level_comments.extend(
+                notes
+                    .drain(..)
+                    .map(|note| review_comment_from_note(note, current_user_id)),
+            );
         }
     }
 
@@ -540,6 +583,7 @@ fn parse_review_comment_snapshot_response(stdout: &str) -> Result<ReviewCommentS
 fn review_comment_thread_from_discussion(
     discussion_id: &str,
     notes: &[GitLabDiscussionNote],
+    current_user_id: u64,
 ) -> Option<ReviewCommentThread> {
     let anchor_note = notes.iter().find(|note| {
         note.note_type.as_deref() == Some("DiffNote") && note.position.as_ref().is_some()
@@ -552,7 +596,7 @@ fn review_comment_thread_from_discussion(
         comments: notes
             .iter()
             .cloned()
-            .map(review_comment_from_note)
+            .map(|note| review_comment_from_note(note, current_user_id))
             .collect(),
         id: discussion_id.to_string(),
         is_outdated: None,
@@ -603,15 +647,24 @@ fn gitlab_anchor_from_position(
 }
 
 /// Converts one GitLab discussion note into the forge-neutral comment shape.
-fn review_comment_from_note(note: GitLabDiscussionNote) -> ReviewComment {
+fn review_comment_from_note(note: GitLabDiscussionNote, current_user_id: u64) -> ReviewComment {
+    let authored_by_current_user = note.author.id == Some(current_user_id);
+
     ReviewComment {
         author: note
             .author
             .username
             .or(note.author.name)
             .unwrap_or_default(),
+        authored_by_current_user,
         body: note.body,
     }
+}
+
+/// Parses the authenticated GitLab user required to identify Agentty replies.
+fn parse_current_user_response(stdout: &str) -> Result<GitLabCurrentUser, String> {
+    serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitLab current-user response: {error}"))
 }
 
 /// Builds one base `glab` command with deterministic color settings and the
@@ -716,6 +769,12 @@ struct GitLabMetadataResponse {
     title: String,
 }
 
+/// Authenticated GitLab user returned by `GET /user`.
+#[derive(Deserialize)]
+struct GitLabCurrentUser {
+    id: u64,
+}
+
 /// GitLab merge-request discussion returned by the discussions API.
 #[derive(Clone, Deserialize)]
 struct GitLabDiscussion {
@@ -740,6 +799,7 @@ struct GitLabDiscussionNote {
 /// Minimal GitLab note author data shown in session review-comment views.
 #[derive(Clone, Deserialize)]
 struct GitLabDiscussionAuthor {
+    id: Option<u64>,
     name: Option<String>,
     username: Option<String>,
 }
@@ -1210,6 +1270,16 @@ mod tests {
             .withf({
                 let remote = remote.clone();
 
+                move |command| command == &current_user_command(&remote)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(gitlab_current_user_json())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
                 move |command| command == &discussions_command(&remote, "42")
             })
             .returning(|_| Box::pin(async { Ok(success_output(gitlab_discussions_json())) }));
@@ -1232,7 +1302,10 @@ mod tests {
         assert!(!thread.is_resolved);
         assert_eq!(thread.comments.len(), 2);
         assert_eq!(thread.comments[0].author, "alice");
+        assert!(!thread.comments[0].authored_by_current_user);
         assert_eq!(thread.comments[0].body, "Please simplify this.");
+        assert!(thread.comments[1].authored_by_current_user);
+        assert!(thread.is_addressed_by_agentty());
 
         assert_eq!(snapshot.pr_level_comments.len(), 1);
         assert_eq!(snapshot.pr_level_comments[0].author, "carol");
@@ -1288,6 +1361,37 @@ mod tests {
         let encoded_endpoint =
             discussion_endpoint(&gitlab_remote(), "42", "discussion/1", Some("notes"));
         assert!(encoded_endpoint.contains("discussion%2F1/notes"));
+    }
+
+    #[tokio::test]
+    async fn fetch_authenticated_review_comment_snapshot_preserves_current_user_parse_failure() {
+        // Arrange
+        let remote = gitlab_remote();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &current_user_command(&remote)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output("not-json".to_string())) }));
+        let adapter = GitLabReviewRequestAdapter::new(Arc::new(command_runner));
+
+        // Act
+        let error = adapter
+            .fetch_authenticated_review_comment_snapshot(remote, "!42".to_string())
+            .await
+            .expect_err("invalid current user should fail");
+
+        // Assert
+        assert!(matches!(
+            error,
+            ReviewRequestError::OperationFailed { forge_kind, message }
+                if forge_kind == ForgeKind::GitLab
+                    && message.contains("invalid GitLab current-user response")
+        ));
     }
 
     #[test]
@@ -1455,7 +1559,7 @@ mod tests {
                         "id": 1,
                         "type": "DiffNote",
                         "body": "Please simplify this.",
-                        "author": {"name": "Alice", "username": "alice"},
+                        "author": {"id": 1, "name": "Alice", "username": "alice"},
                         "system": false,
                         "resolved": false,
                         "position": {
@@ -1468,8 +1572,8 @@ mod tests {
                     {
                         "id": 2,
                         "type": "DiscussionNote",
-                        "body": "Agreed.",
-                        "author": {"name": "Bob", "username": "bob"},
+                        "body": "No change needed.\n\n<!-- agentty review resolution:123e4567-e89b-12d3-a456-426614174000 -->",
+                        "author": {"id": 2, "name": "Bob", "username": "bob"},
                         "system": false,
                         "resolved": false,
                         "position": null
@@ -1484,7 +1588,7 @@ mod tests {
                         "id": 3,
                         "type": "DiscussionNote",
                         "body": "Looks good overall.",
-                        "author": {"name": "Carol", "username": "carol"},
+                        "author": {"id": 3, "name": "Carol", "username": "carol"},
                         "system": false,
                         "resolved": false,
                         "position": null
@@ -1493,5 +1597,9 @@ mod tests {
             }
         ]"#
         .to_string()
+    }
+
+    fn gitlab_current_user_json() -> String {
+        serde_json::json!({"id": 2, "username": "bob"}).to_string()
     }
 }

@@ -1874,6 +1874,7 @@ mod tests {
         ReviewCommentSnapshot {
             pr_level_comments: vec![ReviewComment {
                 author: "alice".to_string(),
+                authored_by_current_user: false,
                 body: "Looks ready.".to_string(),
             }],
             threads: Vec::new(),
