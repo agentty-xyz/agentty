@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{App, Tab, UpdateStatus, session};
+use crate::app::{App, ProjectSyncStatus, Tab, UpdateStatus, session};
 use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
@@ -36,6 +36,7 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) mode: &'a AppMode,
     pub(crate) mru_project_order: &'a [usize],
     pub(crate) project_selected_index: Option<usize>,
+    pub(crate) project_sync_status: Option<&'a ProjectSyncStatus>,
     pub(crate) projects: &'a [ProjectListItem],
     pub(crate) session_branch_names: &'a HashMap<SessionId, String>,
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
@@ -94,6 +95,7 @@ impl App {
             mode: &self.mode,
             mru_project_order: project.mru_project_order,
             project_selected_index: project.selected_index,
+            project_sync_status: self.project_sync_status.as_ref(),
             projects: project.project_items,
             session_branch_names: sessions.session_branch_names,
             session_git_statuses: sessions.session_git_statuses,

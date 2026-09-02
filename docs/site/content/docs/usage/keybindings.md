@@ -54,6 +54,11 @@ of pasted text.
 | `Tab` / `Shift+Tab` | Switch to next / previous tab                        |
 | `?`                 | Help                                                 |
 
+Project sync is non-modal. While `s` is running, navigation, project switching, and
+isolated session work continue; repeated `s` presses coalesce. Creating or starting a
+draft session, merging, and rebasing against the syncing project's base checkout wait
+for a retry after the status bar reports completion.
+
 If pre-commit configuration exists without an executable hook, `a` first opens a
 warning. Press `Enter` to continue to the `Regular`, `Draft`, `Orchestrator`, `Stacked`,
 or `Append to stack` selector, or `Esc` / `q` to cancel. `Orchestrator` is marked
@@ -84,6 +89,9 @@ to move, `Enter` to switch the active project without leaving the Sessions view,
 | `j` / `k`           | Navigate projects             |
 | `Tab` / `Shift+Tab` | Switch to next / previous tab |
 | `?`                 | Help                          |
+
+The same non-modal project-sync behavior and base-checkout safety gates apply from the
+Projects list.
 
 <a id="usage-project-list-active-highlight"></a> The currently active project is
 highlighted in the table with a `* ` prefix and accented row text.

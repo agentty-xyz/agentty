@@ -13,9 +13,9 @@ use super::{
     BranchPublishTaskSession, ConfirmationViewMode, DiffReviewComments, HashMap, HashSet,
     InputState, PromptModeSnapshot, PublishBranchAction, QuestionProgress, RealFsClient,
     ReviewCacheEntry, ReviewRequestClient, ReviewRequestStatusUpdate, SessionId, SyncMainOutcome,
-    SyncPopupContext, SyncReviewRequestTaskResult, SyncSessionStartError, TurnAppliedState,
-    UpdateStatus, branch_push_failure, db, detected_forge_kind_from_git_push_error, forge,
-    push_session_branch, run_branch_publish_action, session, sync,
+    SyncReviewRequestTaskResult, SyncSessionStartError, TurnAppliedState, UpdateStatus,
+    branch_push_failure, db, detected_forge_kind_from_git_push_error, forge, push_session_branch,
+    run_branch_publish_action, session, sync,
 };
 use crate::app::branch_publish::{BranchPublishActionUpdate, BranchPublishTaskSuccess};
 use crate::app::review::ReviewUpdate;
@@ -2890,204 +2890,523 @@ async fn open_session_worktree_in_tmux_stays_closed_when_persistence_fails() {
     );
 }
 
-#[test]
-fn sync_main_popup_mode_success_message_tracks_project_and_branch() {
-    // Arrange
-    let sync_popup_context = SyncPopupContext {
-        default_branch: "develop".to_string(),
-        project_name: "agentty".to_string(),
-    };
-    let sync_main_outcome = SyncMainOutcome {
-        default_branch: "develop".to_string(),
-        deferred_merged_session_ids: Vec::new(),
-        pulled_commit_titles: vec![
-            "Add audit log indexing".to_string(),
-            "Fix merge conflict prompt wording".to_string(),
-        ],
-        pulled_commits: Some(2),
-        pushed_commit_titles: vec!["Polish sync popup alignment".to_string()],
-        pushed_commits: Some(1),
-        resolved_conflict_files: vec!["src/lib.rs".to_string()],
-    };
-
-    // Act
-    let mode = App::sync_main_popup_mode(Ok(sync_main_outcome), &sync_popup_context);
-    let expected_message = concat!(
-        "Successfully synchronized with its upstream.\n",
-        "\n",
-        "## 1. 2 commits pulled\n",
-        "  - Add audit log indexing\n",
-        "  - Fix merge conflict prompt wording\n",
-        "\n",
-        "## 2. 1 commit pushed\n",
-        "  - Polish sync popup alignment\n",
-        "\n",
-        "## 3. conflicts fixed: src/lib.rs"
-    );
-
-    // Assert
-    assert!(matches!(mode, AppMode::SyncBlockedPopup { .. }));
-    if let AppMode::SyncBlockedPopup {
-        default_branch,
-        is_loading,
-        message,
-        project_name,
-        title,
-    } = mode
-    {
-        assert_eq!(title, "Sync complete");
-        assert_eq!(default_branch.as_deref(), Some("develop"));
-        assert!(!is_loading);
-        assert_eq!(message, expected_message);
-        assert_eq!(project_name.as_deref(), Some("agentty"));
-    }
-}
-
-#[test]
-fn sync_main_popup_mode_lists_merged_sessions_that_still_need_attention() {
-    // Arrange
-    let sync_popup_context = SyncPopupContext {
-        default_branch: "main".to_string(),
-        project_name: "agentty".to_string(),
-    };
-    let sync_main_outcome = SyncMainOutcome {
-        default_branch: "main".to_string(),
-        deferred_merged_session_ids: vec!["session-a".into(), "session-b".into()],
-        pulled_commit_titles: Vec::new(),
-        pulled_commits: Some(1),
-        pushed_commit_titles: Vec::new(),
-        pushed_commits: Some(0),
-        resolved_conflict_files: Vec::new(),
-    };
-
-    // Act
-    let mode = App::sync_main_popup_mode(Ok(sync_main_outcome), &sync_popup_context);
-
-    // Assert
-    assert!(matches!(
-        mode,
-        AppMode::SyncBlockedPopup { message, title, .. }
-            if title == "Sync complete"
-                && message.contains("Merged sessions still waiting")
-                && message.contains("`session-a`")
-                && message.contains("`session-b`")
-                && message.contains("retry the sync")
-    ));
-}
-
 #[tokio::test]
-async fn apply_app_events_sync_conflicts_updates_loading_popup() {
+async fn apply_app_events_sync_conflicts_updates_non_modal_status() {
     // Arrange
-    let (mut app, base_dir) = crate::test_support::new_test_app().await;
-    let expected_project_name = base_dir
-        .path()
-        .file_name()
-        .and_then(|name| name.to_str())
-        .expect("expected temp dir file name")
-        .to_string();
-    app.projects.update_active_project_context(
-        app.active_project_id(),
-        expected_project_name.clone(),
-        Some("develop".to_string()),
-        None,
-        base_dir.path().to_path_buf(),
-    );
-    app.mode = AppMode::SyncBlockedPopup {
-        default_branch: Some("develop".to_string()),
-        is_loading: true,
-        message: App::sync_loading_message(),
-        project_name: Some(expected_project_name.clone()),
-        title: "Sync in progress".to_string(),
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let operation = sync::ProjectSyncContext {
+        default_branch: "develop".to_string(),
+        operation_id: 7,
+        project_id: app.active_project_id(),
+        project_name: "agentty".to_string(),
     };
+    app.project_sync_status = Some(sync::ProjectSyncStatus {
+        context: operation.clone(),
+        phase: sync::ProjectSyncPhase::Running,
+    });
+    app.mode = AppMode::List;
 
     // Act
     app.apply_app_events(AppEvent::SyncMainConflictResolutionStarted {
         conflicted_files: vec!["src/lib.rs".to_string(), "README.md".to_string()],
+        operation,
+    })
+    .await;
+
+    // Assert
+    assert!(matches!(app.mode, AppMode::List));
+    assert!(matches!(
+        app.project_sync_status,
+        Some(sync::ProjectSyncStatus {
+            phase: sync::ProjectSyncPhase::ResolvingConflicts {
+                conflicted_file_count: 2
+            },
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn apply_app_events_stale_sync_conflict_does_not_replace_live_status() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let live_operation = sync::ProjectSyncContext {
+        default_branch: "main".to_string(),
+        operation_id: 8,
+        project_id: app.active_project_id(),
+        project_name: "agentty".to_string(),
+    };
+    app.project_sync_status = Some(sync::ProjectSyncStatus {
+        context: live_operation.clone(),
+        phase: sync::ProjectSyncPhase::Running,
+    });
+    let mut stale_operation = live_operation;
+    stale_operation.operation_id = 7;
+
+    // Act
+    app.apply_app_events(AppEvent::SyncMainConflictResolutionStarted {
+        conflicted_files: vec!["src/lib.rs".to_string()],
+        operation: stale_operation,
     })
     .await;
 
     // Assert
     assert!(matches!(
-        app.mode,
-        AppMode::SyncBlockedPopup {
-            ref default_branch,
-            is_loading: true,
-            ref message,
-            ref project_name,
-            ref title,
-        } if title == "Resolving conflicts"
-            && default_branch.as_deref() == Some("develop")
-            && project_name.as_deref() == Some(expected_project_name.as_str())
-            && message.contains("Resolving conflicts during sync.")
-            && message.contains("- README.md")
-            && message.contains("- src/lib.rs")
+        app.project_sync_status,
+        Some(sync::ProjectSyncStatus {
+            phase: sync::ProjectSyncPhase::Running,
+            ..
+        })
     ));
 }
 
-#[test]
-fn sync_main_popup_mode_blocked_message_tracks_project_and_branch() {
+#[tokio::test]
+async fn apply_app_events_sync_conflict_without_running_status_is_ignored() {
     // Arrange
-    let sync_popup_context = SyncPopupContext {
-        default_branch: "develop".to_string(),
-        project_name: "agentty".to_string(),
-    };
-
-    // Act
-    let mode = App::sync_main_popup_mode(
-        Err(SyncSessionStartError::MainHasUncommittedChanges {
-            default_branch: "develop".to_string(),
-        }),
-        &sync_popup_context,
-    );
-
-    // Assert
-    assert!(matches!(
-        mode,
-        AppMode::SyncBlockedPopup {
-            ref default_branch,
-            is_loading: false,
-            ref title,
-            ref message,
-            ref project_name,
-        } if title == "Sync blocked"
-            && default_branch.as_deref() == Some("develop")
-            && message.contains("uncommitted changes")
-            && project_name.as_deref() == Some("agentty")
-    ));
-}
-
-#[test]
-fn sync_main_popup_mode_auth_failure_shows_authorization_guidance() {
-    // Arrange
-    let sync_popup_context = SyncPopupContext {
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let operation = sync::ProjectSyncContext {
         default_branch: "main".to_string(),
+        operation_id: 7,
+        project_id: app.active_project_id(),
         project_name: "agentty".to_string(),
     };
-    let sync_error = SyncSessionStartError::Other(
-        "Git push failed: fatal: could not read Username for 'https://github.com': terminal \
-         prompts disabled"
-            .to_string(),
-    );
 
     // Act
-    let mode = App::sync_main_popup_mode(Err(sync_error), &sync_popup_context);
+    app.apply_app_events(AppEvent::SyncMainConflictResolutionStarted {
+        conflicted_files: vec!["src/lib.rs".to_string()],
+        operation,
+    })
+    .await;
+
+    // Assert
+    assert!(app.project_sync_status.is_none());
+}
+
+#[tokio::test]
+async fn project_sync_completion_preserves_the_active_navigation_mode() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let project_id = app.active_project_id();
+    app.project_sync_status = Some(sync::ProjectSyncStatus {
+        context: sync::ProjectSyncContext {
+            default_branch: "main".to_string(),
+            operation_id: 1,
+            project_id,
+            project_name: "agentty".to_string(),
+        },
+        phase: sync::ProjectSyncPhase::Running,
+    });
+    app.mode = AppMode::ProjectSwitcher {
+        selected_option_index: 0,
+    };
+
+    // Act
+    app.apply_app_events(successful_manual_sync(project_id, "main", 2))
+        .await;
 
     // Assert
     assert!(matches!(
-        mode,
-        AppMode::SyncBlockedPopup {
-            ref default_branch,
-            is_loading: false,
-            ref title,
-            ref message,
-            ref project_name,
-        } if title == "Sync failed"
-            && default_branch.as_deref() == Some("main")
-            && message.contains("Git push requires authentication")
-            && message.contains("`gh auth login`")
-            && message.contains("then run sync again")
-            && project_name.as_deref() == Some("agentty")
+        app.mode,
+        AppMode::ProjectSwitcher {
+            selected_option_index: 0
+        }
     ));
+    assert!(matches!(
+        app.project_sync_status.as_ref().map(|status| &status.phase),
+        Some(sync::ProjectSyncPhase::Complete {
+            pulled_commits: Some(2),
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn project_sync_completion_applies_captured_review_updates() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let project_id = app.active_project_id();
+    let operation = sync::ProjectSyncContext {
+        default_branch: "main".to_string(),
+        operation_id: 1,
+        project_id,
+        project_name: "agentty".to_string(),
+    };
+    app.project_sync_status = Some(sync::ProjectSyncStatus {
+        context: operation.clone(),
+        phase: sync::ProjectSyncPhase::Running,
+    });
+    app.latest_project_sync_operation_ids.insert(project_id, 1);
+    let mut completion = successful_manual_sync_completion(project_id, "main", 2);
+    completion.review_request_updates = vec![sync::SyncMainReviewUpdate {
+        result: Ok(SyncReviewRequestTaskResult {
+            outcome: session::SyncReviewRequestOutcome::NoReviewRequest,
+            summary: None,
+        }),
+        session_id: "missing-session".into(),
+    }];
+
+    // Act
+    app.apply_app_events(AppEvent::SyncMainCompleted { completion })
+        .await;
+
+    // Assert
+    assert!(matches!(
+        app.project_sync_status.as_ref().map(|status| &status.phase),
+        Some(sync::ProjectSyncPhase::Complete { .. })
+    ));
+}
+
+#[tokio::test]
+async fn superseded_project_sync_completions_do_not_reconcile_session_state() {
+    // Arrange
+    let (mut app, _pool, _base_dir) = new_test_app_with_database_pool().await;
+    let project_id = app.active_project_id();
+    let session_id = "superseded-sync-session";
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            session_id,
+            AgentModel::Gemini37Flash.as_str(),
+            "main",
+            &Status::Review.to_string(),
+            project_id,
+        )
+        .await
+        .expect("failed to insert review session");
+    let session_folder_name = session_id.chars().take(8).collect::<String>();
+    fs::create_dir_all(
+        app.services
+            .base_path()
+            .join(session_folder_name)
+            .join(SESSION_DATA_DIR),
+    )
+    .expect("failed to create session data dir");
+    app.refresh_sessions_now().await;
+    app.latest_project_sync_operation_ids.insert(project_id, 2);
+    app.project_sync_status = Some(sync::ProjectSyncStatus {
+        context: sync::ProjectSyncContext {
+            default_branch: "main".to_string(),
+            operation_id: 2,
+            project_id,
+            project_name: "agentty".to_string(),
+        },
+        phase: sync::ProjectSyncPhase::Running,
+    });
+    let mut stale_completion = successful_manual_sync_completion(project_id, "main", 1);
+    stale_completion.review_request_updates = vec![sync::SyncMainReviewUpdate {
+        result: Ok(SyncReviewRequestTaskResult {
+            outcome: session::SyncReviewRequestOutcome::Closed {
+                display_id: "#42".to_string(),
+            },
+            summary: None,
+        }),
+        session_id: session_id.into(),
+    }];
+
+    // Act
+    app.apply_app_events(AppEvent::SyncMainCompleted {
+        completion: stale_completion.clone(),
+    })
+    .await;
+    app.pending_project_sync_completions
+        .insert(project_id, stale_completion);
+    app.apply_pending_project_sync_completion().await;
+
+    // Assert
+    let session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == session_id)
+        .expect("session should remain loaded");
+    assert_eq!(session.status, Status::Review);
+    assert!(matches!(
+        app.project_sync_status.as_ref(),
+        Some(sync::ProjectSyncStatus {
+            context,
+            phase: sync::ProjectSyncPhase::Running,
+        }) if context.operation_id == 2
+    ));
+}
+
+#[tokio::test]
+async fn stale_project_sync_completion_does_not_replace_newer_deferred_completion() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let inactive_project_id = app.active_project_id() + 1;
+    app.latest_project_sync_operation_ids
+        .insert(inactive_project_id, 2);
+    let mut newer_completion = successful_manual_sync_completion(inactive_project_id, "main", 2);
+    newer_completion.operation.operation_id = 2;
+    app.pending_project_sync_completions
+        .insert(inactive_project_id, newer_completion);
+
+    // Act
+    app.apply_app_events(successful_manual_sync(inactive_project_id, "main", 1))
+        .await;
+
+    // Assert
+    assert!(matches!(
+        app.pending_project_sync_completions
+            .get(&inactive_project_id),
+        Some(sync::SyncMainCompletion { operation, .. })
+            if operation.operation_id == 2
+    ));
+}
+
+#[tokio::test]
+async fn project_sync_blocks_only_base_checkout_operations_for_its_project() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("session should be created before sync");
+    let project_id = app.active_project_id();
+    app.project_sync_status = Some(sync::ProjectSyncStatus {
+        context: sync::ProjectSyncContext {
+            default_branch: "main".to_string(),
+            operation_id: 1,
+            project_id,
+            project_name: "agentty".to_string(),
+        },
+        phase: sync::ProjectSyncPhase::Running,
+    });
+    let session = app
+        .sessions
+        .state_mut()
+        .session_mut_for_id(&session_id)
+        .expect("session should remain loaded");
+    session.is_draft = true;
+    session.status = Status::Draft;
+    insert_test_ready_review(&mut app, &session_id);
+
+    // Act
+    let create_result = app.create_session().await;
+    let draft_result = app.create_draft_session().await;
+    let start_result = app.start_session(&session_id, "continue").await;
+    let staged_start_result = app.start_staged_session(&session_id).await;
+    let merge_result = app.merge_session(&session_id).await;
+    let rebase_result = app.rebase_session(&session_id).await;
+    let unrelated_project_result = app.ensure_project_checkout_available(project_id + 1);
+
+    // Assert
+    for result in [
+        create_result.map(|_| ()),
+        draft_result.map(|_| ()),
+        start_result,
+        staged_start_result,
+        merge_result,
+        rebase_result,
+    ] {
+        assert!(matches!(
+            result,
+            Err(AppError::Workflow(message))
+                if message.contains("is synchronizing `main`")
+        ));
+    }
+    assert!(unrelated_project_result.is_ok());
+    assert!(app.review_cache.contains_key(session_id.as_str()));
+}
+
+#[tokio::test]
+async fn project_sync_completion_reconciles_after_switching_back_to_its_project() {
+    // Arrange
+    let first_project_dir = tempdir().expect("failed to create first project dir");
+    let second_project_dir = tempdir().expect("failed to create second project dir");
+    let first_project_path = first_project_dir.path().to_path_buf();
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    let first_project_id = database
+        .projects()
+        .upsert_project(&first_project_path.to_string_lossy(), None)
+        .await
+        .expect("failed to insert first project");
+    let second_project_id = database
+        .projects()
+        .upsert_project(&second_project_dir.path().to_string_lossy(), None)
+        .await
+        .expect("failed to insert second project");
+    database
+        .settings()
+        .set_active_project_id(first_project_id)
+        .await
+        .expect("failed to persist initial active project");
+    let mut app = App::new_with_clients(
+        first_project_path.clone(),
+        first_project_path,
+        None,
+        database,
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("failed to build app");
+    app.project_sync_status = Some(sync::ProjectSyncStatus {
+        context: sync::ProjectSyncContext {
+            default_branch: "main".to_string(),
+            operation_id: 1,
+            project_id: first_project_id,
+            project_name: "first".to_string(),
+        },
+        phase: sync::ProjectSyncPhase::Running,
+    });
+    app.switch_project(second_project_id)
+        .await
+        .expect("failed to switch away from syncing project");
+
+    // Act
+    app.apply_app_events(successful_manual_sync(first_project_id, "main", 3))
+        .await;
+    let was_deferred = app
+        .pending_project_sync_completions
+        .contains_key(&first_project_id);
+    app.switch_project(first_project_id)
+        .await
+        .expect("failed to switch back to synced project");
+
+    // Assert
+    assert!(was_deferred);
+    assert!(
+        !app.pending_project_sync_completions
+            .contains_key(&first_project_id)
+    );
+    assert!(matches!(
+        app.project_sync_status.as_ref().map(|status| &status.phase),
+        Some(sync::ProjectSyncPhase::Complete {
+            pulled_commits: Some(3),
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn project_sync_queues_other_project_and_coalesces_duplicate_request() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let first_project_id = app.active_project_id();
+    let second_project_id = first_project_id + 1;
+    let started_project_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured_project_ids = Arc::clone(&started_project_ids);
+    let mut sync_main_runner = crate::app::MockSyncMainRunner::new();
+    sync_main_runner
+        .expect_start_sync_main()
+        .times(2)
+        .returning(move |_, operation, _, _| {
+            captured_project_ids
+                .lock()
+                .expect("started project ids lock should remain available")
+                .push(operation.project_id);
+        });
+    app.sync_main_runner = Arc::new(sync_main_runner);
+
+    app.start_sync_main();
+    let mut second_project_context = app.sync_handle.context_snapshot();
+    second_project_context.project_id = second_project_id;
+    second_project_context.project_name = "second-project".to_string();
+    app.sync_handle.publish_context(second_project_context);
+
+    // Act
+    app.start_sync_main();
+    app.start_sync_main();
+    let queued_request_count = app.pending_project_sync_requests.len();
+    app.apply_app_events(successful_manual_sync(first_project_id, "main", 1))
+        .await;
+
+    // Assert
+    assert_eq!(queued_request_count, 1);
+    assert!(app.pending_project_sync_requests.is_empty());
+    assert_eq!(
+        *started_project_ids
+            .lock()
+            .expect("started project ids lock should remain available"),
+        vec![first_project_id, second_project_id]
+    );
+    assert!(matches!(
+        app.project_sync_status.as_ref(),
+        Some(sync::ProjectSyncStatus {
+            context,
+            phase: sync::ProjectSyncPhase::Running,
+        }) if context.project_id == second_project_id
+    ));
+}
+
+#[tokio::test]
+async fn project_sync_is_blocked_while_merge_work_is_pending() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let mut sync_main_runner = crate::app::MockSyncMainRunner::new();
+    sync_main_runner.expect_start_sync_main().times(0);
+    app.sync_main_runner = Arc::new(sync_main_runner);
+    app.merge_queue.enqueue("pending-merge".into());
+
+    // Act
+    app.start_sync_main();
+
+    // Assert
+    assert!(app.merge_queue.is_queued_or_active("pending-merge"));
+    assert!(matches!(
+        app.project_sync_status.as_ref().map(|status| &status.phase),
+        Some(sync::ProjectSyncPhase::Blocked { message })
+            if message.contains("merge is active or queued")
+    ));
+}
+
+#[tokio::test]
+async fn merge_queue_drain_waits_for_active_project_sync() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    app.project_sync_status = Some(sync::ProjectSyncStatus {
+        context: sync::ProjectSyncContext {
+            default_branch: "main".to_string(),
+            operation_id: 1,
+            project_id: app.active_project_id(),
+            project_name: "test-project".to_string(),
+        },
+        phase: sync::ProjectSyncPhase::Running,
+    });
+    app.merge_queue.enqueue("pending-merge".into());
+
+    // Act
+    let result = app.start_next_merge_from_queue(false).await;
+
+    // Assert
+    assert!(result.is_ok());
+    assert!(app.merge_queue.is_queued_or_active("pending-merge"));
+    assert!(!app.merge_queue.has_active());
+}
+
+#[tokio::test]
+async fn project_sync_scheduler_keeps_requests_queued_while_slots_are_occupied() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let mut sync_main_runner = crate::app::MockSyncMainRunner::new();
+    sync_main_runner
+        .expect_start_sync_main()
+        .times(1)
+        .returning(|_, _, _, _| {
+            // Keep the first operation running so the queued request can be
+            // inspected.
+        });
+    app.sync_main_runner = Arc::new(sync_main_runner);
+    app.start_sync_main();
+    let mut second_project_context = app.sync_handle.context_snapshot();
+    second_project_context.project_id = app.active_project_id() + 1;
+    second_project_context.project_name = "second-project".to_string();
+    app.sync_handle.publish_context(second_project_context);
+    app.start_sync_main();
+
+    // Act
+    app.start_next_project_sync_from_queue();
+    app.resume_base_checkout_work().await;
+    let queued_during_sync = app.pending_project_sync_requests.len();
+    app.project_sync_status = None;
+    app.merge_queue.set_active("active-merge".into());
+    app.resume_base_checkout_work().await;
+
+    // Assert
+    assert_eq!(queued_during_sync, 1);
+    assert_eq!(app.pending_project_sync_requests.len(), 1);
+    assert!(app.merge_queue.has_active());
 }
 
 #[test]
@@ -3565,27 +3884,39 @@ fn app_event_batch_collect_event_marks_successful_sync_for_git_status_refresh() 
 
     // Act
     event_batch.collect_event(AppEvent::SyncMainCompleted {
-        result: Ok(SyncMainOutcome {
-            default_branch: "main".to_string(),
-            deferred_merged_session_ids: Vec::new(),
-            pulled_commit_titles: vec!["Upstream fix".to_string()],
-            pulled_commits: Some(1),
-            pushed_commit_titles: vec!["Local tweak".to_string()],
-            pushed_commits: Some(2),
-            resolved_conflict_files: Vec::new(),
-        }),
+        completion: sync::SyncMainCompletion {
+            operation: sync::ProjectSyncContext {
+                default_branch: "main".to_string(),
+                operation_id: 1,
+                project_id: 1,
+                project_name: "agentty".to_string(),
+            },
+            result: Ok(SyncMainOutcome {
+                default_branch: "main".to_string(),
+                deferred_merged_session_ids: Vec::new(),
+                pulled_commit_titles: vec!["Upstream fix".to_string()],
+                pulled_commits: Some(1),
+                pushed_commit_titles: vec!["Local tweak".to_string()],
+                pushed_commits: Some(2),
+                resolved_conflict_files: Vec::new(),
+            }),
+            review_request_updates: Vec::new(),
+        },
     });
 
     // Assert
     assert!(event_batch.should_refresh_git_status);
     assert!(matches!(
-        event_batch.sync_main_result,
-        Some(Ok(SyncMainOutcome {
+        event_batch.sync_main_completion,
+        Some(sync::SyncMainCompletion {
+            result: Ok(SyncMainOutcome {
                 default_branch,
                 pulled_commits: Some(1),
                 pushed_commits: Some(2),
                 ..
-        })) if default_branch == "main"
+            }),
+            ..
+        }) if default_branch == "main"
     ));
 }
 
@@ -3998,15 +4329,24 @@ async fn apply_app_events_review_request_status_survives_same_batch_sync_refresh
     app.services
         .event_sender()
         .send(AppEvent::SyncMainCompleted {
-            result: Ok(SyncMainOutcome {
-                default_branch: "main".to_string(),
-                deferred_merged_session_ids: Vec::new(),
-                pulled_commit_titles: Vec::new(),
-                pulled_commits: Some(0),
-                pushed_commit_titles: Vec::new(),
-                pushed_commits: Some(0),
-                resolved_conflict_files: Vec::new(),
-            }),
+            completion: sync::SyncMainCompletion {
+                operation: sync::ProjectSyncContext {
+                    default_branch: "main".to_string(),
+                    operation_id: 1,
+                    project_id,
+                    project_name: "agentty".to_string(),
+                },
+                result: Ok(SyncMainOutcome {
+                    default_branch: "main".to_string(),
+                    deferred_merged_session_ids: Vec::new(),
+                    pulled_commit_titles: Vec::new(),
+                    pulled_commits: Some(0),
+                    pushed_commit_titles: Vec::new(),
+                    pushed_commits: Some(0),
+                    resolved_conflict_files: Vec::new(),
+                }),
+                review_request_updates: Vec::new(),
+            },
         })
         .expect("sync completion should queue");
 
@@ -6678,8 +7018,24 @@ fn merged_review_request_status_update(
     }
 }
 
-fn successful_manual_sync(default_branch: &str, pulled_commits: u32) -> AppEvent {
+fn successful_manual_sync(project_id: i64, default_branch: &str, pulled_commits: u32) -> AppEvent {
     AppEvent::SyncMainCompleted {
+        completion: successful_manual_sync_completion(project_id, default_branch, pulled_commits),
+    }
+}
+
+fn successful_manual_sync_completion(
+    project_id: i64,
+    default_branch: &str,
+    pulled_commits: u32,
+) -> sync::SyncMainCompletion {
+    sync::SyncMainCompletion {
+        operation: sync::ProjectSyncContext {
+            default_branch: default_branch.to_string(),
+            operation_id: 1,
+            project_id,
+            project_name: "agentty".to_string(),
+        },
         result: Ok(SyncMainOutcome {
             default_branch: default_branch.to_string(),
             deferred_merged_session_ids: Vec::new(),
@@ -6689,6 +7045,7 @@ fn successful_manual_sync(default_branch: &str, pulled_commits: u32) -> AppEvent
             pushed_commits: Some(0),
             resolved_conflict_files: Vec::new(),
         }),
+        review_request_updates: Vec::new(),
     }
 }
 
@@ -6774,7 +7131,7 @@ async fn manual_sync_defers_merged_session_when_commit_hash_cannot_load() {
     pool.close().await;
 
     // Act
-    app.apply_app_events(successful_manual_sync("main", 1))
+    app.apply_app_events(successful_manual_sync(app.active_project_id(), "main", 1))
         .await;
 
     // Assert
@@ -6785,11 +7142,13 @@ async fn manual_sync_defers_merged_session_when_commit_hash_cannot_load() {
             .status,
         Status::Merged
     );
+    assert!(matches!(app.mode, AppMode::List));
     assert!(matches!(
-        app.mode,
-        AppMode::SyncBlockedPopup { ref message, .. }
-            if message.contains("Merged sessions still waiting")
-                && message.contains(session_id)
+        app.project_sync_status.as_ref().map(|status| &status.phase),
+        Some(sync::ProjectSyncPhase::Complete {
+            deferred_session_count: 1,
+            ..
+        })
     ));
 }
 
@@ -6826,7 +7185,7 @@ async fn manual_sync_surfaces_restack_failure_and_keeps_parent_merged() {
     .expect("failed to install restack trigger");
 
     // Act
-    app.apply_app_events(successful_manual_sync("main", 1))
+    app.apply_app_events(successful_manual_sync(app.active_project_id(), "main", 1))
         .await;
 
     // Assert
@@ -6837,11 +7196,13 @@ async fn manual_sync_surfaces_restack_failure_and_keeps_parent_merged() {
             .status,
         Status::Merged
     );
+    assert!(matches!(app.mode, AppMode::List));
     assert!(matches!(
-        app.mode,
-        AppMode::SyncBlockedPopup { ref message, .. }
-            if message.contains("Merged sessions still waiting")
-                && message.contains(session_id)
+        app.project_sync_status.as_ref().map(|status| &status.phase),
+        Some(sync::ProjectSyncPhase::Complete {
+            deferred_session_count: 1,
+            ..
+        })
     ));
 }
 
@@ -7147,7 +7508,7 @@ async fn merged_review_waits_for_successful_manual_sync_before_cleanup() {
         .status;
     let cleanup_started_before_sync =
         tokio::time::timeout(Duration::from_millis(50), cleanup_started_rx.recv()).await;
-    app.apply_app_events(successful_manual_sync("main", 1))
+    app.apply_app_events(successful_manual_sync(app.active_project_id(), "main", 1))
         .await;
     app.process_pending_app_events().await;
     tokio::time::timeout(Duration::from_secs(1), cleanup_started_rx.recv())
@@ -7196,10 +7557,23 @@ async fn failed_or_unrelated_manual_sync_keeps_session_merged() {
     app.process_pending_app_events().await;
 
     // Act
-    app.apply_app_events(successful_manual_sync("develop", 0))
-        .await;
+    app.apply_app_events(successful_manual_sync(
+        app.active_project_id(),
+        "develop",
+        0,
+    ))
+    .await;
     app.apply_app_events(AppEvent::SyncMainCompleted {
-        result: Err(SyncSessionStartError::Other("sync failed".to_string())),
+        completion: sync::SyncMainCompletion {
+            operation: sync::ProjectSyncContext {
+                default_branch: "main".to_string(),
+                operation_id: 2,
+                project_id: app.active_project_id(),
+                project_name: "agentty".to_string(),
+            },
+            result: Err(SyncSessionStartError::Other("sync failed".to_string())),
+            review_request_updates: Vec::new(),
+        },
     })
     .await;
     app.process_pending_app_events().await;
@@ -7275,7 +7649,7 @@ async fn test_apply_review_request_status_update_merged_restacks_stacked_child()
         .expect("expected parent before manual sync")
         .status;
     let child_parent_before_sync = child_before_sync.parent_session_id.clone();
-    app.apply_app_events(successful_manual_sync("main", 1))
+    app.apply_app_events(successful_manual_sync(app.active_project_id(), "main", 1))
         .await;
     app.process_pending_app_events().await;
     app.refresh_sessions_now().await;
@@ -7365,7 +7739,7 @@ async fn manual_sync_archives_merged_parent_and_merged_stacked_child() {
     app.process_pending_app_events().await;
 
     // Act
-    app.apply_app_events(successful_manual_sync("main", 1))
+    app.apply_app_events(successful_manual_sync(app.active_project_id(), "main", 1))
         .await;
     app.process_pending_app_events().await;
 
@@ -7423,7 +7797,7 @@ async fn manual_sync_recovers_merged_child_after_parent_was_already_archived() {
     app.process_pending_app_events().await;
 
     // Act
-    app.apply_app_events(successful_manual_sync("main", 1))
+    app.apply_app_events(successful_manual_sync(app.active_project_id(), "main", 1))
         .await;
     app.process_pending_app_events().await;
 
@@ -7460,7 +7834,7 @@ async fn manual_sync_defers_stranded_child_when_restack_marker_cannot_load() {
     pool.close().await;
 
     // Act
-    app.apply_app_events(successful_manual_sync("main", 1))
+    app.apply_app_events(successful_manual_sync(app.active_project_id(), "main", 1))
         .await;
 
     // Assert
@@ -7469,11 +7843,13 @@ async fn manual_sync_defers_stranded_child_when_restack_marker_cannot_load() {
         .session_or_err(child_session_id)
         .expect("expected stranded child session");
     assert_eq!(child_session.status, Status::Merged);
+    assert!(matches!(app.mode, AppMode::List));
     assert!(matches!(
-        app.mode,
-        AppMode::SyncBlockedPopup { ref message, .. }
-            if message.contains("Merged sessions still waiting")
-                && message.contains(child_session_id)
+        app.project_sync_status.as_ref().map(|status| &status.phase),
+        Some(sync::ProjectSyncPhase::Complete {
+            deferred_session_count: 1,
+            ..
+        })
     ));
     let workflow_output = app
         .sessions

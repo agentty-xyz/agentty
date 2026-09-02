@@ -705,9 +705,9 @@ their triggers:
   terminal events into the runtime loop.
 
 - **Project sync orchestrator** (startup, project switch, ticks, list-mode `s`): owns
-  one command queue per active project that serializes read-only `git fetch`,
-  ahead/behind snapshots, merge-conflict probes for divergent session branches,
-  review-request refreshes, and manual pull/rebase/push commands. Conflict probes use
+  one application command queue that serializes read-only `git fetch`, ahead/behind
+  snapshots, merge-conflict probes for divergent session branches, review-request
+  refreshes, and manual pull/rebase/push commands. Conflict probes use
   `git merge-tree --write-tree` through `GitClient`, so they do not read or change the
   index or worktree. Git versions without `--write-tree` perform the same probe in a
   disposable local shared clone, leaving the managed repository untouched. Forge CLI
@@ -787,8 +787,10 @@ their triggers:
   every mutation permission request, avoiding plan-mode sandbox initialization;
   persistent read-only research sessions continue to use sandboxed plan mode.
 
-- **Sync-main workflow** (list-mode `s`): pull/rebase/push of the project branch through
-  the sync orchestrator, with assisted conflict resolution.
+- **Sync-main workflow** (list-mode `s`): captures an immutable project ID, operation
+  ID, path, branch, and review-target snapshot before queueing pull/rebase/push through
+  the sync orchestrator. Progress is rendered independently from `AppMode`, with
+  assisted conflict resolution retaining the same operation identity.
 
 - **Session merge task** (merge confirmation): rebase, squash merge with the session
   commit message, worktree cleanup.
@@ -815,7 +817,22 @@ use shared boundaries (`GitClient`, `FsClient`, assist helpers) with distinct
 orchestration paths:
 
 - `sync main`: selected project branch pull/rebase/push with optional assisted conflict
-  resolution, serialized through the shared sync orchestrator.
+  resolution, serialized through the shared sync orchestrator and an app-owned
+  base-checkout mutation scheduler. Same-project duplicates coalesce; requests captured
+  for other projects enter a FIFO queue and retain their immutable path, branch, model,
+  review targets, project ID, and operation ID. Existing active or queued merge work has
+  priority and rejects a new sync with retryable guidance. Merge queue draining rechecks
+  the active-project sync guard before mutating its base checkout, and sync completion
+  resumes merge work before the next queued project sync. Every progress and completion
+  event carries the captured project and operation IDs, so project switching cannot
+  redirect Git work, and a stale completion cannot replace a newer status or reconcile
+  superseded review and merged-session state. The lifecycle state is separate from
+  `AppMode`; navigation and unrelated overlays therefore remain active. Base-checkout
+  operations for the owning project—session creation or draft start, merge, and
+  rebase—fail with retryable workflow guidance until the operation settles, while
+  isolated session turns and other projects remain usable. If completion arrives while
+  another project is active, project-scoped review and merged-session reconciliation is
+  retained in memory and applied after switching back.
 - Session merge: queue-aware workflow for sessions without a linked forge review request
   — assisted rebase first, squash commit into the base branch reusing the session-branch
   `HEAD` commit message, then worktree cleanup and status `Done`. Once a review request
@@ -845,49 +862,49 @@ orchestration paths:
   parent to `Done`, emitting child-restack work, and scheduling tracked worktree
   cleanup. The successful `SyncMainOutcome` owns the exact synced branch, so the event
   model cannot represent success without a finalization target. Restack or archival
-  persistence failures leave the parent safely in `Merged` and are listed in the sync
-  completion popup for retry. A failed sync or a successful sync of another branch
-  leaves the merged stack unchanged. Cleanup-critical git subprocesses are cancellable
-  and bounded to 30 seconds; confirmed shutdown shares a five-second grace period across
-  all tracked cleanup tasks before canceling unfinished work. Session view also loads
-  comments on demand for its linked review request: `AppMode::DiffLoading` renders a
-  cancelable page while the full diff loads, then `AppMode::Diff` renders its Files and
-  Comments sidebar immediately with a comment-loading state. The loading surface uses an
-  explicit Files placeholder instead of parsing its status text as an empty diff. A
-  failed interactive load restores its source mode with a transient workflow notice;
-  completed file and inline comment drafts move into a per-session app-state cache when
-  Diff mode closes, move back into `AppMode::Diff` when it reopens, and are discarded
-  when that session starts a new turn. A queued comment batch remains cached until its
-  worker dequeues it, so retracting the queued message with `Ctrl+C` preserves the
-  comments; during managed merge cleanup, `TaskService` falls back from a
-  repository-unavailable live diff to the archived diff already persisted for that
-  session. Other Git failures remain visible diagnostics. `TaskService` resolves the
-  session worktree remote through the injected git/forge boundaries, falls back to the
-  persisted review-request URL after terminal-session worktree cleanup, and uses the
-  matching `AppEvent` to update only the still-open Diff workspace or its help overlay.
-  Inline code context is derived from the already loaded current diff. From a
-  reply-capable session, `Space` toggles an actionable thread in the evaluation batch,
-  and `Enter` renders every selected thread into one `TurnPrompt`; outdated threads
-  include an explicit stale-anchor marker. The selected forge thread IDs are recorded in
-  turn metadata. Post-turn handling requires exactly one allowlisted, nonblank outcome
-  per selected thread and rejects an incomplete or duplicated batch before any forge
-  mutation. Accepted outcomes, their original replies, and random per-thread reply
-  tokens commit in the same SQLite transaction as the completed-turn metadata before
-  auto-commit starts. A failed auto-commit prevents the published-branch push and
-  discards the selected batch before a later turn can push unrelated changes. Successful
-  auto-commit binds each newly inserted operation to the full fix commit SHA. After
-  every successful push, the worker requires that commit to exactly match pushed `HEAD`;
-  later descendants and rewritten commits are discarded before forge access. An
-  operation whose commit binding was interrupted remains pending and is replaceable by a
-  fresh agent turn, while a bound operation continues to retain its original reply.
-  Immediately before a forge reply, the worker marks the durable operation as posting.
-  Recovery trusts a matching tokenized reply only when that flag is set, which closes
-  the reply-success/crash window without treating a collaborator-authored imitation as
-  Agentty's audit reply. The row is deleted after the requested forge effects finish.
-  Bound operations retain the first accepted reply when a later agent turn reports a
-  different one. The worker resolves only `fixed` operations through
-  `ReviewRequestClient`; `no_change_needed` operations remain open, and failed commits
-  or pushes never mutate forge thread state.
+  persistence failures leave the parent safely in `Merged` and are counted in the
+  non-modal sync completion status for retry. A failed sync or a successful sync of
+  another branch leaves the merged stack unchanged. Cleanup-critical git subprocesses
+  are cancellable and bounded to 30 seconds; confirmed shutdown shares a five-second
+  grace period across all tracked cleanup tasks before canceling unfinished work.
+  Session view also loads comments on demand for its linked review request:
+  `AppMode::DiffLoading` renders a cancelable page while the full diff loads, then
+  `AppMode::Diff` renders its Files and Comments sidebar immediately with a
+  comment-loading state. The loading surface uses an explicit Files placeholder instead
+  of parsing its status text as an empty diff. A failed interactive load restores its
+  source mode with a transient workflow notice; completed file and inline comment drafts
+  move into a per-session app-state cache when Diff mode closes, move back into
+  `AppMode::Diff` when it reopens, and are discarded when that session starts a new
+  turn. A queued comment batch remains cached until its worker dequeues it, so
+  retracting the queued message with `Ctrl+C` preserves the comments; during managed
+  merge cleanup, `TaskService` falls back from a repository-unavailable live diff to the
+  archived diff already persisted for that session. Other Git failures remain visible
+  diagnostics. `TaskService` resolves the session worktree remote through the injected
+  git/forge boundaries, falls back to the persisted review-request URL after
+  terminal-session worktree cleanup, and uses the matching `AppEvent` to update only the
+  still-open Diff workspace or its help overlay. Inline code context is derived from the
+  already loaded current diff. From a reply-capable session, `Space` toggles an
+  actionable thread in the evaluation batch, and `Enter` renders every selected thread
+  into one `TurnPrompt`; outdated threads include an explicit stale-anchor marker. The
+  selected forge thread IDs are recorded in turn metadata. Post-turn handling requires
+  exactly one allowlisted, nonblank outcome per selected thread and rejects an
+  incomplete or duplicated batch before any forge mutation. Accepted outcomes, their
+  original replies, and random per-thread reply tokens commit in the same SQLite
+  transaction as the completed-turn metadata before auto-commit starts. A failed
+  auto-commit prevents the published-branch push and discards the selected batch before
+  a later turn can push unrelated changes. Successful auto-commit binds each newly
+  inserted operation to the full fix commit SHA. After every successful push, the worker
+  requires that commit to exactly match pushed `HEAD`; later descendants and rewritten
+  commits are discarded before forge access. An operation whose commit binding was
+  interrupted remains pending and is replaceable by a fresh agent turn, while a bound
+  operation continues to retain its original reply. Immediately before a forge reply,
+  the worker marks the durable operation as posting. Recovery trusts a matching
+  tokenized reply only when that flag is set, which closes the reply-success/crash
+  window without treating a collaborator-authored imitation as Agentty's audit reply.
+  The row is deleted after the requested forge effects finish. Bound operations retain
+  the first accepted reply when a later agent turn reports a different one. The worker
+  resolves only `fixed` operations through `ReviewRequestClient`; `no_change_needed`
+  operations remain open, and failed commits or pushes never mutate forge thread state.
 
 ## Persistence and Recovery Boundaries
 

@@ -42,6 +42,11 @@ impl MergeQueue {
         self.active_session_id.is_some()
     }
 
+    /// Returns whether a merge is active or waiting to start.
+    pub(crate) fn has_work(&self) -> bool {
+        self.has_active() || !self.queued_session_ids.is_empty()
+    }
+
     /// Pops the next queued session id from the queue head.
     pub(crate) fn pop_next(&mut self) -> Option<SessionId> {
         self.queued_session_ids.pop_front()
@@ -145,6 +150,21 @@ mod tests {
         assert_eq!(first.as_deref(), Some("session-a"));
         assert_eq!(second.as_deref(), Some("session-b"));
         assert_eq!(third, None);
+    }
+
+    #[test]
+    fn test_has_work_includes_active_and_queued_merges() {
+        // Arrange
+        let mut active_queue = MergeQueue::default();
+        active_queue.set_active("active".into());
+        let mut pending_queue = MergeQueue::default();
+        pending_queue.enqueue("pending".into());
+        let empty_queue = MergeQueue::default();
+
+        // Act & Assert
+        assert!(active_queue.has_work());
+        assert!(pending_queue.has_work());
+        assert!(!empty_queue.has_work());
     }
 
     #[test]

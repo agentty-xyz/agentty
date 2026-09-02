@@ -45,6 +45,7 @@ pub(crate) fn render_app(
             render_cache_store,
             project_table_state,
             projects: snapshot.projects,
+            project_sync_status: snapshot.project_sync_status,
             session_review_snapshot: session_review_snapshot.as_ref(),
             active_prompt_outputs: snapshot.active_prompt_outputs,
             session_branch_names: snapshot.session_branch_names,

@@ -23,6 +23,7 @@ use crate::app::assist::{
 };
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError};
+use crate::app::sync::SyncMainEventContext;
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
@@ -306,7 +307,7 @@ struct FinalizeMergeInput<'a> {
 
 /// Input context for assisted conflict resolution during `sync main`.
 struct SyncRebaseAssistInput {
-    app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
+    event_context: Option<SyncMainEventContext>,
     base_branch: String,
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
@@ -1624,7 +1625,7 @@ impl SessionManager {
     pub(crate) async fn sync_main_for_project(
         default_branch: Option<String>,
         working_dir: PathBuf,
-        app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
+        event_context: Option<SyncMainEventContext>,
         git_client: Arc<dyn GitClient>,
         session_model: AgentModel,
     ) -> Result<SyncMainOutcome, SyncSessionStartError> {
@@ -1639,7 +1640,7 @@ impl SessionManager {
         Self::sync_main_for_project_with_assist_client(
             default_branch,
             working_dir,
-            app_event_tx,
+            event_context,
             fs_client,
             git_client,
             session_agent,
@@ -1658,7 +1659,7 @@ impl SessionManager {
     async fn sync_main_for_project_with_assist_client(
         default_branch: Option<String>,
         working_dir: PathBuf,
-        app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
+        event_context: Option<SyncMainEventContext>,
         fs_client: Arc<dyn FsClient>,
         git_client: Arc<dyn GitClient>,
         session_agent: AgentSelection,
@@ -1698,7 +1699,7 @@ impl SessionManager {
         let mut resolved_conflict_files = Vec::new();
         if let git::PullRebaseResult::Conflict { detail } = pull_result {
             let sync_rebase_input = SyncRebaseAssistInput {
-                app_event_tx,
+                event_context,
                 base_branch: default_branch.clone(),
                 folder: working_dir.clone(),
                 fs_client: Arc::clone(&fs_client),
@@ -1762,19 +1763,21 @@ impl SessionManager {
         .map(|outcome| outcome.resolved_conflict_files)
     }
 
-    /// Emits a foreground sync popup update listing the files currently being
-    /// resolved by the assisted project sync rebase.
+    /// Emits a non-modal sync update for files currently under assistance.
     fn emit_sync_rebase_conflict_status(
         input: &SyncRebaseAssistInput,
         conflicted_files: &[String],
     ) {
-        let Some(app_event_tx) = &input.app_event_tx else {
+        let Some(event_context) = &input.event_context else {
             return;
         };
 
-        let _ = app_event_tx.send(AppEvent::SyncMainConflictResolutionStarted {
-            conflicted_files: conflicted_files.to_vec(),
-        });
+        let _ = event_context
+            .app_event_tx
+            .send(AppEvent::SyncMainConflictResolutionStarted {
+                conflicted_files: conflicted_files.to_vec(),
+                operation: event_context.operation.clone(),
+            });
     }
 
     /// Returns pull/push counts inferred around one completed sync run.
@@ -3330,7 +3333,7 @@ mod tests {
         sync_assist_client: Arc<dyn SyncAssistClient>,
     ) -> SyncRebaseAssistInput {
         SyncRebaseAssistInput {
-            app_event_tx: None,
+            event_context: None,
             base_branch: "main".to_string(),
             folder,
             fs_client: test_fs_client(),
@@ -3363,7 +3366,7 @@ mod tests {
                 Box::pin(async {
                     Ok(vec![
                         "Update changelog format".to_string(),
-                        "Fix sync popup copy".to_string(),
+                        "Fix sync status copy".to_string(),
                     ])
                 })
             });
@@ -3427,7 +3430,7 @@ mod tests {
             deferred_merged_session_ids: Vec::new(),
             pulled_commit_titles: vec![
                 "Update changelog format".to_string(),
-                "Fix sync popup copy".to_string(),
+                "Fix sync status copy".to_string(),
             ],
             pulled_commits: Some(2),
             pushed_commit_titles: vec!["Refine sync conflict messaging".to_string()],
@@ -4619,12 +4622,21 @@ mod tests {
             .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let operation = crate::app::sync::ProjectSyncContext {
+            default_branch: "main".to_string(),
+            operation_id: 1,
+            project_id: 1,
+            project_name: "agentty".to_string(),
+        };
 
         // Act
         let result = SessionManager::sync_main_for_project_with_assist_client(
             Some("main".to_string()),
             working_dir,
-            Some(app_event_tx),
+            Some(SyncMainEventContext {
+                app_event_tx,
+                operation: operation.clone(),
+            }),
             test_fs_client(),
             Arc::new(mock_git_client),
             AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash),
@@ -4639,8 +4651,10 @@ mod tests {
         assert!(matches!(
             status_event,
             AppEvent::SyncMainConflictResolutionStarted {
-                conflicted_files
+                conflicted_files,
+                operation: event_operation,
             } if conflicted_files == vec!["src/lib.rs".to_string()]
+                && event_operation == operation
         ));
         assert!(app_event_rx.try_recv().is_err());
         assert_eq!(
