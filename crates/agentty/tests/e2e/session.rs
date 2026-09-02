@@ -206,17 +206,32 @@ fn seed_missing_pre_commit_hook_project(
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
-printf 'pending change\n' > generated.txt
+prompt=$(cat)
+case "$prompt" in
+  *"Generate the canonical session commit message"*)
+    sleep 2
+    ;;
+  *)
+    printf 'pending change\n' > generated.txt
+    ;;
+esac
 printf '%s\n' '{"type":"system","subtype":"init"}'
-printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Created pending worktree change"}]}}'
-printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Created pending worktree change\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}'
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"StructuredOutput","input":{"answer":"Created pending worktree change","questions":[],"review_comment_outcomes":[],"subtasks":[],"verification_verdicts":[]}}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"","structured_output":{"answer":"Created pending worktree change","questions":[],"review_comment_outcomes":[],"subtasks":[],"verification_verdicts":[]},"usage":{"input_tokens":5,"output_tokens":9}}'
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])?;
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+        ],
+    )?;
 
     Ok(())
 }
@@ -654,7 +669,7 @@ case "$prompt" in
     ;;
 esac
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
-printf '{{"type":"result","subtype":"success","result":"{{\\"answer\\":\\"{{\\\\\\"project_impact\\\\\\":[\\\\\\"%s\\\\\\"],\\\\\\"suggestions\\\\\\":[]}}\\",\\"questions\\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n' "$answer"
+printf '{{"type":"result","subtype":"success","result":"{{\\"project_impact\\":[\\"%s\\"],\\"suggestions\\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n' "$answer"
 "#,
     );
     std::fs::write(&claude_path, script)?;
@@ -670,8 +685,9 @@ printf '{{"type":"result","subtype":"success","result":"{{\\"answer\\":\\"{{\\\\
     )
 }
 
-/// Seeds a Codex focused review with commentary, a valid final item, and a
-/// blank duplicate final item in `turn/completed`.
+/// Seeds a Codex focused review whose first direct review has an unknown field,
+/// then returns a valid direct review for the schema-repair turn. Both turns
+/// include a blank duplicate final item in `turn/completed`.
 fn seed_codex_review_with_blank_completed_fallback(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -687,6 +703,7 @@ extract_id() {
     printf '%s\n' "$1" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
 }
 
+turn_count=0
 while IFS= read -r request; do
     case "$request" in
         *'"method":"initialize"'*)
@@ -698,11 +715,24 @@ while IFS= read -r request; do
             printf '{"id":"%s","result":{"thread":{"id":"review-thread"}}}\n' "$request_id"
             ;;
         *'"method":"turn/start"'*)
+            turn_count=$((turn_count + 1))
             request_id=$(extract_id "$request")
             printf '{"id":"%s","result":{"turn":{"id":"review-turn"}}}\n' "$request_id"
             printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"review-turn"}}}'
+            case "$request" in
+                *'"outputSchema":'*'"project_impact"'*)
+                    if [ "$turn_count" -eq 1 ]; then
+                        final_text='{\"project_impact\":[],\"suggestions\":[],\"summary\":\"extra\"}'
+                    else
+                        final_text='{\"project_impact\":[\"Final focused review result.\"],\"suggestions\":[]}'
+                    fi
+                    ;;
+                *)
+                    final_text='{\"project_impact\":[\"Codex did not receive the focused-review output schema.\"],\"suggestions\":[]}'
+                    ;;
+            esac
             printf '%s\n' '{"method":"item/completed","params":{"threadId":"review-thread","turnId":"review-turn","item":{"type":"agentMessage","id":"commentary-item","text":"I will inspect the current code.","phase":"commentary"}}}'
-            printf '%s\n' '{"method":"item/completed","params":{"threadId":"review-thread","turnId":"review-turn","item":{"type":"agentMessage","id":"final-item","text":"{\"answer\":\"{\\\"project_impact\\\":[\\\"Final focused review result.\\\"],\\\"suggestions\\\":[]}\",\"questions\":[]}","phase":"final_answer"}}}'
+            printf '{"method":"item/completed","params":{"threadId":"review-thread","turnId":"review-turn","item":{"type":"agentMessage","id":"final-item","text":"%s","phase":"final_answer"}}}\n' "$final_text"
             printf '%s\n' '{"method":"turn/completed","params":{"threadId":"review-thread","turn":{"id":"review-turn","status":"completed","items":[{"type":"agentMessage","id":"blank-final-item","text":"   ","phase":"final_answer"}]}}}'
             ;;
     esac
@@ -755,7 +785,7 @@ while IFS= read -r request; do
             ;;
         *'"method":"session/prompt"'*)
             request_id=$(extract_id "$request")
-            printf '{{"jsonrpc":"2.0","id":"%s","result":{{"response":"{{\\"answer\\":\\"{{\\\\\\"project_impact\\\\\\":[\\\\\\"%s\\\\\\"],\\\\\\"suggestions\\\\\\":[]}}\\",\\"questions\\":[]}}","usage":{{"inputTokens":5,"outputTokens":9}}}}}}\n' "$request_id" "$answer"
+            printf '{{"jsonrpc":"2.0","id":"%s","result":{{"response":"{{\\"project_impact\\":[\\"%s\\"],\\"suggestions\\":[]}}","usage":{{"inputTokens":5,"outputTokens":9}}}}}}\n' "$request_id" "$answer"
             ;;
     esac
 done
@@ -965,19 +995,19 @@ case "$prompt" in
     printf '%s\n' "$review_count" > "$review_count_file"
     case "$review_count" in
       1)
-        result='{\"answer\":\"{\\\"project_impact\\\":[\\\"First lifecycle review completed.\\\"],\\\"suggestions\\\":[{\\\"details\\\":\\\"Apply the first lifecycle suggestion.\\\",\\\"severity\\\":\\\"medium\\\"}]}\",\"questions\":[]}'
+        result='{\"project_impact\":[\"First lifecycle review completed.\"],\"suggestions\":[{\"details\":\"Apply the first lifecycle suggestion.\",\"severity\":\"medium\"}]}'
         ;;
       2)
-        result='{\"answer\":\"{\\\"project_impact\\\":[\\\"No suggestions remain after one automatic remediation.\\\"],\\\"suggestions\\\":[]}\",\"questions\":[]}'
+        result='{\"project_impact\":[\"No suggestions remain after one automatic remediation.\"],\"suggestions\":[]}'
         ;;
       3|4|5)
-        result='{\"answer\":\"{\\\"project_impact\\\":[\\\"Iteration-limit lifecycle review completed.\\\"],\\\"suggestions\\\":[{\\\"details\\\":\\\"Apply the next bounded lifecycle suggestion.\\\",\\\"severity\\\":\\\"medium\\\"}]}\",\"questions\":[]}'
+        result='{\"project_impact\":[\"Iteration-limit lifecycle review completed.\"],\"suggestions\":[{\"details\":\"Apply the next bounded lifecycle suggestion.\",\"severity\":\"medium\"}]}'
         ;;
       6)
-        result='{\"answer\":\"{\\\"project_impact\\\":[\\\"Three automatic remediation iterations completed.\\\"],\\\"suggestions\\\":[{\\\"details\\\":\\\"Fourth suggestion remains unapplied at the iteration limit.\\\",\\\"severity\\\":\\\"medium\\\"}]}\",\"questions\":[]}'
+        result='{\"project_impact\":[\"Three automatic remediation iterations completed.\"],\"suggestions\":[{\"details\":\"Fourth suggestion remains unapplied at the iteration limit.\",\"severity\":\"medium\"}]}'
         ;;
       *)
-        result='{\"answer\":\"{\\\"project_impact\\\":[\\\"Automatic remediation exceeded the iteration limit.\\\"],\\\"suggestions\\\":[]}\",\"questions\":[]}'
+        result='{\"project_impact\":[\"Automatic remediation exceeded the iteration limit.\"],\"suggestions\":[]}'
         ;;
     esac
     ;;
@@ -2517,10 +2547,10 @@ case "$prompt" in
     case "$prompt" in
       *"{DEFERRED_PROJECT_REVIEW_PROMPT}"*"{DEFERRED_PROJECT_TURN_ANSWER}"*)
         printf 'started\n' > '{}'
-        result='{{\"answer\":\"{{\\\"project_impact\\\":[\\\"{DEFERRED_PROJECT_REVIEW_TEXT}\\\"],\\\"suggestions\\\":[]}}\",\"questions\":[]}}'
+        result='{{\"project_impact\":[\"{DEFERRED_PROJECT_REVIEW_TEXT}\"],\"suggestions\":[]}}'
         ;;
       *)
-        result='{{\"answer\":\"{{\\\"project_impact\\\":[\\\"{MISSING_DEFERRED_PROJECT_HISTORY_TEXT}\\\"],\\\"suggestions\\\":[{{\\\"details\\\":\\\"Restore saved session history.\\\",\\\"severity\\\":\\\"medium\\\"}}]}}\",\"questions\":[]}}'
+        result='{{\"project_impact\":[\"{MISSING_DEFERRED_PROJECT_HISTORY_TEXT}\"],\"suggestions\":[{{\"details\":\"Restore saved session history.\",\"severity\":\"medium\"}}]}}'
         ;;
     esac
     ;;
@@ -3061,7 +3091,7 @@ if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 printf '%s\n' '{"type":"system","subtype":"init"}'
-printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"{\\\"project_impact\\\":[\\\"No review findings.\\\"],\\\"suggestions\\\":[]}\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"project_impact\":[\"No review findings.\"],\"suggestions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}'
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
@@ -4187,7 +4217,23 @@ fn test_session_pre_commit_hook_warning() -> E2eResult {
                     .wait_for_text("Create one worktree change", 3000)
                     .press_key("Enter")
                     .wait_for_text("Created pending worktree change", 30000)
-                    .wait_for_text("[Commit Warning]", 30000)
+                    .wait_for_text("Committing...", 10000)
+                    .eventually(
+                        Duration::from_secs(60),
+                        Duration::from_millis(100),
+                        |frame| assertion::match_not_visible(frame, "Committing..."),
+                    )
+                    .wait_for_text("Enter: reply", 5000)
+                    .write_text("g")
+                    .eventually(
+                        Duration::from_secs(5),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, "[Commit Warning]", &full)
+                        },
+                    )
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "commit_warning",
@@ -9684,8 +9730,8 @@ fn focused_review_honors_resolved_session_decisions() -> E2eResult {
     Ok(())
 }
 
-/// Verify a blank Codex completion fallback cannot replace an earlier final
-/// focused-review item.
+/// Verify Codex focused review uses its direct transport schema, repairs
+/// unknown fields, and ignores a blank completion fallback.
 #[test]
 fn focused_review_ignores_blank_completed_fallback() -> E2eResult {
     // Arrange, Act, Assert
@@ -9712,6 +9758,11 @@ fn focused_review_ignores_blank_completed_fallback() -> E2eResult {
                 assertion::assert_text_in_region(frame, "Suggestions", &full);
                 assertion::assert_not_visible(frame, "I will inspect the current code.");
                 assertion::assert_not_visible(frame, "Reviewing changes with");
+                assertion::assert_not_visible(
+                    frame,
+                    "Codex did not receive the focused-review output schema.",
+                );
+                assertion::assert_not_visible(frame, "Review assist unavailable");
             },
         )?;
 

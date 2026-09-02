@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ag_protocol::{
-    SchemaRequiredPolicy, TurnPrompt, TurnPromptContentPart, agent_response_output_schema,
+    ProtocolRequestProfile, SchemaRequiredPolicy, TurnPrompt, TurnPromptContentPart,
+    protocol_output_schema,
 };
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -354,6 +355,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     state: &mut CodexRuntimeState,
     prompt: impl Into<TurnPrompt>,
+    protocol_profile: ProtocolRequestProfile,
     reasoning_level: ReasoningLevel,
     speed_mode: SpeedMode,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
@@ -375,6 +377,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
             model: &state.model,
             permission_mode: state.permission_mode,
             prompt: prompt.clone(),
+            protocol_profile,
             reasoning_level,
             speed_mode,
             stream_tx: stream_tx.clone(),
@@ -404,6 +407,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
                     model: &state.model,
                     permission_mode: state.permission_mode,
                     prompt,
+                    protocol_profile,
                     reasoning_level,
                     speed_mode,
                     stream_tx,
@@ -502,6 +506,8 @@ pub(super) struct CodexTurnEventLoopInput<'a> {
     pub(super) model: &'a str,
     /// Prompt payload sent to the runtime.
     pub(super) prompt: TurnPrompt,
+    /// Structured response contract enforced for this turn.
+    pub(super) protocol_profile: ProtocolRequestProfile,
     /// Provider permission policy enforced for this turn.
     pub(super) permission_mode: PermissionMode,
     /// Reasoning level sent to the runtime.
@@ -526,7 +532,7 @@ pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport
     let folder = input.folder;
     let permission_mode = input.permission_mode;
     let turn_timeout = input.turn_timeout;
-    let mut state = CodexTurnEventLoopState::new(input.stream_tx);
+    let mut state = CodexTurnEventLoopState::new(input.stream_tx, input.protocol_profile);
 
     tokio::time::timeout(turn_timeout, async {
         loop {
@@ -559,19 +565,24 @@ struct CodexTurnEventLoopState {
     assistant_messages: Vec<String>,
     completed_turn_usage: Option<(u64, u64)>,
     latest_stream_usage: Option<(u64, u64)>,
+    protocol_profile: ProtocolRequestProfile,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     waiting_for_handoff_turn_completion: bool,
 }
 
 impl CodexTurnEventLoopState {
     /// Creates empty turn-event state for one active app-server turn.
-    fn new(stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>) -> Self {
+    fn new(
+        stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+        protocol_profile: ProtocolRequestProfile,
+    ) -> Self {
         Self {
             active_phase: None,
             active_turn_id: None,
             assistant_messages: Vec::new(),
             completed_turn_usage: None,
             latest_stream_usage: None,
+            protocol_profile,
             stream_tx,
             waiting_for_handoff_turn_completion: false,
         }
@@ -696,6 +707,7 @@ impl CodexTurnEventLoopState {
             turn_result,
             completed_assistant_message.as_ref(),
             &self.assistant_messages,
+            self.protocol_profile,
             &self.stream_tx,
             input_tokens,
             output_tokens,
@@ -729,6 +741,7 @@ async fn write_turn_start_request<Transport: AppServerRuntimeTransport>(
         model: input.model,
         permission_mode: input.permission_mode,
         prompt: input.prompt.clone(),
+        protocol_profile: input.protocol_profile,
         reasoning_level: input.reasoning_level,
         speed_mode: input.speed_mode,
         thread_id: input.thread_id,
@@ -749,6 +762,8 @@ pub(super) struct CodexTurnStartPayloadInput<'a> {
     pub(super) permission_mode: PermissionMode,
     /// Structured prompt content sent to Codex.
     pub(super) prompt: TurnPrompt,
+    /// Structured response contract enforced for this turn.
+    pub(super) protocol_profile: ProtocolRequestProfile,
     /// Requested Codex reasoning effort.
     pub(super) reasoning_level: ReasoningLevel,
     /// Requested Codex service speed.
@@ -775,7 +790,10 @@ pub(super) fn build_turn_start_payload(input: &CodexTurnStartPayloadInput<'_>) -
             "effort": input.reasoning_level.codex(),
             "summary": Value::Null,
             "personality": Value::Null,
-            "outputSchema": agent_response_output_schema(SchemaRequiredPolicy::AllProperties)
+            "outputSchema": protocol_output_schema(
+                input.protocol_profile,
+                SchemaRequiredPolicy::AllProperties,
+            )
         }
     })
 }
@@ -926,6 +944,7 @@ fn finalize_turn_completion(
     turn_result: Result<(), String>,
     completed_assistant_message: Option<&stream_parser::ExtractedAgentMessage>,
     assistant_messages: &[String],
+    protocol_profile: ProtocolRequestProfile,
     stream_tx: &mpsc::UnboundedSender<AppServerStreamEvent>,
     input_tokens: u64,
     output_tokens: u64,
@@ -933,7 +952,12 @@ fn finalize_turn_completion(
     match turn_result {
         Ok(()) => {
             let assistant_message = completed_assistant_message.map_or_else(
-                || stream_parser::preferred_completed_assistant_message(assistant_messages),
+                || {
+                    stream_parser::preferred_completed_assistant_message(
+                        assistant_messages,
+                        protocol_profile,
+                    )
+                },
                 |message| message.message.clone(),
             );
 
@@ -1078,6 +1102,31 @@ mod tests {
     }
 
     #[test]
+    fn final_completion_fallback_uses_only_the_active_protocol_profile() {
+        // Arrange
+        let assistant_messages = vec![
+            r#"{"project_impact":[],"suggestions":[]}"#.to_string(),
+            "later status text".to_string(),
+        ];
+        let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = finalize_turn_completion(
+            Ok(()),
+            None,
+            &assistant_messages,
+            ProtocolRequestProfile::SessionTurn,
+            &stream_tx,
+            12,
+            34,
+        )
+        .expect("completed turn should produce a response");
+
+        // Assert
+        assert_eq!(result, ("later status text".to_string(), 12, 34));
+    }
+
+    #[test]
     fn build_thread_start_payload_carries_method_id_cwd_and_model() {
         // Arrange
         let folder = PathBuf::from("/tmp/agentty-codex-thread-start");
@@ -1174,6 +1223,7 @@ mod tests {
             model: AgentModel::Gpt56Sol.as_str(),
             permission_mode: PermissionMode::AutoEdit,
             prompt: "Update the repository instructions".into(),
+            protocol_profile: ProtocolRequestProfile::SessionTurn,
             reasoning_level: ReasoningLevel::Medium,
             speed_mode: SpeedMode::default(),
             thread_id: "thread-1",
@@ -1221,6 +1271,7 @@ mod tests {
             model: AgentModel::Gpt56Sol.as_str(),
             permission_mode: PermissionMode::ReadOnly,
             prompt: "Inspect the architecture".into(),
+            protocol_profile: ProtocolRequestProfile::SessionTurn,
             reasoning_level: ReasoningLevel::Medium,
             speed_mode: SpeedMode::default(),
             thread_id: "thread-1",

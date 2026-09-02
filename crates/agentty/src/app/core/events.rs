@@ -3114,6 +3114,36 @@ mod tests {
         assert!(reduction_plan.changes_observable_state);
     }
 
+    /// Applies queued events until the expected session-diff request settles.
+    async fn apply_session_diff_request(app: &mut App, expected_request_id: u64) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while app
+                .pending_session_diff_requests
+                .contains_key(&expected_request_id)
+            {
+                let event = app
+                    .next_app_event()
+                    .await
+                    .expect("session diff should emit an event");
+                app.apply_app_events(event).await;
+            }
+        })
+        .await
+        .expect("timed out waiting for session diff");
+    }
+
+    /// Queues an event that may share a reducer batch with a session-diff
+    /// result.
+    fn queue_unrelated_session_progress(app: &App) {
+        app.services
+            .event_sender()
+            .send(AppEvent::SessionProgressUpdated {
+                progress_message: Some("Unrelated progress".to_string()),
+                session_id: "unrelated-session".into(),
+            })
+            .expect("unrelated event should queue before the diff result");
+    }
+
     #[tokio::test]
     async fn completed_turn_starts_auto_review_when_project_is_inactive() {
         // Arrange
@@ -3185,12 +3215,13 @@ mod tests {
             turn_applied_state,
         })
         .await;
-        let diff_event =
-            tokio::time::timeout(std::time::Duration::from_secs(1), app.next_app_event())
-                .await
-                .expect("timed out waiting for inactive-project diff")
-                .expect("inactive-project diff should emit an event");
-        app.apply_app_events(diff_event).await;
+        let expected_request_id = *app
+            .pending_session_diff_requests
+            .keys()
+            .next()
+            .expect("inactive-project diff should be pending");
+        queue_unrelated_session_progress(&app);
+        apply_session_diff_request(&mut app, expected_request_id).await;
 
         // Assert
         assert!(app.deferred_auto_review_session_ids.is_empty());

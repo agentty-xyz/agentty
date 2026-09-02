@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, ProtocolSchemaInstructionMode,
-    format_protocol_parse_debug_details, parse_agent_response_strict,
+    format_protocol_parse_debug_details, parse_protocol_response_strict,
 };
 
 use super::backend::{
@@ -83,7 +83,7 @@ pub(crate) fn parse_turn_response(
     response_text: &str,
     protocol_profile: ProtocolRequestProfile,
 ) -> Result<AgentResponse, String> {
-    parse_agent_response_strict(response_text).map_err(|error| {
+    parse_protocol_response_strict(response_text, protocol_profile).map_err(|error| {
         format!(
             "Agent output did not match the required JSON schema from {kind}: \
              {error}\nprotocol_profile: {protocol_profile:?}\ndebug_details:\n{}",

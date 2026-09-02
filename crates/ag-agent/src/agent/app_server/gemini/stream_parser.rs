@@ -1,5 +1,6 @@
 //! Gemini ACP stream parsing helpers.
 
+use ag_protocol::{ProtocolRequestProfile, parse_protocol_response_strict};
 use agent_client_protocol::schema::v1::CLIENT_METHOD_NAMES;
 use serde_json::Value;
 
@@ -14,6 +15,7 @@ use super::usage;
 pub(super) fn select_preferred_assistant_message(
     streamed_message: &str,
     completion_message: Option<&str>,
+    protocol_profile: ProtocolRequestProfile,
 ) -> String {
     let Some(completion_message) = completion_message.filter(|message| !message.trim().is_empty())
     else {
@@ -24,9 +26,10 @@ pub(super) fn select_preferred_assistant_message(
         return completion_message.to_string();
     }
 
-    let streamed_is_protocol = ag_protocol::parse_agent_response_strict(streamed_message).is_ok();
+    let streamed_is_protocol =
+        parse_protocol_response_strict(streamed_message, protocol_profile).is_ok();
     let completion_is_protocol =
-        ag_protocol::parse_agent_response_strict(completion_message).is_ok();
+        parse_protocol_response_strict(completion_message, protocol_profile).is_ok();
 
     if completion_is_protocol && !streamed_is_protocol {
         return completion_message.to_string();
@@ -106,4 +109,26 @@ pub(super) fn extract_session_update_kind<'value>(
         .get("update")
         .and_then(|update| update.get("sessionUpdate"))
         .and_then(Value::as_str)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_direct_focused_review_supersedes_invalid_streamed_message() {
+        // Arrange
+        let streamed_message = r#"{"project_impact":["Incomplete""#;
+        let completion_message = r#"{"project_impact":["Improves reliability."],"suggestions":[]}"#;
+
+        // Act
+        let selected_message = select_preferred_assistant_message(
+            streamed_message,
+            Some(completion_message),
+            ProtocolRequestProfile::FocusedReview,
+        );
+
+        // Assert
+        assert_eq!(selected_message, completion_message);
+    }
 }

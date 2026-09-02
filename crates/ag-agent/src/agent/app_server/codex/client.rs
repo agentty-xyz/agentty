@@ -1,6 +1,6 @@
 //! Codex app-server client orchestration.
 
-use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
+use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use tokio::sync::mpsc;
 
 use super::super::client::{ProviderRuntimeClient, RuntimeClientProvider, RuntimeClientRuntime};
@@ -53,6 +53,7 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
     fn run_turn<'scope>(
         runtime: &'scope mut Self::Runtime,
         prompt: &'scope TurnPrompt,
+        protocol_profile: ProtocolRequestProfile,
         reasoning_level: ReasoningLevel,
         speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
@@ -62,6 +63,7 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
                 &mut runtime.transport,
                 &mut runtime.state,
                 prompt,
+                protocol_profile,
                 reasoning_level,
                 speed_mode,
                 stream_tx,
@@ -218,6 +220,7 @@ mod tests {
         let result = CodexRuntimeProvider::run_turn(
             &mut runtime,
             &prompt,
+            ProtocolRequestProfile::SessionTurn,
             ReasoningLevel::default(),
             SpeedMode::Fast,
             stream_tx,
@@ -543,6 +546,7 @@ mod tests {
                 model: AgentModel::Gpt56Sol.as_str(),
                 permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 prompt: "Implement the task".into(),
+                protocol_profile: ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::default(),
                 speed_mode: SpeedMode::default(),
                 stream_tx,
@@ -581,6 +585,7 @@ mod tests {
                 model: AgentModel::Gpt56Sol.as_str(),
                 permission_mode: crate::model::permission::PermissionMode::AutoEdit,
                 prompt: "Review the current diff".into(),
+                protocol_profile: ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::default(),
                 speed_mode: SpeedMode::default(),
                 stream_tx,
@@ -806,6 +811,7 @@ mod tests {
             &mut transport,
             &mut state,
             "Implement the task",
+            ProtocolRequestProfile::SessionTurn,
             ReasoningLevel::default(),
             SpeedMode::default(),
             stream_tx,
@@ -958,6 +964,7 @@ mod tests {
             &mut transport,
             &mut state,
             "Implement the task",
+            ProtocolRequestProfile::SessionTurn,
             ReasoningLevel::default(),
             SpeedMode::Fast,
             stream_tx,
@@ -1390,6 +1397,7 @@ mod tests {
             model: AgentModel::Gpt56Sol.as_str(),
             permission_mode: crate::model::permission::PermissionMode::AutoEdit,
             prompt: "Implement the task".into(),
+            protocol_profile: ProtocolRequestProfile::SessionTurn,
             reasoning_level: ReasoningLevel::default(),
             speed_mode: SpeedMode::default(),
             thread_id: "thread-123",
@@ -1404,6 +1412,38 @@ mod tests {
                 .and_then(|schema| schema.get("type"))
                 .and_then(Value::as_str),
             Some("object")
+        );
+    }
+
+    #[test]
+    fn build_turn_start_payload_sets_direct_focused_review_schema() {
+        // Arrange
+        let folder = tempdir().expect("temporary folder should be created");
+
+        // Act
+        let payload = lifecycle::build_turn_start_payload(&lifecycle::CodexTurnStartPayloadInput {
+            folder: folder.path(),
+            model: AgentModel::Gpt56Sol.as_str(),
+            permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+            prompt: "Review the task".into(),
+            protocol_profile: ProtocolRequestProfile::FocusedReview,
+            reasoning_level: ReasoningLevel::default(),
+            speed_mode: SpeedMode::default(),
+            thread_id: "thread-123",
+            turn_start_id: "turn-start-1",
+        });
+
+        // Assert
+        let properties = payload
+            .pointer("/params/outputSchema/properties")
+            .and_then(Value::as_object)
+            .expect("focused-review schema properties should exist");
+        assert!(properties.contains_key("project_impact"));
+        assert!(properties.contains_key("suggestions"));
+        assert!(!properties.contains_key("answer"));
+        assert_eq!(
+            payload.pointer("/params/outputSchema/required"),
+            Some(&serde_json::json!(["project_impact", "suggestions"]))
         );
     }
 }

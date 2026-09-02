@@ -6210,19 +6210,27 @@ async fn auto_start_reviews_clears_cache_on_in_progress_transition() {
     assert_eq!(app.sessions.sessions()[0].transient_messages.messages(), []);
 }
 
-/// Applies queued app events through the first completed full-diff load.
+/// Applies queued app events until the pending session-diff request settles.
 async fn apply_next_session_diff(app: &mut App) {
-    loop {
-        let event = tokio::time::timeout(Duration::from_secs(1), app.next_app_event())
-            .await
-            .expect("session diff event should arrive")
-            .expect("app event channel should remain open");
-        let is_session_diff = matches!(event, AppEvent::SessionDiffLoaded { .. });
-        app.apply_app_events(event).await;
-        if is_session_diff {
-            return;
+    let expected_request_id = *app
+        .pending_session_diff_requests
+        .keys()
+        .next()
+        .expect("session diff request should be pending");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while app
+            .pending_session_diff_requests
+            .contains_key(&expected_request_id)
+        {
+            let event = app
+                .next_app_event()
+                .await
+                .expect("app event channel should remain open");
+            app.apply_app_events(event).await;
         }
-    }
+    })
+    .await
+    .expect("session diff request should settle");
 }
 
 #[tokio::test]

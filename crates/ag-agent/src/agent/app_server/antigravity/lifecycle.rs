@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use ag_protocol::TurnPrompt;
+use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use tokio::sync::mpsc;
 
 use super::super::stdio_transport::{AppServerRuntimeTransport, AppServerStdioTransport};
@@ -26,6 +26,7 @@ pub(super) struct AntigravityRuntimeState {
     model: String,
     permission_mode: PermissionMode,
     previous_cumulative_usage: Option<TokenUsage>,
+    protocol_profile: ProtocolRequestProfile,
     reasoning_level: ReasoningLevel,
     restored_context: bool,
 }
@@ -40,6 +41,7 @@ impl AntigravityRuntimeState {
             model: request.model.clone(),
             permission_mode: request.permission_mode,
             previous_cumulative_usage: None,
+            protocol_profile: request.request_kind.protocol_profile(),
             reasoning_level: request.reasoning_level,
             restored_context: request.provider_conversation_id.is_some(),
         }
@@ -52,6 +54,7 @@ impl AntigravityRuntimeState {
         self.folder == request.folder
             && self.model == request.model
             && self.permission_mode == request.permission_mode
+            && self.protocol_profile == request.request_kind.protocol_profile()
             && self.reasoning_level == request.reasoning_level
             && required_directories
                 .iter()

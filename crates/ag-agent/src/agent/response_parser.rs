@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use ag_protocol::FocusedReview;
 use serde::Deserialize;
 
 use crate::model::session::{SessionDiffState, SessionStats};
@@ -261,7 +262,9 @@ fn record_antigravity_payload(
 
 /// Returns whether a JSON value is the protocol response itself.
 fn antigravity_protocol_payload(payload: &serde_json::Value) -> bool {
-    payload.get("answer").is_some() && payload.get("questions").is_some()
+    let is_agent_response = payload.get("answer").is_some() && payload.get("questions").is_some();
+
+    is_agent_response || serde_json::from_value::<FocusedReview>(payload.clone()).is_ok()
 }
 
 /// Extracts string or structured content from an Antigravity event value.
@@ -1274,6 +1277,35 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&parsed.content)
                 .expect("content should remain JSON"),
             serde_json::json!({"answer": "Direct result", "questions": []})
+        );
+    }
+
+    #[test]
+    /// Ensures a direct focused-review payload supersedes preceding response
+    /// chunks after its schema has been validated.
+    fn test_antigravity_parse_response_reads_streamed_direct_focused_review() {
+        // Arrange
+        let review = serde_json::json!({
+            "project_impact": ["Improves focused-review reliability."],
+            "suggestions": [{
+                "details": "Preserve the final structured review.",
+                "severity": "medium",
+            }],
+        });
+        let stdout = format!(
+            "{}\n{}",
+            serde_json::json!({"event": "response", "delta": "partial response"}),
+            review,
+        );
+
+        // Act
+        let parsed = parse_antigravity_response_with_fallback(&stdout, "");
+
+        // Assert
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&parsed.content)
+                .expect("content should remain JSON"),
+            review
         );
     }
 

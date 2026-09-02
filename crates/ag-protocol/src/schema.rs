@@ -60,17 +60,52 @@ pub fn agent_response_output_schema_json(required_policy: SchemaRequiredPolicy) 
 /// Returns a pretty-printed JSON Schema string for focused-review prompt
 /// instructions.
 ///
-/// Focused review uses the shared top-level [`AgentResponse`] transport and
-/// carries this request-specific object inside `answer`. Embedding the
-/// self-descriptive schema in the utility prompt keeps its structured fields
-/// explicit without adding focused-review-only fields to every agent turn.
+/// Focused review uses a direct request-specific object so native structured
+/// output transports can enforce every review field.
 pub fn focused_review_json_schema_json() -> String {
+    let schema_value = focused_review_json_schema();
+
+    stringify_schema_json(&schema_value)
+}
+
+/// Returns the transport-normalized JSON Schema for direct focused-review
+/// output.
+pub fn focused_review_output_schema() -> Value {
+    let mut value = focused_review_json_schema();
+    normalize_schema_for_transport(&mut value, SchemaRequiredPolicy::AllProperties);
+
+    value
+}
+
+/// Returns the output schema selected for one protocol request profile.
+pub fn protocol_output_schema(
+    profile: super::model::ProtocolRequestProfile,
+    required_policy: SchemaRequiredPolicy,
+) -> Value {
+    if matches!(profile, super::model::ProtocolRequestProfile::FocusedReview) {
+        return focused_review_output_schema();
+    }
+
+    agent_response_output_schema(required_policy)
+}
+
+/// Returns the prompt-facing schema selected for one protocol request profile.
+pub(crate) fn protocol_json_schema_json(profile: super::model::ProtocolRequestProfile) -> String {
+    if matches!(profile, super::model::ProtocolRequestProfile::FocusedReview) {
+        return focused_review_json_schema_json();
+    }
+
+    agent_response_json_schema_json()
+}
+
+/// Returns the self-descriptive focused-review JSON Schema.
+fn focused_review_json_schema() -> Value {
     let schema = schemars::schema_for!(FocusedReview);
     let mut schema_value = serde_json::to_value(schema).unwrap_or(Value::Null);
 
     inject_additional_properties_false(&mut schema_value);
 
-    stringify_schema_json(&schema_value)
+    schema_value
 }
 
 /// Returns the self-descriptive JSON Schema for the response payload.
@@ -114,12 +149,14 @@ fn inject_dynamic_schema_guidance(schema: &mut Value) {
 /// Recursively injects `additionalProperties: false` into every schema object
 /// that declares `properties` and does not already set `additionalProperties`.
 ///
-/// The wire-format structs omit `#[serde(deny_unknown_fields)]` so
+/// Most wire-format structs omit `#[serde(deny_unknown_fields)]` so their
 /// deserialization tolerates extra fields that LLM providers sometimes add.
-/// This function restores the `additionalProperties: false` constraint in the
-/// generated JSON Schema so prompt-level guidance still tells models not to
-/// add extra fields. Pre-existing `additionalProperties` values (e.g. on
-/// map-like schema fields) are preserved.
+/// Focused-review structs are stricter because their dedicated parser must
+/// match the direct transport schema. This function restores the
+/// `additionalProperties: false` constraint elsewhere so prompt-level guidance
+/// still tells models not to add extra fields. Pre-existing
+/// `additionalProperties` values (e.g. on map-like schema fields) are
+/// preserved.
 fn inject_additional_properties_false(value: &mut Value) {
     match value {
         Value::Object(object) => {
@@ -553,6 +590,21 @@ mod tests {
             schema["$defs"]["FocusedReviewSuggestion"]["additionalProperties"],
             Value::Bool(false)
         );
+    }
+
+    #[test]
+    fn focused_review_output_schema_is_transport_compatible() {
+        // Arrange / Act
+        let schema = focused_review_output_schema();
+
+        // Assert
+        assert_eq!(schema.get("$schema"), None);
+        assert_eq!(
+            schema.get("required"),
+            Some(&serde_json::json!(["project_impact", "suggestions"]))
+        );
+        assert_eq!(schema["additionalProperties"], Value::Bool(false));
+        assert_eq!(schema["properties"].get("answer"), None);
     }
 
     #[test]

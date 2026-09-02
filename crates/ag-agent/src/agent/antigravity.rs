@@ -2,7 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use ag_protocol::{SchemaRequiredPolicy, agent_response_output_schema};
+use ag_protocol::{SchemaRequiredPolicy, protocol_output_schema};
 
 use super::availability;
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
@@ -56,7 +56,7 @@ impl AgentBackend for AntigravityBackend {
             model,
             permission_mode,
             prompt: _prompt,
-            request_kind: _request_kind,
+            request_kind,
             replay_transcript: _replay_transcript,
             reasoning_level,
             ..
@@ -89,7 +89,11 @@ impl AgentBackend for AntigravityBackend {
             .arg("stream-json")
             .arg("--json-schema")
             .arg(
-                agent_response_output_schema(SchemaRequiredPolicy::MinimumProtocolKeys).to_string(),
+                protocol_output_schema(
+                    request_kind.protocol_profile(),
+                    SchemaRequiredPolicy::MinimumProtocolKeys,
+                )
+                .to_string(),
             )
             .current_dir(folder)
             .stdout(Stdio::piped())

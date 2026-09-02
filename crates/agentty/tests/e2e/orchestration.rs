@@ -245,7 +245,7 @@ input=$(cat)
 case "$input" in
   *"Review the Git diff for display in a terminal UI."*)
     sleep 30
-    result='{{\"answer\":\"{{\\\"project_impact\\\":[\\\"Managed worker review completed.\\\"],\\\"suggestions\\\":[]}}\",\"questions\":[]}}'
+    result='{{\"project_impact\":[\"Managed worker review completed.\"],\"suggestions\":[]}}'
     ;;
   *)
     result='{{\"answer\":\"{CONTROLLER_REVISION_RESPONSE}\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[],\"verification_verdicts\":[]}}'

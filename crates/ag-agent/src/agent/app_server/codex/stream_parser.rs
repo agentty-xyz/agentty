@@ -1,6 +1,6 @@
 //! Codex app-server stream parsing helpers.
 
-use ag_protocol::parse_agent_response_strict;
+use ag_protocol::{ProtocolRequestProfile, parse_protocol_response_strict};
 use serde_json::Value;
 
 use crate::agent;
@@ -19,14 +19,19 @@ pub(super) struct ExtractedAgentMessage {
 ///
 /// Preference order is the latest non-empty protocol payload, followed by the
 /// latest non-empty plain-text assistant message.
-pub(super) fn preferred_completed_assistant_message(assistant_messages: &[String]) -> String {
+pub(super) fn preferred_completed_assistant_message(
+    assistant_messages: &[String],
+    protocol_profile: ProtocolRequestProfile,
+) -> String {
     if let Some(protocol_payload) = assistant_messages.iter().rev().find_map(|message| {
         let trimmed_message = message.trim();
         if trimmed_message.is_empty() {
             return None;
         }
 
-        parse_agent_response_strict(trimmed_message).ok()?;
+        if parse_protocol_response_strict(trimmed_message, protocol_profile).is_err() {
+            return None;
+        }
 
         Some(trimmed_message.to_string())
     }) {
@@ -495,7 +500,10 @@ mod tests {
         ];
 
         // Act
-        let preferred = preferred_completed_assistant_message(&assistant_messages);
+        let preferred = preferred_completed_assistant_message(
+            &assistant_messages,
+            ProtocolRequestProfile::SessionTurn,
+        );
 
         // Assert
         assert_eq!(
@@ -514,8 +522,14 @@ mod tests {
         let plain_messages = vec!["  ".to_string(), " plain answer ".to_string()];
 
         // Act
-        let protocol_preferred = preferred_completed_assistant_message(&protocol_messages);
-        let plain_preferred = preferred_completed_assistant_message(&plain_messages);
+        let protocol_preferred = preferred_completed_assistant_message(
+            &protocol_messages,
+            ProtocolRequestProfile::SessionTurn,
+        );
+        let plain_preferred = preferred_completed_assistant_message(
+            &plain_messages,
+            ProtocolRequestProfile::SessionTurn,
+        );
 
         // Assert
         assert_eq!(
@@ -534,10 +548,49 @@ mod tests {
         ];
 
         // Act
-        let preferred = preferred_completed_assistant_message(&assistant_messages);
+        let preferred = preferred_completed_assistant_message(
+            &assistant_messages,
+            ProtocolRequestProfile::SessionTurn,
+        );
 
         // Assert
         assert_eq!(preferred, r#"{"verification_verdicts":[]}"#);
+    }
+
+    #[test]
+    fn preferred_completed_assistant_message_accepts_direct_focused_review() {
+        // Arrange
+        let assistant_messages = vec![
+            r#"{"project_impact":[],"suggestions":[]}"#.to_string(),
+            "later status text".to_string(),
+        ];
+
+        // Act
+        let preferred = preferred_completed_assistant_message(
+            &assistant_messages,
+            ProtocolRequestProfile::FocusedReview,
+        );
+
+        // Assert
+        assert_eq!(preferred, r#"{"project_impact":[],"suggestions":[]}"#);
+    }
+
+    #[test]
+    fn preferred_completed_assistant_message_rejects_cross_profile_payload() {
+        // Arrange
+        let assistant_messages = vec![
+            r#"{"project_impact":[],"suggestions":[]}"#.to_string(),
+            "later status text".to_string(),
+        ];
+
+        // Act
+        let preferred = preferred_completed_assistant_message(
+            &assistant_messages,
+            ProtocolRequestProfile::SessionTurn,
+        );
+
+        // Assert
+        assert_eq!(preferred, "later status text");
     }
 
     #[test]

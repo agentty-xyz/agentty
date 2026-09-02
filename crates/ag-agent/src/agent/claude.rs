@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use ag_protocol::{SchemaRequiredPolicy, agent_response_output_schema_json};
+use ag_protocol::{SchemaRequiredPolicy, protocol_output_schema};
 
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 use super::prompt::{CliPromptAccessRootMode, append_cli_prompt_access_directories};
@@ -85,11 +85,13 @@ impl AgentBackend for ClaudeBackend {
         command.arg("--verbose");
         command.arg("--effort").arg(reasoning_level.claude());
         command.arg("--output-format").arg("stream-json");
-        command
-            .arg("--json-schema")
-            .arg(agent_response_output_schema_json(
+        command.arg("--json-schema").arg(
+            protocol_output_schema(
+                request_kind.protocol_profile(),
                 SchemaRequiredPolicy::MinimumProtocolKeys,
-            ));
+            )
+            .to_string(),
+        );
         command
             .env("ANTHROPIC_MODEL", model)
             .current_dir(folder)

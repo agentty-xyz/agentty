@@ -611,7 +611,7 @@ impl TaskService {
                 model: review_selection.model(),
                 permission_mode: ag_agent::PermissionMode::ReadOnly,
                 prompt: review_prompt,
-                request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
+                request_kind: ag_agent::AgentRequestKind::FocusedReview,
                 reasoning_level,
                 speed_mode,
             })
@@ -1439,7 +1439,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Ensures a detached Gemini review-assist task uses the utility-prompt
+    /// Ensures a detached Gemini review-assist task uses the focused-review
     /// route and emits the completed review through the app event channel.
     async fn spawn_review_assist_task_with_client_emits_completed_review() {
         // Arrange
@@ -1453,7 +1453,7 @@ mod tests {
                 assert_eq!(request.permission_mode, ag_agent::PermissionMode::ReadOnly);
                 assert!(matches!(
                     request.request_kind,
-                    ag_agent::AgentRequestKind::UtilityPrompt
+                    ag_agent::AgentRequestKind::FocusedReview
                 ));
                 assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
                 assert_eq!(request.speed_mode, crate::domain::agent::SpeedMode::Fast);
@@ -1567,6 +1567,10 @@ mod tests {
         one_shot_client.expect_submit().returning(|request| {
             assert_eq!(request.agent_kind, AgentKind::Antigravity);
             assert_eq!(request.model, AgentModel::Gemini37Flash);
+            assert_eq!(
+                request.request_kind,
+                ag_agent::AgentRequestKind::FocusedReview
+            );
             assert_eq!(request.reasoning_level, ReasoningLevel::Low);
 
             Ok(agent::OneShotSubmission {
@@ -1718,11 +1722,12 @@ mod tests {
         let normalized_prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
 
         // Assert
-        assert!(normalized_prompt.contains(
-            "`answer` as a string containing exactly one concise JSON object matching the \
-             focused-review schema"
-        ));
-        assert!(normalized_prompt.contains("leave `questions` empty"));
+        assert!(
+            normalized_prompt.contains(
+                "Return exactly one concise JSON object matching the focused-review schema"
+            )
+        );
+        assert!(normalized_prompt.contains("Do not wrap it in an `answer` envelope"));
         assert!(prompt.contains("Authoritative focused-review JSON Schema:"));
         assert!(prompt.contains("\"title\": \"FocusedReview\""));
         assert!(prompt.contains("\"project_impact\""));

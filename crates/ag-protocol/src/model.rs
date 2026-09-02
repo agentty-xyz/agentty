@@ -91,13 +91,15 @@ fn collapse_whitespace(text: &str) -> String {
 /// Protocol-owned request family preserved across prompt submission and repair
 /// retries.
 ///
-/// Session discussion turns and isolated utility prompts share the same
-/// top-level [`AgentResponse`] schema. Agentty still carries the request
-/// family through transport boundaries so call sites can keep one consistent
-/// protocol contract even when some callers ignore parts of the response.
+/// Session discussion turns and ordinary utility prompts share the top-level
+/// [`AgentResponse`] schema. Focused reviews use their own direct structured
+/// response so transports can enforce the review fields instead of embedding
+/// JSON inside `AgentResponse::answer`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProtocolRequestProfile {
+    /// Isolated focused review with a direct structured review response.
+    FocusedReview,
     /// Interactive session turn.
     SessionTurn,
     /// Isolated utility prompt.
