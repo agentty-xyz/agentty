@@ -20,6 +20,7 @@ use crate::model::{
 use crate::policy::Policy;
 use crate::read::{self, ReadError, ReadTool};
 use crate::schema_contract::OutputSchema;
+use crate::session::{Database, LoadedSession, SessionConfig, SessionError};
 use crate::tool::{
     ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments,
 };
@@ -280,6 +281,48 @@ pub struct ChatSession<'a> {
     system_prompt: Option<String>,
 }
 
+/// Resumable chat that persists each successful complete turn in SQLite.
+pub struct PersistentChatSession<'a> {
+    database: Database,
+    harness: &'a Harness,
+    history: ChatHistory,
+    id: String,
+    schema: OutputSchema,
+    system_prompt: Option<String>,
+}
+
+impl PersistentChatSession<'_> {
+    /// Returns the stable application-provided session identifier.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Sends one prompt and atomically persists the successful complete turn.
+    ///
+    /// A failed model or tool turn is not persisted. If persistence fails
+    /// after the model turn succeeds, the turn is not added to in-memory
+    /// history and the storage error is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] when the model turn or persistence operation
+    /// fails.
+    pub async fn send(&mut self, prompt: impl Into<String>) -> Result<TurnOutcome, SessionError> {
+        let mut messages = self.history.messages();
+        if let Some(system_prompt) = &self.system_prompt {
+            messages.insert(0, ModelMessage::System(system_prompt.clone()));
+        }
+        let retained_messages = messages.len();
+        let request = ModelRequest::with_history(messages, prompt.into(), self.schema.clone());
+        let (outcome, mut messages) = self.harness.run_request(request).await?;
+        let turn = messages.split_off(retained_messages);
+        self.database.append_turn(&self.id, &turn).await?;
+        self.history.push(turn);
+
+        Ok(outcome)
+    }
+}
+
 impl ChatSession<'_> {
     /// Adds a system prompt to every model request in this chat.
     #[must_use]
@@ -310,14 +353,14 @@ impl ChatSession<'_> {
     }
 }
 
-struct ChatHistory {
+pub(crate) struct ChatHistory {
     bytes: usize,
     max_bytes: usize,
     turns: VecDeque<Vec<ModelMessage>>,
 }
 
 impl ChatHistory {
-    fn new(max_bytes: usize) -> Self {
+    pub(crate) fn new(max_bytes: usize) -> Self {
         Self {
             bytes: 0,
             max_bytes,
@@ -325,14 +368,14 @@ impl ChatHistory {
         }
     }
 
-    fn messages(&self) -> Vec<ModelMessage> {
+    pub(crate) fn messages(&self) -> Vec<ModelMessage> {
         self.turns
             .iter()
             .flat_map(|turn| turn.iter().cloned())
             .collect()
     }
 
-    fn push(&mut self, turn: Vec<ModelMessage>) {
+    pub(crate) fn push(&mut self, turn: Vec<ModelMessage>) {
         self.bytes = self.bytes.saturating_add(retained_bytes(&turn));
         self.turns.push_back(turn);
 
@@ -472,6 +515,92 @@ impl Harness {
             schema,
             system_prompt: None,
         }
+    }
+
+    /// Creates a persistent chat with no retained turns.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] when the identifier is invalid or already
+    /// exists, or when SQLite cannot store the session.
+    pub async fn create_session<'a>(
+        &'a self,
+        database: &Database,
+        config: SessionConfig,
+    ) -> Result<PersistentChatSession<'a>, SessionError> {
+        database
+            .create_session(&config, self.model.metadata(), self.max_history_bytes)
+            .await?;
+
+        Ok(PersistentChatSession {
+            database: database.clone(),
+            harness: self,
+            history: ChatHistory::new(self.max_history_bytes),
+            id: config.id().to_string(),
+            schema: config.schema().clone(),
+            system_prompt: config.system_prompt().map(str::to_string),
+        })
+    }
+
+    /// Opens a persistent chat and restores its bounded completed-turn history.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] when the session is missing or invalid, its
+    /// saved model differs from this harness, or SQLite cannot load it.
+    pub async fn open_session<'a>(
+        &'a self,
+        database: &Database,
+        id: &str,
+    ) -> Result<PersistentChatSession<'a>, SessionError> {
+        let loaded = database.load_session(id).await?;
+        self.validate_session_model(id, &loaded)?;
+        let mut history = ChatHistory::new(loaded.max_history_bytes);
+        for turn in loaded.turns {
+            history.push(turn);
+        }
+
+        Ok(PersistentChatSession {
+            database: database.clone(),
+            harness: self,
+            history,
+            id: id.to_string(),
+            schema: loaded.schema,
+            system_prompt: loaded.system_prompt,
+        })
+    }
+
+    fn validate_session_model(&self, id: &str, loaded: &LoadedSession) -> Result<(), SessionError> {
+        let (Some(stored_provider), Some(stored_model)) = (&loaded.provider, &loaded.model) else {
+            if loaded.provider.is_none() && loaded.model.is_none() {
+                return Ok(());
+            }
+
+            return Err(SessionError::InvalidData {
+                reason: format!("session `{id}` has incomplete model identity"),
+            });
+        };
+        let metadata = self.model.metadata();
+        let (actual_provider, actual_model) = metadata.as_ref().map_or(
+            ("unavailable".to_string(), "unavailable".to_string()),
+            |metadata| {
+                (
+                    metadata.provider().to_string(),
+                    metadata.model().to_string(),
+                )
+            },
+        );
+        if actual_provider != *stored_provider || actual_model != *stored_model {
+            return Err(SessionError::ModelMismatch {
+                actual_model,
+                actual_provider,
+                id: id.to_string(),
+                stored_model: stored_model.clone(),
+                stored_provider: stored_provider.clone(),
+            });
+        }
+
+        Ok(())
     }
 
     async fn run_request(

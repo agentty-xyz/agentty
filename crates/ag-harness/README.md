@@ -38,6 +38,21 @@ Use `Harness::chat()` for sequential in-memory turns and sanitized activity repo
 Chat history retains complete recent turns within a 256 KiB payload budget; use
 `Harness::max_history_bytes()` to override it.
 
+Use `Harness::create_session()` and `Harness::open_session()` with `Database` for a
+resumable SQLite chat. Only successful complete turns are stored; failed or interrupted
+turns are not resumed. The saved output schema, optional system prompt, model identity,
+and complete tool-call/result groups are restored within the configured history budget.
+
+```rust
+use ag_harness::{Database, SessionConfig};
+
+let database = Database::open(&database_path).await?;
+let config = SessionConfig::new("session-1", output_schema)
+    .with_system_prompt("Keep answers concise.");
+let mut session = harness.create_session(&database, config).await?;
+let outcome = session.send(prompt).await?;
+```
+
 Use `ModelWithMetadata::complete_with_metadata()` for normalized completion metadata.
 
 Use `ModelProvider` and `ModelConfiguration` to discover built-in providers and
