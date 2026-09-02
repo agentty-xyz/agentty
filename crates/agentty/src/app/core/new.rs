@@ -185,6 +185,7 @@ impl App {
             merge_queue: crate::app::merge_queue::MergeQueue::default(),
             next_sync_operation_id: 1,
             project_sync_status: None,
+            project_sync_status_expires_at: None,
             session_progress_messages: std::collections::HashMap::new(),
             update_status: None,
             sync_handle,

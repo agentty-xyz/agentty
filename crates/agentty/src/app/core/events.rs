@@ -1278,6 +1278,7 @@ impl App {
                 message: Self::sync_failure_message(error),
             },
         };
+        self.schedule_project_sync_status_expiry();
     }
 
     /// Applies completed linked-session comment loads only while the matching

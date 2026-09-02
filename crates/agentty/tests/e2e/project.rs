@@ -258,11 +258,30 @@ fn test_project_sync_non_modal() {
                         "sync_complete",
                         "Project sync completes in the status bar without a popup",
                     )
+                    .sleep_ms(10_500)
+                    .capture_labeled(
+                        "sync_status_expired",
+                        "The status bar returns to its normal page hint",
+                    )
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Synced zeta-project/main", &full);
+                assertion::assert_not_visible(frame, "Synced zeta-project/main");
+                assertion::assert_text_in_region(frame, "FYI:", &full);
                 assertion::assert_not_visible(frame, "Sync complete");
+
+                let complete_capture = report
+                    .captures
+                    .iter()
+                    .find(|capture| capture.label == "sync_complete")
+                    .expect("missing completed sync capture");
+                let complete_frame = common::frame_from_capture(complete_capture);
+                let complete_full = Region::full(complete_frame.cols(), complete_frame.rows());
+                assertion::assert_text_in_region(
+                    &complete_frame,
+                    "Synced zeta-project/main",
+                    &complete_full,
+                );
 
                 let syncing_capture = report
                     .captures

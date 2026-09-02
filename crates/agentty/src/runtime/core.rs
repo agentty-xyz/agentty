@@ -233,6 +233,8 @@ where
     async fn run_cycle(&mut self) -> io::Result<EventResult> {
         self.app.process_pending_app_events().await;
         self.app.reconcile_open_session_question_mode().await;
+        self.app
+            .expire_project_sync_status(self.clock.now_instant());
         render_frame(
             self.app,
             self.terminal,

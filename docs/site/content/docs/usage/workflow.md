@@ -90,7 +90,8 @@ has priority: requesting sync while a merge is active or queued reports retryabl
 guidance in the status bar, and a queued merge rechecks the sync guard before it starts.
 If the sync stops on rebase conflicts, the status bar reports the number of files handed
 to the assist agent. Completion, blocked preflight, and failure summaries remain in that
-bar instead of opening a popup.
+bar for ten seconds instead of opening a popup, then the page's normal `FYI:` message
+returns.
 
 ## Session Lifecycle
 

@@ -827,12 +827,13 @@ orchestration paths:
   event carries the captured project and operation IDs, so project switching cannot
   redirect Git work, and a stale completion cannot replace a newer status or reconcile
   superseded review and merged-session state. The lifecycle state is separate from
-  `AppMode`; navigation and unrelated overlays therefore remain active. Base-checkout
-  operations for the owning project—session creation or draft start, merge, and
-  rebase—fail with retryable workflow guidance until the operation settles, while
-  isolated session turns and other projects remain usable. If completion arrives while
-  another project is active, project-scoped review and merged-session reconciliation is
-  retained in memory and applied after switching back.
+  `AppMode`; navigation and unrelated overlays therefore remain active. Terminal display
+  state expires after ten seconds, independently of deferred project reconciliation.
+  Base-checkout operations for the owning project—session creation or draft start,
+  merge, and rebase—fail with retryable workflow guidance until the operation settles,
+  while isolated session turns and other projects remain usable. If completion arrives
+  while another project is active, project-scoped review and merged-session
+  reconciliation is retained in memory and applied after switching back.
 - Session merge: queue-aware workflow for sessions without a linked forge review request
   — assisted rebase first, squash commit into the base branch reusing the session-branch
   `HEAD` commit message, then worktree cleanup and status `Done`. Once a review request
