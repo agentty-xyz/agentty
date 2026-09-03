@@ -5,9 +5,9 @@ Run a model with bounded repository tools and validated structured output.
 ## Library
 
 ```rust
-use ag_harness::{Harness, MUSE_SPARK_1_2, Muse, Tool};
+use ag_harness::{Harness, MUSE_SPARK_1_3, Muse, Tool};
 
-let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_2)?)
+let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?)
     .repository(&repository_root)
     .allow(Tool::Read)
     .allow(Tool::Write);

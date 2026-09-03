@@ -16,7 +16,7 @@ cargo test --locked -p ag-harness --test e2e kimi::test_kimi -- --exact --ignore
 ## Muse
 
 `MODEL_API_BASE_URL` defaults to `https://api.meta.ai/v1`, and `MODEL_API_MODEL`
-defaults to `muse-spark-1.2`.
+defaults to `muse-spark-1.3`.
 
 ```sh
 MODEL_API_KEY=... \

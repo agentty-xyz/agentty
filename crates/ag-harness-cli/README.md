@@ -5,7 +5,7 @@ Interactive command-line chat powered by the `ag-harness` model runtime.
 Set the provider credentials, then start a chat:
 
 ```sh
-MODEL_API_KEY=your-key cargo run -p ag-harness-cli -- run muse-spark-1.2
+MODEL_API_KEY=your-key cargo run -p ag-harness-cli -- run muse-spark-1.3
 ```
 
 The package keeps the executable name `ag-harness`. The current directory is readable by

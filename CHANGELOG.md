@@ -7,6 +7,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- ag-harness: replace the Muse Spark 1.2 model catalog with Muse Spark 1.3.
+
 ## [v0.15.9] - 2026-08-31
 
 ### Added

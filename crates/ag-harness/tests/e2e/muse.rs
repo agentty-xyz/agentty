@@ -1,6 +1,6 @@
 //! Live Muse provider check.
 
-use ag_harness::{MUSE_SPARK_1_2, ModelClient, MuseConfig};
+use ag_harness::{MUSE_SPARK_1_3, ModelClient, MuseConfig};
 
 use crate::{DynError, greeting};
 
@@ -14,7 +14,7 @@ async fn test_muse() -> Result<(), DynError> {
         api_key: std::env::var("MODEL_API_KEY")?,
         base_url: std::env::var("MODEL_API_BASE_URL")
             .unwrap_or_else(|_| MODEL_API_BASE_URL.to_string()),
-        model: std::env::var("MODEL_API_MODEL").unwrap_or_else(|_| MUSE_SPARK_1_2.to_string()),
+        model: std::env::var("MODEL_API_MODEL").unwrap_or_else(|_| MUSE_SPARK_1_3.to_string()),
     };
     let client = ModelClient::muse(config)?;
 
