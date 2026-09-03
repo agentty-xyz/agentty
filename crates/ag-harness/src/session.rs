@@ -313,6 +313,47 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
         session_id: &str,
         max_history_bytes: usize,
     ) -> Result<Vec<Vec<ModelMessage>>, SessionError> {
+        let Some(oldest_turn) = self
+            .oldest_turn_within_budget(session_id, max_history_bytes)
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+        let rows = sqlx::query_as::<_, (i64, String, String)>(
+            r"
+SELECT turn_position, kind, payload
+FROM session_message
+WHERE session_id = ? AND turn_position >= ?
+ORDER BY turn_position, message_position
+",
+        )
+        .bind(session_id)
+        .bind(oldest_turn)
+        .fetch_all(&self.pool)
+        .await
+        .session_context("load persistent session history")?;
+        let mut turns = Vec::<Vec<ModelMessage>>::new();
+        let mut current_position = None;
+
+        for (turn_position, kind, payload) in rows {
+            if current_position != Some(turn_position) {
+                turns.push(Vec::new());
+                current_position = Some(turn_position);
+            }
+            let message = EncodedMessage::into_message(&kind, &payload)?;
+            if let Some(turn) = turns.last_mut() {
+                turn.push(message);
+            }
+        }
+
+        Ok(turns)
+    }
+
+    async fn oldest_turn_within_budget(
+        &self,
+        session_id: &str,
+        max_history_bytes: usize,
+    ) -> Result<Option<i64>, SessionError> {
         let mut retained_bytes = 0_usize;
         let mut oldest_turn = None;
         let mut before_turn = None;
@@ -346,37 +387,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
             }
         }
 
-        let Some(oldest_turn) = oldest_turn else {
-            return Ok(Vec::new());
-        };
-        let rows = sqlx::query_as::<_, (i64, String, String)>(
-            r"
-SELECT turn_position, kind, payload
-FROM session_message
-WHERE session_id = ? AND turn_position >= ?
-ORDER BY turn_position, message_position
-",
-        )
-        .bind(session_id)
-        .bind(oldest_turn)
-        .fetch_all(&self.pool)
-        .await
-        .session_context("load persistent session history")?;
-        let mut turns = Vec::<Vec<ModelMessage>>::new();
-        let mut current_position = None;
-
-        for (turn_position, kind, payload) in rows {
-            if current_position != Some(turn_position) {
-                turns.push(Vec::new());
-                current_position = Some(turn_position);
-            }
-            let message = EncodedMessage::into_message(&kind, &payload)?;
-            if let Some(turn) = turns.last_mut() {
-                turn.push(message);
-            }
-        }
-
-        Ok(turns)
+        Ok(oldest_turn)
     }
 }
 

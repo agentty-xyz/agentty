@@ -983,26 +983,19 @@ impl ReadTool {
         let file: Box<dyn AsyncRead + Send + Unpin> =
             Box::new(file.take((MAX_SCAN_BYTES + 1) as u64));
         let mut reader = BufReader::new(file);
-        let mut current_line = 1_u64;
         let mut remaining_scan_bytes = MAX_SCAN_BYTES;
 
-        while current_line < start_line {
-            if !Self::skip_line(&mut reader, &path, &mut remaining_scan_bytes).await? {
-                if source_truncated {
-                    return Err(ReadError::ScanLimitExceeded {
-                        limit: MAX_SCAN_BYTES,
-                        path,
-                    });
-                }
-                return Err(ReadError::OffsetBeyondEnd {
-                    offset: start_line,
-                    path,
-                });
-            }
-            current_line += 1;
-        }
+        Self::skip_to_line(
+            &mut reader,
+            start_line,
+            &path,
+            source_truncated,
+            &mut remaining_scan_bytes,
+        )
+        .await?;
 
         let mut content = String::new();
+        let mut current_line = start_line;
         let mut lines_read = 0_u64;
         let mut next_offset = None;
         while lines_read < selected_lines {
@@ -1061,6 +1054,34 @@ impl ReadTool {
             start_line,
             truncated: next_offset.is_some(),
         })
+    }
+
+    async fn skip_to_line(
+        reader: &mut BufReader<Box<dyn AsyncRead + Send + Unpin>>,
+        start_line: u64,
+        path: &str,
+        source_truncated: bool,
+        remaining_scan_bytes: &mut usize,
+    ) -> Result<(), ReadError> {
+        let mut current_line = 1_u64;
+        while current_line < start_line {
+            if !Self::skip_line(reader, path, remaining_scan_bytes).await? {
+                return Err(if source_truncated {
+                    ReadError::ScanLimitExceeded {
+                        limit: MAX_SCAN_BYTES,
+                        path: path.to_string(),
+                    }
+                } else {
+                    ReadError::OffsetBeyondEnd {
+                        offset: start_line,
+                        path: path.to_string(),
+                    }
+                });
+            }
+            current_line += 1;
+        }
+
+        Ok(())
     }
 
     async fn next_line(
