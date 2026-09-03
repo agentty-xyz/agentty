@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use testty::assertion;
+use testty::proof::report::ProofReport;
 use testty::region::Region;
 
 use crate::common;
@@ -82,6 +83,21 @@ fn run_git(working_directory: &Path, args: &[&str]) -> Result<(), Box<dyn std::e
     if !status.success() {
         return Err(format!("git {} failed with {status}", args.join(" ")).into());
     }
+
+    Ok(())
+}
+
+/// Verifies that session creation is rejected in-app during project sync.
+fn verify_session_creation_blocked(report: &ProofReport) -> Result<(), &'static str> {
+    let capture = report
+        .captures
+        .iter()
+        .find(|capture| capture.label == "session_creation_blocked")
+        .ok_or("missing blocked session creation capture")?;
+    let frame = common::frame_from_capture(capture);
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(&frame, "Session creation unavailable", &full);
+    assertion::assert_text_in_region(&frame, "is synchronizing main", &full);
 
     Ok(())
 }
@@ -241,6 +257,16 @@ fn test_project_sync_non_modal() {
                         "syncing_while_navigating",
                         "Sessions tab remains interactive during project sync",
                     )
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Session creation unavailable", 5000)
+                    .capture_labeled(
+                        "session_creation_blocked",
+                        "Session creation is safely blocked without exiting Agentty",
+                    )
+                    .press_key("Enter")
+                    .wait_for_text("Sessions", 5000)
                     .press_key("p")
                     .wait_for_text("Switch project", 5000)
                     .press_key("j")
@@ -297,6 +323,9 @@ fn test_project_sync_non_modal() {
                 );
                 assertion::assert_text_in_region(&syncing_frame, "Sessions", &syncing_full);
                 assertion::assert_not_visible(&syncing_frame, "Sync in progress");
+
+                verify_session_creation_blocked(report)
+                    .expect("missing blocked session creation capture");
 
                 let queued_capture = report
                     .captures
