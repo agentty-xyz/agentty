@@ -487,7 +487,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_unsupported_tool_type_name_and_terminal_content() {
+    async fn rejects_unsupported_tool_type_and_name() {
         // Arrange
         let messages = [
             (
@@ -510,17 +510,6 @@ mod tests {
                     }]
                 }),
                 "model requested unsupported tool: write",
-            ),
-            (
-                json!({
-                    "content": "done",
-                    "tool_calls": [{
-                        "id": "call_content",
-                        "type": "function",
-                        "function": {"name": "read", "arguments": r#"{"path":"Cargo.toml"}"#}
-                    }]
-                }),
-                "model tool call response contained terminal content",
             ),
             (
                 json!({
@@ -550,6 +539,40 @@ mod tests {
         assert!(errors.iter().all(|(error, expected)| {
             error == expected || (expected.ends_with(':') && error.starts_with(expected))
         }));
+    }
+
+    #[tokio::test]
+    async fn accepts_bounded_content_with_tool_calls() {
+        // Arrange
+        let server = MockServer::start().await;
+        mount_tool_response(
+            &server,
+            "inspect the manifest",
+            json!({
+                "content": "I will inspect the manifest.",
+                "tool_calls": [{
+                    "id": "call_content",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": r#"{"path":"Cargo.toml"}"#}
+                }]
+            }),
+        )
+        .await;
+
+        // Act
+        let response = qwen(&server)
+            .complete(read_request("inspect the manifest"))
+            .await
+            .expect("incidental tool-call content should be ignored");
+
+        // Assert
+        assert_eq!(
+            response
+                .call()
+                .expect("response should contain a tool call")
+                .id(),
+            "call_content"
+        );
     }
 
     #[tokio::test]

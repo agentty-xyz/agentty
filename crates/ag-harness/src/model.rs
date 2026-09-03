@@ -779,9 +779,6 @@ pub enum ModelError {
         /// Bounded duplicate identifier returned by the provider.
         id: String,
     },
-    /// A tool-call response also contained terminal assistant content.
-    #[error("model tool call response contained terminal content")]
-    ToolCallWithContent,
     /// A terminal response also contained native tool calls.
     #[error("model terminal response contained tool calls")]
     TerminalResponseWithToolCalls,
@@ -895,7 +892,6 @@ impl ModelError {
             Self::MissingToolCall
             | Self::MultipleToolCalls
             | Self::DuplicateToolCallId { .. }
-            | Self::ToolCallWithContent
             | Self::TerminalResponseWithToolCalls
             | Self::UnsupportedToolType { .. }
             | Self::UnsupportedToolName { .. }
@@ -1574,10 +1570,6 @@ mod tests {
             (ModelError::MissingToolCall, ModelErrorType::InvalidToolCall),
             (
                 ModelError::MultipleToolCalls,
-                ModelErrorType::InvalidToolCall,
-            ),
-            (
-                ModelError::ToolCallWithContent,
                 ModelErrorType::InvalidToolCall,
             ),
             (

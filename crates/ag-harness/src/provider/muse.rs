@@ -401,7 +401,7 @@ mod tests {
                 "choices": [{
                     "finish_reason": "tool_calls",
                     "message": {
-                        "content": null,
+                        "content": "I will inspect the manifest before answering.",
                         "tool_calls": [{
                             "id": "call_muse_read",
                             "type": "function",
