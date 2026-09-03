@@ -682,25 +682,30 @@ can retry without reporting a false terminal cancellation.
   an already published branch, it refreshes the live threads, posts the agent's concise
   reply for every valid allowlisted outcome, and resolves only threads reported as
   `fixed`. Threads reported as `no_change_needed` receive their explanatory reply but
-  remain open. Unknown thread IDs are ignored. Unresolved outdated threads remain
-  actionable through their forge thread ID while their stale line anchor is omitted from
-  current diff context. Agentty saves each operation's original reply and random marker
-  token in the same database transaction that completes the agent turn, so restart
-  recovery cannot observe one without the other. It flags the operation immediately
-  before posting and deletes it after completion, so a later successful branch push
-  resumes saved work and reuses a reply that reached the forge before an interruption
-  instead of posting it twice. A new agent response cannot replace a bound unfinished
-  operation's saved reply, and an unrelated comment that copies Agentty's old static
-  marker is not accepted as its audit reply. Commit, reply, resolution, and
-  missing-open-review failures produce a `[Review Comments Warning]` transcript notice.
-  A commit failure discards that review batch, so a later unrelated push cannot apply
-  its stale outcomes; reopen the comments to retry. A push failure keeps a successfully
-  committed batch for the next push attempt. Before applying that batch, Agentty
-  verifies the pushed tip still exactly matches its saved fix commit. Any later commit,
-  including a revert, causes Agentty to discard the saved outcomes and require a fresh
-  review batch. If shutdown or persistence failure interrupts commit binding, Agentty
-  keeps the unbound batch pending, reports that a fresh agent turn is required, and lets
-  that turn replace only the unbound operation.
+  remain open. While an authenticated Agentty reply is the thread's latest comment, the
+  thread is shown as `addressed` and cannot be submitted again. The forge-reported
+  authorship and Agentty's reply marker must both match, so a reviewer-authored marker
+  cannot suppress feedback. A later reviewer follow-up makes the thread actionable
+  again, preventing repeated replies to unchanged feedback without hiding new feedback.
+  Unknown thread IDs are ignored. Unresolved outdated threads remain actionable through
+  their forge thread ID while their stale line anchor is omitted from current diff
+  context. Agentty saves each operation's original reply and random marker token in the
+  same database transaction that completes the agent turn, so restart recovery cannot
+  observe one without the other. It flags the operation immediately before posting and
+  deletes it after completion, so a later successful branch push resumes saved work and
+  reuses a reply that reached the forge before an interruption instead of posting it
+  twice. A new agent response cannot replace a bound unfinished operation's saved reply,
+  and an unrelated comment that copies Agentty's old static marker is not accepted as
+  its audit reply. Commit, reply, resolution, and missing-open-review failures produce a
+  `[Review Comments Warning]` transcript notice. A commit failure discards that review
+  batch, so a later unrelated push cannot apply its stale outcomes; reopen the comments
+  to retry. A push failure keeps a successfully committed batch for the next push
+  attempt. Before applying that batch, Agentty verifies the pushed tip still exactly
+  matches its saved fix commit. Any later commit, including a revert, causes Agentty to
+  discard the saved outcomes and require a fresh review batch. If shutdown or
+  persistence failure interrupts commit binding, Agentty keeps the unbound batch
+  pending, reports that a fresh agent turn is required, and lets that turn replace only
+  the unbound operation.
 
 <a id="usage-review-request-prerequisites"></a> Publishing needs regular Git
 authentication (credential helper or PAT for HTTPS remotes, SSH key for SSH remotes)

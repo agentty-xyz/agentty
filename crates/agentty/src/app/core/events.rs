@@ -2948,6 +2948,7 @@ mod tests {
             anchor_side: ReviewCommentAnchorSide::New,
             comments: vec![ReviewComment {
                 author: "reviewer".to_string(),
+                authored_by_current_user: false,
                 body: "Review comment".to_string(),
             }],
             id: id.to_string(),

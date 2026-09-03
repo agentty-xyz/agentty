@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use super::{
     ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner, ForgeFuture,
-    ForgeKind, ForgeRemote, ReviewCommentSnapshot, ReviewRequestError, ReviewRequestMetadata,
-    ReviewRequestSummary, UpdateReviewRequestInput, command_output_detail,
+    ForgeKind, ForgeRemote, ReviewRequestError, ReviewRequestMetadata, ReviewRequestSummary,
+    UpdateReviewRequestInput, command_output_detail,
 };
 
 /// Provider-neutral partial edit produced after a best-effort recheck that the
@@ -287,33 +287,6 @@ impl ReviewRequestOperations {
             }
 
             refresh_review_request(remote, display_id).await
-        })
-    }
-
-    /// Fetches and parses one review-comment snapshot in an owned future for
-    /// adapter trait implementations.
-    pub(crate) fn fetch_review_comment_snapshot_future(
-        &self,
-        remote: ForgeRemote,
-        display_id: String,
-        parse_display_id: fn(&str) -> Result<String, ReviewRequestError>,
-        snapshot_command: fn(&ForgeRemote, &str) -> ForgeCommand,
-        operation: &'static str,
-        parse_snapshot_response: fn(&str) -> Result<ReviewCommentSnapshot, String>,
-    ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>> {
-        let operations = self.clone();
-
-        Box::pin(async move {
-            let command_display_id = parse_display_id(&display_id)?;
-            let output = operations
-                .run_review_command(
-                    &remote,
-                    snapshot_command(&remote, &command_display_id),
-                    operation,
-                )
-                .await?;
-
-            map_parse_error(remote.forge_kind, parse_snapshot_response(&output.stdout))
         })
     }
 

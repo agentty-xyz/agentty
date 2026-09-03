@@ -18,19 +18,19 @@ const REVIEW_THREADS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
      repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: \
      100, after: $endCursor) { nodes { id diffSide isOutdated isResolved line path startLine \
-     subjectType comments(first: 100) { nodes { author { login } body } pageInfo { hasNextPage \
-     endCursor } } } pageInfo { hasNextPage endCursor } } } } }";
+     subjectType comments(first: 100) { nodes { author { login } body viewerDidAuthor } pageInfo \
+     { hasNextPage endCursor } } } pageInfo { hasNextPage endCursor } } } } }";
 /// Paginated GraphQL query used to fetch pull-request conversation comments.
 const PULL_REQUEST_COMMENTS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
      repository(owner: $owner, name: $repo) { pullRequest(number: $number) { comments(first: 100, \
-     after: $endCursor) { nodes { author { login } body } pageInfo { hasNextPage endCursor } } } \
-     } }";
+     after: $endCursor) { nodes { author { login } body viewerDidAuthor } pageInfo { hasNextPage \
+     endCursor } } } } }";
 /// Paginated GraphQL query used when one review thread exceeds 100 comments.
-const THREAD_COMMENTS_QUERY: &str = "query($threadId: ID!, $endCursor: String) { node(id: \
-                                     $threadId) { ... on PullRequestReviewThread { \
-                                     comments(first: 100, after: $endCursor) { nodes { author { \
-                                     login } body } pageInfo { hasNextPage endCursor } } } } }";
+const THREAD_COMMENTS_QUERY: &str =
+    "query($threadId: ID!, $endCursor: String) { node(id: $threadId) { ... on \
+     PullRequestReviewThread { comments(first: 100, after: $endCursor) { nodes { author { login } \
+     body viewerDidAuthor } pageInfo { hasNextPage endCursor } } } } }";
 /// GraphQL mutation used to add one reply to a pull-request review thread.
 const REPLY_TO_THREAD_MUTATION: &str =
     "mutation($threadId: ID!, $body: String!) { addPullRequestReviewThreadReply(input: { \
@@ -681,6 +681,7 @@ fn review_comment_from_node(node: GitHubReviewCommentNode) -> ReviewComment {
         author: node
             .author
             .map_or_else(|| "ghost".to_string(), |author| author.login),
+        authored_by_current_user: node.viewer_did_author,
         body: node.body,
     }
 }
@@ -814,6 +815,8 @@ struct GitHubThreadCommentsNode {
 struct GitHubReviewCommentNode {
     author: Option<GitHubReviewCommentAuthor>,
     body: String,
+    #[serde(default, rename = "viewerDidAuthor")]
+    viewer_did_author: bool,
 }
 
 /// GraphQL author node for a review comment. The `ghost` author is the only
@@ -1376,7 +1379,10 @@ mod tests {
         assert!(!unresolved.is_resolved);
         assert_eq!(unresolved.comments.len(), 2);
         assert_eq!(unresolved.comments[0].author, "alice");
+        assert!(!unresolved.comments[0].authored_by_current_user);
         assert_eq!(unresolved.comments[0].body, "Why aren't we handling None?");
+        assert!(unresolved.comments[1].authored_by_current_user);
+        assert!(unresolved.is_addressed_by_agentty());
 
         let resolved = &snapshot.threads[1];
         assert_eq!(resolved.path, "src/bar.rs");
@@ -1853,7 +1859,10 @@ mod tests {
             review_threads_page(vec![review_thread_node(ReviewThreadFixture {
                 comments: vec![
                     review_comment_node(Some("alice"), "Why aren't we handling None?"),
-                    review_comment_node(Some("bob"), "Good catch. Will fix."),
+                    current_user_review_comment_node(
+                        "No change needed.\n\n<!-- agentty review \
+                         resolution:123e4567-e89b-12d3-a456-426614174000 -->",
+                    ),
                 ],
                 diff_side: "RIGHT",
                 has_next_comment_page: false,
@@ -2020,7 +2029,16 @@ mod tests {
     fn review_comment_node(author: Option<&str>, body: &str) -> serde_json::Value {
         serde_json::json!({
             "author": author.map(|login| serde_json::json!({"login": login})),
-            "body": body
+            "body": body,
+            "viewerDidAuthor": false
+        })
+    }
+
+    fn current_user_review_comment_node(body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "author": {"login": "agentty"},
+            "body": body,
+            "viewerDidAuthor": true
         })
     }
 

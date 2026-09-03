@@ -610,6 +610,7 @@ mod tests {
             anchor_side: ReviewCommentAnchorSide::New,
             comments: vec![ReviewComment {
                 author: "alice".to_string(),
+                authored_by_current_user: false,
                 body: "Please explain this output.".to_string(),
             }],
             id: "thread-id".to_string(),
@@ -626,6 +627,7 @@ mod tests {
             anchor_side: ReviewCommentAnchorSide::File,
             comments: vec![ReviewComment {
                 author: "bob".to_string(),
+                authored_by_current_user: false,
                 body: "Please review the whole file.".to_string(),
             }],
             id: "thread-id".to_string(),
@@ -647,6 +649,7 @@ mod tests {
         ReviewCommentSnapshot {
             pr_level_comments: vec![ReviewComment {
                 author: "alice".to_string(),
+                authored_by_current_user: false,
                 body: "General comment".to_string(),
             }],
             threads: vec![thread],
@@ -1176,6 +1179,7 @@ mod tests {
         let snapshot = ReviewCommentSnapshot {
             pr_level_comments: vec![ReviewComment {
                 author: "bob".to_string(),
+                authored_by_current_user: false,
                 body: "General note".to_string(),
             }],
             threads: vec![inline_thread(2), inline_thread(3)],
@@ -1199,6 +1203,7 @@ mod tests {
         let snapshot = ReviewCommentSnapshot {
             pr_level_comments: vec![ReviewComment {
                 author: "bob".to_string(),
+                authored_by_current_user: false,
                 body: "Standalone note".to_string(),
             }],
             threads: vec![resolved, unresolved],
@@ -1227,6 +1232,7 @@ mod tests {
         let snapshot = ReviewCommentSnapshot {
             pr_level_comments: vec![ReviewComment {
                 author: "bob".to_string(),
+                authored_by_current_user: false,
                 body: "General note".to_string(),
             }],
             threads: vec![current, resolved, outdated],
@@ -1261,6 +1267,7 @@ mod tests {
         let snapshot = ReviewCommentSnapshot {
             pr_level_comments: vec![ReviewComment {
                 author: "bob".to_string(),
+                authored_by_current_user: false,
                 body: "Standalone note".to_string(),
             }],
             threads: vec![resolved],

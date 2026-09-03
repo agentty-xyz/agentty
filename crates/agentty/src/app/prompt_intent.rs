@@ -1554,6 +1554,7 @@ mod tests {
         ReviewCommentSnapshot {
             pr_level_comments: vec![ReviewComment {
                 author: "general-reviewer".to_string(),
+                authored_by_current_user: false,
                 body: "Update the overview.".to_string(),
             }],
             threads: vec![
@@ -1582,6 +1583,7 @@ mod tests {
             anchor_side: ReviewCommentAnchorSide::New,
             comments: vec![ReviewComment {
                 author: "inline-reviewer".to_string(),
+                authored_by_current_user: false,
                 body: "Add validation.".to_string(),
             }],
             id: id.to_string(),

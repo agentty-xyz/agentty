@@ -218,6 +218,7 @@ mod tests {
         ]);
         snapshot.pr_level_comments.push(ReviewComment {
             author: "reviewer".to_string(),
+            authored_by_current_user: false,
             body: "Standalone comment".to_string(),
         });
 
@@ -277,6 +278,7 @@ mod tests {
         let mut snapshot = snapshot_with_threads([thread("thread", false)]);
         snapshot.pr_level_comments.push(ReviewComment {
             author: "reviewer".to_string(),
+            authored_by_current_user: false,
             body: "Standalone comment".to_string(),
         });
         let rows = grouped_review_comment_rows(&snapshot);
@@ -394,6 +396,7 @@ mod tests {
             anchor_side: ReviewCommentAnchorSide::New,
             comments: vec![ReviewComment {
                 author: "reviewer".to_string(),
+                authored_by_current_user: false,
                 body: "Review comment".to_string(),
             }],
             id: id.to_string(),

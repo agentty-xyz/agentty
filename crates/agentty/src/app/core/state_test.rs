@@ -6108,6 +6108,7 @@ fn review_comment_snapshot() -> forge::ReviewCommentSnapshot {
     forge::ReviewCommentSnapshot {
         pr_level_comments: vec![forge::ReviewComment {
             author: "alice".to_string(),
+            authored_by_current_user: false,
             body: "Looks good.".to_string(),
         }],
         threads: Vec::new(),
