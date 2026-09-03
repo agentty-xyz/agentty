@@ -14,6 +14,7 @@ mod policy;
 mod provider;
 mod read;
 mod schema_contract;
+mod session;
 mod telemetry;
 mod tool;
 mod trace;
@@ -21,7 +22,8 @@ mod write;
 
 pub use file_system::{FileSystem, LocalFileSystem};
 pub use harness::{
-    ChatSession, Harness, ModelRequestActivity, ToolActivity, TurnError, TurnOutcome, TurnReport,
+    ChatSession, Harness, ModelRequestActivity, PersistentChatSession, ToolActivity, TurnError,
+    TurnOutcome, TurnReport,
 };
 pub use lifecycle::{
     LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, LifecycleObserverSet,
@@ -39,6 +41,7 @@ pub use provider::{
 };
 pub use read::{ReadError, ReadOutput};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
+pub use session::{Database, SessionConfig, SessionError, TimestampSource};
 pub use telemetry::LifecycleMetrics;
 pub use tool::{
     ReadAction, ReadArguments, ReadSide, Tool, ToolCall, ToolCallArguments, ToolDefinition,

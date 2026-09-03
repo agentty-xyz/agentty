@@ -34,11 +34,12 @@ For file-level detail, read the module docstrings directly.
   catalog and environment-backed configuration, private Qwen, Kimi, and Muse policies, a
   shared Chat Completions backend with JSON Object and JSON Schema modes,
   backend-neutral request-duration telemetry, and a deny-by-default `Harness` loop with
-  closed built-in `read` and `write` capabilities. The `read` tool provides bounded
-  worktree reads, path listing, literal search, host-bound diffs, and base/HEAD file
-  inspection; stale-safe patch writes and file reads use the injectable `FileSystem`
-  boundary. Application binaries own prompts, tool permissions, and telemetry setup; the
-  v0 read tool owns its fixed `main` comparison base.
+  closed built-in `read` and `write` capabilities. It also provides completed-turn-only
+  SQLite chat persistence with embedded migrations and bounded whole-turn reloads. The
+  `read` tool provides bounded worktree reads, path listing, literal search, host-bound
+  diffs, and base/HEAD file inspection; stale-safe patch writes and file reads use the
+  injectable `FileSystem` boundary. Application binaries own prompts, tool permissions,
+  and telemetry setup; the v0 read tool owns its fixed `main` comparison base.
 - `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
   process-level tests. It derives provider parsing and help from `ag-harness`, then owns
   command-line defaults, application prompts, bounded repository permission selection,

@@ -4,10 +4,10 @@ use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use ag_harness::{
-    CompletionMetadata, CompletionUsage, Harness, LifecycleEventKind, LifecycleMetrics,
+    CompletionMetadata, CompletionUsage, Database, Harness, LifecycleEventKind, LifecycleMetrics,
     LifecycleObserverSet, LifecycleTraceObserver, Model, ModelCompletion, ModelConfiguration,
     ModelError, ModelMetadata, ModelProvider, ModelRequest, ModelResponse, ModelWithMetadata,
-    OutputSchema, OutputSchemaError,
+    OutputSchema, OutputSchemaError, SessionConfig,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -104,6 +104,27 @@ async fn external_response_only_provider_implements_model() -> Result<(), Box<dy
     assert_model::<ExternalModel>();
     assert_eq!(response.output(), Some(&json!({ "name": "Ada" })));
     assert!(metadata.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_consumer_creates_and_reopens_persistent_session() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let database = Database::open_in_memory().await?;
+    let harness = Harness::new(ExternalModel);
+    let config = SessionConfig::new("external-session", request()?.schema().clone())
+        .with_system_prompt("Extract names");
+
+    // Act
+    let mut session = harness.create_session(&database, config).await?;
+    let first = session.send("Ada").await?;
+    drop(session);
+    let reopened = harness.open_session(&database, "external-session").await?;
+
+    // Assert
+    assert_eq!(first.output(), &json!({ "name": "Ada" }));
+    assert_eq!(reopened.id(), "external-session");
 
     Ok(())
 }
