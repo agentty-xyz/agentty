@@ -36,9 +36,9 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::chat_completion::{
-        ERROR_BODY_LIMIT_BYTES, RESPONSE_ENVELOPE_LIMIT_BYTES, STRUCTURED_OUTPUT_INSTRUCTION,
-        SUCCESS_BODY_LIMIT_BYTES,
+    use crate::chat_completion::STRUCTURED_OUTPUT_INSTRUCTION;
+    use crate::transport::{
+        ERROR_BODY_LIMIT_BYTES, RESPONSE_ENVELOPE_LIMIT_BYTES, SUCCESS_BODY_LIMIT_BYTES,
     };
     use crate::{model, schema_contract, tool};
 

@@ -103,9 +103,49 @@ where
 /// [`ModelClient::complete`], which owns telemetry and structured-output
 /// validation.
 pub struct ModelClient {
-    backend: chat_completion::ChatCompletionBackend,
+    backend: ModelBackend,
     lifecycle: LifecycleEmitter,
     metadata: ModelMetadata,
+}
+
+/// Provider-neutral result returned by an internal model backend.
+pub(crate) enum GeneratedResponse {
+    Failed {
+        error: ModelError,
+        metadata: CompletionMetadata,
+    },
+    Output {
+        metadata: CompletionMetadata,
+        output: String,
+    },
+    ToolCall {
+        call: tool::ToolCall,
+        metadata: CompletionMetadata,
+    },
+    ToolCalls {
+        calls: Vec<tool::ToolCall>,
+        metadata: CompletionMetadata,
+    },
+}
+
+impl GeneratedResponse {
+    pub(crate) fn failed(error: ModelError, metadata: CompletionMetadata) -> Self {
+        Self::Failed { error, metadata }
+    }
+}
+
+enum ModelBackend {
+    ChatCompletion(chat_completion::ChatCompletionBackend),
+    Codex(provider::CodexBackend),
+}
+
+impl ModelBackend {
+    async fn generate(&self, request: &ModelRequest) -> Result<GeneratedResponse, ModelError> {
+        match self {
+            Self::ChatCompletion(backend) => backend.generate(request).await,
+            Self::Codex(backend) => backend.generate(request).await,
+        }
+    }
 }
 
 impl ModelClient {
@@ -152,6 +192,23 @@ impl ModelClient {
             config.model,
             provider::QWEN_POLICY,
         )
+    }
+
+    pub(crate) fn codex(config: provider::CodexConfig) -> Result<Self, ModelMetadataError> {
+        Self::codex_backend(provider::CodexBackend::new(config))
+    }
+
+    pub(crate) fn codex_backend(
+        backend: provider::CodexBackend,
+    ) -> Result<Self, ModelMetadataError> {
+        let (provider, model) = backend.identity();
+        let metadata = ModelMetadata::new(provider, model)?;
+
+        Ok(Self {
+            backend: ModelBackend::Codex(backend),
+            lifecycle: LifecycleEmitter::default(),
+            metadata,
+        })
     }
 
     /// Returns the validated provider and model identity retained by the
@@ -204,10 +261,8 @@ impl ModelClient {
             None => operation.await,
         };
         let (result, failure_metadata) = match generated {
-            Ok(chat_completion::GeneratedResponse::Failed { error, metadata }) => {
-                (Err(error), Some(metadata))
-            }
-            Ok(chat_completion::GeneratedResponse::Output { metadata, output }) => {
+            Ok(GeneratedResponse::Failed { error, metadata }) => (Err(error), Some(metadata)),
+            Ok(GeneratedResponse::Output { metadata, output }) => {
                 match request.schema().parse_and_validate(&output) {
                     Ok(response) => (
                         Ok(ModelCompletion::new(
@@ -219,14 +274,14 @@ impl ModelClient {
                     Err(error) => (Err(ModelError::from(error)), Some(metadata)),
                 }
             }
-            Ok(chat_completion::GeneratedResponse::ToolCall { call, metadata }) => (
+            Ok(GeneratedResponse::ToolCall { call, metadata }) => (
                 Ok(ModelCompletion::new(
                     metadata,
                     ModelResponse::tool_call(call),
                 )),
                 None,
             ),
-            Ok(chat_completion::GeneratedResponse::ToolCalls { calls, metadata }) => (
+            Ok(GeneratedResponse::ToolCalls { calls, metadata }) => (
                 Ok(ModelCompletion::new(
                     metadata,
                     ModelResponse::tool_calls(calls),
@@ -265,7 +320,7 @@ impl ModelClient {
         let metadata = ModelMetadata::new(provider, model)?;
 
         Ok(Self {
-            backend,
+            backend: ModelBackend::ChatCompletion(backend),
             lifecycle: LifecycleEmitter::default(),
             metadata,
         })
@@ -821,6 +876,8 @@ pub enum ModelErrorType {
     InvalidResponse,
     /// The provider cannot satisfy the requested output contract.
     UnsupportedOutput,
+    /// The provider cannot satisfy a requested model capability.
+    UnsupportedCapability,
     /// The response exceeded a configured safety bound.
     ResponseTooLarge,
     /// Terminal output failed JSON parsing or local schema validation.
@@ -839,6 +896,7 @@ impl ModelErrorType {
             Self::InvalidProviderResponse => telemetry::ERROR_INVALID_PROVIDER_RESPONSE,
             Self::InvalidResponse => telemetry::ERROR_INVALID_RESPONSE,
             Self::UnsupportedOutput => telemetry::ERROR_UNSUPPORTED_OUTPUT,
+            Self::UnsupportedCapability => telemetry::ERROR_UNSUPPORTED_CAPABILITY,
             Self::ResponseTooLarge => telemetry::ERROR_RESPONSE_TOO_LARGE,
             Self::InvalidOutput => telemetry::ERROR_INVALID_OUTPUT,
             Self::InvalidToolCall => telemetry::ERROR_INVALID_TOOL_CALL,
@@ -1614,26 +1672,38 @@ mod tests {
                 .into_iter()
                 .all(|(actual, expected, status)| actual == expected && status.is_none())
         );
-        assert_eq!(ModelErrorType::Request.as_str(), "request_error");
-        assert_eq!(ModelErrorType::Transport.as_str(), "transport_error");
-        assert_eq!(ModelErrorType::Provider.as_str(), "provider_error");
-        assert_eq!(
-            ModelErrorType::InvalidProviderResponse.as_str(),
-            "invalid_provider_response"
-        );
-        assert_eq!(ModelErrorType::InvalidResponse.as_str(), "invalid_response");
-        assert_eq!(
-            ModelErrorType::UnsupportedOutput.as_str(),
-            "unsupported_output"
-        );
-        assert_eq!(
-            ModelErrorType::ResponseTooLarge.as_str(),
-            "response_too_large"
-        );
-        assert_eq!(ModelErrorType::InvalidOutput.as_str(), "invalid_output");
-        assert_eq!(
-            ModelErrorType::InvalidToolCall.as_str(),
-            "invalid_tool_call"
+    }
+
+    #[test]
+    fn model_error_types_expose_stable_telemetry_values() {
+        // Arrange
+        let values = [
+            (ModelErrorType::Request, "request_error"),
+            (ModelErrorType::Transport, "transport_error"),
+            (ModelErrorType::Provider, "provider_error"),
+            (
+                ModelErrorType::InvalidProviderResponse,
+                "invalid_provider_response",
+            ),
+            (ModelErrorType::InvalidResponse, "invalid_response"),
+            (
+                ModelErrorType::UnsupportedCapability,
+                "unsupported_capability",
+            ),
+            (ModelErrorType::UnsupportedOutput, "unsupported_output"),
+            (ModelErrorType::ResponseTooLarge, "response_too_large"),
+            (ModelErrorType::InvalidOutput, "invalid_output"),
+            (ModelErrorType::InvalidToolCall, "invalid_tool_call"),
+        ];
+
+        // Act
+        let values = values.map(|(error_type, expected)| (error_type.as_str(), expected));
+
+        // Assert
+        assert!(
+            values
+                .into_iter()
+                .all(|(actual, expected)| actual == expected)
         );
     }
 

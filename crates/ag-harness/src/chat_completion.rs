@@ -9,19 +9,14 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::transport::{ERROR_BODY_LIMIT_BYTES, SUCCESS_BODY_LIMIT_BYTES};
 use crate::{model, schema_contract, tool};
 
-pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
-const JSON_STRING_MAX_EXPANSION: usize = 6;
 const MAX_RATE_LIMIT_RETRIES: usize = 5;
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_TRANSPORT_RETRIES: usize = 1;
-pub(crate) const RESPONSE_ENVELOPE_LIMIT_BYTES: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_mins(1);
 const RETRY_DELAY: Duration = Duration::from_secs(1);
-pub(crate) const SUCCESS_BODY_LIMIT_BYTES: usize = schema_contract::RESPONSE_CONTENT_LIMIT_BYTES
-    * JSON_STRING_MAX_EXPANSION
-    + RESPONSE_ENVELOPE_LIMIT_BYTES;
 pub(crate) const STRUCTURED_OUTPUT_INSTRUCTION: &str = concat!(
     "Return only one JSON object. The object must validate against this JSON Schema. ",
     "Do not include Markdown fences or any other text.\n\nJSON Schema:\n",
@@ -69,32 +64,6 @@ pub(crate) struct ChatCompletionProviderPolicy {
     pub(crate) unsupported_schema_reason: &'static str,
 }
 
-/// Provider-neutral result of decoding one Chat Completions choice.
-pub(crate) enum GeneratedResponse {
-    Failed {
-        error: model::ModelError,
-        metadata: model::CompletionMetadata,
-    },
-    Output {
-        metadata: model::CompletionMetadata,
-        output: String,
-    },
-    ToolCall {
-        call: tool::ToolCall,
-        metadata: model::CompletionMetadata,
-    },
-    ToolCalls {
-        calls: Vec<tool::ToolCall>,
-        metadata: model::CompletionMetadata,
-    },
-}
-
-impl GeneratedResponse {
-    fn failed(error: model::ModelError, metadata: model::CompletionMetadata) -> Self {
-        Self::Failed { error, metadata }
-    }
-}
-
 /// Shared structured-output backend for OpenAI-compatible Chat Completions
 /// APIs.
 pub(crate) struct ChatCompletionBackend {
@@ -125,7 +94,7 @@ impl ChatCompletionBackend {
     pub(crate) async fn generate(
         &self,
         request: &model::ModelRequest,
-    ) -> Result<GeneratedResponse, model::ModelError> {
+    ) -> Result<model::GeneratedResponse, model::ModelError> {
         if !request.schema().has_object_root() {
             return Err(model::ModelError::UnsupportedOutputSchema {
                 reason: self.policy.unsupported_schema_reason.to_string(),
@@ -157,13 +126,15 @@ impl ChatCompletionBackend {
             .ok_or(model::ModelError::InvalidResponse)?;
         let (metadata, content, reasoning_content, tool_calls) = completion.into_parts();
         match metadata.finish_reason() {
-            "stop" if !tool_calls.is_empty() => Ok(GeneratedResponse::failed(
+            "stop" if !tool_calls.is_empty() => Ok(model::GeneratedResponse::failed(
                 model::ModelError::TerminalResponseWithToolCalls,
                 metadata,
             )),
             "stop" => Ok(match content {
-                Some(output) => GeneratedResponse::Output { metadata, output },
-                None => GeneratedResponse::failed(model::ModelError::InvalidResponse, metadata),
+                Some(output) => model::GeneratedResponse::Output { metadata, output },
+                None => {
+                    model::GeneratedResponse::failed(model::ModelError::InvalidResponse, metadata)
+                }
             }),
             "tool_calls" => Ok(Self::decode_tool_call(
                 request,
@@ -179,7 +150,7 @@ impl ChatCompletionBackend {
             _ => {
                 let reason = schema_contract::bounded_diagnostic(metadata.finish_reason());
 
-                Ok(GeneratedResponse::failed(
+                Ok(model::GeneratedResponse::failed(
                     model::ModelError::IncompleteResponse { reason },
                     metadata,
                 ))
@@ -351,14 +322,14 @@ impl ChatCompletionBackend {
         reasoning_content: Option<&str>,
         calls: Vec<ChatCompletionToolCall>,
         metadata: model::CompletionMetadata,
-    ) -> GeneratedResponse {
+    ) -> model::GeneratedResponse {
         match Self::decode_tool_call_parts(request, content, reasoning_content, calls) {
-            Ok(mut calls) if calls.len() == 1 => GeneratedResponse::ToolCall {
+            Ok(mut calls) if calls.len() == 1 => model::GeneratedResponse::ToolCall {
                 call: calls.remove(0),
                 metadata,
             },
-            Ok(calls) => GeneratedResponse::ToolCalls { calls, metadata },
-            Err(error) => GeneratedResponse::failed(error, metadata),
+            Ok(calls) => model::GeneratedResponse::ToolCalls { calls, metadata },
+            Err(error) => model::GeneratedResponse::failed(error, metadata),
         }
     }
 
@@ -1259,7 +1230,7 @@ mod tests {
         // Assert
         assert!(matches!(
             response,
-            GeneratedResponse::ToolCall {
+            model::GeneratedResponse::ToolCall {
                 ref call,
                 ref metadata,
             } if metadata.finish_reason() == "tool_calls"
@@ -1301,7 +1272,7 @@ mod tests {
         // Assert
         assert!(matches!(
             response,
-            GeneratedResponse::Failed {
+            model::GeneratedResponse::Failed {
                 error: model::ModelError::InvalidToolArguments { .. },
                 metadata,
             } if metadata.finish_reason() == "tool_calls"
@@ -1338,7 +1309,7 @@ mod tests {
         // Assert
         assert!(matches!(
             response,
-            GeneratedResponse::ToolCall { ref call, .. }
+            model::GeneratedResponse::ToolCall { ref call, .. }
                 if call.read_arguments().is_some_and(|arguments| {
                     arguments.validation_error()
                         == Some("search requires a query and accepts only an optional path and limit")
@@ -1376,7 +1347,7 @@ mod tests {
         // Assert
         assert!(matches!(
             response,
-            GeneratedResponse::Failed {
+            model::GeneratedResponse::Failed {
                 error: model::ModelError::InvalidToolArguments { .. },
                 ..
             }
@@ -1417,7 +1388,7 @@ mod tests {
         // Assert
         assert!(matches!(
             response,
-            GeneratedResponse::ToolCalls { calls, metadata }
+            model::GeneratedResponse::ToolCalls { calls, metadata }
                 if metadata.finish_reason() == "tool_calls"
                     && calls.len() == 2
                     && calls[0].read_arguments().is_some_and(|arguments| {
@@ -1462,7 +1433,7 @@ mod tests {
         // Assert
         assert!(matches!(
             response,
-            GeneratedResponse::Failed {
+            model::GeneratedResponse::Failed {
                 error: model::ModelError::DuplicateToolCallId { id },
                 metadata,
             } if id == "duplicate_call" && metadata.finish_reason() == "tool_calls"
