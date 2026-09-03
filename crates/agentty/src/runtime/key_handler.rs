@@ -299,10 +299,20 @@ async fn create_selected_session(app: &mut App) -> io::Result<()> {
         mode,
         project_id,
     });
-    let session_id = app
-        .drive_session_request(request)
-        .await
-        .map_err(io::Error::other)?;
+    let session_id = match app.drive_session_request(request).await {
+        Ok(session_id) => session_id,
+        Err(error) => {
+            app.mode = AppMode::SyncBlockedPopup {
+                default_branch: None,
+                is_loading: false,
+                message: error.to_string(),
+                project_name: None,
+                title: "Session creation unavailable".to_string(),
+            };
+
+            return Ok(());
+        }
+    };
     mode::list::open_session_prompt(app, session_id.into());
 
     Ok(())
@@ -1170,6 +1180,47 @@ mod tests {
                 } if !session_id.is_empty()
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn test_session_creation_rejection_stays_in_terminal_ui() {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        let project_id = app.active_project_id();
+        app.project_sync_status = Some(crate::app::ProjectSyncStatus {
+            context: crate::app::ProjectSyncContext {
+                default_branch: "main".to_string(),
+                operation_id: 1,
+                project_id,
+                project_name: "agentty".to_string(),
+            },
+            phase: crate::app::ProjectSyncPhase::Running,
+        });
+        app.mode = AppMode::SessionCreation {
+            selected_option_index: 0,
+        };
+
+        // Act
+        let result = handle_session_creation_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert!(app.sessions.sessions().is_empty());
+        assert!(matches!(
+            app.mode,
+            AppMode::SyncBlockedPopup {
+                is_loading: false,
+                ref message,
+                ref title,
+                ..
+            } if title == "Session creation unavailable"
+                && message.contains("is synchronizing `main`")
+        ));
     }
 
     #[tokio::test]

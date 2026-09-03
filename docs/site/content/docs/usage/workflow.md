@@ -83,15 +83,15 @@ New session worktrees start from the local active base branch. If local `main` i
 List-mode sync stays non-modal: you can navigate, switch projects, inspect sessions, and
 continue work already running in isolated session worktrees while it proceeds. Agentty
 coalesces repeated `s` presses for the same project and queues one request per other
-project in FIFO order. Operations that read or change the syncing project's base
+project in FIFO order. Operations that change the syncing project's base
 checkout—creating or starting a draft session, merging, and rebasing—return a retryable
-workflow error until sync finishes; other projects remain available. Existing merge work
-has priority: requesting sync while a merge is active or queued reports retryable
-guidance in the status bar, and a queued merge rechecks the sync guard before it starts.
-If the sync stops on rebase conflicts, the status bar reports the number of files handed
-to the assist agent. Completion, blocked preflight, and failure summaries remain in that
-bar for ten seconds instead of opening a popup, then the page's normal `FYI:` message
-returns.
+workflow error until sync finishes; the TUI keeps running and shows that guidance
+in-app. Other projects remain available. Existing merge work has priority: requesting
+sync while a merge is active or queued reports retryable guidance in the status bar, and
+a queued merge rechecks the sync guard before it starts. If the sync stops on rebase
+conflicts, the status bar reports the number of files handed to the assist agent.
+Completion, blocked preflight, and failure summaries remain in that bar for ten seconds
+instead of opening a popup, then the page's normal `FYI:` message returns.
 
 ## Session Lifecycle
 
