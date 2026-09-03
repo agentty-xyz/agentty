@@ -1093,7 +1093,7 @@ mod tests {
         runner.start_sync_main(
             app_event_tx,
             operation.clone(),
-            AgentModel::Gemini37Flash,
+            AgentModel::Gemini38Flash,
             sync_context,
         );
         let event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
@@ -1196,7 +1196,7 @@ mod tests {
             .run_sync_main(SyncMainRequest {
                 app_event_tx,
                 operation: operation.clone(),
-                session_model: AgentModel::Gemini37Flash,
+                session_model: AgentModel::Gemini38Flash,
                 sync_context,
             })
             .await;

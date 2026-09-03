@@ -410,7 +410,7 @@ mod tests {
             local_image_path: attachment_directory.join("one.png"),
         };
         let backend = supported_backend();
-        let requested_model = "gemini-3.7-flash";
+        let requested_model = "gemini-3.8-flash";
 
         // Act
         let command = AgentBackend::build_command(

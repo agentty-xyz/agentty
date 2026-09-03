@@ -1525,7 +1525,7 @@ mod tests {
         let loaded_selection = load_default_smart_agent_setting(
             &services,
             Some(project_id),
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash),
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         )
         .await;
 
@@ -1811,7 +1811,7 @@ mod tests {
         );
         assert_eq!(
             settings.default_fast_selection,
-            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini37Flash)
+            AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash)
         );
         assert_eq!(
             settings.default_review_selection,
@@ -1829,7 +1829,7 @@ mod tests {
             ),
             (
                 SettingName::DefaultFastModel,
-                AgentModel::Gemini37Flash.as_str(),
+                AgentModel::Gemini38Flash.as_str(),
             ),
             (SettingName::DefaultFastAgent, AgentKind::Antigravity.name()),
             (

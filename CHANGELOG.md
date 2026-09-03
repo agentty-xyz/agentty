@@ -9,6 +9,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- agentty: replace Gemini 3.7 Flash with Gemini 3.8 Flash for the Gemini and Antigravity
+  providers, migrating persisted selections to the replacement.
 - ag-harness: replace the Muse Spark 1.2 model catalog with Muse Spark 1.3.
 
 ## [v0.15.9] - 2026-08-31

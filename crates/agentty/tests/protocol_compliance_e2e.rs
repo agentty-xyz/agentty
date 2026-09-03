@@ -54,13 +54,13 @@ async fn codex_protocol_compliance_e2e() {
     }
 }
 
-/// Verifies real Gemini Flash (`gemini-3.7-flash`) turn execution
+/// Verifies real Gemini Flash (`gemini-3.8-flash`) turn execution
 /// through `create_agent_channel()` yields a non-empty protocol `answer`.
 #[tokio::test]
 #[ignore = "requires real Gemini CLI credentials and network"]
 async fn gemini_flash_protocol_compliance_e2e() {
     // Arrange
-    let model = AgentModel::Gemini37Flash;
+    let model = AgentModel::Gemini38Flash;
     if provider_preflight_skip_reason(AgentKind::Gemini)
         .await
         .is_some()

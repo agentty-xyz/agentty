@@ -2208,7 +2208,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 "session-id",
-                "gemini-3.7-flash",
+                "gemini-3.8-flash",
                 "main",
                 "Review",
                 project_id,

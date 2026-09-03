@@ -187,7 +187,7 @@ entries with different trade-offs between speed, quality, and cost.
 Both providers share the same Gemini model ids:
 
 - `gemini-3.1-pro-preview` (default): Higher-quality Gemini model for deeper reasoning.
-- `gemini-3.7-flash`: Fast Gemini model for agentic and multimodal tasks.
+- `gemini-3.8-flash`: Fast Gemini model for agentic and multimodal tasks.
 - `gemini-3.5-flash-lite`: Lightweight Gemini model for fast, cost-conscious workloads.
 
 ### Claude Models

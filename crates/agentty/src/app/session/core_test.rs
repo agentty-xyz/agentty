@@ -742,7 +742,7 @@ fn add_manual_session_with_status(
         role: SessionRole::default(),
         agent: crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
-            crate::domain::agent::AgentModel::Gemini37Flash,
+            crate::domain::agent::AgentModel::Gemini38Flash,
         ),
         parent_session_id: None,
         permission_mode: PermissionMode::AutoEdit,
@@ -2945,7 +2945,7 @@ async fn test_reply_first_message_uses_full_prompt_text_as_title() {
             &session_id,
             prompt,
             Arc::new(backend),
-            AgentModel::Gemini37Flash,
+            AgentModel::Gemini38Flash,
         )
         .await;
 
@@ -3569,7 +3569,7 @@ async fn test_create_session_uses_default_smart_model_setting_and_most_recent_pe
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("alpha0001", "gemini-3.7-flash", "main", "Done", project_id)
+        .insert_session("alpha0001", "gemini-3.8-flash", "main", "Done", project_id)
         .await
         .expect("failed to insert alpha0001");
     db.sessions()
@@ -3639,7 +3639,7 @@ async fn test_load_existing_sessions_ordered_by_updated_at_desc() {
         .await
         .expect("failed to insert alpha000");
     db.sessions()
-        .insert_session("beta0000", "gemini-3.7-flash", "main", "Done", project_id)
+        .insert_session("beta0000", "gemini-3.8-flash", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
 
@@ -3838,7 +3838,7 @@ async fn test_refresh_sessions_if_needed_reloads_and_preserves_selection() {
     db.sessions()
         .insert_session(
             "alpha000",
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             "InProgress",
             project_id,
@@ -3908,7 +3908,7 @@ async fn test_periodic_session_refresh_preserves_focused_review_states() {
         db.sessions()
             .insert_session(
                 session_id,
-                "gemini-3.7-flash",
+                "gemini-3.8-flash",
                 "main",
                 &Status::Review.to_string(),
                 project_id,
@@ -4010,7 +4010,7 @@ async fn test_refresh_sessions_loads_question_detail_when_another_session_is_sel
     db.sessions()
         .insert_session(
             "alpha000",
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             "Question",
             project_id,
@@ -4108,7 +4108,7 @@ async fn test_refresh_sessions_loads_diff_help_detail_when_another_session_is_se
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("alpha000", "gemini-3.7-flash", "main", "Review", project_id)
+        .insert_session("alpha000", "gemini-3.8-flash", "main", "Review", project_id)
         .await
         .expect("failed to insert alpha000");
     db.sessions()
@@ -4222,7 +4222,7 @@ async fn test_load_done_session_without_folder_kept() {
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("missing01", "gemini-3.7-flash", "main", "Done", project_id)
+        .insert_session("missing01", "gemini-3.8-flash", "main", "Done", project_id)
         .await
         .expect("failed to insert");
 
@@ -4254,7 +4254,7 @@ async fn test_load_in_progress_session_without_folder_skipped() {
     db.sessions()
         .insert_session(
             "missing02",
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             "InProgress",
             project_id,
@@ -6069,7 +6069,7 @@ async fn test_sync_main_uses_active_project_branch_from_context() {
         app.projects.working_dir().to_path_buf(),
         None,
         Arc::new(mock_git_client),
-        AgentModel::Gemini37Flash,
+        AgentModel::Gemini38Flash,
     )
     .await;
 
@@ -6107,7 +6107,7 @@ async fn test_sync_main_requires_clean_selected_project_branch() {
         app.projects.working_dir().to_path_buf(),
         None,
         Arc::new(mock_git_client),
-        AgentModel::Gemini37Flash,
+        AgentModel::Gemini38Flash,
     )
     .await;
 
@@ -6132,7 +6132,7 @@ async fn test_sync_main_returns_error_without_upstream_remote() {
         app.projects.working_dir().to_path_buf(),
         None,
         app.services.git_client(),
-        AgentModel::Gemini37Flash,
+        AgentModel::Gemini38Flash,
     )
     .await;
 
@@ -6195,7 +6195,7 @@ async fn test_sync_main_pushes_local_commits_to_remote() {
         dir.path().to_path_buf(),
         None,
         Arc::new(mock_git_client),
-        AgentModel::Gemini37Flash,
+        AgentModel::Gemini38Flash,
     )
     .await;
 

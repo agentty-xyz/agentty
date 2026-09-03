@@ -1000,7 +1000,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 session_id,
-                "gemini-3.7-flash",
+                "gemini-3.8-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -1084,7 +1084,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 &session_id,
-                "gemini-3.7-flash",
+                "gemini-3.8-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -1150,7 +1150,7 @@ mod tests {
         db.sessions()
             .insert_session(
                 session_with_worktree_id,
-                "gemini-3.7-flash",
+                "gemini-3.8-flash",
                 "main",
                 "Draft",
                 project_id,
@@ -1160,7 +1160,7 @@ mod tests {
         db.sessions()
             .insert_draft_session(
                 session_without_worktree_id,
-                "gemini-3.7-flash",
+                "gemini-3.8-flash",
                 "main",
                 "Draft",
                 project_id,
@@ -1212,7 +1212,7 @@ mod tests {
 
         let session_id = "test-session";
         db.sessions()
-            .insert_session(session_id, "gemini-3.7-flash", "main", "Review", project_id)
+            .insert_session(session_id, "gemini-3.8-flash", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         db.sessions()
@@ -1295,7 +1295,7 @@ mod tests {
 
         let session_id = "inactive-session";
         db.sessions()
-            .insert_session(session_id, "gemini-3.7-flash", "main", "Review", project_id)
+            .insert_session(session_id, "gemini-3.8-flash", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         db.sessions()
@@ -1366,7 +1366,7 @@ mod tests {
 
         let session_id = "active-session";
         db.sessions()
-            .insert_session(session_id, "gemini-3.7-flash", "main", "Review", project_id)
+            .insert_session(session_id, "gemini-3.8-flash", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         db.sessions()
@@ -1458,7 +1458,7 @@ mod tests {
 
         let session_id = "test-session";
         db.sessions()
-            .insert_session(session_id, "gemini-3.7-flash", "main", "Done", project_id)
+            .insert_session(session_id, "gemini-3.8-flash", "main", "Done", project_id)
             .await
             .expect("failed to insert session");
 
@@ -1841,7 +1841,7 @@ WHERE id = ?
 
         let session_id = "test-session";
         db.sessions()
-            .insert_session(session_id, "gemini-3.7-flash", "main", "Done", project_id)
+            .insert_session(session_id, "gemini-3.8-flash", "main", "Done", project_id)
             .await
             .expect("failed to insert session");
         db.reviews()

@@ -1009,7 +1009,7 @@ async fn test_new_prefers_active_session_for_initial_selection() {
         .sessions()
         .insert_session(
             active_session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -1020,7 +1020,7 @@ async fn test_new_prefers_active_session_for_initial_selection() {
         .sessions()
         .insert_session(
             archive_session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             &Status::Done.to_string(),
             project_id,
@@ -1155,7 +1155,7 @@ async fn test_new_with_clients_falls_back_from_stale_active_project_and_loads_cu
         .sessions()
         .insert_session(
             current_session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             &Status::Review.to_string(),
             current_project_id,
@@ -1166,7 +1166,7 @@ async fn test_new_with_clients_falls_back_from_stale_active_project_and_loads_cu
         .sessions()
         .insert_session(
             missing_session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             &Status::Review.to_string(),
             missing_project_id,
@@ -3132,7 +3132,7 @@ async fn superseded_project_sync_completions_do_not_reconcile_session_state() {
         .sessions()
         .insert_session(
             session_id,
-            AgentModel::Gemini37Flash.as_str(),
+            AgentModel::Gemini38Flash.as_str(),
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -3752,7 +3752,7 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
     // Act
     event_batch.collect_event(AppEvent::SessionModelUpdated {
         session_id: "session-a".into(),
-        session_agent: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini37Flash),
+        session_agent: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini38Flash),
     });
     event_batch.collect_event(AppEvent::SessionModelUpdated {
         session_id: "session-a".into(),
@@ -4319,7 +4319,7 @@ async fn apply_app_events_review_request_status_transition_updates_session() {
         .sessions()
         .insert_session(
             session_id,
-            AgentModel::Gemini37Flash.as_str(),
+            AgentModel::Gemini38Flash.as_str(),
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -4376,7 +4376,7 @@ async fn apply_app_events_review_request_status_survives_same_batch_sync_refresh
         .sessions()
         .insert_session(
             session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -5589,7 +5589,7 @@ async fn apply_app_events_refresh_keeps_viewed_merging_session_without_worktree(
         .sessions()
         .insert_session(
             "session-1",
-            AgentModel::Gemini37Flash.as_str(),
+            AgentModel::Gemini38Flash.as_str(),
             "main",
             &Status::Merging.to_string(),
             project_id,
@@ -5849,7 +5849,7 @@ async fn apply_app_events_refresh_projects_reloads_project_active_session_count(
         .sessions()
         .insert_session(
             "session-active",
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -7031,7 +7031,7 @@ async fn insert_review_session_with_data_dir(app: &App, session_id: &str) {
         .sessions()
         .insert_session(
             session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             &Status::Review.to_string(),
             app.active_project_id(),
@@ -7231,7 +7231,7 @@ async fn manual_sync_surfaces_restack_failure_and_keeps_parent_merged() {
         .sessions()
         .insert_stacked_draft_session(
             "child-session",
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "wt/parent",
             &Status::Draft.to_string(),
             session_id,
@@ -7341,7 +7341,7 @@ async fn test_apply_review_request_status_update_persists_summary() {
         .sessions()
         .insert_session(
             session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -7399,7 +7399,7 @@ async fn test_apply_review_request_status_update_closed_cancels_session() {
         .sessions()
         .insert_session(
             session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -7458,7 +7458,7 @@ async fn test_apply_review_request_status_update_closed_cancels_stacked_child() 
         .sessions()
         .insert_session(
             session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "main",
             &Status::Review.to_string(),
             project_id,
@@ -7470,7 +7470,7 @@ async fn test_apply_review_request_status_update_closed_cancels_stacked_child() 
         .sessions()
         .insert_stacked_draft_session(
             child_session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "wt/session",
             &Status::Draft.to_string(),
             session_id,
@@ -7669,7 +7669,7 @@ async fn test_apply_review_request_status_update_merged_restacks_stacked_child()
         .sessions()
         .insert_stacked_draft_session(
             child_session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "wt/session",
             &Status::Draft.to_string(),
             session_id,
@@ -7767,7 +7767,7 @@ async fn manual_sync_archives_merged_parent_and_merged_stacked_child() {
         .sessions()
         .insert_stacked_draft_session(
             child_session_id,
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "wt/session-id",
             &Status::Review.to_string(),
             parent_session_id,
