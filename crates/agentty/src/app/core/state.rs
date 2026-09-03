@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use ag_agent::{AgentAvailabilityProbe, AppServerClient, RealAgentAvailabilityProbe};
 #[cfg(test)]
@@ -28,8 +29,8 @@ use app::session::SessionManager;
 use app::session_runtime::SessionRuntime;
 use app::setting::SettingsManager;
 use app::sync::{
-    ProjectSyncContext, ProjectSyncPhase, ProjectSyncStatus, SyncMainCompletion, SyncMainRequest,
-    SyncMainRunner,
+    PROJECT_SYNC_STATUS_VISIBLE_DURATION, ProjectSyncContext, ProjectSyncPhase, ProjectSyncStatus,
+    SyncMainCompletion, SyncMainRequest, SyncMainRunner,
 };
 use app::tab::TabManager;
 use app::{sync, task};
@@ -307,6 +308,8 @@ pub struct App {
     pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
     /// Latest non-modal explicit project-sync lifecycle state.
     pub(crate) project_sync_status: Option<ProjectSyncStatus>,
+    /// Deadline after which the terminal project-sync result is removed.
+    pub(crate) project_sync_status_expires_at: Option<Instant>,
     /// Owns the active-project sync orchestrator command and context
     /// channels.
     pub(crate) sync_handle: sync::SyncHandle,
@@ -1570,6 +1573,7 @@ impl App {
                     message: "a merge is active or queued; try again after it finishes".to_string(),
                 },
             });
+            self.schedule_project_sync_status_expiry();
             self.mark_dirty();
 
             return;
@@ -1606,6 +1610,7 @@ impl App {
 
     /// Starts one request after the foreground mutation slot is reserved.
     fn dispatch_sync_main_request(&mut self, request: SyncMainRequest) {
+        self.project_sync_status_expires_at = None;
         self.project_sync_status = Some(ProjectSyncStatus {
             context: request.operation.clone(),
             phase: ProjectSyncPhase::Running,
@@ -1618,6 +1623,26 @@ impl App {
             request.session_model,
             request.sync_context,
         );
+    }
+
+    /// Keeps the current terminal sync result visible for a short period.
+    pub(super) fn schedule_project_sync_status_expiry(&mut self) {
+        self.project_sync_status_expires_at =
+            Some(self.services.clock().now_instant() + PROJECT_SYNC_STATUS_VISIBLE_DURATION);
+    }
+
+    /// Clears a terminal sync result once its visibility deadline is reached.
+    pub(crate) fn expire_project_sync_status(&mut self, now: Instant) {
+        if self
+            .project_sync_status_expires_at
+            .is_none_or(|expires_at| now < expires_at)
+        {
+            return;
+        }
+
+        self.project_sync_status = None;
+        self.project_sync_status_expires_at = None;
+        self.mark_dirty();
     }
 
     /// Starts the oldest queued project sync when base-checkout mutation is

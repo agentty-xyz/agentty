@@ -30,6 +30,8 @@ use crate::domain::session::{ReviewRequestState, SessionId};
 
 /// Seconds between background read-only sync passes.
 const SYNC_TICK_INTERVAL_SECONDS: u64 = 30;
+/// Duration terminal project-sync results remain visible in the status bar.
+pub(crate) const PROJECT_SYNC_STATUS_VISIBLE_DURATION: Duration = Duration::from_secs(10);
 /// Number of ticks between review-request refresh passes, so forge CLIs are
 /// polled at half the git-status cadence.
 const REVIEW_REQUEST_PASS_TICKS: u64 = 2;

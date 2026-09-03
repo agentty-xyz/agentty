@@ -3018,6 +3018,71 @@ async fn project_sync_completion_preserves_the_active_navigation_mode() {
             ..
         })
     ));
+    assert!(app.project_sync_status_expires_at.is_some());
+}
+
+#[tokio::test]
+async fn project_sync_terminal_status_expires_at_its_deadline() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let project_id = app.active_project_id();
+    app.project_sync_status = Some(sync::ProjectSyncStatus {
+        context: sync::ProjectSyncContext {
+            default_branch: "main".to_string(),
+            operation_id: 1,
+            project_id,
+            project_name: "agentty".to_string(),
+        },
+        phase: sync::ProjectSyncPhase::Running,
+    });
+    app.apply_app_events(successful_manual_sync(project_id, "main", 2))
+        .await;
+    let expires_at = app
+        .project_sync_status_expires_at
+        .expect("terminal sync status should have an expiry");
+
+    // Act
+    app.expire_project_sync_status(
+        expires_at
+            .checked_sub(Duration::from_millis(1))
+            .expect("sync status expiry should be after the monotonic clock origin"),
+    );
+
+    // Assert
+    assert!(app.project_sync_status.is_some());
+
+    // Act
+    app.clear_redraw();
+    app.expire_project_sync_status(expires_at);
+
+    // Assert
+    assert!(app.project_sync_status.is_none());
+    assert!(app.project_sync_status_expires_at.is_none());
+    assert!(app.needs_redraw());
+}
+
+#[tokio::test]
+async fn project_sync_running_status_has_no_expiry() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let mut sync_main_runner = crate::app::MockSyncMainRunner::new();
+    sync_main_runner
+        .expect_start_sync_main()
+        .times(1)
+        .returning(|_, _, _, _| {});
+    app.sync_main_runner = Arc::new(sync_main_runner);
+
+    // Act
+    app.start_sync_main();
+    let future = app.services.clock().now_instant() + Duration::from_secs(60);
+    app.expire_project_sync_status(future);
+
+    // Assert
+    assert!(matches!(
+        app.project_sync_status.as_ref().map(|status| &status.phase),
+        Some(sync::ProjectSyncPhase::Running)
+    ));
+    assert!(app.project_sync_status_expires_at.is_none());
 }
 
 #[tokio::test]
@@ -3349,6 +3414,7 @@ async fn project_sync_is_blocked_while_merge_work_is_pending() {
         Some(sync::ProjectSyncPhase::Blocked { message })
             if message.contains("merge is active or queued")
     ));
+    assert!(app.project_sync_status_expires_at.is_some());
 }
 
 #[tokio::test]
