@@ -2594,7 +2594,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             role: SessionRole::default(),
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini37Flash,
+                AgentModel::Gemini38Flash,
             ),
             parent_session_id: None,
             permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
@@ -2688,7 +2688,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             role: SessionRole::default(),
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini37Flash,
+                AgentModel::Gemini38Flash,
             ),
             parent_session_id: None,
             permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
@@ -2736,7 +2736,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             role: SessionRole::default(),
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini37Flash,
+                AgentModel::Gemini38Flash,
             ),
             parent_session_id: None,
             permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
@@ -2784,7 +2784,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             role: SessionRole::default(),
             agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                AgentModel::Gemini37Flash,
+                AgentModel::Gemini38Flash,
             ),
             parent_session_id: None,
             permission_mode: crate::domain::permission::PermissionMode::AutoEdit,

@@ -1365,7 +1365,7 @@ mod tests {
             role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini37Flash,
+                crate::domain::agent::AgentModel::Gemini38Flash,
             ),
             parent_session_id: None,
             permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
@@ -1446,7 +1446,7 @@ mod tests {
             role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini37Flash,
+                crate::domain::agent::AgentModel::Gemini38Flash,
             ),
             parent_session_id: None,
             permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
@@ -1523,7 +1523,7 @@ mod tests {
             .sessions()
             .insert_session(
                 session_id,
-                "gemini-3.7-flash",
+                "gemini-3.8-flash",
                 "main",
                 "InProgress",
                 project_id,
@@ -3186,7 +3186,7 @@ mod tests {
             role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Antigravity,
-                crate::domain::agent::AgentModel::Gemini37Flash,
+                crate::domain::agent::AgentModel::Gemini38Flash,
             ),
             parent_session_id: None,
             permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
