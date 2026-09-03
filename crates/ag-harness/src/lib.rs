@@ -33,7 +33,7 @@ pub use model::{
     ModelWithMetadata,
 };
 pub use provider::{
-    KIMI_K2_6, KimiConfig, MUSE_SPARK_1_2, MUSE_SPARK_1_2_CONTRIBUTOR, ModelConfiguration,
+    KIMI_K2_6, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, ModelConfiguration,
     ModelConfigurationError, ModelProvider, ModelProviderParseError, Muse, MuseConfig, QWEN_PLUS,
     QwenConfig,
 };

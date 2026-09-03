@@ -11,6 +11,6 @@ pub use catalog::{
 pub(crate) use kimi::POLICY as KIMI_POLICY;
 pub use kimi::{KIMI_K2_6, KimiConfig};
 pub(crate) use muse::POLICY as MUSE_POLICY;
-pub use muse::{MUSE_SPARK_1_2, MUSE_SPARK_1_2_CONTRIBUTOR, Muse, MuseConfig};
+pub use muse::{MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, Muse, MuseConfig};
 pub(crate) use qwen::POLICY as QWEN_POLICY;
 pub use qwen::{QWEN_PLUS, QwenConfig};

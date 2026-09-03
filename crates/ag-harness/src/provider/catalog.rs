@@ -38,7 +38,7 @@ impl ModelProvider {
     pub const fn known_models(self) -> &'static [&'static str] {
         match self {
             Self::Kimi => &[kimi::KIMI_K2_6],
-            Self::Muse => &[muse::MUSE_SPARK_1_2, muse::MUSE_SPARK_1_2_CONTRIBUTOR],
+            Self::Muse => &[muse::MUSE_SPARK_1_3, muse::MUSE_SPARK_1_3_CONTRIBUTOR],
             Self::Qwen => &[qwen::QWEN_PLUS],
         }
     }
@@ -242,7 +242,7 @@ mod tests {
         );
         assert_eq!(
             ModelProvider::Muse.known_models(),
-            &["muse-spark-1.2", "muse-spark-1.2-contributor"]
+            &["muse-spark-1.3", "muse-spark-1.3-contributor"]
         );
         assert_eq!(ModelProvider::Kimi.known_models(), &["kimi-k2.6"]);
         assert_eq!(ModelProvider::Qwen.known_models(), &["qwen-plus"]);
@@ -311,8 +311,8 @@ mod tests {
     #[test]
     fn configuration_uses_default_and_explicit_base_urls() {
         // Arrange
-        let default = ModelConfiguration::new(ModelProvider::Muse, muse::MUSE_SPARK_1_2);
-        let explicit = ModelConfiguration::new(ModelProvider::Muse, muse::MUSE_SPARK_1_2)
+        let default = ModelConfiguration::new(ModelProvider::Muse, muse::MUSE_SPARK_1_3);
+        let explicit = ModelConfiguration::new(ModelProvider::Muse, muse::MUSE_SPARK_1_3)
             .base_url("https://cli.example/v1");
 
         // Act
@@ -368,7 +368,7 @@ mod tests {
     fn configuration_redacts_api_key_lookup_failures() {
         // Arrange
         let secret = "visible-secret-material";
-        let configuration = ModelConfiguration::new(ModelProvider::Muse, muse::MUSE_SPARK_1_2);
+        let configuration = ModelConfiguration::new(ModelProvider::Muse, muse::MUSE_SPARK_1_3);
 
         // Act
         let error = configuration
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn configuration_reports_optional_environment_failures() {
         // Arrange
-        let configuration = ModelConfiguration::new(ModelProvider::Muse, muse::MUSE_SPARK_1_2);
+        let configuration = ModelConfiguration::new(ModelProvider::Muse, muse::MUSE_SPARK_1_3);
 
         // Act
         let error = configuration
@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn configuration_reports_missing_api_key() {
         // Arrange
-        let configuration = ModelConfiguration::new(ModelProvider::Muse, muse::MUSE_SPARK_1_2);
+        let configuration = ModelConfiguration::new(ModelProvider::Muse, muse::MUSE_SPARK_1_3);
 
         // Act
         let error = configuration

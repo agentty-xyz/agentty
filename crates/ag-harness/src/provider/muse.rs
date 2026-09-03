@@ -13,13 +13,13 @@ pub(crate) const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
 pub(crate) const MODEL_API_BASE_URL_ENV: &str = "MODEL_API_BASE_URL";
 pub(crate) const MODEL_API_KEY_ENV: &str = "MODEL_API_KEY";
 
-/// Standard Muse Spark 1.2 model whose prompts and completions are not used
+/// Standard Muse Spark 1.3 model whose prompts and completions are not used
 /// to train Meta models.
-pub const MUSE_SPARK_1_2: &str = "muse-spark-1.2";
+pub const MUSE_SPARK_1_3: &str = "muse-spark-1.3";
 
-/// Discounted Muse Spark 1.2 model that permits Meta to use prompts and
+/// Discounted Muse Spark 1.3 model that permits Meta to use prompts and
 /// completions to train future models.
-pub const MUSE_SPARK_1_2_CONTRIBUTOR: &str = "muse-spark-1.2-contributor";
+pub const MUSE_SPARK_1_3_CONTRIBUTOR: &str = "muse-spark-1.3-contributor";
 
 pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
     chat_completion::ChatCompletionProviderPolicy {
@@ -147,7 +147,7 @@ mod tests {
     }
 
     fn muse(server: &MockServer) -> Muse {
-        Muse::from_environment(MUSE_SPARK_1_2, |name| {
+        Muse::from_environment(MUSE_SPARK_1_3, |name| {
             if name == MODEL_API_KEY_ENV {
                 Ok("test-key".to_string())
             } else {
@@ -170,23 +170,23 @@ mod tests {
     #[test]
     fn exposes_standard_and_contributor_model_identifiers() {
         // Arrange and Act
-        let models = [MUSE_SPARK_1_2, MUSE_SPARK_1_2_CONTRIBUTOR];
+        let models = [MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR];
 
         // Assert
-        assert_eq!(models, ["muse-spark-1.2", "muse-spark-1.2-contributor"]);
+        assert_eq!(models, ["muse-spark-1.3", "muse-spark-1.3-contributor"]);
     }
 
     #[test]
     fn environment_configuration_uses_official_base_url_default() {
         // Arrange and Act
-        let muse = Muse::from_environment(MUSE_SPARK_1_2, default_environment)
+        let muse = Muse::from_environment(MUSE_SPARK_1_3, default_environment)
             .expect("fixture environment should be valid");
         let metadata = ModelWithMetadata::metadata(&muse)
             .expect("Muse should expose its configured model identity");
 
         // Assert
         assert_eq!(metadata.provider(), "meta");
-        assert_eq!(metadata.model(), MUSE_SPARK_1_2);
+        assert_eq!(metadata.model(), MUSE_SPARK_1_3);
     }
 
     #[test]
@@ -218,20 +218,20 @@ mod tests {
     #[ignore = "run by environment_configuration_from_env_runs_in_isolated_process"]
     fn environment_configuration_from_env_subprocess() {
         // Arrange and Act
-        let muse = Muse::from_env(MUSE_SPARK_1_2)
+        let muse = Muse::from_env(MUSE_SPARK_1_3)
             .expect("isolated process environment should configure Muse");
         let metadata = ModelWithMetadata::metadata(&muse)
             .expect("Muse should expose its configured model identity");
 
         // Assert
         assert_eq!(metadata.provider(), "meta");
-        assert_eq!(metadata.model(), MUSE_SPARK_1_2);
+        assert_eq!(metadata.model(), MUSE_SPARK_1_3);
     }
 
     #[test]
     fn environment_configuration_requires_api_key() {
         // Arrange and Act
-        let error = Muse::from_environment(MUSE_SPARK_1_2, |_| Err(env::VarError::NotPresent))
+        let error = Muse::from_environment(MUSE_SPARK_1_3, |_| Err(env::VarError::NotPresent))
             .err()
             .expect("missing API key should fail");
 
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn environment_configuration_rejects_non_unicode_base_url() {
         // Arrange and Act
-        let error = Muse::from_environment(MUSE_SPARK_1_2, |name| {
+        let error = Muse::from_environment(MUSE_SPARK_1_3, |name| {
             if name == MODEL_API_KEY_ENV {
                 Ok("test-key".to_string())
             } else {
@@ -287,7 +287,7 @@ mod tests {
         let model = model::ModelClient::muse(MuseConfig {
             api_key: "test-key".to_string(),
             base_url: "https://api.meta.ai/v1".to_string(),
-            model: MUSE_SPARK_1_2_CONTRIBUTOR.to_string(),
+            model: MUSE_SPARK_1_3_CONTRIBUTOR.to_string(),
         })
         .expect("fixture configuration should be valid");
 
@@ -296,7 +296,7 @@ mod tests {
 
         // Assert
         assert_eq!(metadata.provider(), "meta");
-        assert_eq!(metadata.model(), "muse-spark-1.2-contributor");
+        assert_eq!(metadata.model(), "muse-spark-1.3-contributor");
     }
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn configures_lifecycle_observer() {
         // Arrange
-        let muse = Muse::from_environment(MUSE_SPARK_1_2, default_environment)
+        let muse = Muse::from_environment(MUSE_SPARK_1_3, default_environment)
             .expect("fixture environment should be valid");
 
         // Act
@@ -329,7 +329,7 @@ mod tests {
 
         // Assert
         assert_eq!(metadata.provider(), "meta");
-        assert_eq!(metadata.model(), MUSE_SPARK_1_2);
+        assert_eq!(metadata.model(), MUSE_SPARK_1_3);
     }
 
     #[tokio::test]
@@ -343,7 +343,7 @@ mod tests {
                 "messages": [
                     {"content": "extract the name", "role": "user"}
                 ],
-                "model": "muse-spark-1.2",
+                "model": "muse-spark-1.3",
                 "response_format": response_format()
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -393,7 +393,7 @@ mod tests {
                 "messages": [
                     {"content": "inspect the manifest", "role": "user"}
                 ],
-                "model": "muse-spark-1.2",
+                "model": "muse-spark-1.3",
                 "response_format": response_format(),
                 "tools": [read_tool_wire()]
             })))
@@ -450,7 +450,7 @@ mod tests {
                 "messages": [
                     {"content": "inspect the manifest", "role": "user"}
                 ],
-                "model": "muse-spark-1.2",
+                "model": "muse-spark-1.3",
                 "response_format": response_format(),
                 "tools": [read_tool_wire()]
             })))
@@ -510,7 +510,7 @@ mod tests {
                         "tool_call_id": "call_muse_read"
                     }
                 ],
-                "model": "muse-spark-1.2",
+                "model": "muse-spark-1.3",
                 "response_format": response_format(),
                 "tools": [read_tool_wire()]
             })))

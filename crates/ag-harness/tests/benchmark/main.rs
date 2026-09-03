@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use std::{env, fmt};
 
 use ag_harness::{
-    Harness, KimiConfig, MUSE_SPARK_1_2, ModelClient, ModelRequestActivity, ModelResponseType,
+    Harness, KimiConfig, MUSE_SPARK_1_3, ModelClient, ModelRequestActivity, ModelResponseType,
     MuseConfig, OutputSchema, QwenConfig, Tool, ToolActivity, TurnOutcome,
 };
 use serde_json::{Value, json};
@@ -292,7 +292,7 @@ impl Provider {
                 api_key: env::var("MODEL_API_KEY")?,
                 base_url: env::var("MODEL_API_BASE_URL")
                     .unwrap_or_else(|_| MODEL_API_BASE_URL.to_string()),
-                model: env::var("MODEL_API_MODEL").unwrap_or_else(|_| MUSE_SPARK_1_2.to_string()),
+                model: env::var("MODEL_API_MODEL").unwrap_or_else(|_| MUSE_SPARK_1_3.to_string()),
             })?),
             Self::Qwen => Ok(ModelClient::qwen(QwenConfig {
                 api_key: env::var("DASHSCOPE_API_KEY")?,

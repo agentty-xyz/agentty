@@ -2,7 +2,7 @@
 
 use std::io::{self, Write as _};
 
-use ag_harness::{Harness, MUSE_SPARK_1_2, Muse, OutputSchema, Tool};
+use ag_harness::{Harness, MUSE_SPARK_1_3, Muse, OutputSchema, Tool};
 use serde_json::json;
 
 use crate::DynError;
@@ -16,7 +16,7 @@ const PROMPT: &str = concat!(
 #[ignore = "requires live Muse credentials"]
 async fn test_muse_read() -> Result<(), DynError> {
     // Arrange
-    let model = Muse::from_env(MUSE_SPARK_1_2)?;
+    let model = Muse::from_env(MUSE_SPARK_1_3)?;
 
     // Act and Assert
     inspect_manifest(model).await
