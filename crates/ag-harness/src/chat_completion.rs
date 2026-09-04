@@ -368,8 +368,8 @@ impl ChatCompletionBackend {
         reasoning_content: Option<&str>,
         calls: Vec<ChatCompletionToolCall>,
     ) -> Result<Vec<tool::ToolCall>, model::ModelError> {
-        if content.is_some_and(|content| !content.is_empty()) {
-            return Err(model::ModelError::ToolCallWithContent);
+        if let Some(content) = content {
+            schema_contract::ensure_content_size(content).map_err(model::ModelError::from)?;
         }
         if calls.is_empty() {
             return Err(model::ModelError::MissingToolCall);
@@ -1250,7 +1250,7 @@ mod tests {
         // Act
         let response = ChatCompletionBackend::decode_tool_call(
             &request,
-            None,
+            Some("I will update the requested file."),
             None,
             calls,
             model::CompletionMetadata::new("tool_calls".to_string(), None, None, None, None),
@@ -1268,6 +1268,44 @@ mod tests {
                         arguments.path() == "src/lib.rs"
                             && arguments.patch().starts_with("--- a/src/lib.rs")
                     })
+        ));
+    }
+
+    #[test]
+    fn rejects_oversized_content_with_tool_calls() {
+        // Arrange
+        let schema = schema_contract::OutputSchema::new(serde_json::json!({
+            "type": "object"
+        }))
+        .expect("schema should be valid");
+        let request =
+            model::ModelRequest::new("inspect", schema).with_tool(tool::ToolDefinition::read());
+        let content = "x".repeat(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + 1);
+        let calls = vec![ChatCompletionToolCall {
+            function: serde_json::json!({
+                "name": "read",
+                "arguments": r#"{"path":"Cargo.toml"}"#
+            }),
+            id: "call_read".to_string(),
+            kind: "function".to_string(),
+        }];
+
+        // Act
+        let response = ChatCompletionBackend::decode_tool_call(
+            &request,
+            Some(&content),
+            None,
+            calls,
+            model::CompletionMetadata::new("tool_calls".to_string(), None, None, None, None),
+        );
+
+        // Assert
+        assert!(matches!(
+            response,
+            GeneratedResponse::Failed {
+                error: model::ModelError::ResponseContentTooLarge,
+                ..
+            }
         ));
     }
 

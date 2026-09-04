@@ -29,3 +29,30 @@ fn rejects_incomplete_benchmark_summary() {
     // Assert
     assert_eq!(error.to_string(), "benchmark failed: 29 of 30 cases passed");
 }
+
+#[test]
+fn redacts_provider_response_bodies_from_benchmark_details() {
+    // Arrange
+    let detail = "model request failed: Kimi returned HTTP 429 Too Many Requests: secret body";
+
+    // Act
+    let sanitized = summary::sanitize_detail(detail);
+
+    // Assert
+    assert_eq!(
+        sanitized,
+        "model request failed: Kimi returned HTTP 429 Too Many Requests: <redacted>"
+    );
+}
+
+#[test]
+fn normalizes_non_provider_benchmark_details() {
+    // Arrange
+    let detail = "schema failed\nwithout provider response";
+
+    // Act
+    let sanitized = summary::sanitize_detail(detail);
+
+    // Assert
+    assert_eq!(sanitized, "schema failed without provider response");
+}
