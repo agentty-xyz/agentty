@@ -660,6 +660,10 @@ pub(crate) const PINNED_CLOCK_ENV_VAR: &str = "AGENTTY_CLOCK_UNIX";
 /// Mirrors `agentty::infra::clock::CLOCK_UTC_OFFSET_SECONDS_ENV_VAR`, which is
 /// private to the binary crate and therefore not importable from this test.
 pub(crate) const PINNED_CLOCK_UTC_OFFSET_ENV_VAR: &str = "AGENTTY_CLOCK_UTC_OFFSET_SECONDS";
+/// Environment flag that pins the status-bar version during feature runs.
+pub(crate) const PINNED_DISPLAY_VERSION_ENV_VAR: &str = "AGENTTY_E2E_PIN_DISPLAY_VERSION";
+/// Stable version label used by feature runs and freshness redaction.
+pub(crate) const PINNED_DISPLAY_VERSION: &str = "v<test>";
 /// Environment variable that disables terminal color detection.
 ///
 /// Feature GIF hashes include formatted terminal frames, including cell
@@ -787,14 +791,12 @@ pub(crate) fn session_worktree_redaction() -> Redaction {
 
 /// Return the redaction that hides the version painted in the header bar.
 ///
-/// The header shows `Agentty v{CARGO_PKG_VERSION}`, so without this rule
-/// every release bump would change every captured frame and stale every
-/// committed GIF hash at once. The needle comes from this test binary's own
-/// compile-time version, which matches the `agentty` binary under test
-/// because both build from the same package.
+/// Feature runs pin the header version before rendering so changes in version
+/// width cannot move styled cells in the ANSI frame. This second normalization
+/// keeps the pinned label itself out of the freshness hash.
 fn agentty_version_redaction() -> Redaction {
     Redaction::literal(
-        concat!("Agentty v", env!("CARGO_PKG_VERSION")),
+        format!("Agentty {PINNED_DISPLAY_VERSION}"),
         "Agentty <version>",
     )
 }
@@ -949,6 +951,7 @@ impl FeatureTest {
                     PINNED_CLOCK_UTC_OFFSET_ENV_VAR.to_string(),
                     PINNED_CLOCK_UTC_OFFSET_SECONDS.to_string(),
                 ),
+                (PINNED_DISPLAY_VERSION_ENV_VAR.to_string(), "1".to_string()),
             ],
             inherit_system_path: true,
             name: name.into(),
@@ -1672,7 +1675,7 @@ mod tests {
     }
 
     #[test]
-    fn feature_test_pins_wall_clock_and_utc_offset() {
+    fn feature_test_pins_render_environment() {
         // Arrange
         let expected_environment = [
             (
@@ -1683,6 +1686,7 @@ mod tests {
                 PINNED_CLOCK_UTC_OFFSET_ENV_VAR.to_string(),
                 PINNED_CLOCK_UTC_OFFSET_SECONDS.to_string(),
             ),
+            (PINNED_DISPLAY_VERSION_ENV_VAR.to_string(), "1".to_string()),
         ];
 
         // Act

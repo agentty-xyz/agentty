@@ -32,6 +32,7 @@ pub(crate) fn render_app(
             active_project_id: snapshot.active_project_id,
             available_agent_clis: &snapshot.available_agent_clis,
             current_tab: snapshot.current_tab,
+            current_version_display_text: snapshot.current_version_display_text,
             default_reasoning_level: snapshot.default_reasoning_level,
             frame_time: snapshot.frame_time,
             git_branch: snapshot.git_branch,

@@ -46,6 +46,8 @@ pub struct RenderContext<'a> {
     pub available_agent_clis: &'a [AgentCliInfo],
     /// Active top-level tab selection.
     pub current_tab: Tab,
+    /// Version label rendered in the status bar.
+    pub current_version_display_text: &'a str,
     /// Active project-scoped reasoning level used by session pages.
     pub default_reasoning_level: ReasoningLevel,
     /// One coherent wall-clock snapshot used by this render pass.
@@ -148,7 +150,7 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
         status_bar_area,
     } = layout::app_frame_areas(f.area());
 
-    component::status_bar::StatusBar::new(current_version_display_text())
+    component::status_bar::StatusBar::new(context.current_version_display_text.to_string())
         .latest_available_version(
             context
                 .latest_available_version
@@ -182,11 +184,6 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
     );
 
     router::route_frame(f, content_area, context);
-}
-
-/// Returns the current app version as displayed in the status bar.
-fn current_version_display_text() -> String {
-    format!("v{}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Renders the footer bar with directory, branch, and project- or
@@ -737,17 +734,5 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("agentty/legacy"));
         assert!(!text.contains("wt/legacy"));
-    }
-
-    #[test]
-    fn current_version_display_text_includes_v_prefix() {
-        // Arrange
-
-        // Act
-        let version = current_version_display_text();
-
-        // Assert
-        assert!(version.starts_with('v'));
-        assert!(version.len() > 1);
     }
 }

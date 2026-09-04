@@ -21,6 +21,11 @@ use crate::infra::fs::FsClient;
 #[cfg(test)]
 use crate::infra::project_discovery::ProjectDiscoveryClient;
 
+/// Environment flag that pins the version rendered by feature-test runs.
+const E2E_PIN_DISPLAY_VERSION_ENV_VAR: &str = "AGENTTY_E2E_PIN_DISPLAY_VERSION";
+/// Stable version label rendered while feature-test capture is enabled.
+const E2E_DISPLAY_VERSION: &str = "v<test>";
+
 impl App {
     /// Builds the app state from persisted data and starts background
     /// housekeeping tasks.
@@ -41,12 +46,17 @@ impl App {
         repositories: impl Into<AppRepositories>,
     ) -> Result<Self, AppError> {
         let clients = AppClients::new();
+        let current_version_display_text = current_version_display_text(
+            std::env::var_os(E2E_PIN_DISPLAY_VERSION_ENV_VAR).as_deref(),
+            env!("CARGO_PKG_VERSION"),
+        );
 
         let app = Self::new_with_options(
             auto_update,
             base_path,
             working_dir,
             git_branch,
+            current_version_display_text,
             repositories,
             clients,
         )
@@ -77,6 +87,7 @@ impl App {
             base_path,
             working_dir,
             git_branch,
+            format!("v{}", env!("CARGO_PKG_VERSION")),
             repositories,
             clients,
         )
@@ -94,6 +105,7 @@ impl App {
         base_path: PathBuf,
         working_dir: PathBuf,
         git_branch: Option<String>,
+        current_version_display_text: String,
         repositories: impl Into<AppRepositories>,
         clients: AppClients,
     ) -> Result<Self, AppError> {
@@ -163,6 +175,7 @@ impl App {
             settings_presentation:
                 crate::presentation::settings::SettingsPresentationState::default(),
             tabs: crate::app::tab::TabManager::new(initial_tab),
+            current_version_display_text,
             prompt_progress: std::collections::HashMap::new(),
             diff_comment_progress: std::collections::HashMap::new(),
             auto_address_review_iterations: std::collections::HashMap::new(),
@@ -554,6 +567,18 @@ impl App {
     }
 }
 
+/// Resolves the real or deterministic feature-test version label.
+fn current_version_display_text(
+    pin_feature_version: Option<&std::ffi::OsStr>,
+    package_version: &str,
+) -> String {
+    if pin_feature_version == Some(std::ffi::OsStr::new("1")) {
+        return E2E_DISPLAY_VERSION.to_string();
+    }
+
+    format!("v{package_version}")
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -567,6 +592,23 @@ mod tests {
     use crate::infra::db::{AppRepositories, Database};
 
     const PUBLIC_CONSTRUCTOR_COVERAGE_ENV: &str = "AGENTTY_PUBLIC_CONSTRUCTOR_COVERAGE";
+
+    #[test]
+    fn current_version_display_text_pins_only_explicit_feature_runs() {
+        // Arrange / Act
+        let pinned_single_digit =
+            current_version_display_text(Some(std::ffi::OsStr::new("1")), "0.15.9");
+        let pinned_double_digit =
+            current_version_display_text(Some(std::ffi::OsStr::new("1")), "0.15.10");
+        let unpinned = current_version_display_text(None, "0.15.10");
+        let invalid = current_version_display_text(Some(std::ffi::OsStr::new("true")), "0.15.10");
+
+        // Assert
+        assert_eq!(pinned_single_digit, E2E_DISPLAY_VERSION);
+        assert_eq!(pinned_double_digit, pinned_single_digit);
+        assert_eq!(unpinned, "v0.15.10");
+        assert_eq!(invalid, unpinned);
+    }
 
     #[tokio::test]
     /// Verifies the public constructor starts with its production client
