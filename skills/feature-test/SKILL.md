@@ -447,10 +447,11 @@ harness already neutralizes the known variance:
 - Temp paths are normalized by testty, and `BuilderEnv` keeps every painted directory
   under the test `HOME` so paths render home-collapsed (`~/test-project`,
   `~/.agentty/wt/<hash>`) with a platform-independent length.
-- `FeatureTest` pins the wall clock and UTC offset, redacts the `wt/<hash>` worktree
-  name a session derives from its generated UUID (see
-  `common::session_worktree_redaction`), and redacts the `Agentty v<version>` header so
-  release bumps do not stale every GIF.
+- `FeatureTest` pins the wall clock, UTC offset, and rendered version label before
+  capture; it also redacts the `wt/<hash>` worktree name a session derives from its
+  generated UUID (see `common::session_worktree_redaction`) and the pinned version
+  label. Pinning before rendering prevents a wider version from moving styled terminal
+  cells and staling every GIF.
 - `BuilderEnv` stubs every supported agent CLI, so agent availability — and the default
   agent a new session resolves — does not depend on which real CLIs a machine has.
 

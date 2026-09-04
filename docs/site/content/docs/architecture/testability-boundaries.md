@@ -109,3 +109,7 @@ testty has no crate-root re-export module: every public item is addressable only
 its owning module path (for example, `use testty::scenario::Scenario;`). The
 `tests/public_api.rs` tripwire pins those per-module items as the documented stable
 surface.
+
+Agentty feature runs pin the wall clock, UTC offset, agent executables, and rendered
+version label before the PTY frame is captured. Hash redactions then normalize generated
+worktree names and the pinned version label without relying on their runtime width.

@@ -7,11 +7,39 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.10] - 2026-09-03
+
+### Added
+
+- agentty: check for updates at startup and hourly while the application runs.
+- ag-harness: persist resumable chat sessions in SQLite.
+- ag-harness: provide bounded native repository tools for listing, searching, and
+  reading files.
+
 ### Changed
 
+- agentty: keep project synchronization non-modal and operation-scoped, retain session
+  creation during synchronization, and expire terminal status after ten seconds.
+- agentty: use direct protocol schemas for focused reviews and display review metadata
+  on separate rows.
 - agentty: replace Gemini 3.7 Flash with Gemini 3.8 Flash for the Gemini and Antigravity
   providers, migrating persisted selections to the replacement.
 - ag-harness: replace the Muse Spark 1.2 model catalog with Muse Spark 1.3.
+- ag-harness: reuse chat completion requests across retry attempts.
+- deps: update Rust, workspace dependencies, and GitHub Actions.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.10`.
+
+### Fixed
+
+- agentty: suppress duplicate focused-review replies across GitHub and GitLab.
+- quality: pin the feature-test version label before rendering so version-width changes
+  do not invalidate every enforced GIF freshness hash.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.15.9] - 2026-08-31
 
