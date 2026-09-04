@@ -38,7 +38,9 @@ exit 1
         env!("CARGO_PKG_VERSION")
     );
     std::fs::write(&npm_path, npm_script)?;
-    std::fs::set_permissions(&npm_path, std::fs::Permissions::from_mode(0o755))?;
+    // The PTY child retains the test process's UID, so owner execution is
+    // sufficient.
+    std::fs::set_permissions(&npm_path, std::fs::Permissions::from_mode(0o700))?;
 
     Ok(())
 }
