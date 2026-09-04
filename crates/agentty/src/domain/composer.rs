@@ -1864,6 +1864,7 @@ mod tests {
         assert_eq!(
             labels,
             vec![
+                "gpt-6-astra".to_string(),
                 "gpt-5.6-sol".to_string(),
                 "gpt-5.6-terra".to_string(),
                 "gpt-5.6-luna".to_string(),
