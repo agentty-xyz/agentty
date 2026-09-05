@@ -125,6 +125,16 @@ sequenceDiagram
 Unsupported configurations return an explicit error instead of silently falling back to
 unstructured text.
 
+### External model adapters
+
+`ModelRequest::messages()` exposes the ordered conversation as immutable `ModelMessage`
+entries. External adapters translate system instructions, retained turns, assistant tool
+calls, and correlated results from this view rather than from `prompt()` alone.
+`ToolCall::from_json()` shares bounded built-in argument decoding with native providers;
+call serialization and optional reasoning are available for provider replay. History
+mutation, tool permissions, execution limits, and terminal schema validation remain
+owned by the harness.
+
 ## Telemetry
 
 - **Metrics** - record model and tool duration, token usage, and outcomes.

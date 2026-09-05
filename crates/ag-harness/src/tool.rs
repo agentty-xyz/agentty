@@ -4,6 +4,8 @@ use std::num::NonZeroU64;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Number, Value, json};
 
+use crate::{model, schema_contract};
+
 const READ_DESCRIPTION: &str = concat!(
     "Inspect the repository with one bounded read-only action. Use `file` with `path` and ",
     "optional `offset`/`limit` for worktree text; `list` with optional `path`/`limit`; ",
@@ -15,6 +17,7 @@ const READ_NAME: &str = "read";
 const MAX_PATCH_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
 const MAX_QUERY_BYTES: usize = 4 * 1024;
+const MAX_TOOL_CALL_ID_BYTES: usize = 1024;
 pub(crate) const MAX_TOOL_RESULT_BYTES: usize = 64 * 1024;
 const WRITE_DESCRIPTION: &str = concat!(
     "Apply one unified diff to one repository-relative text file. To create an empty file, use ",
@@ -142,22 +145,55 @@ pub struct ToolCall {
     reasoning_content: Option<String>,
 }
 
-impl fmt::Debug for ToolCall {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ToolCall")
-            .field("arguments", &self.arguments)
-            .field("id", &self.id)
-            .field("name", &self.name())
-            .field(
-                "reasoning_content",
-                &self.reasoning_content.as_ref().map(|_| "[REDACTED]"),
-            )
-            .finish()
-    }
-}
-
 impl ToolCall {
+    /// Decodes a built-in tool call returned by a model adapter.
+    ///
+    /// The call identifier must contain non-whitespace text and be at most
+    /// 1,024 UTF-8 bytes. Accepted identifiers are preserved verbatim.
+    /// Arguments and optional provider reasoning are bounded before decoding.
+    /// Structurally valid read-action mistakes are retained for corrective
+    /// tool feedback. The harness separately enforces tool permissions,
+    /// repository containment, batch identifiers, and execution limits.
+    ///
+    /// # Errors
+    /// Returns [`crate::ModelError`] for an invalid call identifier,
+    /// unsupported tool name, oversized content, or invalid JSON arguments,
+    /// including unsafe repository paths.
+    pub fn from_json(
+        id: String,
+        name: &str,
+        arguments: &str,
+        reasoning_content: Option<String>,
+    ) -> Result<Self, model::ModelError> {
+        if id.len() > MAX_TOOL_CALL_ID_BYTES || id.trim().is_empty() {
+            return Err(model::ModelError::InvalidToolCallId);
+        }
+
+        schema_contract::ensure_content_size(arguments).map_err(model::ModelError::from)?;
+        if let Some(reasoning_content) = &reasoning_content {
+            schema_contract::ensure_content_size(reasoning_content)
+                .map_err(model::ModelError::from)?;
+        }
+        let arguments = match name {
+            READ_NAME => serde_json::from_str(arguments).map(ToolArguments::Read),
+            WRITE_NAME => serde_json::from_str(arguments).map(ToolArguments::Write),
+            _ => {
+                return Err(model::ModelError::UnsupportedToolName {
+                    name: schema_contract::bounded_diagnostic(name),
+                });
+            }
+        }
+        .map_err(|error| model::ModelError::InvalidToolArguments {
+            reason: schema_contract::bounded_diagnostic(error),
+        })?;
+
+        Ok(Self {
+            arguments,
+            id,
+            reasoning_content,
+        })
+    }
+
     /// Returns the typed arguments for this native tool call.
     pub fn arguments(&self) -> ToolCallArguments<'_> {
         match &self.arguments {
@@ -195,6 +231,23 @@ impl ToolCall {
         }
     }
 
+    /// Serializes the validated arguments for replay to a provider.
+    ///
+    /// # Errors
+    /// Returns an error if the argument values cannot be serialized as JSON.
+    pub fn arguments_json(&self) -> Result<String, serde_json::Error> {
+        match &self.arguments {
+            ToolArguments::Read(arguments) => serde_json::to_string(arguments),
+            ToolArguments::Write(arguments) => serde_json::to_string(arguments),
+        }
+    }
+
+    /// Returns optional provider reasoning needed to replay the assistant
+    /// tool call. This sensitive content is redacted from debug output.
+    pub fn reasoning_content(&self) -> Option<&str> {
+        self.reasoning_content.as_deref()
+    }
+
     pub(crate) fn read(
         id: String,
         arguments: ReadArguments,
@@ -218,16 +271,20 @@ impl ToolCall {
             reasoning_content,
         }
     }
+}
 
-    pub(crate) fn arguments_json(&self) -> Result<String, serde_json::Error> {
-        match &self.arguments {
-            ToolArguments::Read(arguments) => serde_json::to_string(arguments),
-            ToolArguments::Write(arguments) => serde_json::to_string(arguments),
-        }
-    }
-
-    pub(crate) fn reasoning_content(&self) -> Option<&str> {
-        self.reasoning_content.as_deref()
+impl fmt::Debug for ToolCall {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToolCall")
+            .field("arguments", &self.arguments)
+            .field("id", &self.id)
+            .field("name", &self.name())
+            .field(
+                "reasoning_content",
+                &self.reasoning_content.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
     }
 }
 
@@ -600,6 +657,158 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn tool_call_from_json_rejects_blank_and_oversized_identifiers() {
+        // Arrange
+        let identifiers = [
+            String::new(),
+            " \t\n".to_string(),
+            "x".repeat(MAX_TOOL_CALL_ID_BYTES + 1),
+            "é".repeat(MAX_TOOL_CALL_ID_BYTES / 2 + 1),
+        ];
+
+        // Act
+        let results =
+            identifiers.map(|id| ToolCall::from_json(id, "read", r#"{"path":"name.txt"}"#, None));
+
+        // Assert
+        for result in results {
+            let error = result.expect_err("invalid identifier must be rejected");
+            assert!(matches!(error, model::ModelError::InvalidToolCallId));
+            assert_eq!(error.error_type(), model::ModelErrorType::InvalidToolCall);
+            assert_eq!(error.http_status(), None);
+            assert_eq!(
+                error.to_string(),
+                "model returned a blank or oversized tool call identifier"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_call_from_json_preserves_identifiers_within_the_byte_limit() {
+        // Arrange
+        let identifiers = [
+            "x".to_string(),
+            " provider-id ".to_string(),
+            "x".repeat(MAX_TOOL_CALL_ID_BYTES),
+            "é".repeat(MAX_TOOL_CALL_ID_BYTES / 2),
+        ];
+
+        // Act
+        let calls = identifiers.clone().map(|id| {
+            ToolCall::from_json(id, "read", r#"{"path":"name.txt"}"#, None)
+                .expect("valid identifier must be accepted")
+        });
+
+        // Assert
+        for (call, expected_id) in calls.iter().zip(identifiers) {
+            assert_eq!(call.id(), expected_id);
+        }
+    }
+
+    #[test]
+    fn tool_call_from_json_preserves_read_and_write_payloads() {
+        // Arrange
+        let inputs = [
+            (
+                "read",
+                r#"{"path":"Cargo.toml"}"#,
+                Some("reasoning".to_string()),
+            ),
+            ("write", r#"{"path":"name.txt","patch":"patch"}"#, None),
+        ];
+
+        // Act
+        let calls = inputs.clone().map(|(name, arguments, reasoning)| {
+            ToolCall::from_json("call-id".to_string(), name, arguments, reasoning)
+                .expect("valid built-in call should decode")
+        });
+
+        // Assert
+        for (call, (name, arguments, reasoning)) in calls.iter().zip(inputs) {
+            assert_eq!(call.id(), "call-id");
+            assert_eq!(call.name(), name);
+            assert_eq!(call.reasoning_content(), reasoning.as_deref());
+            assert_eq!(
+                serde_json::from_str::<Value>(&call.arguments_json().expect("arguments encode"))
+                    .expect("encoded arguments are JSON"),
+                serde_json::from_str::<Value>(arguments).expect("fixture is JSON")
+            );
+        }
+    }
+
+    #[test]
+    fn tool_call_from_json_rejects_unsupported_names_and_invalid_arguments() {
+        // Arrange
+        let inputs = [
+            ("bash", "{}"),
+            ("read", "{"),
+            ("read", r#"{"path":"../secret"}"#),
+            ("read", r#"{"path":"name.txt","limit":0}"#),
+            ("write", r#"{"path":"name.txt","patch":""}"#),
+            (
+                "write",
+                r#"{"path":"name.txt","patch":"patch","extra":true}"#,
+            ),
+        ];
+
+        // Act
+        let results = inputs.map(|(name, arguments)| {
+            ToolCall::from_json("call-id".to_string(), name, arguments, None)
+        });
+
+        // Assert
+        assert!(matches!(
+            results[0],
+            Err(model::ModelError::UnsupportedToolName { .. })
+        ));
+        assert!(
+            results[1..].iter().all(|result| matches!(
+                result,
+                Err(model::ModelError::InvalidToolArguments { .. })
+            ))
+        );
+    }
+
+    #[test]
+    fn tool_call_from_json_bounds_arguments_and_reasoning() {
+        // Arrange
+        let oversized = "x".repeat(schema_contract::RESPONSE_CONTENT_LIMIT_BYTES + 1);
+        let inputs = [
+            (oversized.as_str(), None),
+            (r#"{"path":"name.txt"}"#, Some(oversized.clone())),
+        ];
+
+        // Act
+        let results = inputs.map(|(arguments, reasoning)| {
+            ToolCall::from_json("call-id".to_string(), "read", arguments, reasoning)
+        });
+
+        // Assert
+        assert!(
+            results
+                .iter()
+                .all(|result| matches!(result, Err(model::ModelError::ResponseContentTooLarge)))
+        );
+    }
+
+    #[test]
+    fn tool_call_from_json_retains_correctable_read_action_errors() {
+        // Arrange
+        let arguments = r#"{"action":"search"}"#;
+
+        // Act
+        let call = ToolCall::from_json("call-id".to_string(), "read", arguments, None)
+            .expect("structurally valid action should reach tool feedback");
+
+        // Assert
+        assert_eq!(
+            call.read_arguments()
+                .and_then(ReadArguments::validation_error),
+            Some("search requires a query and accepts only an optional path and limit")
+        );
+    }
 
     #[test]
     fn read_definition_exposes_native_function_contract() {

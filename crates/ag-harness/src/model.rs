@@ -404,12 +404,17 @@ impl ModelRequest {
         &self.tools
     }
 
-    pub(crate) fn advertises_tool(&self, name: &str) -> bool {
-        self.tools.iter().any(|tool| tool.name() == name)
+    /// Returns the ordered conversation to send to the provider, including
+    /// the system prompt, retained turns, current prompt, and tool results.
+    ///
+    /// Model adapters must use this history rather than only [`Self::prompt`]
+    /// to support chat and tool execution. The harness owns its mutation.
+    pub fn messages(&self) -> &[ModelMessage] {
+        &self.messages
     }
 
-    pub(crate) fn messages(&self) -> &[ModelMessage] {
-        &self.messages
+    pub(crate) fn advertises_tool(&self, name: &str) -> bool {
+        self.tools.iter().any(|tool| tool.name() == name)
     }
 
     pub(crate) fn lifecycle_observed(&self) -> bool {
@@ -465,17 +470,32 @@ impl ModelRequest {
     }
 }
 
+/// Provider-neutral conversation entry supplied through
+/// [`ModelRequest::messages`].
+///
+/// Tool results retain their call identifiers so adapters can correlate them
+/// with the preceding assistant calls without parsing provider wire formats.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ModelMessage {
+#[non_exhaustive]
+pub enum ModelMessage {
+    /// Validated structured assistant output serialized as JSON text.
     Assistant(String),
+    /// One assistant tool call, followed by its result.
     AssistantToolCall(tool::ToolCall),
+    /// An ordered assistant tool-call batch, followed by its ordered results.
     AssistantToolCalls(Vec<tool::ToolCall>),
+    /// Application-provided instructions for the conversation.
     System(String),
+    /// Harness-produced feedback for one assistant tool call.
     ToolResult {
+        /// Identifier of the corresponding assistant tool call.
         call_id: String,
+        /// Serialized tool output or corrective failure feedback.
         content: String,
+        /// Built-in tool name.
         name: String,
     },
+    /// User prompt for a retained or current turn.
     User(String),
 }
 
@@ -770,6 +790,9 @@ pub enum ModelError {
     /// The provider returned tool calls without any call entries.
     #[error("model returned no tool call")]
     MissingToolCall,
+    /// The provider tool-call identifier is blank or exceeds its byte limit.
+    #[error("model returned a blank or oversized tool call identifier")]
+    InvalidToolCallId,
     /// The provider returned more than the single supported call.
     #[error("model returned multiple tool calls")]
     MultipleToolCalls,
@@ -890,6 +913,7 @@ impl ModelError {
                 ModelErrorType::InvalidOutput
             }
             Self::MissingToolCall
+            | Self::InvalidToolCallId
             | Self::MultipleToolCalls
             | Self::DuplicateToolCallId { .. }
             | Self::TerminalResponseWithToolCalls

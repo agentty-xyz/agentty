@@ -55,6 +55,16 @@ let outcome = session.send(prompt).await?;
 
 Use `ModelWithMetadata::complete_with_metadata()` for normalized completion metadata.
 
+External adapters implement `Model` or `ModelWithMetadata`. Translate the ordered
+`ModelRequest::messages()` entries, including system instructions, previous turns,
+assistant tool calls, and correlated tool results; `prompt()` alone is insufficient for
+chat. Construct built-in calls with `ToolCall::from_json()`, which applies the same
+bounded argument validation as built-in providers. Call IDs must contain non-whitespace
+text and fit within 1,024 UTF-8 bytes; accepted IDs are preserved exactly. Use
+`arguments_json()` and, when required by the provider, `reasoning_content()` to replay
+calls. The harness still owns history, tool permissions, execution limits, and terminal
+output validation.
+
 Use `ModelProvider` and `ModelConfiguration` to discover built-in providers and
 construct a provider client from its standard environment variables. The catalog owns
 known model identifiers, credential variables, endpoint variables, and provider defaults

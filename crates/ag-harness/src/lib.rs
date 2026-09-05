@@ -31,7 +31,7 @@ pub use lifecycle::{
 };
 pub use model::{
     CompletionMetadata, CompletionUsage, Model, ModelClient, ModelCompletion, ModelError,
-    ModelErrorType, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,
+    ModelErrorType, ModelMessage, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,
     ModelWithMetadata,
 };
 pub use provider::{

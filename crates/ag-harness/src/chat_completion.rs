@@ -406,29 +406,12 @@ impl ChatCompletionBackend {
                 name: schema_contract::bounded_diagnostic(function.name),
             });
         }
-        schema_contract::ensure_content_size(&function.arguments)
-            .map_err(model::ModelError::from)?;
-        if let Some(reasoning_content) = reasoning_content {
-            schema_contract::ensure_content_size(reasoning_content)
-                .map_err(model::ModelError::from)?;
-        }
-        let call = if function.name == "write" {
-            let arguments = serde_json::from_str::<tool::WriteArguments>(&function.arguments)
-                .map_err(|error| model::ModelError::InvalidToolArguments {
-                    reason: schema_contract::bounded_diagnostic(error),
-                })?;
-
-            tool::ToolCall::write(call.id, arguments, reasoning_content.map(str::to_string))
-        } else {
-            let arguments = serde_json::from_str::<tool::ReadArguments>(&function.arguments)
-                .map_err(|error| model::ModelError::InvalidToolArguments {
-                    reason: schema_contract::bounded_diagnostic(error),
-                })?;
-
-            tool::ToolCall::read(call.id, arguments, reasoning_content.map(str::to_string))
-        };
-
-        Ok(call)
+        tool::ToolCall::from_json(
+            call.id,
+            &function.name,
+            &function.arguments,
+            reasoning_content.map(str::to_string),
+        )
     }
 }
 
