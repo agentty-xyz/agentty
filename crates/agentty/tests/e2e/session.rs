@@ -187,6 +187,50 @@ duration: 283ms
     Ok(())
 }
 
+/// Creates a real worktree index lock after a stubbed agent edits a file.
+fn seed_commit_index_lock_project(env: &BuilderEnv) -> E2eResult {
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+response='{"answer":"Preserve pending worktree change","questions":[],"review_comment_outcomes":[],"subtasks":[],"verification_verdicts":[]}'
+case "$prompt" in
+  *"Generate the canonical session commit message"*) ;;
+  *"Review the Git diff for display in a terminal UI."*)
+    response='{"project_impact":[],"suggestions":[]}'
+    ;;
+  *"Repair a failed git commit"*)
+    printf 'unexpected assistance\n' > "$AGENTTY_TEST_EVIDENCE/assist"
+    exit 91
+    ;;
+  *)
+    printf 'pending change\n' > generated.txt
+    lock_path=$(git rev-parse --git-path index.lock) || exit 92
+    printf 'test lock\n' > "$lock_path"
+    printf '%s\n' "$lock_path" > "$AGENTTY_TEST_EVIDENCE/lock-path"
+    printf '%s/generated.txt\n' "$PWD" > "$AGENTTY_TEST_EVIDENCE/change-path"
+    ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"StructuredOutput","input":%s}]}}\n' "$response"
+printf '{"type":"result","subtype":"success","result":"","structured_output":%s,"usage":{"input_tokens":5,"output_tokens":9}}\n' "$response"
+"#;
+    let claude_path = env.stub_bin.join("claude");
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+        ],
+    )
+}
+
 /// Seeds configured pre-commit validation without installing its Git hook.
 fn seed_missing_pre_commit_hook_project(
     env: &BuilderEnv,
@@ -4215,6 +4259,68 @@ fn test_session_antigravity_accepts_large_replay() -> E2eResult {
                     &full,
                 );
                 assertion::assert_not_visible(frame, "32768-byte");
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that a persistent worktree index lock stops commit recovery without
+/// invoking assistance or deleting either the lock or the pending changes.
+#[test]
+fn test_session_commit_index_lock() -> E2eResult {
+    // Arrange
+    let evidence = tempfile::tempdir()?;
+
+    // Act / Assert
+    FeatureTest::new("session_commit_index_lock")
+        .with_git()
+        .with_terminal_size(100, 40)
+        .env("AGENTTY_TEST_EVIDENCE", evidence.path().to_string_lossy())
+        .setup(seed_commit_index_lock_project)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Select session type", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Create a pending change")
+                    .press_key("Enter")
+                    .wait_for_text("Auto-commit blocked by a Git index lock", 30000)
+                    .wait_for_text("Enter: reply", 5000)
+                    .write_text("g")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "index_lock",
+                        "Commit stops with index-lock recovery guidance",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "[Commit Error]", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Auto-commit blocked by a Git index lock",
+                    &full,
+                );
+                assertion::assert_text_in_region(frame, "repository owner confirm it is", &full);
+                assertion::assert_text_in_region(frame, "stale before removing it", &full);
+                assertion::assert_not_visible(frame, "Committing...");
+                assertion::assert_not_visible(frame, "[Commit Assist]");
+                assert!(!evidence.path().join("assist").exists());
+                for (record, expected) in [
+                    ("lock-path", "test lock\n"),
+                    ("change-path", "pending change\n"),
+                ] {
+                    let path = std::fs::read_to_string(evidence.path().join(record))
+                        .expect("stub should record the fixture path");
+                    let content = std::fs::read_to_string(path.trim())
+                        .expect("auto-commit should preserve the fixture");
+                    assert_eq!(content, expected);
+                }
             },
         )?;
 

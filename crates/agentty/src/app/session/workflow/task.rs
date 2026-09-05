@@ -675,6 +675,16 @@ impl SessionTaskService {
                 Err(commit_error) if commit_error.to_string().contains("Nothing to commit") => {
                     return Ok(None);
                 }
+                Err(SessionError::Git(error)) if error.is_index_locked() => {
+                    return Err(SessionError::Workflow(format!(
+                        "Auto-commit blocked by a Git index lock after retries. Wait for any \
+                         active Git operation to finish, then retry. If the lock persists, have \
+                         the repository owner confirm it is stale before removing it. \
+                         Linked-worktree locks may be outside the session workspace. Agentty left \
+                         the lock and your changes intact; commit assistance cannot repair this \
+                         failure.\n\n{error}"
+                    )));
+                }
                 Err(commit_error) => {
                     // Keep test execution deterministic and offline by skipping
                     // model-assisted commit retries.
@@ -2678,6 +2688,90 @@ mod tests {
             .unwrap_or_default();
         assert!(output_text.contains("[Commit Error] commit failed"));
         assert!(matches!(outcome, AutoCommitOutcome::Failed));
+    }
+
+    #[tokio::test]
+    /// Verifies persistent index contention ends auto-commit with recovery
+    /// guidance and clears progress without asking an agent to repair it.
+    async fn test_handle_auto_commit_stops_on_index_lock() {
+        // Arrange
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_diff()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok("+pending change".to_string()) }));
+        mock_git_client
+            .expect_has_commits_since()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_commit_all_preserving_single_commit()
+            .times(1)
+            .returning(|_, _, _, _| {
+                Box::pin(async {
+                    Err(GitError::CommandFailed {
+                        command: "git add -A".to_string(),
+                        stderr: "fatal: Unable to create '.git/worktrees/session/index.lock': \
+                                 File exists."
+                            .to_string(),
+                    })
+                })
+            });
+        let mut one_shot_client = MockOneShotClient::new();
+        one_shot_client
+            .expect_submit()
+            .times(1)
+            .returning(|request| {
+                assert!(
+                    request
+                        .prompt
+                        .contains("Generate the canonical session commit message")
+                );
+
+                Ok(one_shot_submission("Preserve pending changes", 0, 0))
+            });
+        let database = AppRepositories::in_memory().await.expect("db should open");
+        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+        let context = AssistContext {
+            app_event_tx,
+            child_pid: Arc::new(Mutex::new(None)),
+            db: database.clone(),
+            folder: PathBuf::from("project"),
+            git_client: Arc::new(mock_git_client),
+            id: "session-id".to_string(),
+            one_shot_client: Arc::new(one_shot_client),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            session_update_versions: Arc::default(),
+            transcript: Arc::clone(&transcript),
+        };
+
+        // Act
+        let outcome = SessionTaskService::handle_auto_commit(context).await;
+
+        // Assert
+        assert!(matches!(outcome, AutoCommitOutcome::Failed));
+        let messages = database
+            .sessions()
+            .load_session_messages("session-id")
+            .await
+            .expect("persisted messages should load");
+        assert_eq!(messages.len(), 1);
+        let message = &messages[0].content;
+        assert!(message.contains("[Commit Error] Auto-commit blocked by a Git index lock"));
+        assert!(message.contains("confirm it is stale before removing it"));
+        assert!(message.contains("left the lock and your changes intact"));
+        assert!(message.contains("git add -A: fatal: Unable to create"));
+        let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(events.contains(&AppEvent::SessionProgressUpdated {
+            progress_message: None,
+            session_id: "session-id".into(),
+        }));
     }
 
     #[tokio::test]

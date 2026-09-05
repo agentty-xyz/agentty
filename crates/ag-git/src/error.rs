@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use crate::rebase;
+
 /// Typed error returned by git infrastructure operations.
 ///
 /// Wraps command execution failures, output parsing issues, and I/O errors so
@@ -58,9 +60,62 @@ pub enum GitError {
     Join(#[from] tokio::task::JoinError),
 }
 
+impl GitError {
+    /// Returns whether a failed command reports Git index-lock contention.
+    ///
+    /// This identifies the lock failure without implying that the lock is
+    /// stale or safe to remove.
+    #[must_use]
+    pub fn is_index_locked(&self) -> bool {
+        matches!(self, Self::CommandFailed { stderr, .. } if rebase::is_git_index_lock_error(stderr))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_lock_classification_requires_a_matching_command_failure() {
+        // Arrange
+        let cases = [
+            (
+                "fatal: Unable to create '.git/index.lock': File exists.",
+                true,
+            ),
+            (
+                "fatal: Unable to create '.git/worktrees/session/index.lock': File exists.",
+                true,
+            ),
+            (
+                "fatal: Unable to create '.git/HEAD.lock': File exists.",
+                false,
+            ),
+            (
+                "fatal: Unable to create '.git/index.lock': Permission denied",
+                false,
+            ),
+            ("index.lock: another git process is running", true),
+            ("pre-commit hook rejected changes", false),
+            ("index.lock mentioned by a hook", false),
+        ];
+
+        for (stderr, expected) in cases {
+            let error = GitError::CommandFailed {
+                command: "git add -A".to_string(),
+                stderr: stderr.to_string(),
+            };
+
+            // Act / Assert
+            assert_eq!(error.is_index_locked(), expected, "{stderr}");
+        }
+
+        // Arrange
+        let error = GitError::OutputParse(cases[0].0.to_string());
+
+        // Act / Assert
+        assert!(!error.is_index_locked());
+    }
 
     #[test]
     fn command_failed_display_includes_command_and_stderr() {
