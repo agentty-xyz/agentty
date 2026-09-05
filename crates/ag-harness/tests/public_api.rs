@@ -1,16 +1,270 @@
 //! External-consumer coverage for the `ag-harness` model traits.
 
 use std::error::Error;
+use std::io::{self, Cursor};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_harness::{
-    CompletionMetadata, CompletionUsage, Database, Harness, LifecycleEventKind, LifecycleMetrics,
-    LifecycleObserverSet, LifecycleTraceObserver, Model, ModelCompletion, ModelConfiguration,
-    ModelError, ModelMetadata, ModelProvider, ModelRequest, ModelResponse, ModelWithMetadata,
-    OutputSchema, OutputSchemaError, SessionConfig,
+    CompletionMetadata, CompletionUsage, Database, FileSystem, Harness, LifecycleEventKind,
+    LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver, Model, ModelCompletion,
+    ModelConfiguration, ModelError, ModelMessage, ModelMetadata, ModelProvider, ModelRequest,
+    ModelResponse, ModelWithMetadata, OutputSchema, OutputSchemaError, SessionConfig, Tool,
+    ToolCall, TurnError,
 };
 use async_trait::async_trait;
 use serde_json::json;
+use tokio::io::AsyncRead;
+
+struct ExternalToolModel {
+    batched: bool,
+    requests: Arc<Mutex<Vec<Vec<ModelMessage>>>>,
+}
+
+#[async_trait]
+impl Model for ExternalToolModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        self.requests
+            .lock()
+            .map_err(|_| ModelError::request(io::Error::other("request recorder poisoned")))?
+            .push(request.messages().to_vec());
+
+        match request.messages().last() {
+            Some(ModelMessage::User(prompt)) if prompt == "Read the name" => {
+                let call = ToolCall::from_json(
+                    "read-name".to_string(),
+                    "read",
+                    r#"{"path":"name.txt"}"#,
+                    Some("provider replay context".to_string()),
+                )?;
+                if self.batched {
+                    let second = ToolCall::from_json(
+                        "read-again".to_string(),
+                        "read",
+                        r#"{"path":"name.txt"}"#,
+                        None,
+                    )?;
+
+                    return Ok(ModelResponse::ToolCalls(vec![call, second]));
+                }
+
+                Ok(ModelResponse::ToolCall(call))
+            }
+            Some(ModelMessage::ToolResult { content, .. }) => {
+                let result: serde_json::Value =
+                    serde_json::from_str(content).map_err(ModelError::request)?;
+                let name = result["content"]
+                    .as_str()
+                    .ok_or(ModelError::InvalidResponse)?;
+
+                Ok(ModelResponse::Output(json!({ "name": name.trim() })))
+            }
+            Some(ModelMessage::User(_)) => {
+                let previous = request
+                    .messages()
+                    .iter()
+                    .rev()
+                    .find_map(|message| {
+                        if let ModelMessage::Assistant(output) = message {
+                            return Some(output);
+                        }
+
+                        None
+                    })
+                    .ok_or(ModelError::InvalidResponse)?;
+
+                Ok(ModelResponse::Output(
+                    serde_json::from_str(previous).map_err(ModelError::request)?,
+                ))
+            }
+            _ => Err(ModelError::InvalidResponse),
+        }
+    }
+}
+
+struct NameFileSystem;
+
+#[async_trait]
+impl FileSystem for NameFileSystem {
+    async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        Ok(path.to_path_buf())
+    }
+
+    async fn open_beneath(
+        &self,
+        root: &Path,
+        path: &Path,
+    ) -> io::Result<Box<dyn AsyncRead + Send + Unpin>> {
+        assert_eq!(root, Path::new("fixture"));
+        assert_eq!(path, Path::new("name.txt"));
+
+        Ok(Box::new(Cursor::new(b"Ada\n")))
+    }
+
+    async fn replace_beneath(
+        &self,
+        _root: &Path,
+        _path: &Path,
+        _expected: Option<Vec<u8>>,
+        _content: Vec<u8>,
+    ) -> io::Result<()> {
+        Err(io::Error::other("read-only fixture"))
+    }
+}
+
+#[tokio::test]
+async fn external_model_reads_tool_results_and_retains_chat_history() -> Result<(), Box<dyn Error>>
+{
+    for batched in [false, true] {
+        // Arrange
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let model = ExternalToolModel {
+            batched,
+            requests: Arc::clone(&requests),
+        };
+        let harness = Harness::new(model)
+            .repository("fixture")
+            .file_system(NameFileSystem)
+            .allow(Tool::Read);
+        let mut chat = harness
+            .chat(request()?.schema().clone())
+            .with_system_prompt("Extract names");
+
+        // Act
+        let first = chat.send("Read the name").await?;
+        let second = chat.send("Recall the name").await?;
+
+        // Assert
+        assert_eq!(first.output(), &json!({ "name": "Ada" }));
+        assert_eq!(second.output(), first.output());
+        assert_eq!(
+            first.report().tool_calls().len(),
+            if batched { 2 } else { 1 }
+        );
+        assert_eq!(second.report().tool_calls().len(), 0);
+        let requests = requests
+            .lock()
+            .expect("request recorder should not be poisoned");
+        assert_eq!(requests.len(), 3);
+        assert!(
+            matches!(requests[0].as_slice(), [ModelMessage::System(system), ModelMessage::User(prompt)]
+            if system == "Extract names" && prompt == "Read the name")
+        );
+        let calls = match &requests[1][2] {
+            ModelMessage::AssistantToolCall(call) if !batched => std::slice::from_ref(call),
+            ModelMessage::AssistantToolCalls(calls) if batched => calls.as_slice(),
+            message => return Err(format!("unexpected assistant message: {message:?}").into()),
+        };
+        assert_eq!(requests[1].len(), 3 + calls.len());
+        assert_eq!(
+            calls[0].reasoning_content(),
+            Some("provider replay context")
+        );
+        assert_eq!(calls[0].arguments_json()?, r#"{"path":"name.txt"}"#);
+        for (call, result) in calls.iter().zip(&requests[1][3..]) {
+            assert!(
+                matches!(result, ModelMessage::ToolResult { call_id, content, name }
+                if call_id == call.id() && name == "read" && content.contains("Ada"))
+            );
+        }
+        assert_eq!(&requests[2][..requests[1].len()], requests[1].as_slice());
+        assert!(matches!(&requests[2][requests[1].len()..],
+            [ModelMessage::Assistant(output), ModelMessage::User(prompt)]
+                if serde_json::from_str::<serde_json::Value>(output)? == *first.output()
+                    && prompt == "Recall the name"));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn external_adapter_enforces_tool_call_identifier_limits() -> Result<(), Box<dyn Error>> {
+    for (name, arguments) in [
+        ("read", r#"{"path":"name.txt"}"#),
+        ("write", r#"{"path":"name.txt","patch":"patch"}"#),
+    ] {
+        // Arrange
+        let invalid_identifiers = [
+            String::new(),
+            " \t\n".to_string(),
+            "x".repeat(1025),
+            "é".repeat(513),
+        ];
+        let boundary_id = "é".repeat(512);
+
+        // Act
+        let rejected = invalid_identifiers.map(|id| ToolCall::from_json(id, name, arguments, None));
+        let accepted = ToolCall::from_json(boundary_id.clone(), name, arguments, None)?;
+
+        // Assert
+        assert!(
+            rejected
+                .iter()
+                .all(|result| matches!(result, Err(ModelError::InvalidToolCallId)))
+        );
+        assert_eq!(accepted.id(), boundary_id);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn external_adapter_constructs_a_validated_write_call() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let arguments = json!({
+        "path": "name.txt",
+        "patch": "--- a/name.txt\n+++ b/name.txt\n@@ -1 +1 @@\n-Ada\n+Grace\n"
+    });
+
+    // Act
+    let call = ToolCall::from_json(
+        "write-name".to_string(),
+        "write",
+        &arguments.to_string(),
+        None,
+    )?;
+    let invalid = ToolCall::from_json(
+        "unsafe".to_string(),
+        "write",
+        r#"{"path":"../secret","patch":"patch"}"#,
+        None,
+    );
+
+    // Assert
+    assert_eq!(
+        call.write_arguments().expect("write arguments").path(),
+        "name.txt"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&call.arguments_json()?)?,
+        arguments
+    );
+    assert!(matches!(
+        invalid,
+        Err(ModelError::InvalidToolArguments { .. })
+    ));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_tool_call_still_requires_harness_permission() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let harness = Harness::new(ExternalToolModel {
+        batched: false,
+        requests: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    // Act
+    let result = harness
+        .run("Read the name", request()?.schema().clone())
+        .await;
+
+    // Assert
+    assert!(matches!(result, Err(TurnError::ToolDenied { name }) if name == "read"));
+
+    Ok(())
+}
 
 struct ExternalModel;
 
