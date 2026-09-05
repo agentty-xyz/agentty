@@ -433,6 +433,8 @@ flowchart LR
    commit. After a successful normal commit, the app checks hook readiness again and
    persists the first copy of each distinct `[Commit Warning]` when configured
    validation did not run, avoiding repeated identical notices across later turns.
+   Persistent index-lock failures stop after the Git layer's bounded retries and persist
+   recovery guidance without invoking commit assistance or deleting the lock.
    Installed-hook failures continue through normal commit error handling. The session
    title is synced from the commit text. Orchestrator controllers skip diff refresh,
    commit, publish, sync, and merge work. Research children refresh diff evidence but

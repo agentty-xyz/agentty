@@ -611,7 +611,6 @@ pub(super) fn is_git_index_lock_error(detail: &str) -> bool {
 
     normalized_detail.contains("index.lock")
         && (normalized_detail.contains("file exists")
-            || normalized_detail.contains("unable to create")
             || normalized_detail.contains("another git process"))
 }
 
