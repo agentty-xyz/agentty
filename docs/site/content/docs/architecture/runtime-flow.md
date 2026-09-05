@@ -242,9 +242,17 @@ Runtime owns one shared `RenderCacheStore` for markdown, diff, and session-outpu
 caches. The session-output cache keeps a bounded stable-body layer keyed by the typed
 transcript's cached content hash, width, theme, queued input, and transient-message
 version. Workflow-only status changes such as `Review` entering `Rebasing` reuse that
-body and append only the dynamic status tail. Changes in this area should keep caches
-bounded and route layout/count helpers and the final paint path through the same cached
-derived data instead of recomputing the render twice per frame.
+body and allocate only the dynamic status tail. Painting borrows visible slices across
+that shared body and tail. Superseded entries for the same session and width are
+dropped; measurement and painting share the cached scrollbar decision and resolved
+layout. Mermaid parsing is cached independently of width and theme, while each preview
+is painted with the current palette.
+
+Transcript scroll keys bypass workflow action-availability checks. Consecutive scroll
+keys reuse measurements within one input batch; other input events and the next runtime
+cycle invalidate those measurements. The foreground drains at most 64 input events or 8
+milliseconds before returning to painting, so held keys cannot indefinitely delay the
+next frame. An individual render or handler still runs to completion.
 
 ## Session Turn Data Flow
 

@@ -37,6 +37,7 @@ const DRAFT_PREVIEW_STACKED_STAGED_NOTE: &str =
 const USER_PROMPT_TAB_WIDTH: usize = 4;
 
 /// Fully assembled session-output lines plus metadata derived during assembly.
+#[cfg(test)]
 pub(crate) struct SessionOutputLines {
     pub(crate) active_loader_line_index: Option<usize>,
     pub(crate) lines: Vec<Line<'static>>,
@@ -53,6 +54,7 @@ pub(crate) struct SessionOutputBody {
 }
 
 /// Assembles a complete session-output panel in canonical display order.
+#[cfg(test)]
 pub(crate) fn output_lines(
     session: &Session,
     inner_width: usize,
@@ -72,27 +74,21 @@ pub(crate) fn output_body(
     output_assembly(session, inner_width, None, markdown_render_cache).into_output_body()
 }
 
-/// Appends the dynamic status tail to a cached stable transcript body.
-pub(crate) fn layout_from_body(
-    session: &Session,
-    active_progress: Option<&str>,
-    body: &SessionOutputBody,
-) -> SessionOutputLines {
-    let mut lines = body.lines.iter().cloned().collect::<Vec<_>>();
-    let active_loader_line_index = append_session_tail_lines(
-        &mut lines,
+/// Dynamic rows rendered after the shared transcript body.
+pub(crate) struct SessionOutputTail {
+    pub(crate) active_loader_line_index: Option<usize>,
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) trim_body: bool,
+}
+
+/// Builds only the status rows; the cached transcript stays shared.
+pub(crate) fn output_tail(session: &Session, active_progress: Option<&str>) -> SessionOutputTail {
+    session_tail_lines(
         session.status,
         active_progress,
         review_loading_message(session),
         review_comment_resolution_loading_message(session),
-    );
-
-    SessionOutputLines {
-        active_loader_line_index,
-        lines,
-        queued_line_indices: body.queued_line_indices.iter().copied().collect(),
-        transient_loader_line_index: body.transient_loader_line_index,
-    }
+    )
 }
 
 /// Returns whether the status owns a live or queued turn whose newest prompt
@@ -224,6 +220,7 @@ impl SessionOutputTranscriptSection<'_> {
 }
 
 impl SessionOutputAssembly<'_> {
+    #[cfg(test)]
     fn into_output_lines(mut self) -> SessionOutputLines {
         for block in SESSION_OUTPUT_BLOCK_ORDER {
             self.append_block(block);
@@ -384,32 +381,55 @@ fn append_session_tail_lines(
     review_status_message: Option<&str>,
     review_comment_resolution_message: Option<&str>,
 ) -> Option<usize> {
+    let tail = session_tail_lines(
+        status,
+        active_progress,
+        review_status_message,
+        review_comment_resolution_message,
+    );
+    if tail.trim_body {
+        trim_trailing_blank_lines(lines);
+    }
+    let active_loader_line_index = tail
+        .active_loader_line_index
+        .map(|index| lines.len() + index);
+    lines.extend(tail.lines);
+
+    active_loader_line_index
+}
+
+fn session_tail_lines(
+    status: Status,
+    active_progress: Option<&str>,
+    review_status_message: Option<&str>,
+    review_comment_resolution_message: Option<&str>,
+) -> SessionOutputTail {
     let status_lines = session_format::session_output_status_lines(
         status,
         active_progress,
         review_status_message,
         review_comment_resolution_message,
     );
-    if !status_lines.is_empty() {
-        append_block_separator(lines, SessionOutputSeparator::Always);
-        let active_loader_line_index =
-            session_format::session_output_uses_tachyon_loader(status).then_some(lines.len());
+    let trim_body = !status_lines.is_empty();
+    let mut lines = vec![Line::from("")];
+    let active_loader_line_index = if trim_body {
         lines.extend(status_lines);
 
-        return active_loader_line_index;
+        session_format::session_output_uses_tachyon_loader(status).then_some(1)
+    } else {
+        if status == Status::Done {
+            lines.push(session_format::session_output_done_line());
+            lines.push(Line::from(""));
+        }
+
+        None
+    };
+
+    SessionOutputTail {
+        active_loader_line_index,
+        lines,
+        trim_body,
     }
-
-    if status == Status::Done {
-        lines.push(Line::from(""));
-        lines.push(session_format::session_output_done_line());
-        lines.push(Line::from(""));
-
-        return None;
-    }
-
-    lines.push(Line::from(""));
-
-    None
 }
 
 fn review_loading_message(session: &Session) -> Option<&str> {

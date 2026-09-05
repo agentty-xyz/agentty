@@ -9591,6 +9591,10 @@ fn session_view_compact_mermaid_output() -> E2eResult {
                         "session_compact_mermaid_output_top",
                         "Top of compacted over-wide Mermaid flow",
                     )
+                    .write_text("j".repeat(80))
+                    .write_text("k".repeat(80))
+                    .write_text("g")
+                    .wait_for_text("Qwen complete", 5000)
                     .write_text("G")
                     .wait_for_text("Grafana on port 3000", 5000)
                     .wait_for_stable_frame(300, 5000)
@@ -9599,8 +9603,16 @@ fn session_view_compact_mermaid_output() -> E2eResult {
                         "session_compact_mermaid_output_bottom",
                         "Bottom of compacted over-wide Mermaid flow",
                     )
+                    .write_text("q")
+                    .wait_for_stable_frame(300, 5000)
             },
-            |_frame, report| {
+            |frame, report| {
+                assertion::assert_not_visible(frame, "Grafana on port 3000");
+                assertion::assert_text_in_region(
+                    frame,
+                    "Compact Mermaid output",
+                    &Region::full(frame.cols(), frame.rows()),
+                );
                 assert_eq!(report.captures.len(), 2);
                 let top_frame = common::frame_from_capture(&report.captures[0]);
                 let bottom_frame = common::frame_from_capture(&report.captures[1]);
