@@ -7,6 +7,30 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.11] - 2026-09-05
+
+### Added
+
+- agentty: add the `gpt-6-astra` Codex model with its large-context compaction policy.
+
+### Changed
+
+- ag-harness: accept bounded assistant content alongside native tool calls while
+  preserving response-size limits.
+- ag-harness: expand live benchmarks with persistent session reopening, lifecycle
+  telemetry, filtering, rate limiting, latency reporting, and redacted provider errors.
+- ag-harness: simplify file line scanning and session history budget selection.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.11`.
+
+### Fixed
+
+- agentty: restrict generated npm test scripts to owner-only executable permissions.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.15.10] - 2026-09-03
 
 ### Added
