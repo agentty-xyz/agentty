@@ -86,6 +86,8 @@ impl AgentCliInfo {
 /// variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModel {
+    /// Codex Astra model backed by `gpt-6-astra`.
+    Gpt6Astra,
     /// Codex Sol model backed by `gpt-5.6-sol`.
     Gpt56Sol,
     /// Codex Terra model backed by `gpt-5.6-terra`.
@@ -169,7 +171,10 @@ impl AgentSelection {
             (AgentKind::Claude, AgentModel::ClaudeOpus5)
                 | (
                     AgentKind::Codex,
-                    AgentModel::Gpt56Sol | AgentModel::Gpt56Terra | AgentModel::Gpt56Luna
+                    AgentModel::Gpt6Astra
+                        | AgentModel::Gpt56Sol
+                        | AgentModel::Gpt56Terra
+                        | AgentModel::Gpt56Luna
                 )
         )
     }
@@ -209,6 +214,7 @@ impl AgentModel {
     /// invocations.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Gpt6Astra => "gpt-6-astra",
             Self::Gpt56Sol => "gpt-5.6-sol",
             Self::Gpt56Terra => "gpt-5.6-terra",
             Self::Gpt56Luna => "gpt-5.6-luna",
@@ -553,6 +559,7 @@ impl FromStr for AgentModel {
             "gemini-3.8-flash" => Ok(Self::Gemini38Flash),
             "gemini-3.5-flash-lite" => Ok(Self::Gemini35FlashLite),
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31Pro),
+            "gpt-6-astra" => Ok(Self::Gpt6Astra),
             "gpt-5.6-sol" => Ok(Self::Gpt56Sol),
             "gpt-5.6-terra" => Ok(Self::Gpt56Terra),
             "gpt-5.6-luna" => Ok(Self::Gpt56Luna),
@@ -578,7 +585,8 @@ impl AgentSelectionMetadata for AgentModel {
             Self::Gemini35FlashLite => {
                 "Lightweight Gemini model for fast, cost-conscious workloads."
             }
-            Self::Gpt56Sol => "Newest Codex model for the strongest coding performance.",
+            Self::Gpt6Astra => "Most capable Codex model for the hardest end-to-end work.",
+            Self::Gpt56Sol => "Flagship Codex model for complex professional work.",
             Self::Gpt56Terra => "Current Codex model for balanced coding performance.",
             Self::Gpt56Luna => "Current Codex model for lighter coding iterations.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
@@ -646,6 +654,7 @@ impl AgentKind {
             AgentModel::ClaudeHaiku4520251001,
         ];
         const CODEX_MODELS: &[AgentModel] = &[
+            AgentModel::Gpt6Astra,
             AgentModel::Gpt56Sol,
             AgentModel::Gpt56Terra,
             AgentModel::Gpt56Luna,
@@ -763,12 +772,14 @@ mod tests {
         let codex_kind = AgentKind::Codex;
 
         // Act
+        let parsed_astra = codex_kind.parse_model("gpt-6-astra");
         let parsed_sol = codex_kind.parse_model("gpt-5.6-sol");
         let parsed_terra = codex_kind.parse_model("gpt-5.6-terra");
         let parsed_luna = codex_kind.parse_model("gpt-5.6-luna");
         let parsed_spark = codex_kind.parse_model("gpt-5.3-codex-spark");
 
         // Assert
+        assert_eq!(parsed_astra, Some(AgentModel::Gpt6Astra));
         assert_eq!(parsed_sol, Some(AgentModel::Gpt56Sol));
         assert_eq!(parsed_terra, Some(AgentModel::Gpt56Terra));
         assert_eq!(parsed_luna, Some(AgentModel::Gpt56Luna));
@@ -1146,6 +1157,7 @@ mod tests {
     fn test_codex_models_are_supported_by_codex() {
         // Arrange
         let models = [
+            AgentModel::Gpt6Astra,
             AgentModel::Gpt56Sol,
             AgentModel::Gpt56Terra,
             AgentModel::Gpt56Luna,
@@ -1157,8 +1169,8 @@ mod tests {
         let unsupported = models.map(|model| AgentKind::Claude.supports_model(model));
 
         // Assert
-        assert_eq!(supported, [true; 4]);
-        assert_eq!(unsupported, [false; 4]);
+        assert_eq!(supported, [true; 5]);
+        assert_eq!(unsupported, [false; 5]);
     }
 
     #[test]
@@ -1238,6 +1250,12 @@ mod tests {
                 SpeedMode::Fast,
                 AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
                 false,
+            ),
+            (
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Astra),
+                SpeedMode::Fast,
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Astra),
+                true,
             ),
             (
                 AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Terra),
@@ -1345,6 +1363,7 @@ mod tests {
         assert_eq!(
             selectable_models,
             vec![
+                AgentModel::Gpt6Astra,
                 AgentModel::Gpt56Sol,
                 AgentModel::Gpt56Terra,
                 AgentModel::Gpt56Luna,

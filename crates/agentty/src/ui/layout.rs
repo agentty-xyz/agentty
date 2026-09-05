@@ -817,10 +817,10 @@ mod tests {
 
         // Assert
         assert_eq!(menu.items.len(), AgentKind::Codex.models().len());
-        assert_eq!(menu.items[0].label, "gpt-5.6-sol");
+        assert_eq!(menu.items[0].label, "gpt-6-astra");
         assert_eq!(
             menu.items[0].detail,
-            Some("Newest Codex model for the strongest coding performance.".to_string())
+            Some("Most capable Codex model for the hardest end-to-end work.".to_string())
         );
     }
 

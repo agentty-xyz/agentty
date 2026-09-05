@@ -95,8 +95,8 @@ impl PreActionApprovalKind {
 
 /// Proactive compaction threshold for Codex models with a 1.05M context window.
 ///
-/// GPT-5.5 and GPT-5.6 models reserve up to 128k tokens for output, leaving a
-/// maximum input size of 922k tokens before compaction is required.
+/// GPT-6 Astra and GPT-5.6 models reserve up to 128k tokens for output,
+/// leaving a maximum input size of 922k tokens before compaction is required.
 pub(super) const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT: u64 = 1_050_000 - 128_000;
 
 /// Proactive compaction threshold for Codex Spark models with a 128k context
@@ -112,7 +112,12 @@ pub(super) const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_128K_CONTEXT: u64 = 120_000;
 pub(super) fn auto_compact_input_token_threshold(model: &str) -> u64 {
     let is_1050k_context_model = matches!(
         AgentKind::Codex.parse_model(model),
-        Some(AgentModel::Gpt56Sol | AgentModel::Gpt56Terra | AgentModel::Gpt56Luna)
+        Some(
+            AgentModel::Gpt6Astra
+                | AgentModel::Gpt56Sol
+                | AgentModel::Gpt56Terra
+                | AgentModel::Gpt56Luna
+        )
     );
     if is_1050k_context_model {
         return AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT;

@@ -263,6 +263,7 @@ mod tests {
     #[test]
     fn auto_compact_input_token_threshold_uses_1050k_limit_for_codex_models() {
         // Arrange
+        let gpt_6_astra_model = AgentModel::Gpt6Astra.as_str();
         let gpt_56_sol_model = AgentModel::Gpt56Sol.as_str();
         let gpt_56_terra_model = AgentModel::Gpt56Terra.as_str();
         let gpt_56_luna_model = AgentModel::Gpt56Luna.as_str();
@@ -270,6 +271,7 @@ mod tests {
         let spark_model = AgentModel::Gpt53CodexSpark.as_str();
 
         // Act
+        let gpt_6_astra_threshold = policy::auto_compact_input_token_threshold(gpt_6_astra_model);
         let gpt_56_sol_threshold = policy::auto_compact_input_token_threshold(gpt_56_sol_model);
         let gpt_56_terra_threshold = policy::auto_compact_input_token_threshold(gpt_56_terra_model);
         let gpt_56_luna_threshold = policy::auto_compact_input_token_threshold(gpt_56_luna_model);
@@ -277,6 +279,10 @@ mod tests {
         let spark_threshold = policy::auto_compact_input_token_threshold(spark_model);
 
         // Assert
+        assert_eq!(
+            gpt_6_astra_threshold,
+            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT
+        );
         assert_eq!(
             gpt_56_sol_threshold,
             policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT

@@ -7261,7 +7261,7 @@ fn codex_model_picker_lists_current_models() -> E2eResult {
                     .press_key("Down")
                     .press_key("Down")
                     .press_key("Enter")
-                    .wait_for_text("gpt-5.6-sol", 3000)
+                    .wait_for_text("gpt-6-astra", 3000)
                     .capture_labeled(
                         "codex_model_picker",
                         "Codex model picker lists current models",
@@ -7269,6 +7269,7 @@ fn codex_model_picker_lists_current_models() -> E2eResult {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "gpt-6-astra", &full);
                 assertion::assert_text_in_region(frame, "gpt-5.6-sol", &full);
                 assertion::assert_text_in_region(frame, "gpt-5.6-terra", &full);
                 assertion::assert_text_in_region(frame, "gpt-5.6-luna", &full);

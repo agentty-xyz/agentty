@@ -199,7 +199,8 @@ Both providers share the same Gemini model ids:
 
 ### Codex Models
 
-- `gpt-5.6-sol` (default): Newest Codex model for the strongest coding performance.
+- `gpt-6-astra`: Most capable Codex model for the hardest end-to-end work.
+- `gpt-5.6-sol` (default): Flagship Codex model for complex professional work.
 - `gpt-5.6-terra`: Current Codex model for balanced coding performance.
 - `gpt-5.6-luna`: Current Codex model for lighter coding iterations.
 - `gpt-5.3-codex-spark`: Codex spark model for quick coding iterations.
