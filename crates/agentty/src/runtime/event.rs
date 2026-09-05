@@ -14,14 +14,19 @@ use tracing::debug;
 
 use crate::app::{App, AppRuntimeEvent};
 use crate::domain::input::InputCommand;
+use crate::infra::clock::Clock;
 use crate::presentation::app_mode::AppMode;
+use crate::runtime::mode::chat_scroll::ChatScrollBatch;
 use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState, key_handler, mode};
+use crate::ui::RenderCacheStore;
 
 /// Maximum terminal input events processed in one foreground cycle.
 ///
 /// Additional queued events remain buffered for the next runtime cycle so the
 /// render loop can redraw between large paste/key-repeat bursts.
 const TERMINAL_EVENT_DRAIN_BUDGET: usize = 64;
+/// Yield to painting after eight milliseconds even when keys remain queued.
+const TERMINAL_EVENT_DRAIN_DURATION: Duration = Duration::from_millis(8);
 
 /// Reads terminal events from an underlying event backend.
 #[cfg_attr(test, mockall::automock)]
@@ -140,17 +145,73 @@ pub(crate) async fn process_events<B: Backend, Message: TerminalEventMessage>(
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    process_events_with_handler(app, terminal, event_rx, tick, |app, terminal, event| {
-        let presentation = Rc::clone(&presentation);
+    process_events_with_scroll_handler(
+        app,
+        presentation,
+        terminal,
+        event_rx,
+        tick,
+        ChatScrollBatch::handle,
+    )
+    .await
+}
 
-        Box::pin(process_event(app, presentation, terminal, event))
-    })
+/// Runs the production dispatcher with an injectable scroll handler so
+/// measurement failures can be tested without a failing physical terminal.
+async fn process_events_with_scroll_handler<B: Backend, Message: TerminalEventMessage>(
+    app: &mut App,
+    presentation: Rc<PresentationState>,
+    terminal: &mut Terminal<B>,
+    event_rx: &mut mpsc::UnboundedReceiver<Message>,
+    tick: &mut tokio::time::Interval,
+    mut handle_scroll: impl FnMut(
+        &mut ChatScrollBatch,
+        &mut App,
+        &RenderCacheStore,
+        &Terminal<B>,
+        KeyEvent,
+    ) -> io::Result<bool>,
+) -> io::Result<EventResult>
+where
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    let clock = app.services.clock();
+    let mut scroll_batch = ChatScrollBatch::default();
+    process_events_with_handler(
+        clock.as_ref(),
+        app,
+        terminal,
+        event_rx,
+        tick,
+        |app, terminal, event| {
+            if let Some(Event::Key(key)) = event.as_ref()
+                && is_press_key_event(*key)
+            {
+                match handle_scroll(
+                    &mut scroll_batch,
+                    app,
+                    presentation.render_cache_store(),
+                    terminal,
+                    *key,
+                ) {
+                    Ok(true) => return Box::pin(std::future::ready(Ok(EventResult::Continue))),
+                    Err(error) => return Box::pin(std::future::ready(Err(error))),
+                    Ok(false) => {}
+                }
+            }
+            scroll_batch = ChatScrollBatch::default();
+            let presentation = Rc::clone(&presentation);
+
+            Box::pin(process_event(app, presentation, terminal, event))
+        },
+    )
     .await
 }
 
 /// Processes one event/tick cycle with an injected event handler so loop exit
 /// branches can be tested without a real terminal.
 async fn process_events_with_handler<Terminal, Message, EventHandler>(
+    clock: &dyn Clock,
     app: &mut App,
     terminal: &mut Terminal,
     event_rx: &mut mpsc::UnboundedReceiver<Message>,
@@ -177,6 +238,7 @@ where
         runtime_event = app.next_runtime_event() => LoopSignal::Runtime(runtime_event),
         _ = tick.tick() => LoopSignal::Tick,
     };
+    let batch_started_at = clock.now_instant();
     let mut handled_terminal_events = 0;
     let maybe_event = match signal {
         LoopSignal::Runtime(runtime_event) => {
@@ -219,6 +281,13 @@ where
     let remaining_terminal_event_budget =
         TERMINAL_EVENT_DRAIN_BUDGET.saturating_sub(handled_terminal_events);
     for _ in 0..remaining_terminal_event_budget {
+        if clock
+            .now_instant()
+            .saturating_duration_since(batch_started_at)
+            >= TERMINAL_EVENT_DRAIN_DURATION
+        {
+            break;
+        }
         let event = match event_rx.try_recv() {
             Ok(message) => message.into_event_result()?,
             Err(mpsc::error::TryRecvError::Empty) => break,
@@ -954,6 +1023,7 @@ mod tests {
 
         // Act
         let result = process_events_with_handler(
+            &crate::test_support::FixedClock::unix_epoch(),
             &mut app,
             &mut terminal,
             &mut event_rx,
@@ -980,6 +1050,7 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let mut tick = tokio::time::interval(Duration::from_mins(1));
         let initial_result = process_events_with_handler(
+            &crate::test_support::FixedClock::unix_epoch(),
             &mut app,
             &mut terminal,
             &mut event_rx,
@@ -993,6 +1064,7 @@ mod tests {
 
         // Act
         let result = process_events_with_handler(
+            &crate::test_support::FixedClock::unix_epoch(),
             &mut app,
             &mut terminal,
             &mut event_rx,
@@ -1020,6 +1092,7 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel::<io::Result<Event>>();
         let mut tick = tokio::time::interval(Duration::from_mins(1));
         let initial_result = process_events_with_handler(
+            &crate::test_support::FixedClock::unix_epoch(),
             &mut app,
             &mut terminal,
             &mut event_rx,
@@ -1031,6 +1104,7 @@ mod tests {
 
         // Act
         let result = process_events_with_handler(
+            &crate::test_support::FixedClock::unix_epoch(),
             &mut app,
             &mut terminal,
             &mut event_rx,
@@ -1068,6 +1142,7 @@ mod tests {
         let result = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 let result = process_events_with_handler(
+                    &crate::test_support::FixedClock::unix_epoch(),
                     &mut app,
                     &mut terminal,
                     &mut event_rx,
@@ -1111,6 +1186,7 @@ mod tests {
 
         // Act
         let result = process_events_with_handler(
+            &crate::test_support::FixedClock::unix_epoch(),
             &mut app,
             &mut terminal,
             &mut event_rx,
@@ -1147,8 +1223,13 @@ mod tests {
         let mut tick = tokio::time::interval(Duration::from_mins(1));
 
         // Act
-        let result =
-            process_events_with_handler(&mut app, &mut terminal, &mut event_rx, &mut tick, {
+        let result = process_events_with_handler(
+            &crate::test_support::FixedClock::unix_epoch(),
+            &mut app,
+            &mut terminal,
+            &mut event_rx,
+            &mut tick,
+            {
                 let handled_events = Arc::clone(&handled_events);
 
                 move |_, (), event| {
@@ -1158,8 +1239,9 @@ mod tests {
 
                     Box::pin(async { Ok(EventResult::Continue) })
                 }
-            })
-            .await;
+            },
+        )
+        .await;
 
         // Assert
         assert!(matches!(result, Ok(EventResult::Continue)));
@@ -1190,8 +1272,13 @@ mod tests {
         tick.tick().await;
 
         // Act
-        let result =
-            process_events_with_handler(&mut app, &mut terminal, &mut event_rx, &mut tick, {
+        let result = process_events_with_handler(
+            &crate::test_support::FixedClock::unix_epoch(),
+            &mut app,
+            &mut terminal,
+            &mut event_rx,
+            &mut tick,
+            {
                 let handled_events = Arc::clone(&handled_events);
 
                 move |_, (), event| {
@@ -1201,8 +1288,9 @@ mod tests {
 
                     Box::pin(async { Ok(EventResult::Continue) })
                 }
-            })
-            .await;
+            },
+        )
+        .await;
 
         // Assert
         let error = result
@@ -1210,5 +1298,173 @@ mod tests {
             .expect("closed reader channel should exit during drain");
         assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
         assert_eq!(handled_events.load(Ordering::Relaxed), 1);
+    }
+
+    struct BatchClock {
+        elapsed_millis: AtomicUsize,
+        start: std::time::Instant,
+    }
+
+    impl Clock for BatchClock {
+        fn now_instant(&self) -> std::time::Instant {
+            self.start + Duration::from_millis(self.elapsed_millis.load(Ordering::Relaxed) as u64)
+        }
+
+        fn now_system_time(&self) -> std::time::SystemTime {
+            std::time::SystemTime::UNIX_EPOCH
+        }
+    }
+
+    #[tokio::test]
+    async fn test_event_batch_yields_when_elapsed_budget_is_reached() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let clock = BatchClock {
+            elapsed_millis: AtomicUsize::new(0),
+            start: std::time::Instant::now(),
+        };
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        for _ in 0..3 {
+            event_tx
+                .send(Ok(Event::Key(KeyEvent::new(
+                    KeyCode::Char('j'),
+                    KeyModifiers::NONE,
+                ))))
+                .expect("queue key");
+        }
+        let mut tick = tokio::time::interval(Duration::from_mins(1));
+        tick.tick().await;
+        let mut handled = 0;
+
+        // Act
+        let result = process_events_with_handler(
+            &clock,
+            &mut app,
+            &mut (),
+            &mut event_rx,
+            &mut tick,
+            |_, (), event| {
+                if event.is_some() {
+                    handled += 1;
+                    clock.elapsed_millis.store(8, Ordering::Relaxed);
+                }
+
+                Box::pin(async { Ok(EventResult::Continue) })
+            },
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert_eq!(handled, 1);
+        assert_eq!(event_rx.len(), 2);
+        assert_eq!(clock.now_system_time(), std::time::SystemTime::UNIX_EPOCH);
+    }
+
+    #[tokio::test]
+    async fn test_production_event_batch_scrolls_then_leaves_mermaid_session() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let session = crate::test_support::SessionFixtureBuilder::new()
+            .status(Status::Review)
+            .transcript("```mermaid\ngraph TD\nA --> B\n```\n".repeat(20))
+            .build();
+        app.mode = AppMode::View {
+            session_id: session.id.clone(),
+            scroll_offset: Some(0),
+        };
+        app.sessions.push_session(session);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
+        let presentation = Rc::new(PresentationState::default());
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        for key in ['j', 'j', 'k'] {
+            event_tx
+                .send(Ok(Event::Key(KeyEvent::new(
+                    KeyCode::Char(key),
+                    KeyModifiers::NONE,
+                ))))
+                .expect("queue scroll");
+        }
+        event_tx
+            .send(Ok(Event::Resize(80, 24)))
+            .expect("queue resize");
+        event_tx
+            .send(Ok(Event::Key(KeyEvent::new(
+                KeyCode::Char('q'),
+                KeyModifiers::NONE,
+            ))))
+            .expect("queue navigation");
+        let mut tick = tokio::time::interval(Duration::from_mins(1));
+        tick.tick().await;
+
+        // Act
+        while !event_rx.is_empty() {
+            process_events(
+                &mut app,
+                Rc::clone(&presentation),
+                &mut terminal,
+                &mut event_rx,
+                &mut tick,
+            )
+            .await
+            .expect("dispatch input");
+        }
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
+        assert!(app.needs_redraw());
+    }
+
+    #[tokio::test]
+    async fn test_event_batch_propagates_scroll_measurement_error() {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let session = crate::test_support::SessionFixtureBuilder::new()
+            .status(Status::Review)
+            .build();
+        app.mode = AppMode::View {
+            session_id: session.id.clone(),
+            scroll_offset: Some(3),
+        };
+        app.sessions.push_session(session);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        event_tx.send(Event::Key(key)).expect("queue scroll");
+        let mut tick = tokio::time::interval(Duration::from_mins(1));
+        tick.tick().await;
+
+        // Act
+        let result = process_events_with_scroll_handler(
+            &mut app,
+            Rc::new(PresentationState::default()),
+            &mut terminal,
+            &mut event_rx,
+            &mut tick,
+            |_, _, _, _, received_key| {
+                assert_eq!(received_key, key);
+
+                Err(io::Error::new(
+                    ErrorKind::BrokenPipe,
+                    "terminal size unavailable",
+                ))
+            },
+        )
+        .await;
+
+        // Assert
+        let error = result.err().expect("scroll failure must reach the caller");
+        assert_eq!(error.kind(), ErrorKind::BrokenPipe);
+        assert_eq!(error.to_string(), "terminal size unavailable");
+        assert!(event_rx.is_empty());
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                scroll_offset: Some(3),
+                ..
+            }
+        ));
     }
 }

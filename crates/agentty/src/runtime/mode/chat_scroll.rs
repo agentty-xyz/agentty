@@ -4,12 +4,16 @@
 //! transcript with the same keys, so the metrics and offset math live here
 //! instead of in each mode handler.
 
+use std::io;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::Terminal;
+use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 
 use crate::app::App;
 use crate::domain::session::{SessionId, SessionRole};
-use crate::presentation::app_mode::ChatFocus;
+use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::runtime::mode::session_output_metric;
 use crate::ui::page::session_chat::{self, SessionChatLayoutInput};
 use crate::ui::{RenderCacheStore, input_layout, layout, page, session_format};
@@ -24,6 +28,88 @@ pub(crate) struct ChatScrollMetrics {
     pub(crate) total_lines: u16,
     /// Visible transcript height in terminal lines.
     pub(crate) view_height: u16,
+}
+
+/// Metrics reused only during consecutive transcript scroll events in one
+/// input batch. The event dispatcher drops this cache on any other event and
+/// at the next cycle, before applying background updates or new geometry.
+#[derive(Default)]
+pub(crate) struct ChatScrollBatch {
+    metrics: Option<ChatScrollMetrics>,
+}
+
+impl ChatScrollBatch {
+    pub(crate) fn handle<B: Backend>(
+        &mut self,
+        app: &mut App,
+        render_cache_store: &RenderCacheStore,
+        terminal: &Terminal<B>,
+        key: KeyEvent,
+    ) -> io::Result<bool>
+    where
+        B::Error: std::error::Error + Send + Sync + 'static,
+    {
+        self.handle_with_measurement(app, key, |app, session_id| {
+            let Some(index) = app.session_index_for_id(session_id) else {
+                return Ok(None);
+            };
+            let size = terminal.size().map_err(crate::runtime::backend_err)?;
+            let terminal_size = Rect::new(0, 0, size.width, size.height);
+
+            Ok(Some(ChatScrollMetrics::new(
+                app,
+                render_cache_store,
+                session_id,
+                index,
+                terminal_size,
+            )))
+        })
+    }
+
+    fn handle_with_measurement(
+        &mut self,
+        app: &mut App,
+        key: KeyEvent,
+        measure: impl FnOnce(&App, &SessionId) -> io::Result<Option<ChatScrollMetrics>>,
+    ) -> io::Result<bool> {
+        if !is_scroll_key(key) {
+            return Ok(false);
+        }
+        let (AppMode::View { session_id, .. }
+        | AppMode::Prompt {
+            at_mention_state: None,
+            session_id,
+            focus: ChatFocus::Chat,
+            ..
+        }
+        | AppMode::Question {
+            session_id,
+            focus: ChatFocus::Chat,
+            ..
+        }) = &app.mode
+        else {
+            return Ok(false);
+        };
+        let metrics = if let Some(metrics) = self.metrics {
+            metrics
+        } else {
+            let Some(metrics) = measure(app, session_id)? else {
+                return Ok(false);
+            };
+            self.metrics = Some(metrics);
+
+            metrics
+        };
+        if let AppMode::View { scroll_offset, .. }
+        | AppMode::Prompt { scroll_offset, .. }
+        | AppMode::Question { scroll_offset, .. } = &mut app.mode
+        {
+            apply_scroll_key(scroll_offset, metrics, key);
+        }
+        app.mark_dirty();
+
+        Ok(true)
+    }
 }
 
 /// A semantic action for a key while a chat page owns the active focus.
@@ -290,11 +376,16 @@ fn half_page_step(metrics: ChatScrollMetrics) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::collections::HashMap;
 
     use super::*;
     use crate::app::session_state::SessionGitStatus;
+    use crate::domain::input::InputState;
     use crate::domain::session::Status;
+    use crate::presentation::prompt::{
+        PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
+    };
     use crate::test_support::SessionFixtureBuilder;
 
     /// Builds a plain key press without modifiers.
@@ -632,5 +723,198 @@ mod tests {
             orchestrator_metrics.view_height + 7,
             regular_metrics.view_height
         );
+    }
+
+    #[tokio::test]
+    async fn test_scroll_batch_measures_once_and_preserves_key_steps() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        app.mode = AppMode::View {
+            session_id: SessionId::from("scroll-batch"),
+            scroll_offset: Some(0),
+        };
+        let mut batch = ChatScrollBatch::default();
+        let mut measurements = 0;
+
+        // Act
+        for _ in 0..5 {
+            assert!(
+                batch
+                    .handle_with_measurement(&mut app, plain_key(KeyCode::Char('j')), |_, _| {
+                        measurements += 1;
+
+                        Ok(Some(ChatScrollMetrics {
+                            total_lines: 100,
+                            view_height: 10,
+                        }))
+                    })
+                    .expect("scroll should succeed")
+            );
+        }
+
+        // Assert
+        assert_eq!(measurements, 1);
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                scroll_offset: Some(5),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_scroll_batch_ignores_non_scroll_and_unfocused_keys() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let mut batch = ChatScrollBatch::default();
+        let measurements = Cell::new(0);
+        let measure_missing = |_: &App, _: &SessionId| {
+            measurements.set(measurements.get() + 1);
+
+            Ok(None)
+        };
+
+        // Act
+        let ignored_action =
+            batch.handle_with_measurement(&mut app, plain_key(KeyCode::Char('q')), measure_missing);
+        let ignored_list_scroll =
+            batch.handle_with_measurement(&mut app, plain_key(KeyCode::Char('j')), measure_missing);
+        assert_eq!(measurements.get(), 0);
+        app.mode = AppMode::View {
+            session_id: SessionId::from("missing"),
+            scroll_offset: Some(0),
+        };
+        let missing_session =
+            batch.handle_with_measurement(&mut app, plain_key(KeyCode::Char('j')), measure_missing);
+        let failed_measurement =
+            batch.handle_with_measurement(&mut app, plain_key(KeyCode::Char('j')), |_, _| {
+                Err(io::Error::other("size unavailable"))
+            });
+
+        // Assert
+        assert!(!ignored_action.expect("ignored action"));
+        assert!(!ignored_list_scroll.expect("ignored list scroll"));
+        assert!(!missing_session.expect("missing session falls through"));
+        assert_eq!(measurements.get(), 1);
+        assert_eq!(
+            failed_measurement
+                .expect_err("measurement error")
+                .to_string(),
+            "size unavailable"
+        );
+        assert!(batch.metrics.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_scroll_batch_missing_session_does_not_cache_empty_metrics() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let session = SessionFixtureBuilder::new()
+            .status(Status::Review)
+            .transcript("line\n".repeat(60))
+            .build();
+        app.mode = AppMode::View {
+            session_id: session.id.clone(),
+            scroll_offset: Some(0),
+        };
+        let terminal =
+            Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("test terminal");
+        let cache = RenderCacheStore::default();
+        let mut batch = ChatScrollBatch::default();
+        let key = plain_key(KeyCode::Char('j'));
+
+        // Act
+        let missing = batch.handle(&mut app, &cache, &terminal, key);
+        app.sessions.push_session(session);
+        let loaded = batch.handle(&mut app, &cache, &terminal, key);
+
+        // Assert
+        assert!(!missing.expect("missing session falls through"));
+        assert!(loaded.expect("loaded session scrolls"));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                scroll_offset: Some(1),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_scroll_batch_respects_prompt_and_question_focus() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let prompt = AppMode::Prompt {
+            at_mention_state: None,
+            attachment_state: PromptAttachmentState::default(),
+            focus: ChatFocus::Chat,
+            history_state: PromptHistoryState::default(),
+            input: InputState::default(),
+            scroll_offset: Some(0),
+            session_id: SessionId::from("focused"),
+            slash_state: PromptSlashState::default(),
+        };
+        let question = AppMode::Question {
+            at_mention_state: None,
+            current_index: 0,
+            focus: ChatFocus::Chat,
+            input: InputState::default(),
+            questions: Vec::new(),
+            responses: Vec::new(),
+            scroll_offset: Some(0),
+            selected_option_index: None,
+            session_id: SessionId::from("focused"),
+        };
+
+        // Act
+        for mode in [prompt, question] {
+            app.mode = mode;
+            let mut batch = ChatScrollBatch::default();
+            let handled =
+                batch.handle_with_measurement(&mut app, plain_key(KeyCode::Char('j')), |_, _| {
+                    Ok(Some(ChatScrollMetrics {
+                        total_lines: 30,
+                        view_height: 10,
+                    }))
+                });
+
+            // Assert
+            assert!(handled.expect("focused scroll"));
+            if let AppMode::Prompt {
+                focus,
+                scroll_offset,
+                ..
+            }
+            | AppMode::Question {
+                focus,
+                scroll_offset,
+                ..
+            } = &mut app.mode
+            {
+                assert_eq!(*scroll_offset, Some(1));
+                *focus = ChatFocus::Input;
+            }
+            let ignored =
+                batch.handle_with_measurement(&mut app, plain_key(KeyCode::Char('j')), |_, _| {
+                    Err(io::Error::other("input must not measure"))
+                });
+            assert!(!ignored.expect("input key falls through"));
+
+            if let AppMode::Prompt {
+                at_mention_state,
+                focus,
+                ..
+            } = &mut app.mode
+            {
+                *focus = ChatFocus::Chat;
+                *at_mention_state = Some(PromptAtMentionState::new(Vec::new()));
+                let dropdown_key =
+                    batch.handle_with_measurement(&mut app, plain_key(KeyCode::Down), |_, _| {
+                        Err(io::Error::other("dropdown must keep arrow-key precedence"))
+                    });
+                assert!(!dropdown_key.expect("dropdown key falls through"));
+            }
+        }
     }
 }

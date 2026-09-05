@@ -49,7 +49,6 @@ impl ViewPendingUpdate {
 /// Borrowed per-key context used while processing one session-view key event.
 struct ViewKeyContext<'a> {
     context: &'a ViewContext,
-    metrics: ChatScrollMetrics,
     session_snapshot: &'a ViewSessionSnapshot,
 }
 
@@ -219,15 +218,20 @@ where
     let Some(view_context) = view_context(app) else {
         return Ok(EventResult::Continue);
     };
-    let view_metrics = view_metrics(app, render_cache_store, terminal, &view_context)?;
     let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+    if chat_scroll::is_scroll_key(key) {
+        let metrics = view_metrics(app, render_cache_store, terminal, &view_context)?;
+        chat_scroll::apply_scroll_key(&mut pending_update.scroll_offset, metrics, key);
+        apply_view_scroll_and_output_mode(app, pending_update.scroll_offset);
+
+        return Ok(EventResult::Continue);
+    }
 
     let Some(view_session_snapshot) = view_session_snapshot(app, &view_context) else {
         return Ok(EventResult::Continue);
     };
     let view_key_context = ViewKeyContext {
         context: &view_context,
-        metrics: view_metrics,
         session_snapshot: &view_session_snapshot,
     };
 
@@ -263,7 +267,6 @@ async fn handle_view_key(
     pending_update: &mut ViewPendingUpdate,
 ) -> bool {
     let view_context = view_key_context.context;
-    let view_metrics = view_key_context.metrics;
     let view_session_snapshot = view_key_context.session_snapshot;
 
     if let Some(should_apply_pending_update) = handle_primary_view_key(
@@ -276,10 +279,6 @@ async fn handle_view_key(
     .await
     {
         return should_apply_pending_update;
-    }
-
-    if chat_scroll::apply_scroll_key(&mut pending_update.scroll_offset, view_metrics, key) {
-        return true;
     }
 
     if let Some(should_apply_pending_update) = handle_workflow_view_key(
@@ -2965,10 +2964,6 @@ mod tests {
         };
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ChatScrollMetrics {
-                total_lines: 10,
-                view_height: 5,
-            },
             session_snapshot: &view_session_snapshot,
         };
 
@@ -3026,10 +3021,6 @@ mod tests {
         };
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ChatScrollMetrics {
-                total_lines: 10,
-                view_height: 5,
-            },
             session_snapshot: &view_session_snapshot,
         };
 
@@ -3549,10 +3540,6 @@ mod tests {
         let view_session_snapshot = reply_enabled_review_snapshot();
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ChatScrollMetrics {
-                total_lines: 10,
-                view_height: 5,
-            },
             session_snapshot: &view_session_snapshot,
         };
 
@@ -3600,10 +3587,6 @@ mod tests {
         let view_session_snapshot = reply_enabled_review_snapshot();
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ChatScrollMetrics {
-                total_lines: 10,
-                view_height: 5,
-            },
             session_snapshot: &view_session_snapshot,
         };
 
@@ -3669,10 +3652,6 @@ mod tests {
         view_session_snapshot.mutate_session_branch = ViewActionState::Disabled;
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ChatScrollMetrics {
-                total_lines: 10,
-                view_height: 5,
-            },
             session_snapshot: &view_session_snapshot,
         };
 
@@ -3715,10 +3694,6 @@ mod tests {
         view_session_snapshot.reply_to_session = ViewActionState::Disabled;
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ChatScrollMetrics {
-                total_lines: 10,
-                view_height: 5,
-            },
             session_snapshot: &view_session_snapshot,
         };
 
@@ -3818,10 +3793,6 @@ mod tests {
         };
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ChatScrollMetrics {
-                total_lines: 10,
-                view_height: 5,
-            },
             session_snapshot: &view_session_snapshot,
         };
 
@@ -3877,10 +3848,6 @@ mod tests {
         };
         let view_key_context = ViewKeyContext {
             context: &view_context,
-            metrics: ChatScrollMetrics {
-                total_lines: 10,
-                view_height: 5,
-            },
             session_snapshot: &view_session_snapshot,
         };
 
@@ -3916,10 +3883,6 @@ mod tests {
             scroll_offset: Some(2),
         };
         let view_context = view_context(&mut app).expect("expected view context");
-        let view_metrics = ChatScrollMetrics {
-            total_lines: 10,
-            view_height: 5,
-        };
 
         // Act
         for key in [
@@ -3954,7 +3917,6 @@ mod tests {
             };
             let view_key_context = ViewKeyContext {
                 context: &view_context,
-                metrics: view_metrics,
                 session_snapshot: &view_session_snapshot,
             };
             let should_apply =
@@ -4399,5 +4361,59 @@ mod tests {
             "snapshot must rebuild from the handle state and not show a phantom row for a prompt \
              the worker is already executing"
         );
+    }
+
+    #[tokio::test]
+    async fn test_scroll_keys_bypass_action_snapshot_and_keep_navigation_working() {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let session = crate::test_support::SessionFixtureBuilder::new()
+            .status(Status::Review)
+            .build();
+        let session_id = session.id.clone();
+        app.sessions.push_session(session);
+        app.sessions.sessions_mut()[0].transcript =
+            Some(SessionTranscript::new(vec![SessionMessage::conversation(
+                0,
+                SessionMessageKind::AssistantAnswer,
+                "```mermaid\ngraph TD\nA --> B\n```\n".repeat(100),
+            )]));
+        app.mode = AppMode::View {
+            session_id,
+            scroll_offset: Some(0),
+        };
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
+        let cache = RenderCacheStore::default();
+
+        // Act
+        for key in ['j', 'j', 'k'] {
+            handle_with_cache(
+                &mut app,
+                &cache,
+                &mut terminal,
+                KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+            )
+            .await
+            .expect("scroll");
+        }
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                scroll_offset: Some(1),
+                ..
+            }
+        ));
+        handle_with_cache(
+            &mut app,
+            &cache,
+            &mut terminal,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("leave session");
+        assert!(matches!(app.mode, AppMode::List));
     }
 }

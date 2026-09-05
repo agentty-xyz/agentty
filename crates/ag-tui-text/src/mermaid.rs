@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -21,6 +23,7 @@ pub const MAX_SOURCE_BYTE_COUNT: usize = 16 * 1024;
 /// Maximum source lines accepted for one mermaid source preview.
 pub const MAX_SOURCE_LINE_COUNT: usize = 128;
 const NODE_BOX_HEIGHT: usize = 3;
+const PARSED_MERMAID_CACHE_ENTRY_LIMIT: usize = 64;
 const SEQUENCE_MAX_GAP_COLUMNS: usize = MAX_LABEL_WIDTH + 2;
 const SEQUENCE_MIN_GAP_COLUMNS: usize = 8;
 const SEQUENCE_SELF_LOOP_COLUMNS: usize = 3;
@@ -63,15 +66,19 @@ pub fn render_mermaid_with_settings(
 /// Renders a diagram within `max_width`, stacking an over-wide left-to-right
 /// graph from top to bottom before giving up on its terminal preview.
 pub(crate) fn render_mermaid_for_width(source: &str, max_width: usize) -> Option<MermaidDiagram> {
-    let diagram = render_mermaid_active_settings(source)?;
+    let parsed = parsed_mermaid(source)?;
+    let diagram = parsed.render()?;
     if diagram.width <= max_width {
         return Some(diagram);
     }
 
-    let mut graph = parse_graph(source)?;
+    let ParsedMermaid::Graph(graph) = parsed.as_ref() else {
+        return None;
+    };
     if !matches!(graph.direction, FlowDirection::LeftRight) {
         return None;
     }
+    let mut graph = graph.clone();
     graph.direction = FlowDirection::TopDown;
 
     let diagram = render_graph(graph)?;
@@ -79,16 +86,68 @@ pub(crate) fn render_mermaid_for_width(source: &str, max_width: usize) -> Option
 }
 
 fn render_mermaid_active_settings(source: &str) -> Option<MermaidDiagram> {
+    parsed_mermaid(source)?.render()
+}
+
+/// Parsing is independent of width and palette. Cache at most 64 bounded
+/// sources, including unsupported syntax, so resizing and scrollbar probes
+/// reuse parsing without retaining styled output from another theme.
+struct ParsedMermaidCacheEntry {
+    diagram: Option<Arc<ParsedMermaid>>,
+    source: Box<str>,
+}
+
+thread_local! {
+    static PARSED_MERMAID_CACHE: RefCell<VecDeque<ParsedMermaidCacheEntry>> =
+        const { RefCell::new(VecDeque::new()) };
+}
+
+enum ParsedMermaid {
+    Graph(MermaidGraph),
+    Sequence(SequenceDiagram),
+}
+
+impl ParsedMermaid {
+    fn render(&self) -> Option<MermaidDiagram> {
+        match self {
+            Self::Graph(graph) => render_graph(graph.clone()),
+            Self::Sequence(diagram) => Some(draw_sequence_diagram(diagram)),
+        }
+    }
+}
+
+fn parsed_mermaid(source: &str) -> Option<Arc<ParsedMermaid>> {
     if !is_source_within_bounds(source) {
         return None;
     }
 
-    if let Some(sequence_diagram) = parse_sequence_diagram(source) {
-        return Some(draw_sequence_diagram(&sequence_diagram));
-    }
+    PARSED_MERMAID_CACHE.with(|cache| {
+        let mut entries = cache.borrow_mut();
+        if let Some(index) = entries
+            .iter()
+            .position(|entry| entry.source.as_ref() == source)
+        {
+            let entry = entries.remove(index)?;
+            let diagram = entry.diagram.clone();
+            entries.push_front(entry);
 
-    let graph = parse_graph(source)?;
-    render_graph(graph)
+            return diagram;
+        }
+
+        let diagram = parse_sequence_diagram(source)
+            .map(ParsedMermaid::Sequence)
+            .or_else(|| parse_graph(source).map(ParsedMermaid::Graph))
+            .map(Arc::new);
+        entries.push_front(ParsedMermaidCacheEntry {
+            diagram: diagram.clone(),
+            source: source.into(),
+        });
+        if entries.len() > PARSED_MERMAID_CACHE_ENTRY_LIMIT {
+            entries.pop_back();
+        }
+
+        diagram
+    })
 }
 
 /// Lays out one parsed graph using its current direction.
@@ -133,6 +192,7 @@ enum NodeShape {
 }
 
 /// One declared diagram node.
+#[derive(Clone)]
 struct MermaidNode {
     is_hidden: bool,
     is_visible: bool,
@@ -141,6 +201,7 @@ struct MermaidNode {
 }
 
 /// One directed or undirected link between two nodes.
+#[derive(Clone)]
 struct MermaidEdge {
     from_index: usize,
     has_arrow: bool,
@@ -153,6 +214,7 @@ struct MermaidEdge {
 }
 
 /// Parsed mermaid diagram ready for layered layout.
+#[derive(Clone)]
 struct MermaidGraph {
     direction: FlowDirection,
     edges: Vec<MermaidEdge>,
@@ -3320,5 +3382,91 @@ mod tests {
         assert!(text.contains('A'));
         assert!(text.contains('C'));
         assert!(!text.contains('▼'));
+    }
+
+    #[test]
+    fn test_parsed_cache_reuses_source_across_widths_and_palettes() {
+        // Arrange
+        let source = "graph LR\nParse[Parse once] --> Paint[Paint twice]";
+        let first = parsed_mermaid(source).expect("parsed graph");
+        let mut settings = TextRenderSettings::default();
+        settings.palette.text = ratatui::style::Color::Red;
+
+        // Act
+        let wide = render_mermaid_for_width(source, 80).expect("wide diagram");
+        let narrow = render_mermaid_for_width(source, 20).expect("stacked diagram");
+        let themed = render_mermaid_with_settings(source, settings).expect("themed diagram");
+        let repeated = parsed_mermaid(source).expect("cached graph");
+
+        // Assert
+        assert!(Arc::ptr_eq(&first, &repeated));
+        assert!(wide.width > narrow.width);
+        assert!(narrow.lines.len() > wide.lines.len());
+        assert!(
+            themed
+                .lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| span.style.fg == Some(ratatui::style::Color::Red))
+        );
+    }
+
+    #[test]
+    fn test_sequence_preview_rejects_narrow_width_and_reuses_parse_when_widened() {
+        // Arrange
+        let source = "sequenceDiagram\nAlice->>Bob: Hello";
+        let original = render_mermaid_for_width(source, 80).expect("sequence preview");
+
+        // Act
+        let too_narrow = render_mermaid_for_width(source, original.width - 1);
+        let widened = render_mermaid_for_width(source, original.width).expect("restored preview");
+
+        // Assert
+        assert!(too_narrow.is_none());
+        assert_eq!(widened.lines, original.lines);
+        assert_eq!(widened.width, original.width);
+    }
+
+    #[test]
+    fn test_parsed_cache_is_bounded_and_promotes_hits() {
+        // Arrange
+        PARSED_MERMAID_CACHE.with(|cache| cache.borrow_mut().clear());
+        let source = "graph TD\nKeep --> Cached";
+        let first = parsed_mermaid(source).expect("first diagram");
+        for index in 0..PARSED_MERMAID_CACHE_ENTRY_LIMIT - 1 {
+            parsed_mermaid(&format!("graph TD\nNode{index} --> End"));
+        }
+
+        // Act
+        let promoted = parsed_mermaid(source).expect("promoted diagram");
+        parsed_mermaid("graph TD\nExtra --> End");
+        let retained = parsed_mermaid(source).expect("retained diagram");
+
+        // Assert
+        assert!(Arc::ptr_eq(&first, &promoted));
+        assert!(Arc::ptr_eq(&first, &retained));
+        PARSED_MERMAID_CACHE.with(|cache| {
+            let entries = cache.borrow();
+            assert_eq!(entries.len(), PARSED_MERMAID_CACHE_ENTRY_LIMIT);
+            assert!(entries.iter().all(|entry| !entry.source.contains("Node0 ")));
+        });
+    }
+
+    #[test]
+    fn test_parsed_cache_retains_unsupported_source_but_rejects_oversized_input() {
+        // Arrange
+        PARSED_MERMAID_CACHE.with(|cache| cache.borrow_mut().clear());
+        let unsupported = "classDiagram\nA <|-- B";
+
+        // Act
+        let first = parsed_mermaid(unsupported);
+        let repeated = parsed_mermaid(unsupported);
+        let oversized = parsed_mermaid(&"x".repeat(MAX_SOURCE_BYTE_COUNT + 1));
+
+        // Assert
+        assert!(first.is_none());
+        assert!(repeated.is_none());
+        assert!(oversized.is_none());
+        PARSED_MERMAID_CACHE.with(|cache| assert_eq!(cache.borrow().len(), 1));
     }
 }

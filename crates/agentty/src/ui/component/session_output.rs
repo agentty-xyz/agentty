@@ -21,7 +21,7 @@ use crate::ui::component::vertical_scrollbar::{SCROLLBAR_THUMB_SYMBOL, SCROLLBAR
 use crate::ui::icon::Icon;
 use crate::ui::icon::{QUEUED_ACTION_WIDTH, TACHYON_LOADER_WIDTH};
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
-use crate::ui::session_output_assembly::{self, SessionOutputBody, SessionOutputLines};
+use crate::ui::session_output_assembly::{self, SessionOutputBody};
 use crate::ui::{Component, markdown, session_format, style};
 
 const SCROLLBAR_PADDING_WIDTH: u16 = 1;
@@ -181,15 +181,58 @@ pub(crate) struct SessionOutputLayout {
     /// Number of rendered lines, saturated for scroll metric arithmetic.
     pub(crate) line_count: u16,
     /// Rendered lines shared between scroll metrics and frame painting.
-    pub(crate) lines: Arc<[Line<'static>]>,
+    pub(crate) lines: Arc<SessionOutputLayoutLines>,
     /// Indices of queued rows whose leading glyph receives a calm pulse.
     pub(crate) queued_line_indices: Arc<[usize]>,
     /// Index of an explicit transient loader row within `lines`, when present.
     pub(crate) transient_loader_line_index: Option<usize>,
 }
 
+/// Shared body plus a small status tail. Status updates allocate only the tail.
+/// `body_line_count` excludes trailing blank body rows when a status separator
+/// replaces them, without copying or changing the cached body.
+pub(crate) struct SessionOutputLayoutLines {
+    body: Arc<[Line<'static>]>,
+    body_line_count: usize,
+    tail: Vec<Line<'static>>,
+}
+
+impl SessionOutputLayoutLines {
+    fn len(&self) -> usize {
+        self.body_line_count + self.tail.len()
+    }
+
+    #[cfg(test)]
+    fn iter(&self) -> impl Iterator<Item = &Line<'static>> {
+        self.body[..self.body_line_count]
+            .iter()
+            .chain(self.tail.iter())
+    }
+
+    /// Borrows only the visible slices on either side of the body/tail
+    /// boundary.
+    fn paint_lines(&self, first: usize, height: usize) -> Vec<Line<'_>> {
+        let body_start = first.min(self.body_line_count);
+        let body_end = first.saturating_add(height).min(self.body_line_count);
+        let tail_start = first
+            .saturating_sub(self.body_line_count)
+            .min(self.tail.len());
+        let tail_end = first
+            .saturating_add(height)
+            .saturating_sub(self.body_line_count)
+            .min(self.tail.len());
+        let mut lines = text_util::borrowed_paint_lines(&self.body[body_start..body_end]);
+        lines.extend(text_util::borrowed_paint_lines(
+            &self.tail[tail_start..tail_end],
+        ));
+
+        lines
+    }
+}
+
 /// Final session-output layout selected for the current viewport and
 /// scrollbar state.
+#[derive(Clone)]
 struct SessionOutputResolvedLayout {
     layout: SessionOutputLayout,
     show_scrollbar: bool,
@@ -199,6 +242,13 @@ struct SessionOutputResolvedLayout {
 struct SessionOutputLayoutCacheEntry {
     key: SessionOutputLayoutCacheKey,
     layout: SessionOutputLayout,
+}
+
+/// One resolved viewport, shared by measurement and painting.
+struct SessionOutputResolvedCacheEntry {
+    key: SessionOutputLayoutCacheKey,
+    resolved: SessionOutputResolvedLayout,
+    viewport_height: u16,
 }
 
 /// Cached stable output-body entry.
@@ -220,6 +270,7 @@ struct SessionOutputBodyCacheEntry {
 pub struct SessionOutputLayoutCache {
     body_entries: RefCell<VecDeque<SessionOutputBodyCacheEntry>>,
     entries: RefCell<VecDeque<SessionOutputLayoutCacheEntry>>,
+    resolved_entries: RefCell<VecDeque<SessionOutputResolvedCacheEntry>>,
     tachyon_loader_effects: RefCell<HashMap<SessionId, TachyonLoaderEffect>>,
 }
 
@@ -232,6 +283,7 @@ impl Default for SessionOutputLayoutCache {
             entries: RefCell::new(VecDeque::with_capacity(
                 SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT,
             )),
+            resolved_entries: RefCell::new(VecDeque::new()),
             tachyon_loader_effects: RefCell::new(HashMap::new()),
         }
     }
@@ -274,15 +326,64 @@ impl SessionOutputLayoutCache {
 
             body
         });
-        let layout = SessionOutput::layout_from_assembled_lines(
-            session_output_assembly::layout_from_body(session, context.active_progress, &body),
-        );
+        let layout = SessionOutput::layout_from_body(session, context.active_progress, &body);
         self.store_entry(SessionOutputLayoutCacheEntry {
             key,
             layout: layout.clone(),
         });
 
         layout
+    }
+
+    /// Reuses the selected width and lines for identical viewport inputs.
+    /// Content, theme, progress and width changes invalidate this bounded LRU.
+    fn resolved_layout(
+        &self,
+        session: &Session,
+        output_area: Rect,
+        viewport_height: u16,
+        context: SessionOutputLineContext<'_>,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+    ) -> SessionOutputResolvedLayout {
+        let key = SessionOutput::layout_cache_key(
+            session,
+            output_area,
+            context,
+            markdown_render_cache.map_or(0, markdown::MarkdownRenderCache::version),
+        );
+        {
+            let mut entries = self.resolved_entries.borrow_mut();
+            if let Some(index) = entries
+                .iter()
+                .position(|entry| entry.key == key && entry.viewport_height == viewport_height)
+                && let Some(entry) = entries.remove(index)
+            {
+                let resolved = entry.resolved.clone();
+                entries.push_front(entry);
+
+                return resolved;
+            }
+        }
+        let resolved = SessionOutput::derive_resolved_layout(
+            session,
+            output_area,
+            viewport_height,
+            context,
+            markdown_render_cache,
+            Some(self),
+        );
+        let mut entries = self.resolved_entries.borrow_mut();
+        entries.retain(|entry| {
+            entry.key.session_id != key.session_id || entry.key.output_width != key.output_width
+        });
+        entries.push_front(SessionOutputResolvedCacheEntry {
+            key,
+            resolved: resolved.clone(),
+            viewport_height,
+        });
+        entries.truncate(SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT);
+
+        resolved
     }
 
     /// Returns a matching stable output body and promotes it in the body LRU.
@@ -299,6 +400,10 @@ impl SessionOutputLayoutCache {
     /// Stores one stable output body within the same bound as full layouts.
     fn store_body_entry(&self, entry: SessionOutputBodyCacheEntry) {
         let mut entries = self.body_entries.borrow_mut();
+        entries.retain(|cached| {
+            cached.key.session_id != entry.key.session_id
+                || cached.key.output_width != entry.key.output_width
+        });
         entries.push_front(entry);
 
         while entries.len() > SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
@@ -324,6 +429,10 @@ impl SessionOutputLayoutCache {
         let mut evicted_session_ids = Vec::new();
         {
             let mut entries = self.entries.borrow_mut();
+            entries.retain(|cached| {
+                cached.key.session_id != entry.key.session_id
+                    || cached.key.output_width != entry.key.output_width
+            });
             entries.push_front(entry);
 
             while entries.len() > SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
@@ -506,6 +615,34 @@ impl<'a> SessionOutput<'a> {
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
         output_layout_cache: Option<&SessionOutputLayoutCache>,
     ) -> SessionOutputResolvedLayout {
+        if let Some(cache) = output_layout_cache {
+            return cache.resolved_layout(
+                session,
+                output_area,
+                viewport_height,
+                context,
+                markdown_render_cache,
+            );
+        }
+
+        Self::derive_resolved_layout(
+            session,
+            output_area,
+            viewport_height,
+            context,
+            markdown_render_cache,
+            None,
+        )
+    }
+
+    fn derive_resolved_layout(
+        session: &Session,
+        output_area: Rect,
+        viewport_height: u16,
+        context: SessionOutputLineContext<'_>,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+        output_layout_cache: Option<&SessionOutputLayoutCache>,
+    ) -> SessionOutputResolvedLayout {
         let layout_without_scrollbar = Self::rendered_layout(
             session,
             output_area,
@@ -562,27 +699,41 @@ impl<'a> SessionOutput<'a> {
     ) -> SessionOutputLayout {
         let inner_width =
             panel_inner_width(output_area, session_format::session_output_panel_borders());
-        let output_lines = session_output_assembly::output_lines(
-            session,
-            inner_width,
-            context.active_progress,
-            markdown_render_cache,
-        );
+        let body =
+            session_output_assembly::output_body(session, inner_width, markdown_render_cache);
 
-        Self::layout_from_assembled_lines(output_lines)
+        Self::layout_from_body(session, context.active_progress, &body)
     }
 
-    /// Converts pure assembled lines into a cacheable layout for scrolling and
-    /// Ratatui painting.
-    fn layout_from_assembled_lines(output_lines: SessionOutputLines) -> SessionOutputLayout {
-        let line_count = u16::try_from(output_lines.lines.len()).unwrap_or(u16::MAX);
+    /// Shares the stable body and allocates only the dynamic tail.
+    fn layout_from_body(
+        session: &Session,
+        active_progress: Option<&str>,
+        body: &SessionOutputBody,
+    ) -> SessionOutputLayout {
+        let tail = session_output_assembly::output_tail(session, active_progress);
+        let body_line_count = if tail.trim_body {
+            body.lines
+                .iter()
+                .rposition(|line| line.width() > 0)
+                .map_or(0, |index| index + 1)
+        } else {
+            body.lines.len()
+        };
+        let line_count = u16::try_from(body_line_count + tail.lines.len()).unwrap_or(u16::MAX);
 
         SessionOutputLayout {
-            active_loader_line_index: output_lines.active_loader_line_index,
+            active_loader_line_index: tail
+                .active_loader_line_index
+                .map(|index| body_line_count + index),
             line_count,
-            lines: Arc::from(output_lines.lines),
-            queued_line_indices: Arc::from(output_lines.queued_line_indices),
-            transient_loader_line_index: output_lines.transient_loader_line_index,
+            lines: Arc::new(SessionOutputLayoutLines {
+                body: Arc::clone(&body.lines),
+                body_line_count,
+                tail: tail.lines,
+            }),
+            queued_line_indices: Arc::clone(&body.queued_line_indices),
+            transient_loader_line_index: body.transient_loader_line_index,
         }
     }
 
@@ -711,18 +862,13 @@ impl<'a> SessionOutput<'a> {
     /// span vectors for every off-screen row on each scroll frame. Slicing
     /// before borrowing keeps paint preparation proportional to terminal
     /// height while retaining `Paragraph`'s established cell semantics.
-    fn visible_paint_lines<'line>(
+    fn visible_paint_lines(
         output_area: Rect,
-        lines: &'line [Line<'static>],
+        lines: &SessionOutputLayoutLines,
         final_scroll: u16,
-    ) -> Vec<Line<'line>> {
+    ) -> Vec<Line<'_>> {
         let inner_area = Self::session_output_inner_area(output_area);
-        let first_visible_index = usize::from(final_scroll).min(lines.len());
-        let last_visible_index = first_visible_index
-            .saturating_add(usize::from(inner_area.height))
-            .min(lines.len());
-
-        text_util::borrowed_paint_lines(&lines[first_visible_index..last_visible_index])
+        lines.paint_lines(usize::from(final_scroll), usize::from(inner_area.height))
     }
 
     /// Returns the width used to wrap output while leaving padding before the
@@ -1187,7 +1333,11 @@ mod tests {
 
         // Assert
         assert!(
-            layout.lines[loader_line_index]
+            layout
+                .lines
+                .iter()
+                .nth(loader_line_index)
+                .expect("loader row")
                 .to_string()
                 .contains("Publishing review request...")
         );
@@ -1245,7 +1395,11 @@ mod tests {
         // Assert
         assert!(!Arc::ptr_eq(&review_layout.lines, &rebase_layout.lines));
         assert_eq!(output_layout_cache.body_entries.borrow().len(), 1);
-        assert_eq!(output_layout_cache.entries.borrow().len(), 2);
+        assert_eq!(output_layout_cache.entries.borrow().len(), 1);
+        assert!(Arc::ptr_eq(
+            &review_layout.lines.body,
+            &rebase_layout.lines.body
+        ));
         assert!(rebase_text.contains("Completed answer stays stable."));
         assert!(rebase_text.contains("Rebasing..."));
     }
@@ -1781,12 +1935,16 @@ mod tests {
     #[test]
     fn test_visible_paint_lines_skip_rows_outside_viewport() {
         // Arrange
-        let cached_lines = [
-            Line::from("hidden before viewport"),
-            Line::from("visible first row"),
-            Line::from("visible second row"),
-            Line::from("hidden after viewport"),
-        ];
+        let cached_lines = SessionOutputLayoutLines {
+            body: Arc::from([
+                Line::from("hidden before viewport"),
+                Line::from("visible first row"),
+                Line::from("visible second row"),
+                Line::from("hidden after viewport"),
+            ]),
+            body_line_count: 4,
+            tail: Vec::new(),
+        };
 
         // Act
         let paint_lines =
@@ -3410,5 +3568,160 @@ mod tests {
         // Assert
         assert!(text.contains("Working..."));
         assert!(text.contains(Icon::TachyonLoader.as_str()));
+    }
+
+    #[test]
+    fn test_progress_updates_share_body_and_discard_superseded_layouts() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::InProgress;
+        set_assistant_transcript(
+            &mut session,
+            &"```mermaid\ngraph TD\nA --> B\n```\n".repeat(100),
+        );
+        let cache = SessionOutputLayoutCache::default();
+        let area = Rect::new(0, 0, 80, 24);
+        let initial = cache.layout(&session, area, line_context(), None);
+
+        // Act
+        for version in 1..20 {
+            let progress = format!("Step {version}");
+            let updated = cache.layout(
+                &session,
+                area,
+                SessionOutputLineContext {
+                    active_progress: Some(&progress),
+                    session_update_version: version,
+                    ..line_context()
+                },
+                None,
+            );
+
+            // Assert
+            assert!(Arc::ptr_eq(&initial.lines.body, &updated.lines.body));
+            assert!(!Arc::ptr_eq(&initial.lines, &updated.lines));
+            assert_eq!(cache.entries.borrow().len(), 1);
+            assert_eq!(cache.body_entries.borrow().len(), 1);
+            assert!(
+                updated
+                    .lines
+                    .tail
+                    .iter()
+                    .any(|line| line.to_string().contains(&progress))
+            );
+        }
+    }
+
+    #[test]
+    fn test_segmented_layout_matches_assembled_status_rows() {
+        // Arrange
+        let mut session = session_fixture();
+        set_assistant_transcript(&mut session, "Body\n\n");
+        let area = Rect::new(0, 0, 80, 24);
+
+        // Act
+        for status in [
+            Status::Review,
+            Status::Done,
+            Status::Rebasing,
+            Status::InProgress,
+            Status::Queued,
+        ] {
+            session.status = status;
+            let layout = SessionOutput::derive_layout(&session, area, line_context(), None);
+            let expected = session_output_assembly::output_lines(&session, 80, None, None);
+
+            // Assert
+            assert_eq!(
+                layout.lines.iter().cloned().collect::<Vec<_>>(),
+                expected.lines
+            );
+            assert_eq!(
+                layout.active_loader_line_index,
+                expected.active_loader_line_index
+            );
+            assert_eq!(
+                layout.queued_line_indices.as_ref(),
+                expected.queued_line_indices.as_slice()
+            );
+            assert_eq!(usize::from(layout.line_count), layout.lines.len());
+        }
+    }
+
+    #[test]
+    fn test_visible_rows_cross_shared_body_and_tail_without_copying_hidden_rows() {
+        // Arrange
+        let lines = SessionOutputLayoutLines {
+            body: Arc::from([Line::from("one"), Line::from("two"), Line::from("")]),
+            body_line_count: 2,
+            tail: vec![Line::from("status"), Line::from("done")],
+        };
+
+        // Act
+        let crossing = lines.paint_lines(1, 2);
+        let tail_only = lines.paint_lines(2, 8);
+        let past_end = lines.paint_lines(10, 2);
+        let zero_height = lines.paint_lines(0, 0);
+
+        // Assert
+        assert_eq!(
+            crossing.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["two", "status"]
+        );
+        assert_eq!(
+            tail_only
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["status", "done"]
+        );
+        assert_eq!(past_end, Vec::<Line<'_>>::new());
+        assert_eq!(zero_height, Vec::<Line<'_>>::new());
+    }
+
+    #[test]
+    fn test_resolved_cache_reuses_scrollbar_decision_and_invalidates_viewport() {
+        // Arrange
+        let mut session = session_fixture();
+        set_assistant_transcript(&mut session, &"line\n".repeat(40));
+        let cache = SessionOutputLayoutCache::default();
+        let area = Rect::new(0, 0, 80, 24);
+        let first = cache.resolved_layout(&session, area, 10, line_context(), None);
+        cache.entries.borrow_mut().clear();
+        cache.body_entries.borrow_mut().clear();
+
+        // Act
+        let repeated = cache.resolved_layout(&session, area, 10, line_context(), None);
+
+        // Assert
+        assert!(first.show_scrollbar);
+        assert!(Arc::ptr_eq(&first.layout.lines, &repeated.layout.lines));
+        assert!(cache.entries.borrow().is_empty());
+        assert!(cache.body_entries.borrow().is_empty());
+        let taller = cache.resolved_layout(&session, area, 100, line_context(), None);
+        assert!(!taller.show_scrollbar);
+        assert_eq!(cache.resolved_entries.borrow().len(), 1);
+    }
+
+    #[test]
+    fn test_resolved_cache_evicts_old_sessions() {
+        // Arrange
+        let mut session = session_fixture();
+        let cache = SessionOutputLayoutCache::default();
+
+        // Act
+        for index in 0..=SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
+            session.id = SessionId::from(format!("resolved-{index}"));
+            cache.resolved_layout(&session, Rect::new(0, 0, 80, 24), 22, line_context(), None);
+        }
+
+        // Assert
+        let entries = cache.resolved_entries.borrow();
+        assert_eq!(entries.len(), SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.key.session_id.as_str() != "resolved-0")
+        );
     }
 }
