@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT COUNT(*) AS \"total!\"\nFROM session_write w\nJOIN session_turn t USING (session_id, turn_position)\nWHERE w.session_id = ? AND t.status != 'completed' AND w.acknowledged_by_turn IS NULL\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "total!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "990944d10ae65ffb59f8777cace7898fd5fb6e4519daaad8de3c95258974e148"
+}

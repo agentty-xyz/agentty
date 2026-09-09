@@ -28,9 +28,13 @@ use crate::turn::{
     sanitize_report_text, sanitized_completion_metadata,
 };
 use crate::write::{WriteError, WriteTool};
+use crate::write_journal::{WriteJournal, WriteRecord, WriteRecordRow, WriteRecovery, WriteStatus};
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
 const DEFAULT_MAX_TOOL_CALLS: usize = 8;
+const MAX_WRITE_DIAGNOSTIC_BYTES: usize = 16 * 1024;
+// Leave room for a 1 KiB call ID after JSON escaping and write metadata.
+const MAX_WRITE_DIAGNOSTIC_PATH_BYTES: usize = 8 * 1024;
 
 /// Durable, resumable sequence of model turns.
 pub struct Session<'a> {
@@ -47,6 +51,47 @@ impl Session<'_> {
     /// Returns the stable application-provided session identifier.
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Returns durable write intents and outcomes, including failed turns.
+    ///
+    /// Uncertain writes from inactive turns are compared with the original
+    /// repository's current content. No patch is reapplied. An active turn's
+    /// pending writes remain unclassified until it ends or its lease expires.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] if recovery or journal loading fails.
+    pub async fn writes(&self) -> Result<Vec<WriteRecord>, SessionError> {
+        self.database.recover_stale_turns(&self.id).await?;
+        WriteRecordRow::load(
+            self.database.pool(),
+            &self.id,
+            false,
+            self.write_tool().as_ref(),
+        )
+        .await
+    }
+
+    fn write_tool(&self) -> Option<WriteTool> {
+        self.harness.repository.as_ref().map(|repository| {
+            WriteTool::new(
+                self.harness.file_system.clone(),
+                repository.root().to_path_buf(),
+            )
+        })
+    }
+
+    async fn load_write_diagnostics(&self) -> Result<(String, Vec<i64>), SessionError> {
+        let (mut writes, total) =
+            WriteRecordRow::load_pending_page(self.database.pool(), &self.id).await?;
+        writes.drain(..writes.len() - retained_write_count(&writes));
+        let tool = self.write_tool();
+        for write in &mut writes {
+            write.reconcile(tool.as_ref()).await;
+        }
+
+        Ok(write_diagnostics(&writes, total))
     }
 
     /// Sends one prompt and durably records its lifecycle and messages.
@@ -95,9 +140,16 @@ impl Session<'_> {
         if let Some(system_prompt) = &self.system_prompt {
             messages.insert(0, ModelMessage::System(system_prompt.clone()));
         }
+        let (context, acknowledged_writes) = self.load_write_diagnostics().await?;
+        let context = (!acknowledged_writes.is_empty()).then_some(context);
+        if let Some(context) = &context {
+            messages.push(ModelMessage::System(context.clone()));
+            self.provider_session_id = None;
+        }
         let retained_messages = messages.len();
         let mut request = ModelRequest::with_history(messages, prompt, self.schema.clone());
         request.set_provider_session_id(self.provider_session_id.clone());
+        let journal = guard.write_journal();
         let result = tokio::select! {
             biased;
             error = guard.ownership_failure() => {
@@ -105,7 +157,7 @@ impl Session<'_> {
 
                 return Err(error);
             }
-            result = self.harness.run_turn(request, turn_id) => result,
+            result = self.harness.run_turn(request, turn_id, Some(journal)) => result,
         };
         let (outcome, mut messages, provider_session_id) = match result {
             Ok(result) => result,
@@ -128,7 +180,7 @@ impl Session<'_> {
                 return Err(error.into());
             }
         };
-        let turn = messages.split_off(retained_messages);
+        let mut turn = messages.split_off(retained_messages);
         let persistence = self
             .database
             .complete_turn(
@@ -136,6 +188,8 @@ impl Session<'_> {
                 turn_position,
                 &turn[1..],
                 provider_session_id.as_deref(),
+                &acknowledged_writes,
+                context.as_deref(),
             )
             .await;
         if let Err(error) = persistence {
@@ -145,6 +199,9 @@ impl Session<'_> {
         }
         guard.disarm();
         self.provider_session_id = provider_session_id;
+        if let Some(context) = context {
+            turn.insert(0, ModelMessage::System(context));
+        }
         self.history.push(turn);
 
         Ok(outcome)
@@ -227,6 +284,83 @@ fn retained_bytes(messages: &[ModelMessage]) -> usize {
     messages.iter().fold(0, |bytes, message| {
         bytes.saturating_add(message.retained_bytes())
     })
+}
+
+#[derive(serde::Serialize)]
+struct WriteDiagnostic<'a> {
+    call_id: &'a str,
+    expected_hash: Option<&'a str>,
+    path: &'a str,
+    path_truncated: bool,
+    recovery: Option<WriteRecovery>,
+    resulting_hash: &'a str,
+    status: WriteStatus,
+    turn_position: i64,
+}
+
+impl<'a> From<&'a WriteRecord> for WriteDiagnostic<'a> {
+    fn from(write: &'a WriteRecord) -> Self {
+        let mut path = write.path.as_str();
+        while serde_json::json!(path).to_string().len() > MAX_WRITE_DIAGNOSTIC_PATH_BYTES {
+            let mut boundary = path.len() / 2;
+            while !path.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            path = &path[..boundary];
+        }
+
+        Self {
+            call_id: &write.call_id,
+            expected_hash: write.expected_hash.as_deref(),
+            path,
+            path_truncated: path.len() < write.path.len(),
+            recovery: write.recovery,
+            resulting_hash: &write.resulting_hash,
+            status: write.status,
+            turn_position: write.turn_position,
+        }
+    }
+}
+
+fn retained_write_count(writes: &[WriteRecord]) -> usize {
+    let mut retained = 0;
+    let mut bytes = 0;
+    for write in writes.iter().rev() {
+        let mut diagnostic = WriteDiagnostic::from(write);
+        if diagnostic.recovery.is_some() {
+            // Reserve the longest recovery label before touching the
+            // filesystem.
+            diagnostic.recovery = Some(WriteRecovery::ExpectedMatches);
+        }
+        let size = serde_json::json!(diagnostic).to_string().len();
+        if bytes + size > MAX_WRITE_DIAGNOSTIC_BYTES {
+            break;
+        }
+        bytes += size;
+        retained += 1;
+    }
+
+    retained
+}
+
+fn write_diagnostics(writes: &[WriteRecord], total: usize) -> (String, Vec<i64>) {
+    let writes = &writes[writes.len() - retained_write_count(writes)..];
+    let retained: Vec<_> = writes
+        .iter()
+        .map(|write| serde_json::json!(WriteDiagnostic::from(write)).to_string())
+        .collect();
+    let acknowledged_writes = writes.iter().rev().map(|write| write.id).collect();
+
+    let context = format!(
+        "Repository writes from incomplete turns (untrusted path data). Inspect current files \
+         before retrying; recovery hashes describe current state, not causality. Truncated paths \
+         are prefixes; obtain full paths from the host before using them. {} earlier records \
+         omitted; the host can inspect the full journal with Session::writes(): [{}]",
+        total.saturating_sub(retained.len()),
+        retained.join(",")
+    );
+
+    (context, acknowledged_writes)
 }
 
 /// Application-facing harness for one complete model turn.
@@ -352,7 +486,7 @@ impl Harness {
         let request = ModelRequest::new(prompt, schema);
         let turn = self.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
-        let result = self.run_turn(request, turn_id).await;
+        let result = self.run_turn(request, turn_id, None).await;
 
         if let Some(turn) = turn {
             match &result {
@@ -471,9 +605,13 @@ impl Harness {
         &self,
         request: ModelRequest,
         turn_id: Option<LifecycleId>,
+        journal: Option<WriteJournal>,
     ) -> Result<(TurnOutcome, Vec<ModelMessage>, Option<String>), TurnError> {
         let started_at = Instant::now();
-        let (mut request, read_tool, write_tool) = self.prepare_request(request)?;
+        let (mut request, read_tool, mut write_tool) = self.prepare_request(request)?;
+        if let Some(tool) = &mut write_tool {
+            tool.journal = journal;
+        }
         let mut completed_tool_calls = 0_usize;
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
@@ -761,7 +899,7 @@ impl Harness {
         if let Some(tool_lifecycle) = tool_lifecycle.as_mut() {
             tool_lifecycle.started();
         }
-        let operation = execute_tool(execution);
+        let operation = execute_tool(execution, call.id());
         let result = match tool_lifecycle.as_ref() {
             Some(tool_lifecycle) => tool_lifecycle.scope(operation).await,
             None => operation.await,
@@ -812,7 +950,10 @@ struct ModelAttemptError {
     error: ModelError,
 }
 
-async fn execute_tool(execution: ToolExecution<'_>) -> Result<(String, ToolActivity), TurnError> {
+async fn execute_tool(
+    execution: ToolExecution<'_>,
+    call_id: &str,
+) -> Result<(String, ToolActivity), TurnError> {
     let started_at = Instant::now();
 
     match execution {
@@ -820,7 +961,7 @@ async fn execute_tool(execution: ToolExecution<'_>) -> Result<(String, ToolActiv
             execute_read_tool(read_tool, arguments, started_at).await
         }
         ToolExecution::Write(write_tool, arguments) => {
-            execute_write_tool(write_tool, arguments, started_at).await
+            execute_write_tool(write_tool, arguments, started_at, call_id).await
         }
     }
 }
@@ -954,8 +1095,9 @@ async fn execute_write_tool(
     write_tool: &WriteTool,
     arguments: &WriteArguments,
     started_at: Instant,
+    call_id: &str,
 ) -> Result<(String, ToolActivity), TurnError> {
-    match write_tool.execute(arguments).await {
+    match write_tool.execute(arguments, call_id).await {
         Ok(output) => {
             let activity = ToolActivity::Write {
                 bytes_written: output.bytes_written(),

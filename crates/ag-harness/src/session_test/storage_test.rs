@@ -64,7 +64,7 @@ async fn on_disk_database_creates_parent_and_applies_connection_policy() {
     assert!(database_path.exists());
     assert_eq!(journal_mode, "wal");
     assert_eq!(foreign_keys, 1);
-    assert_eq!(synchronous, 1);
+    assert_eq!(synchronous, 2);
 }
 
 #[tokio::test]

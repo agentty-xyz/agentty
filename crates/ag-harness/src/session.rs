@@ -18,6 +18,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
+use crate::write_journal::WriteJournal;
 use crate::{OutputSchema, OutputSchemaError, TurnError};
 
 pub(crate) const TURN_LEASE_SECONDS: i64 = 300;
@@ -412,26 +413,14 @@ WHERE id = ?
                 .await
                 .session_context("recover abandoned persistent session turn")?;
         }
-        let session = sqlx::query_as::<_, (i64, Option<String>)>(
-            "SELECT max_history_bytes, provider_session_id FROM session WHERE id = ?",
-        )
-        .bind(session_id)
-        .fetch_optional(&mut *transaction)
-        .await
-        .session_context(operation)?
-        .ok_or_else(|| SessionError::NotFound {
-            id: session_id.to_string(),
-        })?;
-        let (max_history_bytes, provider_session_id) = session;
-        let max_history_bytes = decode_max_history_bytes(session_id, max_history_bytes)?;
-        let turn_position = next_turn_position(&mut transaction, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
-        if max_history_bytes != acquisition.max_history_bytes
-            || provider_session_id != acquisition.provider_session_id
-            || turn_position != acquisition.turn_position
-            || latest_completed_turn != acquisition.latest_completed_turn
+        if !acquisition
+            .matches_current(&mut transaction, session_id)
+            .await?
         {
+            // Keep recovered ownership and continuation state when retrying
+            // with a refreshed acquisition snapshot.
             transaction.commit().await.session_context(operation)?;
+            self.abandoned_turns.remove(&abandoned_turns);
 
             return Ok(None);
         }
@@ -498,6 +487,8 @@ RETURNING owner_token
         turn_position: i64,
         messages: &[ModelMessage],
         provider_session_id: Option<&str>,
+        acknowledged_writes: &[i64],
+        recovery_context: Option<&str>,
     ) -> Result<(), SessionError> {
         let encoded_messages = messages
             .iter()
@@ -509,6 +500,23 @@ RETURNING owner_token
             .begin()
             .await
             .session_context("complete persistent session turn")?;
+        if let Some(context) = recovery_context {
+            let message = EncodedMessage {
+                kind: "recovery_context",
+                payload: serialize_payload(&context)?,
+                retained_bytes: i64::try_from(context.len()).unwrap_or(i64::MAX),
+            };
+            insert_message(
+                &mut transaction,
+                session_id,
+                turn_position,
+                -1,
+                &message,
+                now,
+                "complete persistent session turn",
+            )
+            .await?;
+        }
         for (index, message) in encoded_messages.iter().enumerate() {
             let message_position = i64::try_from(index).unwrap_or(i64::MAX).saturating_add(1);
             insert_message(
@@ -553,6 +561,21 @@ WHERE id = ?
         .execute(&mut *transaction)
         .await
         .session_context("complete persistent session turn")?;
+        for write_id in acknowledged_writes {
+            sqlx::query!(
+                r"
+UPDATE session_write SET acknowledged_by_turn = ?
+WHERE session_id = ? AND id = ? AND turn_position < ? AND acknowledged_by_turn IS NULL
+",
+                turn_position,
+                session_id,
+                write_id,
+                turn_position
+            )
+            .execute(&mut *transaction)
+            .await
+            .session_context("acknowledge persistent write diagnostics")?;
+        }
         transaction
             .commit()
             .await
@@ -613,7 +636,7 @@ WHERE id = ?
         Ok(())
     }
 
-    async fn recover_stale_turns(&self, session_id: &str) -> Result<(), SessionError> {
+    pub(crate) async fn recover_stale_turns(&self, session_id: &str) -> Result<(), SessionError> {
         let now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = self
             .pool
@@ -627,6 +650,10 @@ WHERE id = ?
             .session_context("recover stale persistent session turns")?;
 
         Ok(())
+    }
+
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 
     async fn load_turns(
@@ -717,7 +744,8 @@ pub enum SessionError {
     /// Durable session operations require a configured SQLite database.
     #[error("durable sessions require Harness::database(path)")]
     StorageRequired,
-    /// The model turn failed before it could be persisted.
+    /// The model turn failed; write records remain available through the
+    /// session.
     #[error(transparent)]
     Turn(#[from] TurnError),
     /// A model turn and the attempt to persist its failure both failed.
@@ -754,6 +782,34 @@ struct TurnAcquisition {
     provider_session_id: Option<String>,
     turn_position: i64,
     turns: Vec<Vec<ModelMessage>>,
+}
+
+impl TurnAcquisition {
+    async fn matches_current(
+        &self,
+        transaction: &mut Transaction<'_, sqlx::Sqlite>,
+        session_id: &str,
+    ) -> Result<bool, SessionError> {
+        let session = sqlx::query_as::<_, (i64, Option<String>)>(
+            "SELECT max_history_bytes, provider_session_id FROM session WHERE id = ?",
+        )
+        .bind(session_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .session_context("reserve persistent session turn")?
+        .ok_or_else(|| SessionError::NotFound {
+            id: session_id.to_string(),
+        })?;
+        let (max_history_bytes, provider_session_id) = session;
+        let max_history_bytes = decode_max_history_bytes(session_id, max_history_bytes)?;
+        let turn_position = next_turn_position(transaction, session_id).await?;
+        let latest_completed_turn = latest_completed_turn(transaction, session_id).await?;
+
+        Ok(max_history_bytes == self.max_history_bytes
+            && provider_session_id == self.provider_session_id
+            && turn_position == self.turn_position
+            && latest_completed_turn == self.latest_completed_turn)
+    }
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
@@ -818,6 +874,16 @@ pub(crate) struct TurnGuard {
 }
 
 impl TurnGuard {
+    pub(crate) fn write_journal(&self) -> WriteJournal {
+        WriteJournal {
+            owner_token: self.owner.token.clone(),
+            pool: self.pool.clone(),
+            session_id: self.owner.session_id.clone(),
+            timestamp_source: Arc::clone(&self.timestamp_source),
+            turn_position: self.owner.turn_position,
+        }
+    }
+
     fn new(database: &Database, owner: TurnOwner) -> Self {
         Self {
             armed: true,
@@ -1025,6 +1091,7 @@ impl EncodedMessage {
                 })
             }
             "user" => deserialize_payload(payload).map(ModelMessage::User),
+            "recovery_context" => deserialize_payload(payload).map(ModelMessage::System),
             _ => Err(SessionError::InvalidData {
                 reason: format!("unknown persistent message kind `{kind}`"),
             }),
@@ -1112,7 +1179,7 @@ fn connect_options(path: &Path) -> SqliteConnectOptions {
         .create_if_missing(true)
         .busy_timeout(DB_BUSY_TIMEOUT)
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
+        .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
 }
 
@@ -1334,19 +1401,11 @@ WHERE session_id = ?
     .execute(&mut **transaction)
     .await
     .session_context("recover stale persistent session turns")?;
+
     if result.rows_affected() > 0 {
-        sqlx::query(
-            r"
-UPDATE session
-SET provider_session_id = NULL, updated_at = ?
-WHERE id = ?
-",
-        )
-        .bind(now)
-        .bind(session_id)
-        .execute(&mut **transaction)
-        .await
-        .session_context("recover stale persistent session turns")?;
+        clear_provider_continuation(transaction, session_id, now)
+            .await
+            .session_context("recover stale persistent session turns")?;
     }
 
     Ok(())
@@ -1401,19 +1460,24 @@ WHERE session_id = ?
     .bind(&owner.token)
     .execute(&mut **transaction)
     .await?;
+
     if result.rows_affected() > 0 {
-        sqlx::query(
-            r"
-UPDATE session
-SET provider_session_id = NULL, updated_at = ?
-WHERE id = ?
-",
-        )
+        clear_provider_continuation(transaction, &owner.session_id, now).await?;
+    }
+
+    Ok(())
+}
+
+async fn clear_provider_continuation(
+    transaction: &mut Transaction<'_, sqlx::Sqlite>,
+    session_id: &str,
+    now: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE session SET provider_session_id = NULL, updated_at = ? WHERE id = ?")
         .bind(now)
-        .bind(&owner.session_id)
+        .bind(session_id)
         .execute(&mut **transaction)
         .await?;
-    }
 
     Ok(())
 }

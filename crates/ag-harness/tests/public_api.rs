@@ -5,20 +5,49 @@
 mod repository;
 
 use std::error::Error;
+use std::ffi::OsString;
 use std::io::{self, Cursor};
+use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_harness::{
     CompletionMetadata, CompletionUsage, FileSystem, Harness, LifecycleEventKind, LifecycleMetrics,
-    LifecycleObserverSet, LifecycleTraceObserver, Model, ModelCompletion, ModelConfiguration,
-    ModelError, ModelMessage, ModelMetadata, ModelProvider, ModelRequest, ModelResponse,
-    ModelResponseType, OutputSchema, OutputSchemaError, Repository, RepositoryError, SessionError,
-    SessionInfo, Tool, ToolCall, TurnError,
+    LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, Model, ModelCompletion,
+    ModelConfiguration, ModelError, ModelMessage, ModelMetadata, ModelProvider, ModelRequest,
+    ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError, Repository, RepositoryError,
+    SessionError, SessionInfo, Tool, ToolCall, TurnError, WriteError, WriteRecovery, WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
 use tokio::io::AsyncRead;
+use tokio::sync::Notify;
+
+#[test]
+fn released_write_error_variants_remain_exhaustively_matchable() {
+    // Arrange
+    let error = WriteError::WriteTarget {
+        path: "file.txt".to_string(),
+        source: io::Error::other("write failure"),
+    };
+
+    // Act
+    let category = match error {
+        WriteError::BinaryTarget { .. } => "binary",
+        WriteError::Encode(_) => "encode",
+        WriteError::NoChange { .. } => "unchanged",
+        WriteError::Patch { .. } => "patch",
+        WriteError::PathMismatch { .. } => "path",
+        WriteError::ReadTarget { .. } => "read",
+        WriteError::RepositoryRoot { .. } => "root",
+        WriteError::TargetTooLarge { .. } => "size",
+        WriteError::Unsupported { .. } => "unsupported",
+        WriteError::WriteTarget { .. } => "write",
+    };
+
+    // Assert
+    assert_eq!(category, "write");
+}
 
 struct ExternalToolModel {
     batched: bool,
@@ -91,6 +120,187 @@ impl Model for ExternalToolModel {
 }
 
 struct NameFileSystem;
+
+struct FailingAfterWriteModel;
+
+#[async_trait]
+impl Model for FailingAfterWriteModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        match request.messages().last() {
+            Some(ModelMessage::User(prompt)) if prompt == "write" => Ok(
+                ModelCompletion::from_response(ModelResponse::ToolCall(ToolCall::from_json(
+                    "write-name".to_string(),
+                    "write",
+                    &json!({
+                        "path": "name.txt",
+                        "patch": "--- /dev/null\n+++ b/name.txt\n@@ -0,0 +1 @@\n+Ada\n"
+                    })
+                    .to_string(),
+                    None,
+                )?)),
+            ),
+            Some(ModelMessage::User(prompt)) if prompt == "retry" || prompt == "retry-fails" => {
+                assert!(request.provider_session_id().is_none());
+                assert!(
+                    matches!(&request.messages()[0], ModelMessage::System(context)
+                    if context.contains("write-name") && context.contains("applied")
+                        && !context.contains("repository_root") && !context.contains("host-private"))
+                );
+                assert_eq!(request.messages().len(), 2);
+                if prompt == "retry-fails" {
+                    return Err(ModelError::InvalidResponse);
+                }
+
+                Ok(
+                    ModelCompletion::from_response(ModelResponse::Output(json!({"name": "Ada"})))
+                        .with_provider_session_id("recovered-session"),
+                )
+            }
+            Some(ModelMessage::User(prompt)) if prompt == "follow-up" => {
+                assert!(
+                    matches!(&request.messages()[0], ModelMessage::System(context)
+                        if context.contains("write-name") && context.contains("applied")
+                            && !context.contains("repository_root"))
+                );
+                assert_eq!(
+                    request.messages()[1],
+                    ModelMessage::User("retry".to_string())
+                );
+                assert_eq!(
+                    request
+                        .messages()
+                        .iter()
+                        .filter(|message| matches!(message, ModelMessage::System(_)))
+                        .count(),
+                    1
+                );
+                if let Some(id) = request.provider_session_id() {
+                    assert_eq!(id, "recovered-session");
+
+                    return Err(ModelError::ResumeUnavailable);
+                }
+
+                Ok(ModelCompletion::from_response(ModelResponse::Output(
+                    json!({"name": "Ada"}),
+                )))
+            }
+            _ => Err(ModelError::InvalidResponse),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct NativeRootFileSystem {
+    native_root: PathBuf,
+    physical_root: PathBuf,
+}
+
+#[async_trait]
+impl FileSystem for NativeRootFileSystem {
+    async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        assert_eq!(path, self.physical_root);
+
+        Ok(self.native_root.clone())
+    }
+
+    async fn open_beneath(
+        &self,
+        root: &Path,
+        path: &Path,
+    ) -> io::Result<Box<dyn AsyncRead + Send + Unpin>> {
+        assert_eq!(root, self.native_root);
+
+        LocalFileSystem
+            .open_beneath(&self.physical_root, path)
+            .await
+    }
+
+    async fn replace_beneath(
+        &self,
+        root: &Path,
+        path: &Path,
+        expected: Option<Vec<u8>>,
+        content: Vec<u8>,
+    ) -> io::Result<()> {
+        assert_eq!(root, self.native_root);
+
+        LocalFileSystem
+            .replace_beneath(&self.physical_root, path, expected, content)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn applied_write_survives_model_failure_and_session_reopen() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?;
+    let native_root = root.join(OsString::from_vec(b"host-private-\xff".to_vec()));
+    let file_system = NativeRootFileSystem {
+        native_root: native_root.clone(),
+        physical_root: root.clone(),
+    };
+    let repository = Repository::new(&root, "/usr/bin/git")?;
+    let harness = Harness::new(FailingAfterWriteModel)
+        .database(directory.path().join("harness.db"))
+        .repository(repository.clone())
+        .file_system(file_system.clone())
+        .allow(Tool::Write);
+    let mut session = harness
+        .session("write-failure", request()?.schema().clone())
+        .create()
+        .await?;
+
+    // Act
+    let error = session
+        .send("write")
+        .await
+        .expect_err("model must fail after writing");
+    let before = session.writes().await?;
+    drop(session);
+    drop(harness);
+    let harness = Harness::new(FailingAfterWriteModel)
+        .database(directory.path().join("harness.db"))
+        .repository(repository)
+        .file_system(file_system)
+        .allow(Tool::Write);
+    let mut reopened = harness.resume("write-failure").await?;
+    let after = reopened.writes().await?;
+    let failed_retry = reopened
+        .send("retry-fails")
+        .await
+        .expect_err("failed diagnostics must remain pending");
+    let retry = reopened.send("retry").await?;
+    drop(reopened);
+    let mut recovered = harness.resume("write-failure").await?;
+    let follow_up = recovered.send("follow-up").await?;
+    let stateless_follow_up = recovered.send("follow-up").await?;
+
+    // Assert
+    assert!(matches!(
+        error,
+        SessionError::Turn(TurnError::Model(ModelError::InvalidResponse))
+    ));
+    assert!(matches!(
+        failed_retry,
+        SessionError::Turn(TurnError::Model(ModelError::InvalidResponse))
+    ));
+    assert_eq!(std::fs::read(root.join("name.txt"))?, b"Ada\n");
+    assert_eq!(before, after);
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].status, WriteStatus::Applied);
+    assert_eq!(after[0].repository_root, native_root);
+    assert_eq!(after[0].path, "name.txt");
+    assert_eq!(after[0].call_id, "write-name");
+    assert_eq!(after[0].expected_hash, None);
+    assert_eq!(after[0].resulting_hash.len(), 64);
+    assert_eq!(retry.output(), &json!({"name": "Ada"}));
+    assert_eq!(follow_up.output(), &json!({"name": "Ada"}));
+    assert_eq!(stateless_follow_up.output(), &json!({"name": "Ada"}));
+    assert_eq!(recovered.writes().await?, after);
+
+    Ok(())
+}
 
 #[async_trait]
 impl FileSystem for NameFileSystem {
@@ -625,6 +835,141 @@ async fn external_observer_set_fans_out_lifecycle_events() -> Result<(), Box<dyn
         .expect("second event recorder should not be poisoned");
     assert!(!first_events.is_empty());
     assert_eq!(*first_events, *second_events);
+
+    Ok(())
+}
+
+struct CancellationWriteModel;
+
+#[async_trait]
+impl Model for CancellationWriteModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        if request.prompt() == "first" {
+            return Ok(ModelCompletion::from_response(ModelResponse::Output(
+                json!({"name": "Ada"}),
+            ))
+            .with_provider_session_id("native-session"));
+        }
+        assert_eq!(request.provider_session_id(), Some("native-session"));
+
+        Ok(ModelCompletion::from_response(ModelResponse::ToolCall(ToolCall::from_json(
+            "late-write".to_string(), "write",
+            &json!({"path": "name.txt", "patch": "--- /dev/null\n+++ b/name.txt\n@@ -0,0 +1 @@\n+Ada\n"}).to_string(), None,
+        )?)))
+    }
+}
+
+struct LateWriteFileSystem {
+    finished: Arc<Notify>,
+    release: Arc<Notify>,
+    started: Arc<Notify>,
+}
+
+#[async_trait]
+impl FileSystem for LateWriteFileSystem {
+    async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        LocalFileSystem.canonicalize(path).await
+    }
+
+    async fn open_beneath(
+        &self,
+        root: &Path,
+        path: &Path,
+    ) -> io::Result<Box<dyn AsyncRead + Send + Unpin>> {
+        LocalFileSystem.open_beneath(root, path).await
+    }
+
+    async fn replace_beneath(
+        &self,
+        root: &Path,
+        path: &Path,
+        expected: Option<Vec<u8>>,
+        content: Vec<u8>,
+    ) -> io::Result<()> {
+        let root = root.to_path_buf();
+        let path = path.to_path_buf();
+        let release = Arc::clone(&self.release);
+        let started = Arc::clone(&self.started);
+        let finished = Arc::clone(&self.finished);
+        tokio::spawn(async move {
+            started.notify_one();
+            release.notified().await;
+            let result = LocalFileSystem
+                .replace_beneath(&root, &path, expected, content)
+                .await;
+            finished.notify_one();
+
+            result
+        })
+        .await
+        .map_err(io::Error::other)?
+    }
+}
+
+#[tokio::test]
+async fn cancellation_returns_before_a_late_write_and_preserves_its_uncertainty()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::tempdir()?;
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let finished = Arc::new(Notify::new());
+    let harness = Arc::new(
+        Harness::new(CancellationWriteModel)
+            .database(directory.path().join("harness.db"))
+            .repository(Repository::new(directory.path(), "/usr/bin/git")?)
+            .allow(Tool::Write)
+            .file_system(LateWriteFileSystem {
+                finished: Arc::clone(&finished),
+                release: Arc::clone(&release),
+                started: Arc::clone(&started),
+            }),
+    );
+    let mut session = harness
+        .session("cancel-write", request()?.schema().clone())
+        .create()
+        .await?;
+    session.send("first").await?;
+    drop(session);
+    let task_harness = Arc::clone(&harness);
+    let turn = tokio::spawn(async move {
+        task_harness
+            .resume("cancel-write")
+            .await?
+            .send("write")
+            .await
+    });
+    let timeout = std::time::Duration::from_secs(5);
+    tokio::time::timeout(timeout, started.notified()).await?;
+
+    // Act
+    turn.abort();
+    let cancelled = tokio::time::timeout(timeout, turn)
+        .await?
+        .expect_err("cancelled send");
+    let resumed = harness.resume("cancel-write").await?;
+    // Wait for asynchronous turn cleanup before observing recovery hashes.
+    let before = tokio::time::timeout(timeout, async {
+        loop {
+            let writes = resumed.writes().await?;
+            if writes[0].recovery.is_some() {
+                break Ok::<_, SessionError>(writes);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    release.notify_one();
+    tokio::time::timeout(timeout, finished.notified()).await?;
+    let after = resumed.writes().await?;
+
+    // Assert
+    assert!(cancelled.is_cancelled());
+    assert_eq!(before[0].status, WriteStatus::Pending);
+    assert_eq!(before[0].recovery, Some(WriteRecovery::ExpectedMatches));
+    assert_eq!(after[0].status, WriteStatus::Pending);
+    assert_eq!(after[0].recovery, Some(WriteRecovery::ResultMatches));
+    assert_eq!(std::fs::read(directory.path().join("name.txt"))?, b"Ada\n");
 
     Ok(())
 }
