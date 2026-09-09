@@ -37,6 +37,7 @@ serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true
 sqlx.workspace = true
+sysinfo.workspace = true
 tachyonfx.workspace = true
 time.workspace = true
 thiserror.workspace = true

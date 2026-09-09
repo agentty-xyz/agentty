@@ -1,17 +1,26 @@
 //! Host process-table sampling behind an injectable boundary.
 
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use sysinfo::Components;
 use tokio::process::Command;
 
 use crate::domain::resource::SessionResources;
 use crate::infra::process_identity::ProcessIdentity;
 
+/// Pins temperature for deterministic feature recordings; `--` pins
+/// unavailable.
+#[cfg(debug_assertions)]
+const CPU_TEMPERATURE_ENV_VAR: &str = "AGENTTY_CPU_TEMPERATURE_CELSIUS";
+
 /// One validated row in a host process-table snapshot.
 #[derive(Clone, Debug)]
 pub(crate) struct ProcessSample {
+    pub(crate) host_cpu_temperature_celsius: Option<f32>,
     pub(crate) identity: Option<ProcessIdentity>,
     pub(crate) is_alive: bool,
     pub(crate) parent_pid: u32,
@@ -28,7 +37,10 @@ pub(crate) trait ResourceClient: Send + Sync {
 }
 
 /// Process accounting through the macOS/Linux `ps` interface.
-pub(crate) struct RealResourceClient;
+#[derive(Default)]
+pub(crate) struct RealResourceClient {
+    temperature: Mutex<TemperatureCache>,
+}
 
 impl RealResourceClient {
     /// Reads only tracked roots, off the async executor, before or after `ps`.
@@ -41,6 +53,46 @@ impl RealResourceClient {
         })
         .await
         .ok()
+    }
+
+    /// Polls the independent sensor worker without waiting for host I/O.
+    fn host_cpu_temperature(&self) -> Option<f32> {
+        let read = || {
+            self.temperature.lock().ok()?.sample(Instant::now(), || {
+                let components = Components::new_with_refreshed_list();
+
+                hottest_cpu_temperature(
+                    components
+                        .iter()
+                        .map(|sensor| (sensor.label(), sensor.temperature())),
+                )
+            })
+        };
+
+        #[cfg(debug_assertions)]
+        {
+            let pinned = std::env::var(CPU_TEMPERATURE_ENV_VAR).ok();
+
+            Self::temperature_with_override(pinned.as_deref(), read)
+        }
+        #[cfg(not(debug_assertions))]
+        read()
+    }
+
+    /// Invalid overrides fall back to live sensors, as with the clock fixture.
+    #[cfg(debug_assertions)]
+    fn temperature_with_override(
+        pinned: Option<&str>,
+        read: impl FnOnce() -> Option<f32>,
+    ) -> Option<f32> {
+        if pinned == Some("--") {
+            return None;
+        }
+
+        pinned
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|temperature| temperature.is_finite() && *temperature > 0.0)
+            .or_else(read)
     }
 
     /// Rejects failed commands and malformed output instead of showing zeros.
@@ -84,9 +136,98 @@ impl ResourceClient for RealResourceClient {
         let mut samples = Self::parse_output(&output)?;
         let after = Self::identities(roots).await?;
         Self::bind_identities(&mut samples, &before, &after);
+        let temperature = self.host_cpu_temperature();
+        for sample in &mut samples {
+            sample.host_cpu_temperature_celsius = temperature;
+        }
 
         Some(samples)
     }
+}
+
+/// Keeps at most one sensor worker in flight, refreshing after ten seconds.
+/// Readings expire after twenty seconds so a stalled backend cannot freeze
+/// process accounting or leave an old temperature displayed indefinitely.
+#[derive(Default)]
+struct TemperatureCache {
+    last_started: Option<Instant>,
+    pending: Option<JoinHandle<Option<f32>>>,
+    sample: Option<(Instant, Option<f32>)>,
+}
+
+impl TemperatureCache {
+    fn sample(
+        &mut self,
+        now: Instant,
+        read: impl FnOnce() -> Option<f32> + Send + 'static,
+    ) -> Option<f32> {
+        if let Some(pending) = &self.pending {
+            if !pending.is_finished() {
+                return self.cached_temperature(now);
+            }
+
+            let pending = self.pending.take()?;
+            // Age results from the start of the read, including time spent
+            // stalled or waiting for the next process sample to collect them.
+            self.sample = Some((self.last_started?, pending.join().ok().flatten()));
+        }
+        if let Some((sampled_at, temperature)) = self.sample
+            && now.saturating_duration_since(sampled_at) < Duration::from_secs(10)
+        {
+            return temperature;
+        }
+
+        if self
+            .last_started
+            .is_some_and(|started| now.saturating_duration_since(started) < Duration::from_secs(10))
+        {
+            return self.cached_temperature(now);
+        }
+
+        // Also throttle retries if the OS cannot create a worker. Native sensor
+        // calls cannot be cancelled; retaining the handle prevents overlapping
+        // reads. A dedicated thread does not hold up Tokio runtime shutdown.
+        self.last_started = Some(now);
+        self.pending = thread::Builder::new()
+            .name("agentty-temperature".to_string())
+            .spawn(read)
+            .ok();
+
+        self.cached_temperature(now)
+    }
+
+    fn cached_temperature(&self, now: Instant) -> Option<f32> {
+        self.sample
+            .filter(|(sampled_at, _)| {
+                now.saturating_duration_since(*sampled_at) < Duration::from_secs(20)
+            })
+            .and_then(|(_, temperature)| temperature)
+    }
+}
+
+/// Selects only recognizable CPU sensors, excluding GPU, disk, and invalid
+/// readings.
+fn hottest_cpu_temperature<'a>(
+    sensors: impl IntoIterator<Item = (&'a str, Option<f32>)>,
+) -> Option<f32> {
+    sensors
+        .into_iter()
+        .filter(|(label, _)| {
+            let label = label.to_ascii_lowercase();
+
+            [
+                "cpu", "coretemp", "k10temp", "zenpower", "pacc mtr", "eacc mtr",
+            ]
+            .iter()
+            .any(|name| label.contains(name))
+                // M5 exposes numbered die probes instead of pACC/eACC labels.
+                || label.strip_prefix("pmu tdie").is_some_and(|index| {
+                    !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit())
+                })
+        })
+        .filter_map(|(_, temperature)| temperature)
+        .filter(|temperature| temperature.is_finite() && *temperature > 0.0)
+        .reduce(f32::max)
 }
 
 /// Parses header-free accounting and state; native identity is attached later.
@@ -106,6 +247,7 @@ fn parse_process_table(output: &str) -> Option<Vec<ProcessSample>> {
             }
 
             Some(ProcessSample {
+                host_cpu_temperature_celsius: None,
                 identity: None,
                 is_alive: !state.starts_with(['Z', 'X', 'x']),
                 parent_pid,
@@ -162,157 +304,5 @@ pub(crate) fn process_tree_resources(
 }
 
 #[cfg(test)]
-mod tests {
-    #[cfg(unix)]
-    use std::os::unix::process::ExitStatusExt;
-
-    use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn failed_command_and_invalid_utf8_are_unavailable() {
-        // Arrange
-        let mut output = std::process::Output {
-            status: std::process::ExitStatus::from_raw(256),
-            stdout: b"1 0 0 1024".to_vec(),
-            stderr: Vec::new(),
-        };
-
-        // Act / Assert
-        assert!(RealResourceClient::parse_output(&output).is_none());
-        output.status = std::process::ExitStatus::from_raw(0);
-        output.stdout = vec![0xff];
-        assert!(RealResourceClient::parse_output(&output).is_none());
-    }
-
-    #[test]
-    fn tree_totals_include_descendants_and_exclude_other_sessions() {
-        // Arrange
-        let samples = parse_process_table(
-            "30 20 25.5 1024 S\n10 1 100.0 2048 Ss\n20 10 3.0 512 R\n40 1 90.0 8000 S\n",
-        )
-        .expect("valid table");
-
-        // Act
-        let resources = process_tree_resources(&samples, 10).expect("root present");
-
-        // Assert
-        assert_eq!(
-            resources,
-            SessionResources {
-                cpu_percent: 128.5,
-                process_count: 3,
-                resident_memory_kib: 3584
-            }
-        );
-        assert_eq!(process_tree_resources(&samples, 999), None);
-        assert_eq!(process_tree_resources(&samples, 1), None);
-    }
-
-    #[test]
-    fn malformed_tables_are_unavailable() {
-        // Arrange
-        let malformed = [
-            "1",
-            "x 0 0 1 S",
-            "1 x 0 1 S",
-            "1 0 x 1 S",
-            "1 0 0 x S",
-            "1 0 NaN 1 S",
-            "1 0 inf 1 S",
-            "1 0 -1 1 S",
-            "1 0 0 1",
-            "1 0 0 1 S extra",
-        ];
-
-        // Act / Assert
-        for output in malformed {
-            assert!(parse_process_table(output).is_none(), "{output}");
-        }
-        assert!(parse_process_table("\n ").expect("empty table").is_empty());
-    }
-
-    #[test]
-    fn cycles_and_duplicate_rows_do_not_double_count() {
-        // Arrange
-        let samples =
-            parse_process_table("1 2 1 100 S\n2 1 2 200 S\n2 1 2 200 S").expect("valid table");
-
-        // Act
-        let resources = process_tree_resources(&samples, 1).expect("root present");
-
-        // Assert
-        assert_eq!(resources.process_count, 2);
-        assert_eq!(resources.resident_memory_kib, 300);
-    }
-
-    #[test]
-    fn exited_roots_are_unavailable_and_exited_children_are_excluded() {
-        // Arrange
-        let samples = parse_process_table("1 0 1 100 S\n2 1 50 200 Z+\n3 1 50 200 X\n4 1 50 200 x")
-            .expect("valid table");
-
-        // Act
-        let resources = process_tree_resources(&samples, 1).expect("live root");
-
-        // Assert
-        assert_eq!(resources.process_count, 1);
-        assert_eq!(resources.cpu_percent, 1.0);
-        assert_eq!(resources.resident_memory_kib, 100);
-        for pid in [2, 3, 4] {
-            assert!(process_tree_resources(&samples, pid).is_none());
-        }
-    }
-
-    #[test]
-    fn native_identity_changes_within_one_second_cannot_bind_stale_accounting() {
-        // Arrange
-        let original = ProcessIdentity(1_000_001);
-        let reused = ProcessIdentity(1_000_002);
-        let before = HashMap::from([(10, original), (20, original), (30, original)]);
-        let after = HashMap::from([(10, original), (20, reused), (40, original)]);
-        let mut samples =
-            parse_process_table("10 1 1 100 S\n20 1 90 8192 S\n30 1 1 100 S\n40 1 1 100 S")
-                .expect("accounting snapshot");
-
-        // Act
-        RealResourceClient::bind_identities(&mut samples, &before, &after);
-
-        // Assert
-        assert_eq!(original.0 / 1_000_000, reused.0 / 1_000_000);
-        assert_eq!(samples[0].identity, Some(original));
-        assert!(samples[1..].iter().all(|sample| sample.identity.is_none()));
-
-        // Act: a later coherent sample identifies the new process distinctly.
-        RealResourceClient::bind_identities(&mut samples, &after, &after);
-
-        // Assert
-        assert_eq!(samples[1].identity, Some(reused));
-        assert_ne!(samples[1].identity, Some(original));
-    }
-
-    #[tokio::test]
-    async fn real_process_table_contains_this_process() {
-        // Arrange
-        let client = RealResourceClient;
-
-        // Act
-        let samples = client
-            .sample(vec![std::process::id(), u32::MAX])
-            .await
-            .expect("host ps available");
-        let resources = process_tree_resources(&samples, std::process::id()).expect("root present");
-
-        // Assert
-        assert_eq!(
-            samples
-                .iter()
-                .find(|sample| sample.pid == std::process::id())
-                .expect("root")
-                .identity,
-            ProcessIdentity::read(std::process::id()),
-        );
-        assert!(resources.process_count >= 1);
-        assert!(resources.resident_memory_kib > 0);
-    }
-}
+#[path = "resource_test.rs"]
+mod tests;

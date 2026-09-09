@@ -974,6 +974,10 @@ impl FeatureTest {
                     PINNED_CLOCK_UTC_OFFSET_SECONDS.to_string(),
                 ),
                 (PINNED_DISPLAY_VERSION_ENV_VAR.to_string(), "1".to_string()),
+                (
+                    "AGENTTY_CPU_TEMPERATURE_CELSIUS".to_string(),
+                    "64.5".to_string(),
+                ),
             ],
             inherit_system_path: true,
             name: name.into(),

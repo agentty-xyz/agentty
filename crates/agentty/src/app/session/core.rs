@@ -115,6 +115,7 @@ pub(crate) struct SessionRenderParts<'a> {
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     /// Cached session list positions keyed by stable session id.
     pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
+    pub(crate) session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     /// Latest resource totals for tracked agent process trees.
     pub(crate) session_resources: &'a HashMap<SessionId, SessionResources>,
     /// Whether each rendered session currently has a materialized worktree on
@@ -217,7 +218,7 @@ impl SessionManager {
         Self {
             active_prompt_outputs: HashMap::new(),
             resources: super::resource::ResourceMonitor::new(Arc::new(
-                crate::infra::resource::RealResourceClient,
+                crate::infra::resource::RealResourceClient::default(),
             )),
             at_mention_indexes: HashMap::new(),
             default_session_model: defaults.model,
@@ -348,6 +349,7 @@ impl SessionManager {
     pub(crate) fn render_parts(&self) -> SessionRenderParts<'_> {
         SessionRenderParts {
             active_prompt_outputs: &self.active_prompt_outputs,
+            session_cpu_temperatures: &self.resources.temperatures,
             session_resources: &self.resources.values,
             session_branch_names: &self.state.session_branch_names,
             session_git_statuses: &self.state.session_git_statuses,

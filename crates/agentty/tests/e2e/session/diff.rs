@@ -656,6 +656,7 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .compose(&common::wait_for_agentty_startup())
         .compose(&common::open_selected_session_view())
         .press_key("d")
+        .wait_for_text("j/k: select file", 5000)
         .wait_for_text("main.rs", 5000)
         .press_key("j")
         .wait_for_stable_frame(200, 3000)
@@ -704,6 +705,7 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .press_key("q")
         .wait_for_text("Enter: reply", 5000)
         .press_key("d")
+        .wait_for_text("j/k: select file", 5000)
         .wait_for_text("main.rs", 5000)
         .press_key("j")
         .wait_for_text("Explain the entry point. Updated.", 5000)
@@ -728,7 +730,7 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .wait_for_text("Line comment received.", 5000)
         .wait_for_text("Enter: reply", 5000)
         .wait_for_text("[Commit] No changes to commit.", 5000)
-        .wait_for_text("No review findings.", 5000)
+        // VHS reuses the reviewed diff, so automatic review may be skipped.
         .write_text("G")
         .wait_for_stable_frame(1000, 5000)
         .viewing_pause_ms(1500)
@@ -737,6 +739,7 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
             "Line comment submitted in the next session turn",
         )
         .press_key("d")
+        .wait_for_text("j/k: select file", 5000)
         .wait_for_text("main.rs", 5000)
         .press_key("j")
         .wait_for_text("Shift+C: comment", 5000)

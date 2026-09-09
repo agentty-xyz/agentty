@@ -44,6 +44,7 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
     pub(crate) session_progress_messages: &'a HashMap<SessionId, String>,
+    pub(crate) session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     /// Latest tracked process-tree totals.
     pub(crate) session_resources: &'a HashMap<SessionId, SessionResources>,
     pub(crate) session_review: Option<SessionReviewView<'a>>,
@@ -105,6 +106,7 @@ impl App {
             session_branch_names: sessions.session_branch_names,
             session_git_statuses: sessions.session_git_statuses,
             session_index_by_id: sessions.session_index_by_id,
+            session_cpu_temperatures: sessions.session_cpu_temperatures,
             session_resources: sessions.session_resources,
             session_progress_messages: &self.session_progress_messages,
             session_review,
@@ -153,67 +155,5 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::presentation::app_mode::{DiffFocus, DiffLineComments};
-
-    #[test]
-    fn visible_review_session_id_includes_diff_comments() {
-        // Arrange
-        let mode = AppMode::Diff {
-            diff: String::new(),
-            file_explorer_selected_index: 0,
-            focus: DiffFocus::Files,
-            line_comments: DiffLineComments::default(),
-            selected_diff_line_index: 0,
-            preview: crate::presentation::app_mode::DiffPreview::default(),
-            review_comments: Some(crate::presentation::app_mode::DiffReviewComments::loading(
-                1,
-            )),
-            restore: None,
-            scroll_cache: None,
-            session_id: "session-id".into(),
-            scroll_offset: 0,
-        };
-
-        // Act
-        let session_id = visible_review_session_id(&mode);
-
-        // Assert
-        assert_eq!(session_id, Some("session-id"));
-    }
-
-    #[test]
-    fn visible_review_session_id_includes_loading_diff() {
-        // Arrange
-        let mode = AppMode::DiffLoading {
-            fallback_view_scroll_offset: None,
-            request_id: 1,
-            restore: None,
-            session_id: "loading-session".into(),
-            sidebar_focus: crate::presentation::app_mode::DiffSidebarFocus::Files,
-        };
-
-        // Act
-        let session_id = visible_review_session_id(&mode);
-
-        // Assert
-        assert_eq!(session_id, Some("loading-session"));
-    }
-
-    #[tokio::test]
-    async fn view_snapshot_builds_settings_screen_only_for_settings_tab() {
-        // Arrange
-        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-
-        // Act
-        app.tabs.set(Tab::Sessions);
-        let sessions_tab_has_settings_screen = app.view_snapshot().settings_screen.is_some();
-        app.tabs.set(Tab::Settings);
-        let settings_tab_has_settings_screen = app.view_snapshot().settings_screen.is_some();
-
-        // Assert
-        assert!(!sessions_tab_has_settings_screen);
-        assert!(settings_tab_has_settings_screen);
-    }
-}
+#[path = "view_test.rs"]
+mod tests;

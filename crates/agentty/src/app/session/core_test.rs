@@ -855,6 +855,7 @@ async fn resource_refresh_projects_only_current_worker_pids() {
     let mut client = crate::infra::resource::MockResourceClient::new();
     client.expect_sample().times(1).returning(|_| {
         Some(vec![crate::infra::resource::ProcessSample {
+            host_cpu_temperature_celsius: None,
             is_alive: true,
             identity: Some(crate::infra::process_identity::ProcessIdentity(1_000_001)),
             pid: 42,

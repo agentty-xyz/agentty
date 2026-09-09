@@ -486,3 +486,27 @@ fn session_resources_during_delayed_retry() -> E2eResult {
 
     Ok(())
 }
+
+/// Downstream callers can construct and exhaustively match the original totals.
+#[test]
+fn session_resources_public_shape_remains_exhaustive() {
+    // Arrange
+    let resources = agentty::domain::resource::SessionResources {
+        cpu_percent: 12.5,
+        process_count: 2,
+        resident_memory_kib: 1024,
+    };
+
+    // Act
+    let agentty::domain::resource::SessionResources {
+        cpu_percent,
+        process_count,
+        resident_memory_kib,
+    } = resources;
+
+    // Assert
+    assert_eq!(
+        (cpu_percent, process_count, resident_memory_kib),
+        (12.5, 2, 1024)
+    );
+}
