@@ -86,9 +86,11 @@ offers it to the adapter. `ModelError::ResumeUnavailable` causes one retry with 
 provider identifier removed and the same SQLite history retained. The rejected native
 resume and the replay are reported as separate provider attempts. A successful replay
 replaces the stored continuation identifier with the one it returns, or clears the
-identifier when it returns none. Any failed turn clears the stored provider identifier
-because the harness cannot know whether the remote conversation advanced before the
-failure.
+identifier when it returns none. Failed turns, cancellation, and expired-lease recovery
+clear the stored provider identifier atomically with the terminal turn state because the
+harness cannot know whether the remote conversation advanced. Cleanup clears the
+identifier only when it actually interrupts an active turn, so delayed cleanup cannot
+invalidate a newer continuation. The next request replays completed SQLite history.
 
 ## Concurrency
 
