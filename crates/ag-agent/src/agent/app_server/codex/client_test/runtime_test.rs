@@ -1,10 +1,31 @@
-use super::*;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
+use mockall::Sequence;
+use serde_json::Value;
+use tempfile::tempdir;
+use tokio::sync::mpsc;
+
+use super::support::{
+    build_stopped_session_runtime, expect_commentary_then_completed_final_turn,
+    expect_user_input_request_turn, remember_request_id,
+};
+use crate::agent::app_server::client::{RuntimeClientProvider, RuntimeClientRuntime};
+use crate::agent::app_server::codex::client::CodexRuntimeProvider;
+use crate::agent::app_server::codex::{lifecycle, stream_parser, usage};
+use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport as MockCodexRuntimeTransport;
+use crate::app_server::{AppServerError, AppServerTurnRequest};
+use crate::app_server_transport;
+use crate::model::agent::{AgentModel, ReasoningLevel};
+use crate::model::session::SpeedMode;
 
 #[tokio::test]
 async fn runtime_reuse_requires_matching_permission_mode() {
     // Arrange
     let mut runtime = build_stopped_session_runtime("thread-permission");
     let mut request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: runtime.state.folder.clone(),
         live_transcript: None,
         main_checkout_root: None,

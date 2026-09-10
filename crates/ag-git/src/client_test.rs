@@ -5,7 +5,18 @@ use std::time::Duration;
 
 use tempfile::tempdir;
 
-use super::*;
+use crate::client::{GitClient, RealGitClient};
+use crate::merge::{SquashMergeOutcome, squash_merge};
+use crate::rebase::{RebaseStepResult, abort_rebase, rebase_onto_start};
+use crate::repo::main_repo_root;
+use crate::sync::{
+    PullRebaseResult, SingleCommitMessageStrategy, WorktreeFileContent,
+    commit_all_preserving_single_commit, diff, is_worktree_clean, list_local_commit_titles,
+    list_upstream_commit_titles, pull_rebase, push_current_branch,
+    push_current_branch_to_remote_branch, ref_hash, tracked_worktree_status, worktree_status,
+};
+use crate::worktree::create_worktree;
+use crate::{rebase, sync};
 
 /// Canonicalizes a test path for stable comparisons across symlinked
 /// temporary directory roots (for example `/var` vs `/private/var`).

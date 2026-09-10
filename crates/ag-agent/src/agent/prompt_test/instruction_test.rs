@@ -1,4 +1,13 @@
-use super::*;
+use ag_protocol::{
+    ProtocolRequestProfile, ProtocolSchemaInstructionMode,
+    prepend_protocol_instructions as protocol_prepend_instructions,
+    prepend_protocol_refresh_reminder as protocol_prepend_refresh_reminder,
+};
+
+use super::support::{normalize_prompt, test_workspace_root};
+use crate::agent::instruction::InstructionDeliveryMode;
+use crate::agent::prompt::{PromptPreparationRequest, prepare_prompt_text};
+use crate::channel::PersonalityPromptUpdate;
 
 #[test]
 fn repair_bootstrap_applies_schema_once_for_each_provider_and_profile() {

@@ -1,6 +1,9 @@
+use std::path::PathBuf;
 use std::process::Command;
 
-use super::*;
+use crate::error::ClipboardError;
+use crate::image_data::RgbaImageData;
+use crate::{Clipboard, DISABLE_CLIPBOARD_ENV, backend};
 
 const DISABLED_CONSTRUCTOR_CHILD_ENV: &str = "AGENTTY_TEST_DISABLED_CONSTRUCTOR_CHILD";
 

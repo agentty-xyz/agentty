@@ -1,7 +1,7 @@
 use image::codecs::png::PngEncoder;
-use image::{ExtendedColorType, ImageEncoder};
+use image::{ExtendedColorType, ImageEncoder, ImageFormat};
 
-use super::*;
+use crate::format::decode_image_rgba;
 
 #[test]
 fn test_decode_image_rgba_returns_dimensions_and_rgba_bytes() {

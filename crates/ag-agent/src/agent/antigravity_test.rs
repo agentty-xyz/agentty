@@ -2,8 +2,9 @@ use ag_protocol::TurnPromptAttachment;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
 
-use super::shared_prompt::{CliPromptAccessRootMode, cli_prompt_access_directories};
-use super::*;
+use crate::agent::antigravity::{ANTIGRAVITY_PRINT_TIMEOUT, AntigravityBackend};
+use crate::agent::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
+use crate::agent::prompt::{CliPromptAccessRootMode, cli_prompt_access_directories};
 use crate::channel::AgentRequestKind;
 use crate::model::agent::{AgentModel, ReasoningLevel};
 

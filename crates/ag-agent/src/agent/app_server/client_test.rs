@@ -1,11 +1,20 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
+use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
+use tokio::sync::mpsc;
 
-use super::*;
+use crate::agent::app_server::client::{
+    ProviderRuntimeClient, RuntimeClientProvider, RuntimeClientRuntime,
+};
+use crate::app_server;
+use crate::app_server::{
+    AppServerClient, AppServerError, AppServerFuture, AppServerSessionRegistry,
+    AppServerStreamEvent, AppServerTurnRequest, BorrowedAppServerFuture,
+};
 use crate::channel::AgentRequestKind;
 use crate::model::agent::ReasoningLevel;
+use crate::model::session::SpeedMode;
 
 static RUN_COUNT: AtomicUsize = AtomicUsize::new(0);
 static SHUTDOWN_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -96,6 +105,7 @@ impl RuntimeClientRuntime for TestRuntime {
 
 fn make_request() -> AppServerTurnRequest {
     AppServerTurnRequest {
+        provider_call_budget: None,
         folder: std::env::temp_dir(),
         live_transcript: None,
         main_checkout_root: None,

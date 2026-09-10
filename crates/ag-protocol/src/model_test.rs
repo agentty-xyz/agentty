@@ -1,4 +1,10 @@
-use super::*;
+use crate::model::{
+    AgentResponse, MAX_QUESTIONS, MAX_SUBTASKS, ReviewCommentOutcome, ReviewCommentResolution,
+    questions_field_description, render_field_description_template, subtasks_field_description,
+};
+use crate::question::QuestionItem;
+use crate::subtask::SubtaskItem;
+use crate::verification::VerificationVerdictItem;
 
 #[test]
 /// Ensures the dynamic `questions` field description renders from the

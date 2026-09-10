@@ -1,6 +1,17 @@
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
+
 use tempfile::tempdir;
 
-use super::*;
+use crate::error::GitError;
+use crate::repo::{
+    AsyncGitCommand, apply_non_interactive_environment, command_output_detail,
+    format_git_invocation, main_checkout_working_tree_sync, main_repo_root, normalize_repo_url,
+    repo_root_from_git_dir_async, resolve_git_dir, run_git_command_sync,
+    run_git_command_with_timeout,
+};
 
 #[test]
 fn test_apply_non_interactive_environment_sets_git_prompt_controls() {

@@ -1,12 +1,22 @@
 use std::fs;
+use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::fs as unix_fs;
+use std::path::Path;
 use std::process::{Command, Output};
 
 use mockall::predicate::eq;
 use tempfile::tempdir;
 
-use super::*;
+use crate::error::GitError;
+use crate::rebase::{
+    FilesystemRebaseMetadataCleaner, GIT_INDEX_LOCK_RETRY_ATTEMPTS, GIT_INDEX_LOCK_RETRY_DELAY,
+    InProgressGitOperation, MockGitCommandRunner, MockRebaseMetadataCleaner, RebaseMetadataCleaner,
+    abort_rebase_with_dependencies, in_progress_operation_sync, is_rebase_conflict,
+    is_rebase_in_progress, is_stale_or_inactive_rebase_error, remove_stale_rebase_metadata_path,
+    run_git_command_with_index_lock_retry_with_dependencies,
+};
+use crate::repo::command_output_detail;
 use crate::sleeper::MockSleeper;
 
 #[tokio::test]

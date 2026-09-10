@@ -1,4 +1,4 @@
-use super::*;
+use std::path::Path;
 
 /// Returns the workspace root used by prompt preparation tests.
 pub(super) fn test_workspace_root() -> &'static Path {

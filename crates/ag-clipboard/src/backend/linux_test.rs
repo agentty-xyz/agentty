@@ -1,16 +1,22 @@
 #[cfg(target_os = "linux")]
 use std::ffi::OsString;
 #[cfg(target_os = "linux")]
-use std::fs;
-#[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::process::Command;
 #[cfg(target_os = "linux")]
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(target_os = "linux")]
+use std::{env, fs};
 
-use super::*;
+use crate::backend::contract::ClipboardBackend;
+#[cfg(target_os = "linux")]
+use crate::backend::linux::new_backend;
+use crate::backend::linux::{
+    ClipboardBackendFactory, LinuxClipboardEnvironment, new_backend_with_factories,
+};
+use crate::error::ClipboardError;
 
 struct TestClipboardBackend;
 

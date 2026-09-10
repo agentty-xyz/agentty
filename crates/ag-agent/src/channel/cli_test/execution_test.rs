@@ -1,4 +1,19 @@
-use super::*;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use ag_protocol::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
+use tempfile::tempdir;
+use tokio::sync::mpsc;
+
+use super::support::{make_turn_request, stdin_capture_command};
+use crate::agent::MockAgentBackend;
+use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver};
+use crate::channel::cli::{
+    CliAgentChannel, CliTurnObserver, build_command_request, map_cli_turn_execution_error,
+};
+use crate::channel::contract::{AgentChannel, AgentRequestKind, TurnEvent, TurnRequest};
+use crate::model::agent::{AgentKind, ReasoningLevel};
 
 /// Drains all currently buffered turn events from a test receiver.
 #[test]

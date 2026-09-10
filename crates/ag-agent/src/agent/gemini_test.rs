@@ -1,6 +1,7 @@
 use tempfile::tempdir;
 
-use super::*;
+use crate::agent::backend::{AgentBackend, BuildCommandRequest};
+use crate::agent::gemini::GeminiBackend;
 use crate::channel::AgentRequestKind;
 use crate::model::agent::ReasoningLevel;
 

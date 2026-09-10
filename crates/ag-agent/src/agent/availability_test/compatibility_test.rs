@@ -1,4 +1,18 @@
-use super::*;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
+use std::{env, fs};
+
+use tempfile::tempdir;
+
+use super::support::antigravity_cache_test_guard;
+use crate::agent::availability::{
+    AntigravityCompatibilitySnapshot, AntigravityExecutableFingerprint,
+    available_agent_kinds_from_path, ensure_antigravity_cli_supported_on_path,
+    ensure_cached_antigravity_cli_supported_on_path, refresh_agent_cli_version,
+    validate_antigravity_cli_version, validate_cached_antigravity_cli_support,
+};
+use crate::model::agent::AgentKind;
 
 #[test]
 /// Ensures unsupported Antigravity installations are not selectable even

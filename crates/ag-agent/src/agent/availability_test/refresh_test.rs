@@ -1,4 +1,20 @@
-use super::*;
+use std::ffi::OsStr;
+#[cfg(unix)]
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+use std::{env, fs};
+
+use tempfile::tempdir;
+
+use crate::agent::availability::{
+    available_agent_clis_from_path, detect_agent_cli_version_with_timeout,
+    parse_agent_cli_version_output, refresh_agent_cli_version, refresh_agent_cli_versions,
+    run_agent_cli_update_with_timeout,
+};
+use crate::model::agent::{AgentCliInfo, AgentKind};
 
 #[test]
 /// Ensures available CLI metadata includes parsed command versions.

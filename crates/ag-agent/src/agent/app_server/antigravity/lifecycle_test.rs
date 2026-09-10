@@ -2,21 +2,31 @@
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
+use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use ag_protocol::TurnPromptAttachment;
+use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use mockall::Sequence;
 use tempfile::tempdir;
+use tokio::sync::mpsc;
 
-use super::super::super::stdio_transport::MockAppServerRuntimeTransport;
-use super::*;
-use crate::MockAgentBackend;
-use crate::agent::AgentBackendError;
-use crate::model::agent::AgentModel;
+use crate::agent::app_server::antigravity::lifecycle::{
+    AntigravityRuntimeState, append_conversation_argument, run_turn_with_runtime,
+    run_turn_with_timeout, start_runtime_with_backend, start_runtime_with_built_command,
+};
+use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport;
+use crate::agent::backend::{AgentBackendError, MockAgentBackend};
+use crate::app_server::{AppServerStreamEvent, AppServerTurnRequest};
+use crate::app_server_transport;
+use crate::model::agent::{AgentModel, ReasoningLevel};
+use crate::model::permission::PermissionMode;
 use crate::model::session::SpeedMode;
 
 fn request(folder: PathBuf) -> AppServerTurnRequest {
     AppServerTurnRequest {
+        provider_call_budget: None,
         folder,
         live_transcript: None,
         main_checkout_root: None,

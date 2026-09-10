@@ -1,4 +1,19 @@
-use super::*;
+use std::sync::Arc;
+
+use ag_protocol::{AgentResponse, SubtaskItem};
+use ag_session::{
+    IntegrationApproach, OrchestrationStatus, OrchestrationTaskStatus, SessionStatus,
+};
+use ag_store::MockOrchestrationRepository;
+use tokio::sync::mpsc;
+
+use super::support::{
+    TestSessionBackend, controller_database, orchestration, persist_approved_plan, subtask, task,
+};
+use crate::coordinator::{
+    OrchestrationApprovalOutcome, OrchestrationCoordinator, approve_orchestration,
+    persist_controller_plan,
+};
 
 #[tokio::test]
 async fn approval_reports_unavailable_when_another_actor_advances_the_campaign() {

@@ -1,4 +1,6 @@
-use super::*;
+use std::sync::{Arc, Mutex};
+
+use serde_json::Value;
 
 /// Captures the dynamic JSON-RPC `id` from a written payload through the
 /// supplied mutex so the response side of a mock can echo it back.

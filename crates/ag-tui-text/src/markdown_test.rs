@@ -1,7 +1,22 @@
+use std::cell::Cell;
 use std::fmt::Write;
 use std::sync::Arc;
 
-use super::*;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+
+use crate::markdown::{
+    MARKDOWN_RENDER_CACHE_ENTRY_LIMIT, MarkdownRenderCache, STATS_LABEL_WIDTH,
+    clarification_answer_label_style, clarification_header_style,
+    clarification_prompt_prefix_style, clarification_question_index_style,
+    clarification_question_label_style, code_block_style, heading_style, horizontal_rule_style,
+    inline_code_style, markdown_block_preservation_mask, render_markdown,
+    render_markdown_with_settings, stats_metric_style, stats_section_style, stats_value_style,
+    table_header_style, user_prompt_content_style, user_prompt_lookup_style,
+    user_prompt_prefix_style, wrap_verbatim_spans, wrap_verbatim_spans_with_word_boundaries,
+};
+use crate::style::TextRenderSettings;
+use crate::{mermaid, style};
 
 #[test]
 fn test_render_markdown_styles_heading() {

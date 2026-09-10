@@ -1,4 +1,7 @@
-use super::*;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::worktree::{detect_git_info_sync, find_git_repo_root_sync, get_git_branch};
 
 #[test]
 fn find_git_repo_root_sync_finds_repo_at_current_dir() {

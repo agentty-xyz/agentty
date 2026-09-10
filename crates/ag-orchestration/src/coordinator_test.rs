@@ -1,24 +1,5 @@
-use std::collections::{HashSet, VecDeque};
-use std::error::Error;
-use std::sync::Mutex;
-
-use ag_agent::{AgentKind, ReasoningLevel, SpeedMode};
-use ag_git::MockGitClient;
-use ag_protocol::VerificationVerdictItem;
-use ag_session::{
-    AnswerQuestionsRequest, ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    Session, SessionBackend, SessionError,
-};
-use ag_store::{MockOrchestrationRepository, PersistedSessionCreation};
-use async_trait::async_trait;
-use tokio::sync::mpsc;
-
-use super::*;
-
 #[path = "coordinator_test/support_test.rs"]
 mod support;
-
-use support::*;
 
 #[path = "coordinator_test/contract_test.rs"]
 mod contract;

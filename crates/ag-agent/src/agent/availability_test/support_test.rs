@@ -1,4 +1,4 @@
-use super::*;
+use std::sync::{Mutex, MutexGuard};
 
 /// Serializes tests that update the process-wide Antigravity compatibility
 /// snapshot.

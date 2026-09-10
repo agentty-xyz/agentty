@@ -1,4 +1,8 @@
-use super::*;
+use crate::agent::cli::error::{
+    agent_cli_output_detail, format_agent_cli_exit_error, format_cli_stream_output,
+    is_claude_authentication_error, known_agent_cli_exit_guidance,
+};
+use crate::model::agent::AgentKind;
 
 #[test]
 /// A long provider stream is reduced to its tail so a failing turn cannot

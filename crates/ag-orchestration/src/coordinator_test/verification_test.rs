@@ -1,4 +1,24 @@
-use super::*;
+use std::error::Error;
+use std::path::Path;
+
+use ag_agent::{AgentKind, ReasoningLevel, SpeedMode};
+use ag_git::MockGitClient;
+use ag_protocol::{AgentResponse, VerificationVerdict, VerificationVerdictItem};
+use ag_session::{
+    IntegrationApproach, OrchestrationPolicy, OrchestrationStatus, OrchestrationTaskKind,
+    OrchestrationTaskStatus, SessionId,
+};
+use ag_store::{DbError, PersistedOrchestrationTask, PersistedSessionCreation};
+
+use super::support::{
+    controller_database, insert_managed_child, persist_approved_plan,
+    persist_approved_two_task_plan, research_subtask, seed_verifying_tasks, subtask,
+};
+use crate::coordinator::{
+    OrchestrationApprovalOutcome, approve_orchestration, campaign_task_evidence,
+    persist_controller_plan, persist_managed_child_area_compliance, rollup_message,
+    running_child_count, session_metadata_for_project, task_status,
+};
 
 #[tokio::test]
 async fn awaiting_integration_continuation_resets_passed_siblings_for_verification() {

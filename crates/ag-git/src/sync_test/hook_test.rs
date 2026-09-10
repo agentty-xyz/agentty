@@ -1,4 +1,17 @@
-use super::*;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+use tempfile::tempdir;
+
+use super::support::{
+    git_command_stdout, run_git_command, setup_test_git_repo, write_executable_hook,
+    write_executable_pre_commit_hook,
+};
+use crate::error::GitError;
+use crate::sync::{
+    commit_all, ensure_pre_commit_hook_ready, pre_commit_hook_result, run_pre_commit_hook,
+};
 
 #[test]
 fn ensure_pre_commit_hook_ready_allows_repositories_without_configuration() {

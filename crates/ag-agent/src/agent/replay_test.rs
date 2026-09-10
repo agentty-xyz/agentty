@@ -1,4 +1,11 @@
-use super::*;
+use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+use std::path::{Path, PathBuf};
+
+use crate::agent::replay::{
+    INLINE_HISTORY_BYTES, ReplayContext, ReplayOwnership, cleanup_session_worktree_artifacts,
+};
 
 fn stale_archive(folder: &Path, name: &str) -> PathBuf {
     let path = folder.join(name);

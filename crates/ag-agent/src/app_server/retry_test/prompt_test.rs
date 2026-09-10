@@ -1,4 +1,13 @@
-use super::*;
+use std::path::PathBuf;
+
+use ag_protocol::ProtocolSchemaInstructionMode;
+
+use super::support::{live_transcript, session_resume_request_kind, session_start_request_kind};
+use crate::agent::InstructionDeliveryMode;
+use crate::app_server::contract::AppServerTurnRequest;
+use crate::app_server::prompt::{read_latest_replay_transcript, turn_prompt_for_runtime};
+use crate::channel::AgentRequestKind;
+use crate::model::agent::ReasoningLevel;
 
 #[test]
 fn turn_prompt_for_runtime_adds_repo_root_path_instructions_without_context_reset() {
@@ -76,6 +85,7 @@ fn turn_prompt_for_runtime_uses_shared_protocol_wrapper_for_utility_prompts() {
 fn read_latest_replay_transcript_prefers_live_buffer_over_snapshot() {
     // Arrange
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: Some(live_transcript("live content from stream")),
         main_checkout_root: None,
@@ -103,6 +113,7 @@ fn read_latest_replay_transcript_prefers_live_buffer_over_snapshot() {
 fn read_latest_replay_transcript_falls_back_to_snapshot_when_live_buffer_is_empty() {
     // Arrange
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: Some(live_transcript("")),
         main_checkout_root: None,
@@ -130,6 +141,7 @@ fn read_latest_replay_transcript_falls_back_to_snapshot_when_live_buffer_is_empt
 fn read_latest_replay_transcript_falls_back_to_snapshot_when_no_live_buffer() {
     // Arrange
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: None,
         main_checkout_root: None,
@@ -157,6 +169,7 @@ fn read_latest_replay_transcript_falls_back_to_snapshot_when_no_live_buffer() {
 fn read_latest_replay_transcript_returns_none_when_both_are_absent() {
     // Arrange
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: None,
         main_checkout_root: None,

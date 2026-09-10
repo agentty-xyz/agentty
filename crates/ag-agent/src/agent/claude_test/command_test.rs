@@ -1,4 +1,15 @@
-use super::*;
+use std::ffi::OsStr;
+use std::path::PathBuf;
+
+use ag_protocol::{ProtocolSchemaInstructionMode, TurnPromptAttachment};
+use serde_json::Value;
+use tempfile::tempdir;
+
+use super::support::{session_start_request_kind, settings_argument, utility_request_kind};
+use crate::agent::backend::{AgentBackend, BuildCommandRequest};
+use crate::agent::claude::ClaudeBackend;
+use crate::agent::prompt as shared_prompt;
+use crate::model::agent::ReasoningLevel;
 
 #[test]
 /// Verifies Claude fast sessions enable the noninteractive `fastMode`

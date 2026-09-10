@@ -1,4 +1,5 @@
-use super::*;
+use crate::app_server::error::AppServerError;
+use crate::app_server_transport::AppServerTransportError;
 
 #[test]
 fn lock_poisoned_display_includes_provider_name() {

@@ -1,10 +1,30 @@
-use super::*;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
+use mockall::Sequence;
+use serde_json::Value;
+use tempfile::tempdir;
+use tokio::sync::mpsc;
+
+use super::support::remember_request_id;
+use crate::agent::app_server::codex::lifecycle::{
+    CodexRuntimeState, compaction_timeout_error, finalize_turn_completion, initialize_runtime,
+    start_runtime, start_runtime_with_built_command, turn_completed_timeout_error,
+};
+use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport as MockCodexRuntimeTransport;
+use crate::app_server::{AppServerError, AppServerTurnRequest};
+use crate::model::agent::{AgentModel, ReasoningLevel};
+use crate::model::permission::PermissionMode;
+use crate::model::session::SpeedMode;
 
 #[tokio::test]
 async fn start_runtime_omits_personality_from_the_process_command() {
     // Arrange
     let runtime_parent = tempdir().expect("create runtime parent");
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: runtime_parent.path().join("missing-runtime"),
         live_transcript: None,
         main_checkout_root: None,
@@ -41,6 +61,7 @@ async fn start_runtime_with_built_command_bootstraps_thread_start_with_the_reque
     // Arrange
     let folder = tempdir().expect("create runtime folder");
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: folder.path().to_path_buf(),
         live_transcript: None,
         main_checkout_root: None,

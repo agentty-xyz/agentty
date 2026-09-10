@@ -1,6 +1,9 @@
+use std::fs;
+use std::path::PathBuf;
+
 use tempfile::tempdir;
 
-use super::*;
+use crate::check_migration::{check_prefixes, find_migration_dirs};
 
 #[test]
 fn test_check_prefixes_no_duplicates() {

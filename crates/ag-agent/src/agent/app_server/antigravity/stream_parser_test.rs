@@ -1,4 +1,8 @@
-use super::*;
+use crate::agent::app_server::antigravity::stream_parser::{
+    conversation_id, result, result_error, result_response, result_succeeded, step_update,
+    stream_event,
+};
+use crate::app_server::AppServerStreamEvent;
 
 #[test]
 fn result_prefers_structured_output_and_conversation_id() {

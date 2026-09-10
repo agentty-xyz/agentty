@@ -5,8 +5,14 @@ use std::path::Path;
 use std::process::Command;
 
 use mockall::Sequence;
+use tempfile::tempdir;
 
-use super::*;
+use crate::error::GitError;
+use crate::merge::{
+    CompatibilityMergeOutput, MergeTreeAttempt, MockCompatibilityMergeRunner, SquashMergeOutcome,
+    classify_merge_tree_attempt, has_merge_conflicts,
+    has_merge_conflicts_via_temporary_clone_with_runner, resolve_merge_tree_attempt, squash_merge,
+};
 
 /// Runs `git` in `repo_path` and asserts the command succeeds.
 fn run_git_command(repo_path: &Path, args: &[&str]) {

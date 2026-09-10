@@ -1,4 +1,7 @@
-use super::*;
+use std::path::PathBuf;
+
+use crate::channel::contract::{AgentRequestKind, TurnRequest};
+use crate::model::agent::ReasoningLevel;
 
 pub(super) fn make_turn_request(folder: PathBuf) -> TurnRequest {
     TurnRequest {

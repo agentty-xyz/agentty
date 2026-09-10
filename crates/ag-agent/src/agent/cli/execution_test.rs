@@ -1,18 +1,24 @@
 use std::ffi::OsString;
-use std::os::unix::ffi::OsStringExt as _;
+use std::io;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use ag_protocol::TurnPromptAttachment;
 use tempfile::tempdir;
 use tokio::io::{AsyncRead, ReadBuf};
 
-use super::*;
-use crate::MockAgentBackend;
+use crate::agent::backend::{AgentBackendError, BuildCommandRequest, MockAgentBackend};
+use crate::agent::cli::execution::{
+    CliExecutionError, CliExecutionObserver, CliExitStatus, CollectingCliObserver, capture_stderr,
+    capture_stdout, execute_cli_command, finish_cli_execution, require_pipe,
+};
 use crate::channel::AgentRequestKind;
-use crate::model::agent::ReasoningLevel;
+use crate::model::agent::{AgentKind, ReasoningLevel};
 
 /// Observer that records all streaming callbacks for assertions.
 struct RecordingObserver {

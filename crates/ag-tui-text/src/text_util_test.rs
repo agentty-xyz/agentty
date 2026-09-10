@@ -1,6 +1,10 @@
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
 
-use super::*;
+use crate::text_util::{
+    format_duration_compact, format_token_count, inline_text, span_display_width,
+    truncate_spans_with_ellipsis, truncate_with_ellipsis, wrap_lines, wrap_styled_line,
+};
 
 #[test]
 fn test_wrap_lines_basic() {

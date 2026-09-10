@@ -1,4 +1,6 @@
-use super::*;
+use ag_protocol::ProtocolRequestProfile;
+
+use crate::agent::app_server::gemini::stream_parser::select_preferred_assistant_message;
 
 #[test]
 fn valid_direct_focused_review_supersedes_invalid_streamed_message() {
