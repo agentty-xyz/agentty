@@ -216,7 +216,8 @@ fn is_executable(_path: &Path) -> bool {
 }
 
 #[cfg(test)]
-pub(crate) use tests::test_git_executable;
+#[path = "repository_fixture_test.rs"]
+pub(crate) mod support;
 
 #[cfg(test)]
 #[path = "repository_test.rs"]

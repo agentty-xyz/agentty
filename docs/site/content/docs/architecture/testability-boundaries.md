@@ -72,6 +72,11 @@ the provider transport traits) keep subprocess sequencing and retry behavior
 deterministic in unit tests. The runtime also accepts `Terminal<B: Backend>` via
 `run_with_backend`, enabling in-process TUI tests with `TestBackend`.
 
+Persistent `ag-harness` sessions inject a timestamp source and a reservation observer.
+The observer marks the boundary after SQLite commits a turn reservation, allowing tests
+to exercise cancellation at that point without conditional production control flow. Unit
+suites and their fixtures live in separate test files.
+
 The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
 private. Application workflows that submit isolated utility prompts inject
 `OneShotClient`; provider and transport tests use the feature-gated crate-root mocks and
