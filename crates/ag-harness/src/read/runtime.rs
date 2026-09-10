@@ -4,8 +4,6 @@ use std::sync::Arc;
 use super::command::{LocalRepositoryCommandRunner, RepositoryCommandRunner};
 use super::{InspectionError, ReadError, ReadOutput};
 use crate::file_system::FileSystem;
-#[cfg(test)]
-use crate::repository::test_git_executable;
 use crate::tool::{ReadAction, ReadArguments, ReadSide};
 
 pub(super) const DEFAULT_RESULT_LINES: u64 = 200;
@@ -34,21 +32,6 @@ impl ReadTool {
             file_system,
             repository_root,
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn new(file_system: Arc<dyn FileSystem>, repository_root: PathBuf) -> Self {
-        Self::with_git(file_system, repository_root, test_git_executable())
-    }
-
-    #[cfg(test)]
-    pub(super) fn with_command_runner(
-        mut self,
-        command_runner: Arc<dyn RepositoryCommandRunner>,
-    ) -> Self {
-        self.command_runner = command_runner;
-
-        self
     }
 
     pub(crate) async fn execute(&self, arguments: &ReadArguments) -> Result<ReadOutput, ReadError> {
