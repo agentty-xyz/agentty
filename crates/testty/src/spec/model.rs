@@ -26,19 +26,14 @@ use serde::{Deserialize, Deserializer};
 /// error instead of silent misbehavior.
 pub const SUPPORTED_VERSION: u32 = 1;
 
-/// Default `version` when a scenario file omits the field.
-fn default_version() -> u32 {
-    SUPPORTED_VERSION
-}
-
 /// A complete declarative scenario: how to launch the binary, the steps to
 /// drive it, and the expectations to assert against the final frame.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScenarioSpec {
-    /// Scenario-file format version. Defaults to [`SUPPORTED_VERSION`].
-    #[serde(default = "default_version")]
-    pub version: u32,
+    /// Expectations asserted against the final frame after the steps run.
+    #[serde(default)]
+    pub expect: Vec<ExpectSpec>,
     /// Optional human-readable scenario name used in proof output.
     #[serde(default)]
     pub name: Option<String>,
@@ -47,26 +42,26 @@ pub struct ScenarioSpec {
     /// Ordered steps that drive the session.
     #[serde(default)]
     pub steps: Vec<StepSpec>,
-    /// Expectations asserted against the final frame after the steps run.
-    #[serde(default)]
-    pub expect: Vec<ExpectSpec>,
+    /// Scenario-file format version. Defaults to [`SUPPORTED_VERSION`].
+    #[serde(default = "default_version")]
+    pub version: u32,
 }
 
 /// How to launch the binary under test.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionSpec {
-    /// Path to the binary under test. The CLI `--bin` flag overrides this.
-    pub bin: PathBuf,
-    /// Terminal size as `[cols, rows]`. Defaults to the engine default.
-    #[serde(default)]
-    pub size: Option<[u16; 2]>,
     /// Command-line arguments passed to the binary.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Path to the binary under test. The CLI `--bin` flag overrides this.
+    pub bin: PathBuf,
     /// Environment variables set for the binary.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Terminal size as `[cols, rows]`. Defaults to the engine default.
+    #[serde(default)]
+    pub size: Option<[u16; 2]>,
     /// Working directory the binary launches in.
     #[serde(default)]
     pub workdir: Option<PathBuf>,
@@ -180,22 +175,27 @@ struct WaitForStableFrameArgs {
 struct EventuallyArgs {
     #[serde(rename = "match")]
     matcher: ExpectSpec,
-    timeout_ms: u64,
     poll_ms: u64,
+    timeout_ms: u64,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CaptureLabeledArgs {
-    label: String,
     description: String,
+    label: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TextInRegionArgs {
-    text: String,
     region: RegionSpec,
+    text: String,
+}
+
+/// Default `version` when a scenario file omits the field.
+fn default_version() -> u32 {
+    SUPPORTED_VERSION
 }
 
 /// Reject a second key in a single-key step/expect map.
@@ -338,140 +338,5 @@ impl<'de> Deserialize<'de> for ExpectSpec {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn deserializes_press_key_step() {
-        // Arrange
-        let yaml = "
-session:
-  bin: ./app
-steps:
-  - press_key: Tab
-";
-
-        // Act
-        let spec: ScenarioSpec = serde_yaml_ng::from_str(yaml).expect("parse");
-
-        // Assert
-        assert_eq!(spec.version, SUPPORTED_VERSION);
-        assert_eq!(spec.session.bin, PathBuf::from("./app"));
-        assert_eq!(spec.steps.len(), 1);
-        assert!(matches!(&spec.steps[0], StepSpec::PressKey(key) if key == "Tab"));
-    }
-
-    #[test]
-    fn deserializes_session_size_args_and_expect() {
-        // Arrange
-        let yaml = "
-version: 1
-session:
-  bin: ./app
-  size: [80, 24]
-  args: [--flag, value]
-steps:
-  - write_text: hello
-  - wait_for_stable_frame: { stable_ms: 500, timeout_ms: 5000 }
-expect:
-  - selected_tab: Sessions
-  - text_in_region: { text: \"Counter: 3\", region: [0, 0, 80, 24] }
-";
-
-        // Act
-        let spec: ScenarioSpec = serde_yaml_ng::from_str(yaml).expect("parse");
-
-        // Assert
-        assert_eq!(spec.session.size, Some([80, 24]));
-        assert_eq!(spec.session.args, vec!["--flag", "value"]);
-        assert!(matches!(&spec.steps[0], StepSpec::WriteText(text) if text == "hello"));
-        assert!(matches!(
-            spec.steps[1],
-            StepSpec::WaitForStableFrame {
-                stable_ms: 500,
-                timeout_ms: 5000
-            }
-        ));
-        assert!(matches!(&spec.expect[0], ExpectSpec::SelectedTab(tab) if tab == "Sessions"));
-        assert!(matches!(
-            &spec.expect[1],
-            ExpectSpec::TextInRegion { text, region }
-                if text == "Counter: 3" && (region.0, region.1, region.2, region.3) == (0, 0, 80, 24)
-        ));
-    }
-
-    #[test]
-    fn deserializes_bare_capture_step() {
-        // Arrange
-        let yaml = "
-session:
-  bin: ./app
-steps:
-  - capture
-";
-
-        // Act
-        let spec: ScenarioSpec = serde_yaml_ng::from_str(yaml).expect("parse");
-
-        // Assert
-        assert!(matches!(spec.steps[0], StepSpec::Capture));
-    }
-
-    #[test]
-    fn deserializes_eventually_step_with_nested_matcher() {
-        // Arrange
-        let yaml = "
-session:
-  bin: ./app
-steps:
-  - eventually:
-      match: { not_visible: Loading }
-      timeout_ms: 3000
-      poll_ms: 50
-";
-
-        // Act
-        let spec: ScenarioSpec = serde_yaml_ng::from_str(yaml).expect("parse");
-
-        // Assert
-        assert!(matches!(
-            &spec.steps[0],
-            StepSpec::Eventually { matcher, timeout_ms: 3000, poll_ms: 50 }
-                if matches!(matcher, ExpectSpec::NotVisible(text) if text == "Loading")
-        ));
-    }
-
-    #[test]
-    fn rejects_unknown_top_level_field() {
-        // Arrange — `step` (singular) is a typo for `steps`.
-        let yaml = "
-session:
-  bin: ./app
-step:
-  - press_key: Tab
-";
-
-        // Act
-        let result: Result<ScenarioSpec, _> = serde_yaml_ng::from_str(yaml);
-
-        // Assert
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn rejects_unknown_step_key() {
-        // Arrange
-        let yaml = "
-session:
-  bin: ./app
-steps:
-  - press_buttn: Tab
-";
-
-        // Act
-        let result: Result<ScenarioSpec, _> = serde_yaml_ng::from_str(yaml);
-
-        // Assert
-        assert!(result.is_err());
-    }
-}
+#[path = "model_test.rs"]
+mod tests;
