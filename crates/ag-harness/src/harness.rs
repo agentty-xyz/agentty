@@ -1153,18 +1153,52 @@ mod tests {
         }
     }
 
-    struct PendingModel {
+    struct ContinuationInterruptionModel {
+        call_count: AtomicUsize,
+        dropped: Arc<Notify>,
         started: Arc<Notify>,
     }
 
     #[async_trait]
-    impl Model for PendingModel {
+    impl Model for ContinuationInterruptionModel {
         async fn complete(
             &self,
-            _request: ModelRequest,
+            request: ModelRequest,
         ) -> Result<crate::ModelCompletion, ModelError> {
-            self.started.notify_one();
-            std::future::pending().await
+            match self.call_count.fetch_add(1, Ordering::SeqCst) {
+                0 => {
+                    assert!(request.provider_session_id().is_none());
+
+                    Ok(response_without_metadata(ModelResponse::Output(json!({
+                        "summary": "first"
+                    })))
+                    .with_provider_session_id("native-session"))
+                }
+                1 => {
+                    assert_eq!(request.provider_session_id(), Some("native-session"));
+                    let _drop_notifier = RequestDropNotifier {
+                        dropped: Arc::clone(&self.dropped),
+                    };
+                    self.started.notify_one();
+                    std::future::pending().await
+                }
+                _ => {
+                    assert!(request.provider_session_id().is_none());
+                    assert_eq!(
+                        request.messages(),
+                        [
+                            ModelMessage::User("first".to_string()),
+                            ModelMessage::Assistant(r#"{"summary":"first"}"#.to_string()),
+                            ModelMessage::User("retry".to_string()),
+                        ]
+                    );
+
+                    Ok(response_without_metadata(ModelResponse::Output(json!({
+                        "summary": "recovered"
+                    })))
+                    .with_provider_session_id("replacement-session"))
+                }
+            }
         }
     }
 
@@ -1308,7 +1342,7 @@ mod tests {
 
     async fn stored_lease_expiry(database: &Database) -> i64 {
         sqlx::query_scalar::<_, i64>(
-            "SELECT lease_expires_at FROM session_turn WHERE session_id = ?",
+            "SELECT lease_expires_at FROM session_turn WHERE session_id = ? AND status = 'running'",
         )
         .bind("session-a")
         .fetch_one(database.pool())
@@ -2535,16 +2569,22 @@ mod tests {
         let database_path = directory.path().join("harness.db");
         let request_started = Arc::new(Notify::new());
         let harness = Arc::new(
-            Harness::new(PendingModel {
+            Harness::new(ContinuationInterruptionModel {
+                call_count: AtomicUsize::new(0),
+                dropped: Arc::new(Notify::new()),
                 started: Arc::clone(&request_started),
             })
             .database(&database_path),
         );
-        let session = harness
+        let mut session = harness
             .session("session-a", object_schema())
             .create()
             .await
             .expect("session should be created");
+        session
+            .send("first")
+            .await
+            .expect("first turn should succeed");
         drop(session);
         let turn = tokio::spawn(send_with_resumed_session(
             Arc::clone(&harness),
@@ -2568,7 +2608,18 @@ mod tests {
             cancellation
         );
 
+        let mut resumed = harness
+            .resume("session-a")
+            .await
+            .expect("session should reopen");
+        assert!(resumed.provider_session_id.is_none());
+        let recovered = resumed
+            .send("retry")
+            .await
+            .expect("replayed turn should succeed");
+
         // Assert
+        assert_eq!(recovered.output(), &json!({"summary": "recovered"}));
         assert!(cancellation.is_cancelled());
         assert_eq!(state, expected_state);
     }
@@ -2759,10 +2810,10 @@ mod tests {
             .expect("session should be created");
         let first_started = Arc::new(Notify::new());
         let first_dropped = Arc::new(Notify::new());
-        let harness = Harness::new(LeaseOwnershipModel {
+        let harness = Harness::new(ContinuationInterruptionModel {
             call_count: AtomicUsize::new(0),
-            dropped_first: Arc::clone(&first_dropped),
-            started_first: Arc::clone(&first_started),
+            dropped: Arc::clone(&first_dropped),
+            started: Arc::clone(&first_started),
         });
         let mut first = Session {
             database: database.clone(),
@@ -2783,12 +2834,17 @@ mod tests {
             system_prompt: None,
         };
 
+        first
+            .send("first")
+            .await
+            .expect("first turn should succeed");
+
         // Act
-        let (first_result, second_result) = tokio::join!(first.send("first"), async {
+        let (first_result, second_result) = tokio::join!(first.send("interrupted"), async {
             wait_for_fixture(&first_started, "the original model request").await;
             let original_expiry = stored_lease_expiry(&second.database).await;
             now.store(original_expiry.saturating_add(1), Ordering::SeqCst);
-            let result = second.send("second").await;
+            let result = second.send("retry").await;
             tokio::time::pause();
             tokio::time::advance(Duration::from_secs(
                 crate::session::TURN_LEASE_RENEWAL_INTERVAL_SECONDS,
@@ -2805,7 +2861,7 @@ mod tests {
             first_result,
             Err(SessionError::OwnershipLost {
                 ref id,
-                turn_position: 0,
+                turn_position: 1,
             }) if id == "session-a"
         ));
         second_result.expect("the replacement turn should complete");
