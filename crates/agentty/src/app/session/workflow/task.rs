@@ -52,8 +52,10 @@ struct AutoCommitAssistPromptTemplate<'a> {
 struct SessionCommitMessagePromptTemplate<'a> {
     /// Existing commit message continuity after removing Agentty's trailer.
     current_commit_message: &'a str,
-    /// Full cumulative diff payload wrapped in a Markdown fence sized for its
-    /// content.
+    /// Whether the payload contains filenames and conversation instead of a
+    /// diff.
+    fallback: bool,
+    /// Diff or fallback context wrapped in a fence sized for its content.
     fenced_diff: &'a str,
 }
 
@@ -753,6 +755,7 @@ impl SessionTaskService {
             ),
             context.one_shot_client.as_ref(),
             Self::load_include_coauthored_by_agentty_setting(&context.db, &context.id).await,
+            context.transcript.as_ref(),
         )
         .await
     }
@@ -813,13 +816,16 @@ impl SessionTaskService {
     fn session_commit_message_prompt(
         diff: &str,
         current_commit_message: Option<&str>,
+        fallback: bool,
     ) -> Result<String, SessionError> {
         let stripped_current_commit_message =
             current_commit_message.map_or_else(String::new, strip_agentty_coauthor_trailer);
         let fence = agent::diff_fence(diff);
-        let fenced_diff = format!("{fence}diff\n{diff}\n{fence}");
+        let language = if fallback { "text" } else { "diff" };
+        let fenced_diff = format!("{fence}{language}\n{diff}\n{fence}");
         let template = SessionCommitMessagePromptTemplate {
             current_commit_message: stripped_current_commit_message.trim(),
+            fallback,
             fenced_diff: &fenced_diff,
         };
 
@@ -923,6 +929,9 @@ impl SessionTaskService {
     /// Generates and commits the canonical session commit message through an
     /// injected one-shot client.
     ///
+    /// Input-limit failures retry with cumulative changed filenames and the
+    /// user/assistant transcript, using a fresh bounded utility call budget.
+    ///
     /// # Errors
     /// Returns an error if the worktree is clean, the cumulative session diff
     /// cannot be generated, commit-message generation fails, or the git commit
@@ -938,6 +947,7 @@ impl SessionTaskService {
         ),
         one_shot_client: &dyn OneShotClient,
         include_coauthored_by_agentty: bool,
+        transcript: &Mutex<SessionTranscript>,
     ) -> Result<SessionCommitOutcome, SessionError> {
         let (session_agent, reasoning_level, speed_mode) = agent_settings;
         let speed_mode = if session_agent.kind().supports_speed_mode() {
@@ -971,8 +981,51 @@ impl SessionTaskService {
             current_commit_message.as_deref(),
             one_shot_client,
             include_coauthored_by_agentty,
+            false,
         )
-        .await?;
+        .await;
+        let generated_commit_message = match generated_commit_message {
+            Err(error) if is_input_size_error(&error) => {
+                let changed_files = git_client
+                    .diff_changed_files(folder.clone(), base_branch.to_string())
+                    .await?;
+                let chat_history = transcript
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .messages()
+                    .iter()
+                    .filter(|message| {
+                        matches!(
+                            message.kind,
+                            SessionMessageKind::UserPrompt | SessionMessageKind::AssistantAnswer
+                        )
+                    })
+                    .map(|message| {
+                        serde_json::json!({
+                            "role": message.kind.as_str(),
+                            "content": message.content,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let fallback_context = serde_json::json!({
+                    "changed_files": changed_files,
+                    "chat_history": chat_history,
+                })
+                .to_string();
+
+                Self::generate_session_commit_message_with_client(
+                    folder.as_path(),
+                    (session_agent, reasoning_level, speed_mode),
+                    &fallback_context,
+                    current_commit_message.as_deref(),
+                    one_shot_client,
+                    include_coauthored_by_agentty,
+                    true,
+                )
+                .await?
+            }
+            result => result?,
+        };
 
         git_client
             .commit_all_preserving_single_commit(
@@ -1009,6 +1062,7 @@ impl SessionTaskService {
         current_commit_message: Option<&str>,
         one_shot_client: &dyn OneShotClient,
         include_coauthored_by_agentty: bool,
+        fallback: bool,
     ) -> Result<String, SessionError> {
         let (session_agent, reasoning_level, speed_mode) = agent_settings;
         let (submission, _) = crate::app::diff_prompt::submit(
@@ -1028,7 +1082,7 @@ impl SessionTaskService {
             diff,
             current_commit_message.unwrap_or_default(),
             |diff, context| {
-                Self::session_commit_message_prompt(diff, Some(context))
+                Self::session_commit_message_prompt(diff, Some(context), fallback)
                     .map_err(|error| agent::OneShotError::new(error.to_string()))
             },
         )

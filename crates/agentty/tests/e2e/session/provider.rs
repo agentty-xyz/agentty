@@ -757,3 +757,119 @@ fn claude_session_launch_allows_web_tools() -> E2eResult {
 
     Ok(())
 }
+
+/// Seeds a large change whose diff summarizer cannot produce a valid reduction.
+fn seed_commit_input_limit_project(env: &BuilderEnv) -> E2eResult {
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+case "$prompt" in
+  *"Use only the changed file list"*)
+    printf '%s' "$prompt" > "$AGENTTY_TEST_EVIDENCE/fallback-prompt"
+    response='{"answer":"Recover commit from conversation","questions":[]}'
+    ;;
+  *"Summarize this fragment"*)
+    response='{"answer":"","questions":[]}'
+    ;;
+  *"Review the Git diff for display in a terminal UI."*)
+    response='{"project_impact":[],"suggestions":[]}'
+    ;;
+  *"Repair a failed git commit"*)
+    exit 91
+    ;;
+  *)
+    awk 'BEGIN { for (i = 0; i < 10000; i++) print "DIFF_ONLY_SENTINEL" }' > large.txt
+    printf '%s' "$PWD" > "$AGENTTY_TEST_EVIDENCE/worktree"
+    response='{"answer":"Created the large fallback file","questions":[]}'
+    ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"StructuredOutput","input":%s}]}}\n' "$response"
+printf '{"type":"result","subtype":"success","result":"","structured_output":%s,"usage":{"input_tokens":5,"output_tokens":9}}\n' "$response"
+"#;
+    let claude_path = env.stub_bin.join("claude");
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultSmartAgent", "claude"),
+            ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultFastModel", "claude-haiku-4-5-20251001"),
+        ],
+    )
+}
+
+/// Verify a failed diff reduction still commits pending work using files and
+/// chat.
+#[test]
+fn test_session_commit_input_limit_fallback() -> E2eResult {
+    // Arrange
+    let evidence = tempfile::tempdir()?;
+
+    // Act / Assert
+    FeatureTest::new("session_commit_input_limit_fallback")
+        .with_git()
+        .with_terminal_size(100, 40)
+        .env("AGENTTY_TEST_EVIDENCE", evidence.path().to_string_lossy())
+        .setup(seed_commit_input_limit_project)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Select session type", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Create large fallback file")
+                    .press_key("Enter")
+                    .wait_for_text("Enter: reply", 30000)
+                    .write_text("g")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "fallback_commit",
+                        "Commit recovers from the diff input limit",
+                    )
+            },
+            |frame, _report| {
+                assertion::assert_not_visible(frame, "[Commit Error]");
+                assertion::assert_not_visible(frame, "[Commit Assist]");
+                let prompt = std::fs::read_to_string(evidence.path().join("fallback-prompt"))
+                    .expect("fallback prompt should be submitted");
+                for expected in [
+                    "large.txt",
+                    "Create large fallback file",
+                    "Created the large fallback file",
+                ] {
+                    assert!(prompt.contains(expected));
+                }
+                assert!(!prompt.contains("DIFF_ONLY_SENTINEL"));
+                let worktree = std::fs::read_to_string(evidence.path().join("worktree"))
+                    .expect("stub should record the worktree");
+                let output = Command::new("git")
+                    .args(["log", "-1", "--format=%s"])
+                    .current_dir(worktree.trim())
+                    .output()
+                    .expect("commit title should load");
+                assert!(output.status.success());
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    "Recover commit from conversation"
+                );
+                let output = Command::new("git")
+                    .args(["status", "--porcelain"])
+                    .current_dir(worktree.trim())
+                    .output()
+                    .expect("status should load");
+                assert!(output.status.success());
+                assert_eq!(output.stdout, Vec::<u8>::new());
+            },
+        )?;
+
+    Ok(())
+}

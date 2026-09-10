@@ -28,6 +28,7 @@ async fn commit_generation_summarizes_oversized_diff_and_existing_message() {
         Some(&"previous message\n".repeat(10_000)),
         &client,
         true,
+        false,
     )
     .await
     .expect("operation should succeed");
@@ -595,8 +596,9 @@ fn test_session_commit_message_prompt_includes_continuity_and_diff() {
     let current_commit_message = Some("Keep session commit accurate");
 
     // Act
-    let prompt = SessionTaskService::session_commit_message_prompt(diff, current_commit_message)
-        .expect("prompt should render");
+    let prompt =
+        SessionTaskService::session_commit_message_prompt(diff, current_commit_message, false)
+            .expect("prompt should render");
 
     // Assert
     assert!(prompt.contains("Keep session commit accurate"));
@@ -637,8 +639,9 @@ fn test_session_commit_message_prompt_escapes_triple_backtick_fence_in_diff() {
     let current_commit_message: Option<&str> = None;
 
     // Act
-    let prompt = SessionTaskService::session_commit_message_prompt(diff, current_commit_message)
-        .expect("prompt should render");
+    let prompt =
+        SessionTaskService::session_commit_message_prompt(diff, current_commit_message, false)
+            .expect("prompt should render");
 
     // Assert
     assert!(
@@ -667,6 +670,7 @@ fn test_session_commit_message_prompt_strips_coauthor_trailer_from_continuity() 
     let prompt = SessionTaskService::session_commit_message_prompt(
         diff,
         Some(current_commit_message.as_str()),
+        false,
     )
     .expect("prompt should render");
 
@@ -935,6 +939,7 @@ async fn test_generate_session_commit_message_with_client_rejects_submission_err
         None,
         &one_shot_client,
         false,
+        false,
     )
     .await
     .expect_err("plain-text one-shot commit message should fail");
@@ -977,6 +982,7 @@ async fn test_generate_session_commit_message_with_client_falls_back_for_blank_a
         "diff --git a/a.rs b/a.rs",
         Some("Keep session commit accurate\n\n- Preserve existing behavior"),
         &one_shot_client,
+        false,
         false,
     )
     .await
@@ -1982,10 +1988,14 @@ async fn test_handle_auto_commit_stops_on_input_size() {
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .never();
+    mock_git_client
+        .expect_diff_changed_files()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(vec!["pending.rs".to_string()]) }));
     let mut one_shot_client = MockOneShotClient::new();
     one_shot_client
         .expect_submit()
-        .times(1)
+        .times(2)
         .returning(|request| {
             assert!(
                 request
@@ -2033,4 +2043,232 @@ async fn test_handle_auto_commit_stops_on_input_size() {
         progress_message: None,
         session_id: "session-id".into(),
     }));
+}
+
+/// Covers provider rejection and failed large-diff reduction, using only
+/// filenames and the user/assistant conversation on the successful fallback
+/// attempt.
+#[tokio::test]
+async fn test_commit_session_changes_falls_back_to_files_and_chat() {
+    for oversized_diff in [false, true] {
+        // Arrange
+        let mut git_client = MockGitClient::new();
+        git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        git_client.expect_diff().times(1).returning(move |_, _| {
+            Box::pin(async move {
+                Ok("+DIFF_ONLY_SECRET\n".repeat(if oversized_diff { 10_000 } else { 1 }))
+            })
+        });
+        git_client
+            .expect_has_commits_since()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(false) }));
+        git_client
+            .expect_diff_changed_files()
+            .times(1)
+            .withf(|folder, base| folder == Path::new("project") && base == "main")
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(vec![
+                        "src/old name.rs".into(),
+                        "src/new.rs".into(),
+                        "untracked.md".into(),
+                    ])
+                })
+            });
+        git_client
+            .expect_commit_all_preserving_single_commit()
+            .times(1)
+            .withf(|_, _, message, strategy| {
+                message == "Recover oversized commits"
+                    && *strategy == ag_git::SingleCommitMessageStrategy::Replace
+            })
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        git_client
+            .expect_head_short_hash()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("abc123".into()) }));
+        let mut client = MockOneShotClient::new();
+        let mut sequence = mockall::Sequence::new();
+        client
+            .expect_submit()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |request| {
+                assert!(request.prompt.contains("DIFF_ONLY_SECRET"));
+                if oversized_diff {
+                    assert!(request.prompt.starts_with("Summarize"));
+                    return Ok(one_shot_submission("", 0, 0));
+                }
+                Err(agent::OneShotError::new("Input exceeds the maximum length"))
+            });
+        client
+            .expect_submit()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|request| {
+                assert_eq!(request.permission_mode, agent::PermissionMode::ReadOnly);
+                assert_eq!(request.reasoning_level, ReasoningLevel::Low);
+                assert!(request.prompt.contains("Use only the changed file list"));
+                assert!(
+                    request
+                        .prompt
+                        .contains("Do not retrieve or inspect a Git diff")
+                );
+                for expected in [
+                    "src/old name.rs",
+                    "src/new.rs",
+                    "untracked.md",
+                    "Please recover oversized commits",
+                    "Implemented commit fallback",
+                ] {
+                    assert!(request.prompt.contains(expected));
+                }
+                assert!(!request.prompt.contains("DIFF_ONLY_SECRET"));
+                assert!(!request.prompt.contains("INTERNAL_NOTICE"));
+                assert!(!request.prompt.contains("```diff"));
+                Ok(one_shot_submission("Recover oversized commits", 0, 0))
+            });
+
+        // Act
+        let outcome = SessionTaskService::commit_session_changes(
+            &git_client,
+            Path::new("project"),
+            "main",
+            (
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+                ReasoningLevel::Low,
+                SpeedMode::Normal,
+            ),
+            &client,
+            false,
+            &commit_fallback_transcript(),
+        )
+        .await
+        .expect("files and chat should recover commit generation");
+
+        // Assert
+        assert_eq!(outcome.commit_message, "Recover oversized commits");
+        assert_eq!(outcome.commit_hash, "abc123");
+    }
+}
+
+/// Supplies user/assistant chat alongside internal context excluded from
+/// fallback.
+fn commit_fallback_transcript() -> Mutex<SessionTranscript> {
+    let mut transcript = SessionTranscript::default();
+    transcript.append_message(
+        SessionMessageKind::UserPrompt,
+        "Please recover oversized commits",
+    );
+    transcript.append_message(
+        SessionMessageKind::AssistantAnswer,
+        "Implemented commit fallback",
+    );
+    transcript.append_message(SessionMessageKind::WorkflowNotice, "INTERNAL_NOTICE");
+    transcript.append_message(
+        SessionMessageKind::AgentPrompt,
+        "INTERNAL_NOTICE generated context",
+    );
+
+    Mutex::new(transcript)
+}
+
+/// Keeps earlier commit details available when the chat no longer describes
+/// them.
+#[tokio::test]
+async fn test_commit_fallback_preserves_existing_message_continuity() {
+    // Arrange
+    let previous_message = "Preserve earlier work\n\n- Keep the earlier API behavior";
+    let revised_message = format!("{previous_message}\n- Recover oversized commits");
+    let expected_message = append_agentty_coauthor_trailer(&revised_message, true);
+    let mut git_client = MockGitClient::new();
+    git_client
+        .expect_is_worktree_clean()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(false) }));
+    git_client
+        .expect_diff()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok("+DIFF_ONLY_SECRET".into()) }));
+    git_client
+        .expect_has_commits_since()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(true) }));
+    git_client
+        .expect_head_commit_message()
+        .times(1)
+        .returning(move |_| {
+            Box::pin(async move {
+                Ok(Some(append_agentty_coauthor_trailer(
+                    previous_message,
+                    true,
+                )))
+            })
+        });
+    git_client
+        .expect_diff_changed_files()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(vec!["src/new.rs".into()]) }));
+    let committed_message = expected_message.clone();
+    git_client
+        .expect_commit_all_preserving_single_commit()
+        .times(1)
+        .withf(move |_, _, message, strategy| {
+            message == &committed_message
+                && *strategy == ag_git::SingleCommitMessageStrategy::Replace
+        })
+        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+    git_client
+        .expect_head_short_hash()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok("abc123".into()) }));
+    let mut client = MockOneShotClient::new();
+    let mut sequence = mockall::Sequence::new();
+    client
+        .expect_submit()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_| Err(agent::OneShotError::new("Input exceeds the maximum length")));
+    client
+        .expect_submit()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(move |request| {
+            assert!(request.prompt.contains(previous_message));
+            assert!(request.prompt.contains("Preserve previously documented"));
+            assert!(request.prompt.contains("src/new.rs"));
+            assert!(request.prompt.contains("Implemented commit fallback"));
+            assert!(!request.prompt.contains("DIFF_ONLY_SECRET"));
+            assert!(
+                !request
+                    .prompt
+                    .contains(SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER)
+            );
+            assert_eq!(request.permission_mode, agent::PermissionMode::ReadOnly);
+            Ok(one_shot_submission(&revised_message, 0, 0))
+        });
+
+    // Act
+    let outcome = SessionTaskService::commit_session_changes(
+        &git_client,
+        Path::new("project"),
+        "main",
+        (
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            ReasoningLevel::Low,
+            SpeedMode::Normal,
+        ),
+        &client,
+        true,
+        &commit_fallback_transcript(),
+    )
+    .await
+    .expect("fallback should retain the previous commit details");
+
+    // Assert
+    assert_eq!(outcome.commit_message, expected_message);
 }

@@ -5232,6 +5232,7 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
         ),
         &one_shot_client,
         false,
+        &Mutex::new(SessionTranscript::default()),
     )
     .await
     .expect("failed to commit existing session message");

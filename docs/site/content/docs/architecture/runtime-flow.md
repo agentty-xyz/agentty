@@ -896,7 +896,13 @@ their triggers:
   shared budget is charged immediately before CLI execution or each app-server attempt,
   including protocol repairs and transport restart retries. Size rejection reduces the
   budget instead of restarting the same request or entering commit repair. Reviews
-  prepared from summaries explicitly disclose limited coverage.
+  prepared from summaries explicitly disclose limited coverage. Commit generation
+  catches input-size and reduction-budget failures and starts one separately bounded
+  fallback using cumulative changed filenames, the user/assistant conversation, and the
+  existing session commit message to retain earlier work. The fallback excludes the diff
+  and workflow notices, forbids retrieving diffs or file contents, and preserves
+  read-only utility permissions and commit validation. Both post-turn and pre-sync
+  commits supply the session transcript; fallback failure propagates normally.
 
 - **Sync-main workflow** (list-mode `s`): captures an immutable project ID, operation
   ID, path, branch, and review-target snapshot before queueing pull/rebase/push through
