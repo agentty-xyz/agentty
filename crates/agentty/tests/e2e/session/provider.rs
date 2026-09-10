@@ -7,7 +7,6 @@ use std::process::Command;
 use std::time::Duration;
 
 use agentty::domain::session_message::SessionMessageKind;
-use agentty::test_support;
 use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
@@ -16,15 +15,15 @@ use super::fixture::{
     CLAUDE_STRUCTURED_RESPONSE_TEXT, E2eResult, run_git, seed_claude_structured_output_project,
     seed_project_settings,
 };
-use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::{common, test_support};
 
 /// Stable id for the Antigravity session whose replay exceeds the former argv
 /// transport limit.
 const ANTIGRAVITY_LARGE_REPLAY_SESSION_ID: &str = "antigravity-large-replay";
 
 /// Creates a real worktree index lock after a stubbed agent edits a file.
-fn seed_commit_index_lock_project(env: &BuilderEnv) -> E2eResult {
+async fn seed_commit_index_lock_project(env: &BuilderEnv) -> E2eResult {
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
@@ -71,10 +70,11 @@ printf '{"type":"result","subtype":"success","result":"","structured_output":%s,
             ("DefaultFastModel", "claude-haiku-4-5-20251001"),
         ],
     )
+    .await
 }
 
 /// Seeds configured pre-commit validation without installing its Git hook.
-fn seed_missing_pre_commit_hook_project(
+async fn seed_missing_pre_commit_hook_project(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(env.workdir.join(".pre-commit-config.yaml"), "repos: []\n")?;
@@ -117,7 +117,8 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"","structured_outp
             ("DefaultFastAgent", "claude"),
             ("DefaultFastModel", "claude-haiku-4-5-20251001"),
         ],
-    )?;
+    )
+    .await?;
 
     Ok(())
 }
@@ -136,7 +137,7 @@ const PROTOCOL_FAILURE_TAIL_MARKER: &str = "TAILOFPAYLOAD";
 /// The payload is far longer than the excerpt budget and carries a marker at
 /// each end, so the resulting transcript notice can be checked for a bounded
 /// failure message instead of a raw provider dump.
-fn seed_invalid_protocol_output_project(
+async fn seed_invalid_protocol_output_project(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let payload = format!(
@@ -158,13 +159,13 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{payload}"}}'
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])?;
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await?;
 
     Ok(())
 }
 
 /// Adds an Antigravity stub that validates persistent NDJSON prompt delivery.
-fn seed_antigravity_stream_prompt_project(
+async fn seed_antigravity_stream_prompt_project(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let stub_agent_path = env.stub_bin.join("agy");
@@ -252,17 +253,18 @@ done
             ("DefaultSmartAgent", "antigravity"),
             ("DefaultSmartModel", "gemini-3.1-pro-preview"),
         ],
-    )?;
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Seeds a review-ready Antigravity session with a large replay transcript and
 /// a valid worktree.
-fn seed_antigravity_large_replay_project(
+async fn seed_antigravity_large_replay_project(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_antigravity_stream_prompt_project(env)?;
+    seed_antigravity_stream_prompt_project(env).await?;
     common::seed_session(
         env,
         SessionSeed::regular(
@@ -272,15 +274,15 @@ fn seed_antigravity_large_replay_project(
             "Review",
         )
         .with_title("Large Antigravity replay"),
-    )?;
+    )
+    .await?;
 
-    let runtime = common::seed_runtime()?;
     let large_answer = format!(
         "{}\npreserve the accepted middle decision\n{}",
         "x".repeat(24 * 1024),
         "x".repeat(24 * 1024)
     );
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -305,7 +307,8 @@ fn seed_antigravity_large_replay_project(
                 "Complete the initial task.",
             )
             .await
-    })?;
+    })
+    .await?;
 
     let session_worktree = test_support::session_folder(
         &env.agentty_root.join("wt"),
@@ -322,7 +325,7 @@ fn seed_antigravity_large_replay_project(
 
 /// Installs a Claude stub that reports whether Agentty passed web-capable
 /// Claude Code tools to the non-interactive session launch.
-fn install_web_tool_reporting_claude_stub(
+async fn install_web_tool_reporting_claude_stub(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
@@ -343,17 +346,17 @@ printf '{"type":"result","subtype":"success","result":"{\"answer\":\"%s\",\"ques
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
 }
 
 /// Verify that provider output which fails protocol validation surfaces a
 /// bounded failure notice instead of dumping the raw payload into the chat.
-#[test]
-fn test_session_invalid_protocol_output_is_bounded() -> E2eResult {
+#[tokio::test]
+async fn test_session_invalid_protocol_output_is_bounded() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_invalid_protocol_output_is_bounded")
         .with_git()
-        .setup(seed_invalid_protocol_output_project)
+        .setup(|env| Box::pin(async move { seed_invalid_protocol_output_project(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -372,24 +375,27 @@ fn test_session_invalid_protocol_output_is_bounded() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "embedded_json_candidate", &full);
-                assertion::assert_not_visible(frame, PROTOCOL_FAILURE_TAIL_MARKER);
-                assertion::assert_not_visible(frame, PROTOCOL_FAILURE_PAYLOAD_FILLER);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "embedded_json_candidate", &full);
+                    assertion::assert_not_visible(frame, PROTOCOL_FAILURE_TAIL_MARKER);
+                    assertion::assert_not_visible(frame, PROTOCOL_FAILURE_PAYLOAD_FILLER);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that schema-validated Claude results render their final answer
 /// instead of leaving a transient structured-output tool event in chat.
-#[test]
-fn test_claude_structured_output_response() -> E2eResult {
+#[tokio::test]
+async fn test_claude_structured_output_response() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("claude_structured_output_response")
         .with_git()
-        .setup(seed_claude_structured_output_project)
+        .setup(|env| Box::pin(async move { seed_claude_structured_output_project(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -408,27 +414,30 @@ fn test_claude_structured_output_response() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, CLAUDE_STRUCTURED_RESPONSE_TEXT, &full);
-                assertion::assert_not_visible(
-                    frame,
-                    "Agent output did not match the required JSON schema",
-                );
-                assertion::assert_not_visible(frame, "Working: tool use");
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, CLAUDE_STRUCTURED_RESPONSE_TEXT, &full);
+                    assertion::assert_not_visible(
+                        frame,
+                        "Agent output did not match the required JSON schema",
+                    );
+                    assertion::assert_not_visible(frame, "Working: tool use");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify Antigravity receives stdin prompts and retains one native process
 /// across follow-up turns.
-#[test]
-fn test_session_antigravity_preserves_stream_context() -> E2eResult {
+#[tokio::test]
+async fn test_session_antigravity_preserves_stream_context() -> E2eResult {
     // Arrange
     FeatureTest::new("session_antigravity_stream_context")
         .with_git()
-        .setup(seed_antigravity_stream_prompt_project)
+        .setup(|env| Box::pin(async move { seed_antigravity_stream_prompt_project(env).await }))
         .run(
             |scenario| {
                 // Act
@@ -454,31 +463,34 @@ fn test_session_antigravity_preserves_stream_context() -> E2eResult {
                     )
             },
             |frame, _report| {
-                // Assert
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "Antigravity preserved the native conversation.",
-                    &full,
-                );
-                assertion::assert_not_visible(
-                    frame,
-                    "Antigravity invocation did not satisfy the CLI contract:",
-                );
+                Box::pin(async move {
+                    // Assert
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Antigravity preserved the native conversation.",
+                        &full,
+                    );
+                    assertion::assert_not_visible(
+                        frame,
+                        "Antigravity invocation did not satisfy the CLI contract:",
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify resumed transcripts larger than the former argv ceiling are sent
 /// successfully through Antigravity stdin.
-#[test]
-fn test_session_antigravity_accepts_large_replay() -> E2eResult {
+#[tokio::test]
+async fn test_session_antigravity_accepts_large_replay() -> E2eResult {
     // Arrange
     FeatureTest::new("session_antigravity_large_replay")
         .with_git()
-        .setup(seed_antigravity_large_replay_project)
+        .setup(|env| Box::pin(async move { seed_antigravity_large_replay_project(env).await }))
         .run(
             |scenario| {
                 // Act
@@ -499,24 +511,27 @@ fn test_session_antigravity_accepts_large_replay() -> E2eResult {
                     )
             },
             |frame, _report| {
-                // Assert
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "Antigravity accepted the large stdin replay.",
-                    &full,
-                );
-                assertion::assert_not_visible(frame, "32768-byte");
+                Box::pin(async move {
+                    // Assert
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Antigravity accepted the large stdin replay.",
+                        &full,
+                    );
+                    assertion::assert_not_visible(frame, "32768-byte");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that a persistent worktree index lock stops commit recovery without
 /// invoking assistance or deleting either the lock or the pending changes.
-#[test]
-fn test_session_commit_index_lock() -> E2eResult {
+#[tokio::test]
+async fn test_session_commit_index_lock() -> E2eResult {
     // Arrange
     let evidence = tempfile::tempdir()?;
 
@@ -525,7 +540,7 @@ fn test_session_commit_index_lock() -> E2eResult {
         .with_git()
         .with_terminal_size(100, 40)
         .env("AGENTTY_TEST_EVIDENCE", evidence.path().to_string_lossy())
-        .setup(seed_commit_index_lock_project)
+        .setup(|env| Box::pin(async move { seed_commit_index_lock_project(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -547,37 +562,44 @@ fn test_session_commit_index_lock() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "[Commit Error]", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Auto-commit blocked by a Git index lock",
-                    &full,
-                );
-                assertion::assert_text_in_region(frame, "repository owner confirm it is", &full);
-                assertion::assert_text_in_region(frame, "stale before removing it", &full);
-                assertion::assert_not_visible(frame, "Committing...");
-                assertion::assert_not_visible(frame, "[Commit Assist]");
-                assert!(!evidence.path().join("assist").exists());
-                for (record, expected) in [
-                    ("lock-path", "test lock\n"),
-                    ("change-path", "pending change\n"),
-                ] {
-                    let path = std::fs::read_to_string(evidence.path().join(record))
-                        .expect("stub should record the fixture path");
-                    let content = std::fs::read_to_string(path.trim())
-                        .expect("auto-commit should preserve the fixture");
-                    assert_eq!(content, expected);
-                }
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "[Commit Error]", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Auto-commit blocked by a Git index lock",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "repository owner confirm it is",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "stale before removing it", &full);
+                    assertion::assert_not_visible(frame, "Committing...");
+                    assertion::assert_not_visible(frame, "[Commit Assist]");
+                    assert!(!evidence.path().join("assist").exists());
+                    for (record, expected) in [
+                        ("lock-path", "test lock\n"),
+                        ("change-path", "pending change\n"),
+                    ] {
+                        let path = std::fs::read_to_string(evidence.path().join(record))
+                            .expect("stub should record the fixture path");
+                        let content = std::fs::read_to_string(path.trim())
+                            .expect("auto-commit should preserve the fixture");
+                        assert_eq!(content, expected);
+                    }
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that auto-commit waits for a short-lived writer without assistance.
-#[test]
-fn test_session_commit_index_lock_recovers() -> E2eResult {
+#[tokio::test]
+async fn test_session_commit_index_lock_recovers() -> E2eResult {
     // Arrange
     let evidence = tempfile::tempdir()?;
 
@@ -588,7 +610,7 @@ fn test_session_commit_index_lock_recovers() -> E2eResult {
         .env("AGENTTY_TEST_EVIDENCE", evidence.path().to_string_lossy())
         .env("AGENTTY_TEST_RELEASE_LOCK", "1")
         .env("GIT_OPTIONAL_LOCKS", "1")
-        .setup(seed_commit_index_lock_project)
+        .setup(|env| Box::pin(async move { seed_commit_index_lock_project(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -606,40 +628,43 @@ fn test_session_commit_index_lock_recovers() -> E2eResult {
                     .capture_labeled("commit_recovered", "Auto-commit waits for the index writer")
             },
             |frame, _report| {
-                assertion::assert_not_visible(frame, "[Commit Error]");
-                assertion::assert_not_visible(frame, "[Commit Assist]");
-                assert!(!evidence.path().join("assist").exists());
-                assert_eq!(
-                    std::fs::read_to_string(evidence.path().join("optional-locks"))
-                        .expect("agent should record the inherited Git environment"),
-                    "0\n"
-                );
-                let change_path = std::fs::read_to_string(evidence.path().join("change-path"))
-                    .expect("agent should record its changed file");
-                let worktree = Path::new(change_path.trim())
-                    .parent()
-                    .expect("changed file should have a worktree");
-                let committed = Command::new("git")
-                    .args(["show", "HEAD:generated.txt"])
-                    .current_dir(worktree)
-                    .output()
-                    .expect("committed file should be readable");
-                assert!(committed.status.success());
-                assert_eq!(committed.stdout, b"pending change\n");
+                Box::pin(async move {
+                    assertion::assert_not_visible(frame, "[Commit Error]");
+                    assertion::assert_not_visible(frame, "[Commit Assist]");
+                    assert!(!evidence.path().join("assist").exists());
+                    assert_eq!(
+                        std::fs::read_to_string(evidence.path().join("optional-locks"))
+                            .expect("agent should record the inherited Git environment"),
+                        "0\n"
+                    );
+                    let change_path = std::fs::read_to_string(evidence.path().join("change-path"))
+                        .expect("agent should record its changed file");
+                    let worktree = Path::new(change_path.trim())
+                        .parent()
+                        .expect("changed file should have a worktree");
+                    let committed = Command::new("git")
+                        .args(["show", "HEAD:generated.txt"])
+                        .current_dir(worktree)
+                        .output()
+                        .expect("committed file should be readable");
+                    assert!(committed.status.success());
+                    assert_eq!(committed.stdout, b"pending change\n");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that configured validation without an installed hook warns before
 /// session selection and after a successful normal commit.
-#[test]
-fn test_session_pre_commit_hook_warning() -> E2eResult {
+#[tokio::test]
+async fn test_session_pre_commit_hook_warning() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_pre_commit_hook_warning")
         .with_git()
-        .setup(seed_missing_pre_commit_hook_project)
+        .setup(|env| Box::pin(async move { seed_missing_pre_commit_hook_project(env).await }))
         .zola(
             "Pre-commit hook warning",
             "Warn about missing pre-commit hooks without blocking session creation.",
@@ -689,52 +714,59 @@ fn test_session_pre_commit_hook_warning() -> E2eResult {
                     )
             },
             |frame, report| {
-                let warning_frame = common::frame_from_capture(&report.captures[0]);
-                let warning_full = Region::full(warning_frame.cols(), warning_frame.rows());
-                assertion::assert_text_in_region(
-                    &warning_frame,
-                    "Pre-commit hook warning",
-                    &warning_full,
-                );
-                assertion::assert_text_in_region(
-                    &warning_frame,
-                    "not installed or executable.",
-                    &warning_full,
-                );
-                assertion::assert_text_in_region(&warning_frame, "Install it", &warning_full);
-                assertion::assert_text_in_region(
-                    &warning_frame,
-                    "become an error in a future release.",
-                    &warning_full,
-                );
-                assertion::assert_text_in_region(&warning_frame, "prek install", &warning_full);
-                assertion::assert_text_in_region(
-                    &warning_frame,
-                    "pre-commit install",
-                    &warning_full,
-                );
+                Box::pin(async move {
+                    let warning_frame = common::frame_from_capture(&report.captures[0]);
+                    let warning_full = Region::full(warning_frame.cols(), warning_frame.rows());
+                    assertion::assert_text_in_region(
+                        &warning_frame,
+                        "Pre-commit hook warning",
+                        &warning_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &warning_frame,
+                        "not installed or executable.",
+                        &warning_full,
+                    );
+                    assertion::assert_text_in_region(&warning_frame, "Install it", &warning_full);
+                    assertion::assert_text_in_region(
+                        &warning_frame,
+                        "become an error in a future release.",
+                        &warning_full,
+                    );
+                    assertion::assert_text_in_region(&warning_frame, "prek install", &warning_full);
+                    assertion::assert_text_in_region(
+                        &warning_frame,
+                        "pre-commit install",
+                        &warning_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "[Commit Warning]", &full);
-                assertion::assert_text_in_region(frame, "Created pending worktree change", &full);
-                assertion::assert_text_in_region(frame, "prek install", &full);
-                assertion::assert_text_in_region(frame, "pre-commit install", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "[Commit Warning]", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Created pending worktree change",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "prek install", &full);
+                    assertion::assert_text_in_region(frame, "pre-commit install", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that Claude sessions are launched with web-capable Claude Code
 /// tools so current-information prompts do not require an interactive grant.
-#[test]
-fn claude_session_launch_allows_web_tools() -> E2eResult {
+#[tokio::test]
+async fn claude_session_launch_allows_web_tools() -> E2eResult {
     // Arrange
-    let _test_guard = common::acquire_e2e_test_lock();
+    let _test_guard = common::acquire_e2e_test_lock().await;
     let temp = tempfile::TempDir::new()?;
     let env = BuilderEnv::new(temp.path())?;
     env.init_git()?;
-    install_web_tool_reporting_claude_stub(&env)?;
+    install_web_tool_reporting_claude_stub(&env).await?;
 
     let scenario = Scenario::new("claude_session_web_tools")
         .compose(&common::wait_for_agentty_startup())
@@ -759,7 +791,7 @@ fn claude_session_launch_allows_web_tools() -> E2eResult {
 }
 
 /// Seeds a large change whose diff summarizer cannot produce a valid reduction.
-fn seed_commit_input_limit_project(env: &BuilderEnv) -> E2eResult {
+async fn seed_commit_input_limit_project(env: &BuilderEnv) -> E2eResult {
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
@@ -802,12 +834,13 @@ printf '{"type":"result","subtype":"success","result":"","structured_output":%s,
             ("DefaultFastModel", "claude-haiku-4-5-20251001"),
         ],
     )
+    .await
 }
 
 /// Verify a failed diff reduction still commits pending work using files and
 /// chat.
-#[test]
-fn test_session_commit_input_limit_fallback() -> E2eResult {
+#[tokio::test]
+async fn test_session_commit_input_limit_fallback() -> E2eResult {
     // Arrange
     let evidence = tempfile::tempdir()?;
 
@@ -816,7 +849,7 @@ fn test_session_commit_input_limit_fallback() -> E2eResult {
         .with_git()
         .with_terminal_size(100, 40)
         .env("AGENTTY_TEST_EVIDENCE", evidence.path().to_string_lossy())
-        .setup(seed_commit_input_limit_project)
+        .setup(|env| Box::pin(async move { seed_commit_input_limit_project(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -837,39 +870,42 @@ fn test_session_commit_input_limit_fallback() -> E2eResult {
                     )
             },
             |frame, _report| {
-                assertion::assert_not_visible(frame, "[Commit Error]");
-                assertion::assert_not_visible(frame, "[Commit Assist]");
-                let prompt = std::fs::read_to_string(evidence.path().join("fallback-prompt"))
-                    .expect("fallback prompt should be submitted");
-                for expected in [
-                    "large.txt",
-                    "Create large fallback file",
-                    "Created the large fallback file",
-                ] {
-                    assert!(prompt.contains(expected));
-                }
-                assert!(!prompt.contains("DIFF_ONLY_SENTINEL"));
-                let worktree = std::fs::read_to_string(evidence.path().join("worktree"))
-                    .expect("stub should record the worktree");
-                let output = Command::new("git")
-                    .args(["log", "-1", "--format=%s"])
-                    .current_dir(worktree.trim())
-                    .output()
-                    .expect("commit title should load");
-                assert!(output.status.success());
-                assert_eq!(
-                    String::from_utf8_lossy(&output.stdout).trim(),
-                    "Recover commit from conversation"
-                );
-                let output = Command::new("git")
-                    .args(["status", "--porcelain"])
-                    .current_dir(worktree.trim())
-                    .output()
-                    .expect("status should load");
-                assert!(output.status.success());
-                assert_eq!(output.stdout, Vec::<u8>::new());
+                Box::pin(async move {
+                    assertion::assert_not_visible(frame, "[Commit Error]");
+                    assertion::assert_not_visible(frame, "[Commit Assist]");
+                    let prompt = std::fs::read_to_string(evidence.path().join("fallback-prompt"))
+                        .expect("fallback prompt should be submitted");
+                    for expected in [
+                        "large.txt",
+                        "Create large fallback file",
+                        "Created the large fallback file",
+                    ] {
+                        assert!(prompt.contains(expected));
+                    }
+                    assert!(!prompt.contains("DIFF_ONLY_SENTINEL"));
+                    let worktree = std::fs::read_to_string(evidence.path().join("worktree"))
+                        .expect("stub should record the worktree");
+                    let output = Command::new("git")
+                        .args(["log", "-1", "--format=%s"])
+                        .current_dir(worktree.trim())
+                        .output()
+                        .expect("commit title should load");
+                    assert!(output.status.success());
+                    assert_eq!(
+                        String::from_utf8_lossy(&output.stdout).trim(),
+                        "Recover commit from conversation"
+                    );
+                    let output = Command::new("git")
+                        .args(["status", "--porcelain"])
+                        .current_dir(worktree.trim())
+                        .output()
+                        .expect("status should load");
+                    assert!(output.status.success());
+                    assert_eq!(output.stdout, Vec::<u8>::new());
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

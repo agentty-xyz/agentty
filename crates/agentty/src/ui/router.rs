@@ -18,7 +18,7 @@ use crate::presentation::app_mode::{
     DiffReviewComments, DiffSidebarFocus, HelpContext, allows_diff_line_comment_reply,
 };
 use crate::presentation::frame_time::FrameTime;
-use crate::presentation::settings::SettingsScreenSnapshot;
+use crate::presentation::setting::SettingsScreenSnapshot;
 use crate::ui::{
     Component, Page, RenderContext, SessionReviewSnapshot, component, markdown, overlay, page,
 };
@@ -140,22 +140,22 @@ enum SessionSurfaceMode<'a> {
 struct SessionChatRenderContext<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
+    frame_time: FrameTime,
     is_tmux_session: bool,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     mode: &'a AppMode,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
-    session_id: &'a str,
-    session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
-    session_progress_messages: &'a HashMap<SessionId, String>,
+    scroll_offset: Option<u16>,
     session_cpu_temperatures: &'a HashMap<SessionId, f32>,
+    session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
+    session_id: &'a str,
+    session_progress_messages: &'a HashMap<SessionId, String>,
     /// Latest tracked process-tree totals.
     session_resources: &'a HashMap<SessionId, SessionResources>,
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
     sessions: &'a [Session],
-    scroll_offset: Option<u16>,
-    frame_time: FrameTime,
 }
 
 /// UI-owned immutable resources shared by every surface in one frame.
@@ -167,18 +167,18 @@ struct FrameResources<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
     diff_layout_cache: &'a page::diff::DiffLayoutCache,
+    frame_time: FrameTime,
     is_tmux_session: bool,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
+    session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     session_progress_messages: &'a HashMap<SessionId, String>,
-    session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     /// Latest tracked process-tree totals.
     session_resources: &'a HashMap<SessionId, SessionResources>,
     session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
-    frame_time: FrameTime,
 }
 
 impl<'a> FrameResources<'a> {
@@ -697,8 +697,8 @@ struct DiffSurfaceInput<'a> {
     is_loading: bool,
     line_comments: &'a DiffLineComments,
     preview: &'a DiffPreview,
-    review_comments: Option<&'a DiffReviewComments>,
     restore: Option<&'a DiffRestoreTarget>,
+    review_comments: Option<&'a DiffReviewComments>,
     scroll_offset: u16,
     selected_diff_line_index: usize,
     session_id: &'a str,

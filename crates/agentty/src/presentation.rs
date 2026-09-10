@@ -10,4 +10,4 @@ pub mod help_action;
 pub mod prompt;
 /// Stable selection projection for grouped review-comment snapshots.
 pub(crate) mod review_comment;
-pub(crate) mod settings;
+pub(crate) mod setting;

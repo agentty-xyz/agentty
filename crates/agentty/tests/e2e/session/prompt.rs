@@ -23,7 +23,7 @@ fn seed_draft_at_lookup_project(env: &BuilderEnv) -> Result<(), Box<dyn std::err
 
 /// Seeds two unmaterialized stacked drafts whose nearest materialized ancestor
 /// contains a new file that is absent from the project checkout.
-fn seed_nested_stacked_at_lookup_session(
+async fn seed_nested_stacked_at_lookup_session(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ancestor_session_id = "atparent-0001";
@@ -33,7 +33,8 @@ fn seed_nested_stacked_at_lookup_session(
         env,
         SessionSeed::regular(ancestor_session_id, "gpt-5.6-sol", "main", "Review")
             .with_title("Ancestor with lookup file"),
-    )?;
+    )
+    .await?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
@@ -44,7 +45,8 @@ fn seed_nested_stacked_at_lookup_session(
             ancestor_session_id,
         )
         .with_title("Unmaterialized middle draft"),
-    )?;
+    )
+    .await?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
@@ -55,7 +57,8 @@ fn seed_nested_stacked_at_lookup_session(
             parent_session_id,
         )
         .with_title("Nested lookup child"),
-    )?;
+    )
+    .await?;
 
     let parent_worktree = env.agentty_root.join("wt").join("atparent");
     std::fs::create_dir_all(&parent_worktree)?;
@@ -70,12 +73,12 @@ fn seed_nested_stacked_at_lookup_session(
 /// Verify that `Tab` moves focus from the prompt composer to the chat
 /// transcript, and that `q` returns to the sessions list while preserving the
 /// typed draft for reopening.
-#[test]
-fn session_prompt_chat_focus_toggle() -> E2eResult {
+#[tokio::test]
+async fn session_prompt_chat_focus_toggle() -> E2eResult {
     // Arrange
     FeatureTest::new("session_prompt_chat_focus")
         .with_git()
-        .setup(seed_sessions_startup_tab)
+        .setup(|env| Box::pin(async move { seed_sessions_startup_tab(env).await }))
         .zola(
             "Read the chat while composing",
             "Press Tab to read the chat, then return to Sessions and reopen the composer without \
@@ -121,83 +124,21 @@ fn session_prompt_chat_focus_toggle() -> E2eResult {
                     )
             },
             |frame, report| {
-                // Assert
-                let chat_focused_frame = common::frame_from_capture(&report.captures[1]);
-                let chat_focused_full =
-                    Region::full(chat_focused_frame.cols(), chat_focused_frame.rows());
-                assertion::assert_text_in_region(
-                    &chat_focused_frame,
-                    "Tab: focus",
-                    &chat_focused_full,
-                );
-                assertion::assert_text_in_region(
-                    &chat_focused_frame,
-                    "j/k: scroll",
-                    &chat_focused_full,
-                );
-                assertion::assert_text_in_region(
-                    &chat_focused_frame,
-                    "q: sessions",
-                    &chat_focused_full,
-                );
-                assertion::assert_text_in_region(
-                    &chat_focused_frame,
-                    "d: diff",
-                    &chat_focused_full,
-                );
-                // Chat focus exposes no cancel shortcut, so the composer draft
-                // cannot be lost while scrolling.
-                assertion::assert_not_visible(&chat_focused_frame, "Ctrl+C");
-                // Scroll keys pressed in chat focus must not reach the draft.
-                assertion::assert_text_in_region(
-                    &chat_focused_frame,
-                    PROMPT_FOCUS_DRAFT_TEXT,
-                    &chat_focused_full,
-                );
-
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Enter: send", &full);
-                assertion::assert_text_in_region(frame, PROMPT_FOCUS_DRAFT_TEXT, &full);
-                assertion::assert_not_visible(frame, "j/k: scroll");
-                assertion::assert_not_visible(frame, "q: sessions");
-
-                // This session's worktree name comes from a fresh UUID, so the
-                // footer reads differently on every run. Pin the harness
-                // redaction against the footer agentty actually paints: without
-                // a match, the frame hash moves every run and the committed GIF
-                // is re-recorded for a UI that never changed.
-                let redacted = common::session_worktree_redaction().apply(&frame.all_text());
-                let placeholder = format!(
-                    "{}{}",
-                    common::SESSION_WORKTREE_PREFIX,
-                    common::SESSION_WORKTREE_PLACEHOLDER,
-                );
-
-                assert!(
-                    redacted.contains(&placeholder),
-                    "the session worktree hash must be redacted out of the footer, \
-                     got:\n{redacted}",
-                );
-
-                // The footer must paint the worktree path home-collapsed. An
-                // absolute temp path is truncated differently per platform
-                // (macOS temp roots are far longer than Linux's `/tmp`), which
-                // would make the committed freshness hash unreproducible on CI.
-                assert!(
-                    redacted.contains("~/.agentty/wt/"),
-                    "the footer must paint the worktree path home-collapsed so frames hash \
-                     identically on every platform, got:\n{redacted}",
-                );
+                Box::pin(async move {
+                    // Assert
+                    assert_session_prompt_chat_focus_toggle(frame, report);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that prompt image paste reports unavailable clipboard backends
 /// inline.
-#[test]
-fn prompt_image_paste_unavailable_shows_inline_error() -> E2eResult {
+#[tokio::test]
+async fn prompt_image_paste_unavailable_shows_inline_error() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("prompt_image_paste_unavailable")
         .with_git()
@@ -218,20 +159,23 @@ fn prompt_image_paste_unavailable_shows_inline_error() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Paste Image Error", &full);
-                assertion::assert_text_in_region(frame, "Clipboard is unavailable", &full);
-                assertion::assert_not_visible(frame, "[Image #1]");
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Paste Image Error", &full);
+                    assertion::assert_text_in_region(frame, "Clipboard is unavailable", &full);
+                    assertion::assert_not_visible(frame, "[Image #1]");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that pasted-image shortcuts work directly from a draft session view
 /// by opening the draft composer and routing through prompt image paste.
-#[test]
-fn draft_session_view_paste_image_opens_composer() -> E2eResult {
+#[tokio::test]
+async fn draft_session_view_paste_image_opens_composer() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("draft_session_view_paste_image")
         .with_git()
@@ -261,30 +205,33 @@ fn draft_session_view_paste_image_opens_composer() -> E2eResult {
                     )
             },
             |frame, report| {
-                let draft_view_frame = common::frame_from_capture(&report.captures[0]);
-                let draft_view_full =
-                    Region::full(draft_view_frame.cols(), draft_view_frame.rows());
-                assertion::assert_text_in_region(
-                    &draft_view_frame,
-                    "Ctrl+V/Alt+V: paste image",
-                    &draft_view_full,
-                );
+                Box::pin(async move {
+                    let draft_view_frame = common::frame_from_capture(&report.captures[0]);
+                    let draft_view_full =
+                        Region::full(draft_view_frame.cols(), draft_view_frame.rows());
+                    assertion::assert_text_in_region(
+                        &draft_view_frame,
+                        "Ctrl+V/Alt+V: paste image",
+                        &draft_view_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Paste Image Error", &full);
-                assertion::assert_text_in_region(frame, "Clipboard is unavailable", &full);
-                assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
-                assertion::assert_not_visible(frame, "[Image #1]");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Paste Image Error", &full);
+                    assertion::assert_text_in_region(frame, "Clipboard is unavailable", &full);
+                    assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+                    assertion::assert_not_visible(frame, "[Image #1]");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that pressing `Esc` in an empty prompt for a new non-draft
 /// session deletes it and returns to the empty Sessions list.
-#[test]
-fn session_prompt_cancel_returns_to_empty_list() -> E2eResult {
+#[tokio::test]
+async fn session_prompt_cancel_returns_to_empty_list() -> E2eResult {
     // Arrange
     FeatureTest::new("prompt_cancel")
         .with_git()
@@ -311,31 +258,34 @@ fn session_prompt_cancel_returns_to_empty_list() -> E2eResult {
                     .capture_labeled("back_to_list", "Sessions list after cancel")
             },
             |frame, report| {
-                // Assert
-                let prompt_frame = common::frame_from_capture(&report.captures[0]);
-                let prompt_full = Region::full(prompt_frame.cols(), prompt_frame.rows());
-                assertion::assert_text_in_region(
-                    &prompt_frame,
-                    "Tab: focus | Enter: send",
-                    &prompt_full,
-                );
+                Box::pin(async move {
+                    // Assert
+                    let prompt_frame = common::frame_from_capture(&report.captures[0]);
+                    let prompt_full = Region::full(prompt_frame.cols(), prompt_frame.rows());
+                    assertion::assert_text_in_region(
+                        &prompt_frame,
+                        "Tab: focus | Enter: send",
+                        &prompt_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "No sessions", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "No sessions", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that draft-session prompt mode can open `@` file lookup suggestions
 /// before the deferred worktree exists.
-#[test]
-fn draft_session_at_lookup() -> E2eResult {
+#[tokio::test]
+async fn draft_session_at_lookup() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("draft_session_at_lookup")
         .with_git()
-        .setup(seed_draft_at_lookup_project)
+        .setup(|env| Box::pin(async move { seed_draft_at_lookup_project(env) }))
         .zola(
             "Draft session @ lookup",
             "Browse project files with `@` before a draft session materializes its worktree.",
@@ -362,23 +312,26 @@ fn draft_session_at_lookup() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "draft_lookup_target.txt", &full);
-                assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "draft_lookup_target.txt", &full);
+                    assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that a nested unmaterialized stacked draft resolves `@` suggestions
 /// from its nearest materialized ancestor worktree.
-#[test]
-fn stacked_session_at_lookup() -> E2eResult {
+#[tokio::test]
+async fn stacked_session_at_lookup() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("stacked_session_at_lookup")
         .with_git()
-        .setup(seed_nested_stacked_at_lookup_session)
+        .setup(|env| Box::pin(async move { seed_nested_stacked_at_lookup_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -393,18 +346,21 @@ fn stacked_session_at_lookup() -> E2eResult {
                     .wait_for_text("ancestor_lookup_target.txt", 5000)
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "ancestor_lookup_target.txt", &full);
-                assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "ancestor_lookup_target.txt", &full);
+                    assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that typed text appears in the prompt input.
-#[test]
-fn prompt_typing_shows_text() -> E2eResult {
+#[tokio::test]
+async fn prompt_typing_shows_text() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("prompt_typing")
         .with_git()
@@ -430,42 +386,50 @@ fn prompt_typing_shows_text() -> E2eResult {
                     .capture_labeled("typed_text", "Prompt input with typed text")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "hello world", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "hello world", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that pressing `Backspace` after deleting all prompt text leaves the
 /// empty prompt open.
-#[test]
-fn prompt_backspace_on_empty_input() -> E2eResult {
+#[tokio::test]
+async fn prompt_backspace_on_empty_input() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("prompt_empty_backspace").with_git().run(
-        |scenario| {
-            scenario
-                .compose(&common::wait_for_agentty_startup())
-                .compose(&common::switch_to_tab("Sessions"))
-                .press_key("a")
-                .press_key("Enter")
-                .wait_for_stable_frame(300, 5000)
-                .write_text("bug")
-                .wait_for_text("bug", 3000)
-                .press_key("Backspace")
-                .press_key("Backspace")
-                .press_key("Backspace")
-                .press_key("Backspace")
-                .wait_for_text("Type your message", 3000)
-                .capture_labeled("empty_prompt", "Empty prompt after one extra Backspace")
-        },
-        |frame, _report| {
-            let full = Region::full(frame.cols(), frame.rows());
-            assertion::assert_text_in_region(frame, "Type your message", &full);
-            assertion::assert_text_in_region(frame, "Enter: send", &full);
-        },
-    )?;
+    FeatureTest::new("prompt_empty_backspace")
+        .with_git()
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("bug")
+                    .wait_for_text("bug", 3000)
+                    .press_key("Backspace")
+                    .press_key("Backspace")
+                    .press_key("Backspace")
+                    .press_key("Backspace")
+                    .wait_for_text("Type your message", 3000)
+                    .capture_labeled("empty_prompt", "Empty prompt after one extra Backspace")
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Type your message", &full);
+                    assertion::assert_text_in_region(frame, "Enter: send", &full);
+                })
+            },
+        )
+        .await?;
 
     Ok(())
 }
@@ -475,8 +439,8 @@ fn prompt_backspace_on_empty_input() -> E2eResult {
 ///
 /// Alt+Enter is sent as ESC (0x1b) followed by CR (0x0d) which crossterm
 /// interprets as `KeyCode::Enter` with `KeyModifiers::ALT`.
-#[test]
-fn prompt_multiline_via_alt_enter() -> E2eResult {
+#[tokio::test]
+async fn prompt_multiline_via_alt_enter() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("prompt_multiline")
         .with_git()
@@ -508,18 +472,21 @@ fn prompt_multiline_via_alt_enter() -> E2eResult {
                     .capture_labeled("multiline", "Multiline prompt with both lines")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "first line", &full);
-                assertion::assert_text_in_region(frame, "second line", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "first line", &full);
+                    assertion::assert_text_in_region(frame, "second line", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify bracketed paste keeps leading indentation after prompt submission.
-#[test]
-fn prompt_paste_indentation() -> E2eResult {
+#[tokio::test]
+async fn prompt_paste_indentation() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("prompt_paste_indentation")
         .with_git()
@@ -541,21 +508,24 @@ fn prompt_paste_indentation() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                let text = frame.text_in_region(&full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    let text = frame.text_in_region(&full);
 
-                assert!(text.contains(" ›     indented prompt"));
+                    assert!(text.contains(" ›     indented prompt"));
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that CSI-u `Shift+Enter` inserts a newline in the prompt input.
-#[test]
-fn prompt_multiline_via_csi_u_shift_enter() -> E2eResult {
+#[tokio::test]
+async fn prompt_multiline_via_csi_u_shift_enter() -> E2eResult {
     // Arrange
-    let _test_guard = common::acquire_e2e_test_lock();
+    let _test_guard = common::acquire_e2e_test_lock().await;
     let temp = tempfile::TempDir::new()?;
     let env = BuilderEnv::new(temp.path())?;
     env.init_git()?;
@@ -582,4 +552,65 @@ fn prompt_multiline_via_csi_u_shift_enter() -> E2eResult {
     assertion::assert_not_visible(&frame, "first linesecond line");
 
     Ok(())
+}
+
+/// Checks the captured states for this feature journey.
+fn assert_session_prompt_chat_focus_toggle(
+    frame: &testty::frame::TerminalFrame,
+    report: &testty::proof::report::ProofReport,
+) {
+    // Assert
+    let chat_focused_frame = common::frame_from_capture(&report.captures[1]);
+    let chat_focused_full = Region::full(chat_focused_frame.cols(), chat_focused_frame.rows());
+    assertion::assert_text_in_region(&chat_focused_frame, "Tab: focus", &chat_focused_full);
+    assertion::assert_text_in_region(&chat_focused_frame, "j/k: scroll", &chat_focused_full);
+    assertion::assert_text_in_region(&chat_focused_frame, "q: sessions", &chat_focused_full);
+    assertion::assert_text_in_region(&chat_focused_frame, "d: diff", &chat_focused_full);
+    // Chat focus exposes no cancel shortcut, so the composer
+    // draft cannot be lost while scrolling.
+    assertion::assert_not_visible(&chat_focused_frame, "Ctrl+C");
+    // Scroll keys pressed in chat focus must not reach the
+    // draft.
+    assertion::assert_text_in_region(
+        &chat_focused_frame,
+        PROMPT_FOCUS_DRAFT_TEXT,
+        &chat_focused_full,
+    );
+
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(frame, "Enter: send", &full);
+    assertion::assert_text_in_region(frame, PROMPT_FOCUS_DRAFT_TEXT, &full);
+    assertion::assert_not_visible(frame, "j/k: scroll");
+    assertion::assert_not_visible(frame, "q: sessions");
+
+    // This session's worktree name comes from a fresh UUID, so
+    // the footer reads differently on every
+    // run. Pin the harness
+    // redaction against the footer agentty actually paints:
+    // without a match, the frame hash moves
+    // every run and the committed GIF
+    // is re-recorded for a UI that never changed.
+    let redacted = common::session_worktree_redaction().apply(&frame.all_text());
+    let placeholder = format!(
+        "{}{}",
+        common::SESSION_WORKTREE_PREFIX,
+        common::SESSION_WORKTREE_PLACEHOLDER,
+    );
+
+    assert!(
+        redacted.contains(&placeholder),
+        "the session worktree hash must be redacted out of the footer, got:\n{redacted}",
+    );
+
+    // The footer must paint the worktree path home-collapsed.
+    // An absolute temp path is truncated
+    // differently per platform (macOS temp
+    // roots are far longer than Linux's `/tmp`), which
+    // would make the committed freshness hash unreproducible on
+    // CI.
+    assert!(
+        redacted.contains("~/.agentty/wt/"),
+        "the footer must paint the worktree path home-collapsed so frames hash identically on \
+         every platform, got:\n{redacted}",
+    );
 }

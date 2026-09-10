@@ -7,9 +7,6 @@ use std::os::unix::fs::PermissionsExt;
 use agentty::app::Tab;
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
-use agentty::test_support::{
-    persist_active_tab_for_test, persist_project_reasoning_levels_for_test,
-};
 use testty::assertion;
 use testty::journey::Journey;
 use testty::region::Region;
@@ -17,6 +14,7 @@ use testty::step::Step;
 
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
+use crate::test_support::{persist_active_tab_for_test, persist_project_reasoning_levels_for_test};
 
 const DEFAULT_SMART_MODEL_ROW_OFFSET: usize = 3;
 const LAUNCH_CONFIGURATIONS_ROW_OFFSET: usize = 7;
@@ -50,26 +48,25 @@ fn seed_gemini_settings_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::er
 /// Persists the three model selectors to `claude-opus-4-6` so the test can
 /// verify Agentty upgrades retired stored model ids to `claude-opus-5`
 /// before row navigation changes the visible selector values.
-fn seed_settings_navigation_models(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_settings_models(env, false)
+async fn seed_settings_navigation_models(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_settings_models(env, false).await
 }
 
 /// Seeds deterministic selector values and starts the feature demo on Settings.
-fn seed_settings_dropdown_models(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_settings_models(env, true)
+async fn seed_settings_dropdown_models(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_settings_models(env, true).await
 }
 
 /// Seeds deterministic Claude selectors with optional dropdown-demo state.
-fn seed_settings_models(
+async fn seed_settings_models(
     env: &BuilderEnv,
     configure_dropdown_demo: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
 
-    runtime.block_on(async {
+    (async {
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         let project_id = database
@@ -112,21 +109,19 @@ SET value = excluded.value
         }
 
         Ok::<(), Box<dyn std::error::Error>>(())
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Seeds distinct persisted role reasoning levels for model-selector coverage.
-fn seed_settings_model_reasoning_levels(
+async fn seed_settings_model_reasoning_levels(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
 
-    runtime.block_on(async {
+    (async {
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         let project_id = database
@@ -144,7 +139,8 @@ fn seed_settings_model_reasoning_levels(
         .await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
@@ -154,11 +150,11 @@ fn seed_settings_model_reasoning_levels(
 /// Navigates to the Settings tab and asserts that the settings table
 /// appears with expected role model rows and `Launch Configurations`. It also
 /// verifies the Agentty coauthor trailer starts disabled for new projects.
-#[test]
-fn settings_tab_shows_content() {
+#[tokio::test]
+async fn settings_tab_shows_content() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_content")
-        .setup(seed_gemini_settings_cli_stub)
+        .setup(|env| Box::pin(async move { seed_gemini_settings_cli_stub(env) }))
         .with_stub_only_path()
         .zola(
             "Settings tab",
@@ -176,22 +172,25 @@ fn settings_tab_shows_content() {
                     .capture_labeled("settings_tab", "Settings tab with all rows")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Settings", &full);
-                assertion::assert_text_in_region(frame, "Global settings", &full);
-                assertion::assert_text_in_region(frame, "Default Smart Model", &full);
-                assertion::assert_text_in_region(frame, "Default Fast Model", &full);
-                assertion::assert_text_in_region(frame, "Default Review Model", &full);
-                assertion::assert_text_in_region(frame, "gemini/gemini-3.1-pro-preview", &full);
-                assertion::assert_text_in_region(frame, "[high]", &full);
-                assertion::assert_text_in_region(frame, "Disabled", &full);
-                assertion::assert_text_in_region(frame, "Launch Configurations", &full);
-                assertion::assert_text_in_region(frame, "Theme", &full);
-                assertion::assert_text_in_region(frame, "Agentty Default", &full);
-                assertion::assert_text_in_region(frame, "Orchestrator Parallelism", &full);
-                assertion::assert_text_in_region(frame, "Auto-approve Research", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Settings", &full);
+                    assertion::assert_text_in_region(frame, "Global settings", &full);
+                    assertion::assert_text_in_region(frame, "Default Smart Model", &full);
+                    assertion::assert_text_in_region(frame, "Default Fast Model", &full);
+                    assertion::assert_text_in_region(frame, "Default Review Model", &full);
+                    assertion::assert_text_in_region(frame, "gemini/gemini-3.1-pro-preview", &full);
+                    assertion::assert_text_in_region(frame, "[high]", &full);
+                    assertion::assert_text_in_region(frame, "Disabled", &full);
+                    assertion::assert_text_in_region(frame, "Launch Configurations", &full);
+                    assertion::assert_text_in_region(frame, "Theme", &full);
+                    assertion::assert_text_in_region(frame, "Agentty Default", &full);
+                    assertion::assert_text_in_region(frame, "Orchestrator Parallelism", &full);
+                    assertion::assert_text_in_region(frame, "Auto-approve Research", &full);
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }
 
@@ -202,11 +201,11 @@ fn settings_tab_shows_content() {
 /// row by seeding deterministic retired Opus model values, observing startup
 /// migration to `claude-opus-5`, and then checking which role reasoning
 /// value advances after each dropdown selection.
-#[test]
-fn settings_jk_navigation() {
+#[tokio::test]
+async fn settings_jk_navigation() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_navigation")
-        .setup(seed_settings_navigation_models)
+        .setup(|env| Box::pin(async move { seed_settings_navigation_models(env).await }))
         .zola(
             "Settings navigation",
             "Navigate settings rows with j/k keys.",
@@ -268,32 +267,35 @@ fn settings_jk_navigation() {
                     .capture_labeled("moved_up", "Selection moved back up one row")
             },
             |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Settings", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Settings", &full);
 
-                assert_eq!(
-                    report.captures.len(),
-                    3,
-                    "Expected 3 captures (initial, moved_down, moved_up)"
-                );
+                    assert_eq!(
+                        report.captures.len(),
+                        3,
+                        "Expected 3 captures (initial, moved_down, moved_up)"
+                    );
 
-                let initial_frame = common::frame_from_capture(&report.captures[0]);
-                assertion::assert_match_count(&initial_frame, "claude-opus-4-6", 0);
-                assertion::assert_match_count(&initial_frame, "claude/claude-opus-5", 3);
+                    let initial_frame = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_match_count(&initial_frame, "claude-opus-4-6", 0);
+                    assertion::assert_match_count(&initial_frame, "claude/claude-opus-5", 3);
 
-                let moved_down_frame = common::frame_from_capture(&report.captures[1]);
-                assertion::assert_match_count(&moved_down_frame, "claude-opus-4-6", 0);
-                assertion::assert_match_count(&moved_down_frame, "claude/claude-opus-5", 3);
-                assertion::assert_match_count(&moved_down_frame, "[high, Normal]", 2);
-                assertion::assert_match_count(&moved_down_frame, "[xhigh, Normal]", 1);
+                    let moved_down_frame = common::frame_from_capture(&report.captures[1]);
+                    assertion::assert_match_count(&moved_down_frame, "claude-opus-4-6", 0);
+                    assertion::assert_match_count(&moved_down_frame, "claude/claude-opus-5", 3);
+                    assertion::assert_match_count(&moved_down_frame, "[high, Normal]", 2);
+                    assertion::assert_match_count(&moved_down_frame, "[xhigh, Normal]", 1);
 
-                let moved_up_frame = common::frame_from_capture(&report.captures[2]);
-                assertion::assert_match_count(&moved_up_frame, "claude-opus-4-6", 0);
-                assertion::assert_match_count(&moved_up_frame, "claude/claude-opus-5", 3);
-                assertion::assert_match_count(&moved_up_frame, "[high, Normal]", 1);
-                assertion::assert_match_count(&moved_up_frame, "[xhigh, Normal]", 2);
+                    let moved_up_frame = common::frame_from_capture(&report.captures[2]);
+                    assertion::assert_match_count(&moved_up_frame, "claude-opus-4-6", 0);
+                    assertion::assert_match_count(&moved_up_frame, "claude/claude-opus-5", 3);
+                    assertion::assert_match_count(&moved_up_frame, "[high, Normal]", 1);
+                    assertion::assert_match_count(&moved_up_frame, "[xhigh, Normal]", 2);
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }
 
@@ -303,12 +305,12 @@ fn settings_jk_navigation() {
 /// model dropdown, advances through the reasoning and speed dropdowns, and
 /// selects Fast without saving so semantic and VHS runs begin from identical
 /// state. Captures each stage for the GIF.
-#[test]
-fn settings_dropdown_selects_value() {
+#[tokio::test]
+async fn settings_dropdown_selects_value() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_edit")
         .with_git()
-        .setup(seed_settings_dropdown_models)
+        .setup(|env| Box::pin(async move { seed_settings_dropdown_models(env).await }))
         .zola(
             "Settings editing",
             "Choose model, reasoning, and response-speed defaults.",
@@ -347,55 +349,59 @@ fn settings_dropdown_selects_value() {
                     .capture_labeled("speed_selected", "Fast response speed selected")
             },
             |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Default Smart Model", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Default Smart Model", &full);
 
-                assert_eq!(
-                    report.captures.len(),
-                    5,
-                    "Expected captures before, at all selector stages, and after selection"
-                );
+                    assert_eq!(
+                        report.captures.len(),
+                        5,
+                        "Expected captures before, at all selector stages, and after selection"
+                    );
 
-                let before_frame = common::frame_from_capture(&report.captures[0]);
-                let before_full = Region::full(before_frame.cols(), before_frame.rows());
-                assertion::assert_text_in_region(&before_frame, "[low, Normal]", &before_full);
+                    let before_frame = common::frame_from_capture(&report.captures[0]);
+                    let before_full = Region::full(before_frame.cols(), before_frame.rows());
+                    assertion::assert_text_in_region(&before_frame, "[low, Normal]", &before_full);
 
-                let model_frame = common::frame_from_capture(&report.captures[1]);
-                let model_full = Region::full(model_frame.cols(), model_frame.rows());
-                assertion::assert_text_in_region(&model_frame, "Select model", &model_full);
-                assertion::assert_text_in_region(&model_frame, "codex/", &model_full);
+                    let model_frame = common::frame_from_capture(&report.captures[1]);
+                    let model_full = Region::full(model_frame.cols(), model_frame.rows());
+                    assertion::assert_text_in_region(&model_frame, "Select model", &model_full);
+                    assertion::assert_text_in_region(&model_frame, "codex/", &model_full);
 
-                let reasoning_frame = common::frame_from_capture(&report.captures[2]);
-                let reasoning_full = Region::full(reasoning_frame.cols(), reasoning_frame.rows());
-                assertion::assert_text_in_region(
-                    &reasoning_frame,
-                    "Select reasoning level",
-                    &reasoning_full,
-                );
-                assertion::assert_text_in_region(&reasoning_frame, "> low", &reasoning_full);
-                assertion::assert_text_in_region(&reasoning_frame, "xhigh", &reasoning_full);
-                assertion::assert_text_in_region(&reasoning_frame, "max", &reasoning_full);
+                    let reasoning_frame = common::frame_from_capture(&report.captures[2]);
+                    let reasoning_full =
+                        Region::full(reasoning_frame.cols(), reasoning_frame.rows());
+                    assertion::assert_text_in_region(
+                        &reasoning_frame,
+                        "Select reasoning level",
+                        &reasoning_full,
+                    );
+                    assertion::assert_text_in_region(&reasoning_frame, "> low", &reasoning_full);
+                    assertion::assert_text_in_region(&reasoning_frame, "xhigh", &reasoning_full);
+                    assertion::assert_text_in_region(&reasoning_frame, "max", &reasoning_full);
 
-                let speed_frame = common::frame_from_capture(&report.captures[3]);
-                let speed_full = Region::full(speed_frame.cols(), speed_frame.rows());
-                assertion::assert_text_in_region(
-                    &speed_frame,
-                    "Select response speed",
-                    &speed_full,
-                );
-                assertion::assert_text_in_region(&speed_frame, "Normal", &speed_full);
-                assertion::assert_text_in_region(&speed_frame, "Fast", &speed_full);
+                    let speed_frame = common::frame_from_capture(&report.captures[3]);
+                    let speed_full = Region::full(speed_frame.cols(), speed_frame.rows());
+                    assertion::assert_text_in_region(
+                        &speed_frame,
+                        "Select response speed",
+                        &speed_full,
+                    );
+                    assertion::assert_text_in_region(&speed_frame, "Normal", &speed_full);
+                    assertion::assert_text_in_region(&speed_frame, "Fast", &speed_full);
 
-                let selected_frame = common::frame_from_capture(&report.captures[4]);
-                let selected_full = Region::full(selected_frame.cols(), selected_frame.rows());
-                assertion::assert_text_in_region(
-                    &selected_frame,
-                    "Select response speed",
-                    &selected_full,
-                );
-                assertion::assert_text_in_region(&selected_frame, "> Fast", &selected_full);
+                    let selected_frame = common::frame_from_capture(&report.captures[4]);
+                    let selected_full = Region::full(selected_frame.cols(), selected_frame.rows());
+                    assertion::assert_text_in_region(
+                        &selected_frame,
+                        "Select response speed",
+                        &selected_full,
+                    );
+                    assertion::assert_text_in_region(&selected_frame, "> Fast", &selected_full);
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }
 
@@ -403,11 +409,11 @@ fn settings_dropdown_selects_value() {
 ///
 /// Opens the smart-model selector, confirms models appear once without a
 /// model-reasoning cross product, then advances to the reasoning selector.
-#[test]
-fn settings_model_selector_separates_model_and_reasoning() {
+#[tokio::test]
+async fn settings_model_selector_separates_model_and_reasoning() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_model_reasoning")
-        .setup(seed_settings_model_reasoning_levels)
+        .setup(|env| Box::pin(async move { seed_settings_model_reasoning_levels(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -434,32 +440,35 @@ fn settings_model_selector_separates_model_and_reasoning() {
                     .capture_labeled("reasoning_selector", "Choose the default reasoning level")
             },
             |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Select reasoning level", &full);
-                for reasoning_level in ["low", "medium", "high", "xhigh", "max"] {
-                    assertion::assert_text_in_region(frame, reasoning_level, &full);
-                }
-                assert_eq!(
-                    report.captures.len(),
-                    3,
-                    "Expected model rows, model selector, and reasoning selector captures"
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Select reasoning level", &full);
+                    for reasoning_level in ["low", "medium", "high", "xhigh", "max"] {
+                        assertion::assert_text_in_region(frame, reasoning_level, &full);
+                    }
+                    assert_eq!(
+                        report.captures.len(),
+                        3,
+                        "Expected model rows, model selector, and reasoning selector captures"
+                    );
 
-                let rows_frame = common::frame_from_capture(&report.captures[0]);
-                assertion::assert_match_count(&rows_frame, "[high]", 1);
-                assertion::assert_match_count(&rows_frame, "[low]", 1);
-                assertion::assert_match_count(&rows_frame, "[xhigh]", 1);
+                    let rows_frame = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_match_count(&rows_frame, "[high]", 1);
+                    assertion::assert_match_count(&rows_frame, "[low]", 1);
+                    assertion::assert_match_count(&rows_frame, "[xhigh]", 1);
 
-                let model_frame = common::frame_from_capture(&report.captures[1]);
-                let model_full = Region::full(model_frame.cols(), model_frame.rows());
-                assertion::assert_text_in_region(&model_frame, "Select model", &model_full);
-                assertion::assert_match_count(
-                    &model_frame,
-                    "gemini/gemini-3.1-pro-preview [max]",
-                    0,
-                );
+                    let model_frame = common::frame_from_capture(&report.captures[1]);
+                    let model_full = Region::full(model_frame.cols(), model_frame.rows());
+                    assertion::assert_text_in_region(&model_frame, "Select model", &model_full);
+                    assertion::assert_match_count(
+                        &model_frame,
+                        "gemini/gemini-3.1-pro-preview [max]",
+                        0,
+                    );
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }
 
@@ -468,8 +477,8 @@ fn settings_model_selector_separates_model_and_reasoning() {
 /// Opens the command-list editor, adds one command, edits it, adds another
 /// command, reorders the entries, deletes the selected command, and confirms
 /// the settings row summarizes the remaining command.
-#[test]
-fn settings_launch_configurations_list_editor() {
+#[tokio::test]
+async fn settings_launch_configurations_list_editor() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_launch_configurations")
         .run(
@@ -527,53 +536,56 @@ fn settings_launch_configurations_list_editor() {
                     .capture_labeled("summary", "Launch Configurations row summary after editing")
             },
             |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Launch Configurations", &full);
-                assertion::assert_text_in_region(frame, "lazygit", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Launch Configurations", &full);
+                    assertion::assert_text_in_region(frame, "lazygit", &full);
 
-                assert_eq!(
-                    report.captures.len(),
-                    7,
-                    "Expected 7 captures for the launch-configuration list editor workflow"
-                );
+                    assert_eq!(
+                        report.captures.len(),
+                        7,
+                        "Expected 7 captures for the launch-configuration list editor workflow"
+                    );
 
-                let empty_frame = common::frame_from_capture(&report.captures[0]);
-                let empty_full = Region::full(empty_frame.cols(), empty_frame.rows());
-                assertion::assert_text_in_region(
-                    &empty_frame,
-                    "(no commands configured)",
-                    &empty_full,
-                );
+                    let empty_frame = common::frame_from_capture(&report.captures[0]);
+                    let empty_full = Region::full(empty_frame.cols(), empty_frame.rows());
+                    assertion::assert_text_in_region(
+                        &empty_frame,
+                        "(no commands configured)",
+                        &empty_full,
+                    );
 
-                let add_frame = common::frame_from_capture(&report.captures[1]);
-                let add_full = Region::full(add_frame.cols(), add_frame.rows());
-                assertion::assert_text_in_region(&add_frame, "Add command", &add_full);
-                assertion::assert_text_in_region(&add_frame, "nvim .|", &add_full);
+                    let add_frame = common::frame_from_capture(&report.captures[1]);
+                    let add_full = Region::full(add_frame.cols(), add_frame.rows());
+                    assertion::assert_text_in_region(&add_frame, "Add command", &add_full);
+                    assertion::assert_text_in_region(&add_frame, "nvim .|", &add_full);
 
-                let edit_frame = common::frame_from_capture(&report.captures[2]);
-                let edit_full = Region::full(edit_frame.cols(), edit_frame.rows());
-                assertion::assert_text_in_region(&edit_frame, "Edit command", &edit_full);
-                assertion::assert_text_in_region(&edit_frame, "lazygit|", &edit_full);
+                    let edit_frame = common::frame_from_capture(&report.captures[2]);
+                    let edit_full = Region::full(edit_frame.cols(), edit_frame.rows());
+                    assertion::assert_text_in_region(&edit_frame, "Edit command", &edit_full);
+                    assertion::assert_text_in_region(&edit_frame, "lazygit|", &edit_full);
 
-                let two_command_frame = common::frame_from_capture(&report.captures[3]);
-                let two_command_full =
-                    Region::full(two_command_frame.cols(), two_command_frame.rows());
-                assertion::assert_text_in_region(
-                    &two_command_frame,
-                    "npm run dev",
-                    &two_command_full,
-                );
+                    let two_command_frame = common::frame_from_capture(&report.captures[3]);
+                    let two_command_full =
+                        Region::full(two_command_frame.cols(), two_command_frame.rows());
+                    assertion::assert_text_in_region(
+                        &two_command_frame,
+                        "npm run dev",
+                        &two_command_full,
+                    );
 
-                let deleted_frame = common::frame_from_capture(&report.captures[5]);
-                assertion::assert_match_count(&deleted_frame, "npm run dev", 0);
+                    let deleted_frame = common::frame_from_capture(&report.captures[5]);
+                    assertion::assert_match_count(&deleted_frame, "npm run dev", 0);
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }
 
 /// Verify shared input word deletion, undo, and redo in a single-line editor.
-#[test]
-fn test_input_undo_redo() {
+#[tokio::test]
+async fn test_input_undo_redo() {
     // Arrange, Act, Assert
     FeatureTest::new("input_undo_redo")
         .run(
@@ -603,34 +615,45 @@ fn test_input_undo_redo() {
                     .capture_labeled("redone", "Word deletion restored with Ctrl+y")
             },
             |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "hello brave|", &full);
-                assert_eq!(
-                    report.captures.len(),
-                    4,
-                    "Expected four input edit captures"
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "hello brave|", &full);
+                    assert_eq!(
+                        report.captures.len(),
+                        4,
+                        "Expected four input edit captures"
+                    );
 
-                let typed_frame = common::frame_from_capture(&report.captures[0]);
-                let typed_full = Region::full(typed_frame.cols(), typed_frame.rows());
-                assertion::assert_text_in_region(&typed_frame, "hello brave world|", &typed_full);
+                    let typed_frame = common::frame_from_capture(&report.captures[0]);
+                    let typed_full = Region::full(typed_frame.cols(), typed_frame.rows());
+                    assertion::assert_text_in_region(
+                        &typed_frame,
+                        "hello brave world|",
+                        &typed_full,
+                    );
 
-                let deleted_frame = common::frame_from_capture(&report.captures[1]);
-                let deleted_full = Region::full(deleted_frame.cols(), deleted_frame.rows());
-                assertion::assert_text_in_region(&deleted_frame, "hello brave|", &deleted_full);
+                    let deleted_frame = common::frame_from_capture(&report.captures[1]);
+                    let deleted_full = Region::full(deleted_frame.cols(), deleted_frame.rows());
+                    assertion::assert_text_in_region(&deleted_frame, "hello brave|", &deleted_full);
 
-                let undone_frame = common::frame_from_capture(&report.captures[2]);
-                let undone_full = Region::full(undone_frame.cols(), undone_frame.rows());
-                assertion::assert_text_in_region(&undone_frame, "hello brave world|", &undone_full);
+                    let undone_frame = common::frame_from_capture(&report.captures[2]);
+                    let undone_full = Region::full(undone_frame.cols(), undone_frame.rows());
+                    assertion::assert_text_in_region(
+                        &undone_frame,
+                        "hello brave world|",
+                        &undone_full,
+                    );
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }
 
 /// Verify that the `Theme` settings row dropdown selects `Agentty Default`,
 /// `Agentty Green`, and `Dark Horizon`, then wraps back to `Agentty Default`.
-#[test]
-fn settings_theme_switch() {
+#[tokio::test]
+async fn settings_theme_switch() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_theme_switch")
         .zola(
@@ -678,51 +701,62 @@ fn settings_theme_switch() {
                     .capture_labeled("wrapped_default", "Theme wraps to Agentty Default")
             },
             |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Theme", &full);
-                assertion::assert_text_in_region(frame, "Agentty Default", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Theme", &full);
+                    assertion::assert_text_in_region(frame, "Agentty Default", &full);
 
-                assert_eq!(
-                    report.captures.len(),
-                    4,
-                    "Expected 4 captures (initial Agentty Default, Agentty Green, Dark Horizon, \
-                     wrapped Agentty Default)"
-                );
+                    assert_eq!(
+                        report.captures.len(),
+                        4,
+                        "Expected 4 captures (initial Agentty Default, Agentty Green, Dark \
+                         Horizon, wrapped Agentty Default)"
+                    );
 
-                let before_frame = common::frame_from_capture(&report.captures[0]);
-                let before_full = Region::full(before_frame.cols(), before_frame.rows());
-                assertion::assert_text_in_region(&before_frame, "Agentty Default", &before_full);
+                    let before_frame = common::frame_from_capture(&report.captures[0]);
+                    let before_full = Region::full(before_frame.cols(), before_frame.rows());
+                    assertion::assert_text_in_region(
+                        &before_frame,
+                        "Agentty Default",
+                        &before_full,
+                    );
 
-                let agentty_green_frame = common::frame_from_capture(&report.captures[1]);
-                let agentty_green_full =
-                    Region::full(agentty_green_frame.cols(), agentty_green_frame.rows());
-                assertion::assert_text_in_region(
-                    &agentty_green_frame,
-                    "Agentty Green",
-                    &agentty_green_full,
-                );
+                    let agentty_green_frame = common::frame_from_capture(&report.captures[1]);
+                    let agentty_green_full =
+                        Region::full(agentty_green_frame.cols(), agentty_green_frame.rows());
+                    assertion::assert_text_in_region(
+                        &agentty_green_frame,
+                        "Agentty Green",
+                        &agentty_green_full,
+                    );
 
-                let dark_horizon_frame = common::frame_from_capture(&report.captures[2]);
-                let dark_horizon_full =
-                    Region::full(dark_horizon_frame.cols(), dark_horizon_frame.rows());
-                assertion::assert_text_in_region(
-                    &dark_horizon_frame,
-                    "Dark Horizon",
-                    &dark_horizon_full,
-                );
+                    let dark_horizon_frame = common::frame_from_capture(&report.captures[2]);
+                    let dark_horizon_full =
+                        Region::full(dark_horizon_frame.cols(), dark_horizon_frame.rows());
+                    assertion::assert_text_in_region(
+                        &dark_horizon_frame,
+                        "Dark Horizon",
+                        &dark_horizon_full,
+                    );
 
-                let wrapped_frame = common::frame_from_capture(&report.captures[3]);
-                let wrapped_full = Region::full(wrapped_frame.cols(), wrapped_frame.rows());
-                assertion::assert_text_in_region(&wrapped_frame, "Agentty Default", &wrapped_full);
+                    let wrapped_frame = common::frame_from_capture(&report.captures[3]);
+                    let wrapped_full = Region::full(wrapped_frame.cols(), wrapped_frame.rows());
+                    assertion::assert_text_in_region(
+                        &wrapped_frame,
+                        "Agentty Default",
+                        &wrapped_full,
+                    );
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }
 
 /// Verify that the help overlay on the Settings tab shows settings-specific
 /// keybinding hints.
-#[test]
-fn settings_help_shows_edit_hint() {
+#[tokio::test]
+async fn settings_help_shows_edit_hint() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_help")
         .zola(
@@ -742,10 +776,13 @@ fn settings_help_shows_edit_hint() {
                     .capture_labeled("settings_help", "Help overlay on Settings tab")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Keybindings", &full);
-                assertion::assert_text_in_region(frame, "edit", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Keybindings", &full);
+                    assertion::assert_text_in_region(frame, "edit", &full);
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }

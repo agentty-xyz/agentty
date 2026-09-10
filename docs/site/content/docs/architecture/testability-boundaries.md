@@ -16,6 +16,11 @@ implementation details accessible without expanding production APIs. Large suite
 test-module routers grouped by behavior, with shared fixtures in test-only support
 modules. Coverage excludes these test files while retaining production sources.
 
+Agentty keeps crate-wide fixtures behind `cfg(test)` and integration database fixtures
+in `tests/support/`. Startup receives an explicit version-task runner, and test fixtures
+select offline clients without changing production defaults or control flow. PTY setup
+and database assertions run asynchronously on the test runtime.
+
 <a id="architecture-testability-boundaries"></a> External-boundary traits are mocked
 with `mockall`, usually via `#[cfg_attr(test, mockall::automock)]`; shared workspace
 crates such as `ag-agent`, `ag-forge`, and `ag-git` expose test mocks through crate-root

@@ -95,12 +95,12 @@ fn seed_all_model_picker_cli_stubs(env: &BuilderEnv) -> Result<(), Box<dyn std::
 
 /// Verify that the prompt `/model` picker exposes the current Gemini models
 /// when the Gemini CLI is locally available.
-#[test]
-fn gemini_model_picker_lists_current_models() -> E2eResult {
+#[tokio::test]
+async fn gemini_model_picker_lists_current_models() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("gemini_model_picker_lists_current_models")
         .with_git()
-        .setup(seed_failing_gemini_cli_stub)
+        .setup(|env| Box::pin(async move { seed_failing_gemini_cli_stub(env) }))
         .run(
             |scenario| {
                 scenario
@@ -123,19 +123,22 @@ fn gemini_model_picker_lists_current_models() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gemini-3.8-flash", &full);
-                assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "gemini-3.8-flash", &full);
+                    assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that the prompt `/model` picker exposes the current Claude models
 /// when the Claude CLI is locally available.
-#[test]
-fn claude_model_picker_lists_current_models() -> E2eResult {
+#[tokio::test]
+async fn claude_model_picker_lists_current_models() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("claude_model_picker_lists_current_models")
         .with_git()
@@ -163,27 +166,31 @@ fn claude_model_picker_lists_current_models() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "claude-fable-5", &full);
-                assertion::assert_text_in_region(frame, "claude-opus-5", &full);
-                assertion::assert_text_in_region(frame, "claude-sonnet-5", &full);
-                assertion::assert_text_in_region(frame, "claude-haiku-4-5-20251001", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "claude-fable-5", &full);
+                    assertion::assert_text_in_region(frame, "claude-opus-5", &full);
+                    assertion::assert_text_in_region(frame, "claude-sonnet-5", &full);
+                    assertion::assert_text_in_region(frame, "claude-haiku-4-5-20251001", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Seeds one still-active review session whose persisted model id has been
 /// retired in favor of `gemini-3.5-flash-lite`.
-fn seed_active_session_with_retired_model(
+async fn seed_active_session_with_retired_model(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
         SessionSeed::regular("retired-model-0001", "gemini-3.5-flash", "main", "Review")
             .with_title("Retired model"),
-    )?;
+    )
+    .await?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("retired-"))?;
 
@@ -192,12 +199,12 @@ fn seed_active_session_with_retired_model(
 
 /// Verify that a still-active session stored on a retired model id is
 /// switched automatically to the replacement model.
-#[test]
-fn retired_model_session_switches_to_replacement() -> E2eResult {
+#[tokio::test]
+async fn retired_model_session_switches_to_replacement() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("retired_model_session_switches_to_replacement")
         .with_git()
-        .setup(seed_active_session_with_retired_model)
+        .setup(|env| Box::pin(async move { seed_active_session_with_retired_model(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -210,24 +217,27 @@ fn retired_model_session_switches_to_replacement() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Retired model", &full);
-                assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
-                assertion::assert_match_count(frame, "gemini-3.5-flash [medium]", 0);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Retired model", &full);
+                    assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
+                    assertion::assert_match_count(frame, "gemini-3.5-flash [medium]", 0);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that the prompt `/model` picker exposes the current Codex models in
 /// the expected order.
-#[test]
-fn codex_model_picker_lists_current_models() -> E2eResult {
+#[tokio::test]
+async fn codex_model_picker_lists_current_models() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("codex_model_picker_lists_current_models")
         .with_git()
-        .setup(seed_all_model_picker_cli_stubs)
+        .setup(|env| Box::pin(async move { seed_all_model_picker_cli_stubs(env) }))
         .run(
             |scenario| {
                 scenario
@@ -253,26 +263,29 @@ fn codex_model_picker_lists_current_models() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gpt-6-astra", &full);
-                assertion::assert_text_in_region(frame, "gpt-5.6-sol", &full);
-                assertion::assert_text_in_region(frame, "gpt-5.6-terra", &full);
-                assertion::assert_text_in_region(frame, "gpt-5.6-luna", &full);
-                assertion::assert_text_in_region(frame, "gpt-5.3-codex-spark", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "gpt-6-astra", &full);
+                    assertion::assert_text_in_region(frame, "gpt-5.6-sol", &full);
+                    assertion::assert_text_in_region(frame, "gpt-5.6-terra", &full);
+                    assertion::assert_text_in_region(frame, "gpt-5.6-luna", &full);
+                    assertion::assert_text_in_region(frame, "gpt-5.3-codex-spark", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that the prompt `/model` picker exposes Gemini model choices for
 /// Antigravity when `agy` is locally available.
-#[test]
-fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
+#[tokio::test]
+async fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("antigravity_model_picker_includes_gemini_models")
         .with_git()
-        .setup(seed_model_picker_cli_stubs)
+        .setup(|env| Box::pin(async move { seed_model_picker_cli_stubs(env) }))
         .run(
             |scenario| {
                 scenario
@@ -295,24 +308,27 @@ fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "gemini-3.1-pro-preview", &full);
-                assertion::assert_text_in_region(frame, "gemini-3.8-flash", &full);
-                assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "gemini-3.1-pro-preview", &full);
+                    assertion::assert_text_in_region(frame, "gemini-3.8-flash", &full);
+                    assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify outdated Antigravity installations are excluded from the provider
 /// picker while supported fallback providers remain selectable.
-#[test]
-fn antigravity_model_picker_excludes_outdated_cli() -> E2eResult {
+#[tokio::test]
+async fn antigravity_model_picker_excludes_outdated_cli() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("antigravity_model_picker_excludes_outdated_cli")
         .with_git()
-        .setup(seed_outdated_antigravity_cli_stub)
+        .setup(|env| Box::pin(async move { seed_outdated_antigravity_cli_stub(env) }))
         .run(
             |scenario| {
                 scenario
@@ -333,11 +349,14 @@ fn antigravity_model_picker_excludes_outdated_cli() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Codex CLI", &full);
-                assertion::assert_not_visible(frame, "Antigravity CLI");
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Codex CLI", &full);
+                    assertion::assert_not_visible(frame, "Antigravity CLI");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

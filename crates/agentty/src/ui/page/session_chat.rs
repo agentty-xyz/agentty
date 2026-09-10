@@ -30,9 +30,11 @@ use crate::ui::{
 
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
+
 /// Header height assumed when the rendered header line count does not fit
 /// `u16`.
 const SESSION_HEADER_FALLBACK_HEIGHT: u16 = 2;
+
 /// Height of the single-row footer reserved by non-prompt, non-question modes.
 const SINGLE_ROW_FOOTER_HEIGHT: u16 = 1;
 
@@ -110,57 +112,18 @@ impl SessionChatLayoutPlan {
     }
 }
 
-/// Chat page renderer for a single session.
-pub struct SessionChatPage<'a> {
-    /// Exact prompt transcript block for the active turn, when available.
-    pub active_prompt_output: Option<&'a str>,
-    /// Transient progress text for the active agent turn.
-    pub active_progress: Option<&'a str>,
-    /// Whether the session worktree can be opened externally.
-    pub can_open_worktree: bool,
-    /// Active project-scoped default reasoning level.
-    pub default_reasoning_level: ReasoningLevel,
-    /// Whether the session branch currently conflicts with its base branch.
-    pub has_merge_conflict: bool,
-    /// One coherent render-time clock snapshot.
-    pub(crate) frame_time: FrameTime,
-    /// Shared markdown cache reused across transcript renders in this page.
-    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
-    /// Current UI mode that controls the bottom panel and focus.
-    pub mode: &'a AppMode,
-    /// Shared fully assembled output-layout cache for scroll metrics and
-    /// frame rendering.
-    pub output_layout_cache: &'a SessionOutputLayoutCache,
-    /// Most recent tracked agent process-tree totals.
-    pub resources: Option<SessionResources>,
-    /// Host temperature supplied by the internal monitoring sidecar.
-    pub(crate) host_cpu_temperature_celsius: Option<f32>,
-    /// Focused-review output for the rendered session.
-    pub review_text: Option<&'a str>,
-    /// Current vertical transcript scroll offset.
-    pub scroll_offset: Option<u16>,
-    /// Index of the session being rendered.
-    pub session_index: usize,
-    /// Observable update version for the rendered session snapshot.
-    pub session_update_version: u64,
-    /// Session rows available to the page.
-    pub sessions: &'a [Session],
-}
-
 /// Borrowed inputs needed to construct one session chat page renderer.
 #[derive(Clone, Copy)]
 pub struct SessionChatPageInput<'a> {
+    /// Transient progress text rendered in the active-status loader row.
+    pub active_progress: Option<&'a str>,
     /// Exact prompt transcript block for the currently active turn, when one
     /// has been submitted in this app process.
     pub active_prompt_output: Option<&'a str>,
-    /// Transient progress text rendered in the active-status loader row.
-    pub active_progress: Option<&'a str>,
     /// Active project-scoped default reasoning level.
     pub default_reasoning_level: ReasoningLevel,
     /// Whether the session branch currently conflicts with its base branch.
     pub has_merge_conflict: bool,
-    /// One coherent render-time clock snapshot.
-    pub(crate) frame_time: FrameTime,
     /// Shared render cache for session transcript markdown.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Current UI mode that determines view, prompt, and question rendering.
@@ -169,8 +132,6 @@ pub struct SessionChatPageInput<'a> {
     pub output_layout_cache: &'a SessionOutputLayoutCache,
     /// Most recent tracked agent process-tree totals.
     pub resources: Option<SessionResources>,
-    /// Host temperature supplied by the internal monitoring sidecar.
-    pub(crate) host_cpu_temperature_celsius: Option<f32>,
     /// Focused-review output for the rendered session.
     pub review_text: Option<&'a str>,
     /// Current vertical output scroll offset.
@@ -181,6 +142,47 @@ pub struct SessionChatPageInput<'a> {
     pub session_update_version: u64,
     /// Session rows available to the page.
     pub sessions: &'a [Session],
+    /// One coherent render-time clock snapshot.
+    pub(crate) frame_time: FrameTime,
+    /// Host temperature supplied by the internal monitoring sidecar.
+    pub(crate) host_cpu_temperature_celsius: Option<f32>,
+}
+
+/// Chat page renderer for a single session.
+pub struct SessionChatPage<'a> {
+    /// Transient progress text for the active agent turn.
+    pub active_progress: Option<&'a str>,
+    /// Exact prompt transcript block for the active turn, when available.
+    pub active_prompt_output: Option<&'a str>,
+    /// Whether the session worktree can be opened externally.
+    pub can_open_worktree: bool,
+    /// Active project-scoped default reasoning level.
+    pub default_reasoning_level: ReasoningLevel,
+    /// Whether the session branch currently conflicts with its base branch.
+    pub has_merge_conflict: bool,
+    /// Shared markdown cache reused across transcript renders in this page.
+    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Current UI mode that controls the bottom panel and focus.
+    pub mode: &'a AppMode,
+    /// Shared fully assembled output-layout cache for scroll metrics and
+    /// frame rendering.
+    pub output_layout_cache: &'a SessionOutputLayoutCache,
+    /// Most recent tracked agent process-tree totals.
+    pub resources: Option<SessionResources>,
+    /// Focused-review output for the rendered session.
+    pub review_text: Option<&'a str>,
+    /// Current vertical transcript scroll offset.
+    pub scroll_offset: Option<u16>,
+    /// Index of the session being rendered.
+    pub session_index: usize,
+    /// Observable update version for the rendered session snapshot.
+    pub session_update_version: u64,
+    /// Session rows available to the page.
+    pub sessions: &'a [Session],
+    /// One coherent render-time clock snapshot.
+    pub(crate) frame_time: FrameTime,
+    /// Host temperature supplied by the internal monitoring sidecar.
+    pub(crate) host_cpu_temperature_celsius: Option<f32>,
 }
 
 impl<'a> SessionChatPage<'a> {

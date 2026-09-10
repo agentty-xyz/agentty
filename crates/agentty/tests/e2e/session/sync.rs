@@ -4,7 +4,6 @@
 use std::os::unix::fs::PermissionsExt;
 
 use agentty::domain::session_message::SessionMessageKind;
-use agentty::test_support;
 use testty::assertion;
 use testty::region::Region;
 
@@ -12,20 +11,20 @@ use super::fixture::{
     E2eResult, run_git, seed_rebase_transcript_session_with_delay,
     seed_session_title_candidate_project,
 };
-use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::{common, test_support};
 
 /// Stable id for the session whose branch conflicts with `main`.
 const MERGE_CONFLICT_SESSION_ID: &str = "merge-conflict-0001";
 
 /// Seeds a review-ready worktree whose committed change conflicts with a
 /// newer commit on the stored base branch.
-fn seed_merge_conflict_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_merge_conflict_session_with_model(env, "gpt-5.6-sol")
+async fn seed_merge_conflict_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_merge_conflict_session_with_model(env, "gpt-5.6-sol").await
 }
 
 /// Seeds the merge-conflict fixture with a specific persisted agent model.
-fn seed_merge_conflict_session_with_model(
+async fn seed_merge_conflict_session_with_model(
     env: &BuilderEnv,
     model: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -33,13 +32,14 @@ fn seed_merge_conflict_session_with_model(
         env,
         SessionSeed::regular(MERGE_CONFLICT_SESSION_ID, model, "main", "Review")
             .with_title("Update shared configuration"),
-    )?;
+    )
+    .await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         test_support::persist_active_tab_for_test(&database, agentty::app::Tab::Sessions).await
-    })?;
+    })
+    .await?;
 
     std::fs::write(env.workdir.join("shared.txt"), "initial\n")?;
     run_git(&env.workdir, &["add", "shared.txt"])?;
@@ -77,10 +77,10 @@ fn seed_merge_conflict_session_with_model(
 
 /// Seeds an assisted rebase conflict whose staged resolution is rejected by
 /// the effective pre-commit hook.
-fn seed_rebase_pre_commit_hook_failure_session(
+async fn seed_rebase_pre_commit_hook_failure_session(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_merge_conflict_session_with_model(env, "gemini-3.1-pro-preview")?;
+    seed_merge_conflict_session_with_model(env, "gemini-3.1-pro-preview").await?;
 
     let antigravity_path = env.stub_bin.join("agy");
     let script = r#"#!/bin/sh
@@ -114,25 +114,28 @@ done
 
 /// Seeds a review-ready transcript and delays its Git rebase long enough to
 /// inspect the in-progress session output ordering.
-fn seed_rebase_transcript_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_rebase_transcript_session_with_delay(env, 5)
+async fn seed_rebase_transcript_session(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_rebase_transcript_session_with_delay(env, 5).await
 }
 
 /// Seeds one synced published session whose next completed turn appends a
 /// durable commit notice and then starts a delayed auto-push, leaving the
 /// earlier sync result, the turn commit notice, and the auto-push progress row
 /// visible in one frame.
-fn seed_published_session_output_chronology(
+async fn seed_published_session_output_chronology(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_session_title_candidate_project(env)?;
+    seed_session_title_candidate_project(env).await?;
 
     let session_id = "review-shortcut-0001";
     common::seed_session(
         env,
         SessionSeed::regular(session_id, "claude-haiku-4-5-20251001", "main", "Review")
             .with_title("Chronological session output"),
-    )?;
+    )
+    .await?;
 
     // The session worktree must stay a linked worktree of the project
     // checkout; a standalone repository trips the session isolation guard and
@@ -163,8 +166,7 @@ fn seed_published_session_output_chronology(
         &["push", "--set-upstream", "origin", "wt/review-s"],
     )?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -181,7 +183,8 @@ fn seed_published_session_output_chronology(
                 "\n[Sync] Successfully synced wt/review-s onto origin/main\n",
             )
             .await
-    })?;
+    })
+    .await?;
 
     let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|path| path.join("git"))
@@ -208,12 +211,12 @@ exec '{}' "$@"
 
 /// Verify that a session branch conflicting with its stored base is marked in
 /// both the Sessions list and the open session header.
-#[test]
-fn test_session_merge_conflict_alert() -> E2eResult {
+#[tokio::test]
+async fn test_session_merge_conflict_alert() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_merge_conflict_alert")
         .with_git()
-        .setup(seed_merge_conflict_session)
+        .setup(|env| Box::pin(async move { seed_merge_conflict_session(env).await }))
         .zola(
             "See merge conflicts before syncing",
             "Agentty marks sessions whose branch conflicts with its base branch in the list and \
@@ -239,26 +242,31 @@ fn test_session_merge_conflict_alert() -> E2eResult {
                     )
             },
             |frame, report| {
-                let list_frame = common::frame_from_capture(&report.captures[0]);
-                let list_region = Region::full(list_frame.cols(), list_frame.rows());
-                assertion::assert_text_in_region(&list_frame, "[merge conflict]", &list_region);
+                Box::pin(async move {
+                    let list_frame = common::frame_from_capture(&report.captures[0]);
+                    let list_region = Region::full(list_frame.cols(), list_frame.rows());
+                    assertion::assert_text_in_region(&list_frame, "[merge conflict]", &list_region);
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Merge conflict with main", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Merge conflict with main", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify assisted rebase conflict resolutions must pass the effective
 /// pre-commit hook before Agentty continues the rebase.
-#[test]
-fn test_session_rebase_pre_commit_hook_failure() -> E2eResult {
+#[tokio::test]
+async fn test_session_rebase_pre_commit_hook_failure() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_rebase_pre_commit_hook_failure")
         .with_git()
-        .setup(seed_rebase_pre_commit_hook_failure_session)
+        .setup(|env| {
+            Box::pin(async move { seed_rebase_pre_commit_hook_failure_session(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -274,24 +282,27 @@ fn test_session_rebase_pre_commit_hook_failure() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "[Sync Error]", &full);
-                assertion::assert_text_in_region(frame, "Pre-commit hook rejected", &full);
-                assertion::assert_text_in_region(frame, "resolved conflict rejected", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "[Sync Error]", &full);
+                    assertion::assert_text_in_region(frame, "Pre-commit hook rejected", &full);
+                    assertion::assert_text_in_region(frame, "resolved conflict rejected", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify a manual rebase keeps the completed answer stable while only the
 /// workflow status tail animates.
-#[test]
-fn session_rebase_keeps_completed_transcript_stable() -> E2eResult {
+#[tokio::test]
+async fn session_rebase_keeps_completed_transcript_stable() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_rebase_transcript_stability")
         .with_git()
-        .setup(seed_rebase_transcript_session)
+        .setup(|env| Box::pin(async move { seed_rebase_transcript_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -307,12 +318,19 @@ fn session_rebase_keeps_completed_transcript_stable() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Completed answer before rebase.", &full);
-                assertion::assert_not_visible(frame, "Change Summary");
-                assertion::assert_text_in_region(frame, "Rebasing...", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Completed answer before rebase.",
+                        &full,
+                    );
+                    assertion::assert_not_visible(frame, "Change Summary");
+                    assertion::assert_text_in_region(frame, "Rebasing...", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
@@ -320,13 +338,13 @@ fn session_rebase_keeps_completed_transcript_stable() -> E2eResult {
 /// Verify post-turn auto-push progress renders below every durable notice that
 /// preceded it — the earlier sync result and the completed turn's commit
 /// notice — preserving workflow chronology in session output.
-#[test]
-fn test_session_output_chronology() -> E2eResult {
+#[tokio::test]
+async fn test_session_output_chronology() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_output_chronology")
         .with_git()
         .with_terminal_size(120, 30)
-        .setup(seed_published_session_output_chronology)
+        .setup(|env| Box::pin(async move { seed_published_session_output_chronology(env).await }))
         .zola(
             "Chronological session output",
             "Follow sync, commit, and auto-push progress in execution order.",
@@ -352,47 +370,51 @@ fn test_session_output_chronology() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                let view_text = frame.text_in_region(&full);
-                // Row lookup goes through the rendered lines instead of
-                // `find_text` because unpainted terminal cells drop the spaces
-                // inside multi-word notices.
-                let notice_row =
-                    |needle: &str| view_text.lines().position(|line| line.contains(needle));
-                for needle in [
-                    "[Sync] Successfully synced",
-                    "[Commit] No changes to commit.",
-                    "Auto-pushing published branch",
-                ] {
-                    assert!(
-                        notice_row(needle).is_some(),
-                        "missing `{needle}` in frame:\n{view_text}"
-                    );
-                }
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    let view_text = frame.text_in_region(&full);
+                    // Row lookup goes through the rendered lines instead of
+                    // `find_text` because unpainted terminal cells drop the
+                    // spaces inside multi-word notices.
+                    let notice_row =
+                        |needle: &str| view_text.lines().position(|line| line.contains(needle));
+                    for needle in [
+                        "[Sync] Successfully synced",
+                        "[Commit] No changes to commit.",
+                        "Auto-pushing published branch",
+                    ] {
+                        assert!(
+                            notice_row(needle).is_some(),
+                            "missing `{needle}` in frame:\n{view_text}"
+                        );
+                    }
 
-                let sync_row = notice_row("[Sync] Successfully synced").expect("sync result row");
-                let commit_row =
-                    notice_row("[Commit] No changes to commit.").expect("turn commit notice row");
-                let auto_push_row =
-                    notice_row("Auto-pushing published branch").expect("auto-push status row");
+                    let sync_row =
+                        notice_row("[Sync] Successfully synced").expect("sync result row");
+                    let commit_row = notice_row("[Commit] No changes to commit.")
+                        .expect("turn commit notice row");
+                    let auto_push_row =
+                        notice_row("Auto-pushing published branch").expect("auto-push status row");
 
-                assert!(sync_row < commit_row);
-                assert!(commit_row < auto_push_row);
+                    assert!(sync_row < commit_row);
+                    assert!(commit_row < auto_push_row);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify session sync queues behind an active published-branch auto-push
 /// without blocking session-view input or redraws.
-#[test]
-fn session_sync_remains_responsive_during_auto_push() -> E2eResult {
+#[tokio::test]
+async fn session_sync_remains_responsive_during_auto_push() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_sync_responsive_during_auto_push")
         .with_git()
         .with_terminal_size(120, 30)
-        .setup(seed_published_session_output_chronology)
+        .setup(|env| Box::pin(async move { seed_published_session_output_chronology(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -417,29 +439,34 @@ fn session_sync_remains_responsive_during_auto_push() -> E2eResult {
                     .wait_for_text("[Sync] Successfully synced", 15000)
             },
             |frame, report| {
-                let help_frame = common::frame_from_capture(&report.captures[0]);
-                let help_full = Region::full(help_frame.cols(), help_frame.rows());
-                assertion::assert_text_in_region(&help_frame, "Keybindings", &help_full);
+                Box::pin(async move {
+                    let help_frame = common::frame_from_capture(&report.captures[0]);
+                    let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                    assertion::assert_text_in_region(&help_frame, "Keybindings", &help_full);
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
-                assertion::assert_not_visible(frame, "active session worker is unavailable");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
+                    assertion::assert_not_visible(frame, "active session worker is unavailable");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify a completed automatic branch push remains visible after its owning
 /// project is switched out while the push is running and then restored.
-#[test]
-fn published_branch_push_survives_project_switching() -> E2eResult {
+#[tokio::test]
+async fn published_branch_push_survives_project_switching() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("published_branch_push_survives_project_switching")
         .with_git()
         .setup(|env| {
-            seed_published_session_output_chronology(env)?;
-            common::seed_second_project(env)
+            Box::pin(async move {
+                seed_published_session_output_chronology(env).await?;
+                common::seed_second_project(env).await
+            })
         })
         .run(
             |scenario| {
@@ -471,15 +498,18 @@ fn published_branch_push_survives_project_switching() -> E2eResult {
                     .wait_for_text("Auto-pushed published branch after completed turn.", 5000)
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "[Branch Push]", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Auto-pushed published branch after completed turn.",
-                    &full,
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "[Branch Push]", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Auto-pushed published branch after completed turn.",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

@@ -29,57 +29,5 @@ pub enum AppError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn session_error_converts_via_from() {
-        // Arrange
-        let session_error = SessionError::NotFound;
-
-        // Act
-        let error = AppError::from(session_error);
-
-        // Assert
-        assert!(matches!(error, AppError::Session(SessionError::NotFound)));
-        assert_eq!(error.to_string(), "Session not found");
-    }
-
-    #[test]
-    fn workflow_display_shows_contextual_message() {
-        // Arrange
-        let error = AppError::Workflow("Failed to run terminal UI: broken pipe".to_string());
-
-        // Act / Assert
-        assert_eq!(error.to_string(), "Failed to run terminal UI: broken pipe");
-    }
-
-    #[test]
-    fn db_error_converts_via_from() {
-        // Arrange
-        let db_error = crate::infra::db::DbError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "db file missing",
-        ));
-
-        // Act
-        let error = AppError::from(db_error);
-
-        // Assert
-        assert!(matches!(error, AppError::Db(_)));
-        assert!(error.to_string().contains("db file missing"));
-    }
-
-    #[test]
-    fn one_shot_error_converts_via_from() {
-        // Arrange
-        let one_shot_error = ag_agent::OneShotError::new("one-shot failed");
-
-        // Act
-        let error = AppError::from(one_shot_error);
-
-        // Assert
-        assert!(matches!(error, AppError::OneShot(_)));
-        assert_eq!(error.to_string(), "one-shot failed");
-    }
-}
+#[path = "error_test.rs"]
+mod tests;

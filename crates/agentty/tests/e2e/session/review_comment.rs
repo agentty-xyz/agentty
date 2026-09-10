@@ -18,9 +18,9 @@ use crate::common::{BuilderEnv, FeatureTest};
 const REVIEW_HISTORY_PROMPT_TEXT: &str = "Explain the review status loader";
 
 /// Seeds one unresolved thread whose latest comment is a prior Agentty reply.
-fn seed_addressed_review_comment(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session_with_review_request(env)?;
-    seed_sessions_startup_tab(env)?;
+async fn seed_addressed_review_comment(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_review_request(env).await?;
+    seed_sessions_startup_tab(env).await?;
 
     let gh_path = env.stub_bin.join("gh");
     std::fs::write(
@@ -56,10 +56,10 @@ esac
 
 /// Seeds the linked-review fixture with a delayed Claude turn so the feature
 /// scenario can observe the review-resolution loader in progress.
-fn seed_review_comment_agent_resolution(
+async fn seed_review_comment_agent_resolution(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session_with_review_request(env)?;
+    seed_review_ready_session_with_review_request(env).await?;
     let session_worktree = env.agentty_root.join("wt").join("review-s");
     std::fs::remove_dir_all(&session_worktree)?;
     let session_worktree_path = session_worktree.to_string_lossy().into_owned();
@@ -87,8 +87,7 @@ fn seed_review_comment_agent_resolution(
         "fn main() {\n    println!(\"review\");\n}\n",
     )?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -102,7 +101,8 @@ fn seed_review_comment_agent_resolution(
                 REVIEW_HISTORY_PROMPT_TEXT,
             )
             .await
-    })?;
+    })
+    .await?;
 
     let claude_path = env.stub_bin.join("claude");
     std::fs::write(
@@ -125,10 +125,10 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Proc
 
 /// Seeds a two-thread review batch whose agent response omits one required
 /// outcome so the UI can prove partial forge updates are rejected visibly.
-fn seed_incomplete_review_comment_outcomes(
+async fn seed_incomplete_review_comment_outcomes(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_comment_agent_resolution(env)?;
+    seed_review_comment_agent_resolution(env).await?;
 
     let claude_path = env.stub_bin.join("claude");
     std::fs::write(
@@ -150,8 +150,8 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Proc
 
 /// Verify linked review comments share one workspace with changed files and
 /// the selected thread's current diff context.
-#[test]
-fn test_session_review_comments() -> E2eResult {
+#[tokio::test]
+async fn test_session_review_comments() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_review_comments")
         .with_git()
@@ -162,8 +162,10 @@ fn test_session_review_comments() -> E2eResult {
             44,
         )
         .setup(|env| {
-            seed_review_ready_session_with_review_request(env)?;
-            seed_sessions_startup_tab(env)
+            Box::pin(async move {
+                seed_review_ready_session_with_review_request(env).await?;
+                seed_sessions_startup_tab(env).await
+            })
         })
         .run(
             |scenario| {
@@ -207,48 +209,57 @@ fn test_session_review_comments() -> E2eResult {
                     .wait_for_stable_frame(300, 5000)
             },
             |frame, report| {
-                let inline_frame = common::frame_from_capture(&report.captures[0]);
-                assert_inline_review_comment(&inline_frame);
+                Box::pin(async move {
+                    let inline_frame = common::frame_from_capture(&report.captures[0]);
+                    assert_inline_review_comment(&inline_frame);
 
-                let file_frame = common::frame_from_capture(&report.captures[1]);
-                let file_full = Region::full(file_frame.cols(), file_frame.rows());
-                assertion::assert_text_in_region(&file_frame, "file  ·  1 comments", &file_full);
-                assertion::assert_text_in_region(
-                    &file_frame,
-                    "This file-level comment is not attached to a code line.",
-                    &file_full,
-                );
-                assertion::assert_text_in_region(
-                    &file_frame,
-                    "Please review the whole file.",
-                    &file_full,
-                );
-                assertion::assert_not_visible(&file_frame, "println!(\"review\")");
+                    let file_frame = common::frame_from_capture(&report.captures[1]);
+                    let file_full = Region::full(file_frame.cols(), file_frame.rows());
+                    assertion::assert_text_in_region(
+                        &file_frame,
+                        "file  ·  1 comments",
+                        &file_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &file_frame,
+                        "This file-level comment is not attached to a code line.",
+                        &file_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &file_frame,
+                        "Please review the whole file.",
+                        &file_full,
+                    );
+                    assertion::assert_not_visible(&file_frame, "println!(\"review\")");
 
-                let outdated_frame = common::frame_from_capture(&report.captures[2]);
-                assert_outdated_review_comment(&outdated_frame);
+                    let outdated_frame = common::frame_from_capture(&report.captures[2]);
+                    assert_outdated_review_comment(&outdated_frame);
 
-                let files_focus_region = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Files", &files_focus_region);
-                assertion::assert_not_visible(frame, "Space: select");
-                assertion::assert_not_visible(frame, "Enter: submit");
+                    let files_focus_region = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Files", &files_focus_region);
+                    assertion::assert_not_visible(frame, "Space: select");
+                    assertion::assert_not_visible(frame, "Enter: submit");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that `Esc` returns review-comment focus to Files without leaving
 /// Diff mode.
-#[test]
-fn test_review_comments_escape_focuses_files() -> E2eResult {
+#[tokio::test]
+async fn test_review_comments_escape_focuses_files() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_comments_escape_focuses_files")
         .with_git()
         .with_terminal_size(160, 60)
         .setup(|env| {
-            seed_review_ready_session_with_review_request(env)?;
-            seed_sessions_startup_tab(env)
+            Box::pin(async move {
+                seed_review_ready_session_with_review_request(env).await?;
+                seed_sessions_startup_tab(env).await
+            })
         })
         .run(
             |scenario| {
@@ -267,26 +278,29 @@ fn test_review_comments_escape_focuses_files() -> E2eResult {
                     .wait_for_stable_frame(300, 5000)
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
 
-                assertion::assert_text_in_region(frame, "Files", &full);
-                assertion::assert_text_in_region(frame, "c: comments", &full);
-                assertion::assert_not_visible(frame, "Space: select");
+                    assertion::assert_text_in_region(frame, "Files", &full);
+                    assertion::assert_text_in_region(frame, "c: comments", &full);
+                    assertion::assert_not_visible(frame, "Space: select");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify an unchanged unresolved thread cannot be submitted again after an
 /// Agentty reply, while remaining visible for reviewer follow-up.
-#[test]
-fn test_review_comment_addressed_guard() -> E2eResult {
+#[tokio::test]
+async fn test_review_comment_addressed_guard() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_comment_addressed_guard")
         .with_git()
         .with_terminal_size(160, 60)
-        .setup(seed_addressed_review_comment)
+        .setup(|env| Box::pin(async move { seed_addressed_review_comment(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -310,31 +324,35 @@ fn test_review_comment_addressed_guard() -> E2eResult {
                     .wait_for_stable_frame(300, 5000)
             },
             |frame, report| {
-                let addressed_frame = common::frame_from_capture(&report.captures[0]);
-                let addressed_full = Region::full(addressed_frame.cols(), addressed_frame.rows());
-                assertion::assert_text_in_region(
-                    &addressed_frame,
-                    "unresolved  ·  addressed",
-                    &addressed_full,
-                );
-                assertion::assert_text_in_region(
-                    &addressed_frame,
-                    "No change is needed.",
-                    &addressed_full,
-                );
-                assertion::assert_not_visible(&addressed_frame, "[x]");
-                assertion::assert_not_visible(&addressed_frame, "Space: select");
-                assertion::assert_not_visible(&addressed_frame, "Enter: submit");
+                Box::pin(async move {
+                    let addressed_frame = common::frame_from_capture(&report.captures[0]);
+                    let addressed_full =
+                        Region::full(addressed_frame.cols(), addressed_frame.rows());
+                    assertion::assert_text_in_region(
+                        &addressed_frame,
+                        "unresolved  ·  addressed",
+                        &addressed_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &addressed_frame,
+                        "No change is needed.",
+                        &addressed_full,
+                    );
+                    assertion::assert_not_visible(&addressed_frame, "[x]");
+                    assertion::assert_not_visible(&addressed_frame, "Space: select");
+                    assertion::assert_not_visible(&addressed_frame, "Enter: submit");
 
-                let full = Region::full(frame.cols(), frame.rows());
+                    let full = Region::full(frame.cols(), frame.rows());
 
-                assertion::assert_text_in_region(frame, "Still needs work.", &full);
-                assertion::assert_text_in_region(frame, "[x]", &full);
-                assertion::assert_text_in_region(frame, "Selected 1", &full);
-                assertion::assert_text_in_region(frame, "Space: select", &full);
-                assertion::assert_text_in_region(frame, "Enter: submit", &full);
+                    assertion::assert_text_in_region(frame, "Still needs work.", &full);
+                    assertion::assert_text_in_region(frame, "[x]", &full);
+                    assertion::assert_text_in_region(frame, "Selected 1", &full);
+                    assertion::assert_text_in_region(frame, "Space: select", &full);
+                    assertion::assert_text_in_region(frame, "Enter: submit", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
@@ -403,8 +421,8 @@ fn assert_outdated_review_comment(frame: &TerminalFrame) {
 
 /// Verify actionable review threads can be selected and submitted to the
 /// active session agent as one evaluation batch.
-#[test]
-fn session_review_comment_agent_resolution() -> E2eResult {
+#[tokio::test]
+async fn session_review_comment_agent_resolution() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_review_comment_agent_resolution")
         .with_git()
@@ -414,7 +432,7 @@ fn session_review_comment_agent_resolution() -> E2eResult {
             "Select linked review comments, then submit one agent evaluation batch.",
             45,
         )
-        .setup(seed_review_comment_agent_resolution)
+        .setup(|env| Box::pin(async move { seed_review_comment_agent_resolution(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -455,41 +473,49 @@ fn session_review_comment_agent_resolution() -> E2eResult {
                     )
             },
             |frame, report| {
-                let selection_frame = common::frame_from_capture(&report.captures[0]);
-                let selection_full = Region::full(selection_frame.cols(), selection_frame.rows());
-                assertion::assert_text_in_region(&selection_frame, "[x]", &selection_full);
-                assertion::assert_text_in_region(&selection_frame, "Selected 2", &selection_full);
-                let loader_frame = common::frame_from_capture(&report.captures[1]);
-                let loader_full = Region::full(loader_frame.cols(), loader_frame.rows());
-                assertion::assert_text_in_region(
-                    &loader_frame,
-                    "Resolving 2 review comments...",
-                    &loader_full,
-                );
-                let full = Region::full(frame.cols(), frame.rows());
+                Box::pin(async move {
+                    let selection_frame = common::frame_from_capture(&report.captures[0]);
+                    let selection_full =
+                        Region::full(selection_frame.cols(), selection_frame.rows());
+                    assertion::assert_text_in_region(&selection_frame, "[x]", &selection_full);
+                    assertion::assert_text_in_region(
+                        &selection_frame,
+                        "Selected 2",
+                        &selection_full,
+                    );
+                    let loader_frame = common::frame_from_capture(&report.captures[1]);
+                    let loader_full = Region::full(loader_frame.cols(), loader_frame.rows());
+                    assertion::assert_text_in_region(
+                        &loader_frame,
+                        "Resolving 2 review comments...",
+                        &loader_full,
+                    );
+                    let full = Region::full(frame.cols(), frame.rows());
 
-                assertion::assert_text_in_region(frame, REVIEW_HISTORY_PROMPT_TEXT, &full);
-                assertion::assert_not_visible(
-                    frame,
-                    "Evaluate the following selected forge review comments",
-                );
-                assertion::assert_not_visible(frame, "Thread ID: thread-inline");
-                assertion::assert_not_visible(frame, "Requested action:");
+                    assertion::assert_text_in_region(frame, REVIEW_HISTORY_PROMPT_TEXT, &full);
+                    assertion::assert_not_visible(
+                        frame,
+                        "Evaluate the following selected forge review comments",
+                    );
+                    assertion::assert_not_visible(frame, "Thread ID: thread-inline");
+                    assertion::assert_not_visible(frame, "Requested action:");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify an incomplete structured outcome batch produces a visible warning
 /// and does not silently apply only the reported thread.
-#[test]
-fn test_review_comment_incomplete_outcomes() -> E2eResult {
+#[tokio::test]
+async fn test_review_comment_incomplete_outcomes() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_comment_incomplete_outcomes")
         .with_git()
         .with_terminal_size(160, 60)
-        .setup(seed_incomplete_review_comment_outcomes)
+        .setup(|env| Box::pin(async move { seed_incomplete_review_comment_outcomes(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -510,24 +536,27 @@ fn test_review_comment_incomplete_outcomes() -> E2eResult {
                     .wait_for_text("exactly one valid outcome for 1 of 2", 10000)
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "exactly one valid outcome for 1 of 2",
-                    &full,
-                );
-                assertion::assert_text_in_region(
-                    frame,
-                    "No review replies were posted or threads",
-                    &full,
-                );
-                assertion::assert_text_in_region(
-                    frame,
-                    "resolved. Reopen review comments to retry",
-                    &full,
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "exactly one valid outcome for 1 of 2",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "No review replies were posted or threads",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "resolved. Reopen review comments to retry",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

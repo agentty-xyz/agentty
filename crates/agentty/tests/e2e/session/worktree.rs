@@ -23,7 +23,9 @@ const BARE_LAYOUT_ANSWER_TEXT: &str = "Bare worktree turn completed";
 /// container-of-worktrees layout where the shared repository is bare and there
 /// is no main working checkout for the dirty-status snapshot, which previously
 /// failed the first turn with `this operation must be run in a work tree`.
-fn seed_bare_repo_worktree_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+async fn seed_bare_repo_worktree_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
     let container = env
         .workdir
         .parent()
@@ -61,12 +63,12 @@ fn seed_bare_repo_worktree_project(env: &BuilderEnv) -> Result<(), Box<dyn std::
         ],
     )?;
 
-    install_bare_layout_success_claude_stub(env)
+    install_bare_layout_success_claude_stub(env).await
 }
 
 /// Installs a Claude stub that completes one turn with a fixed successful
 /// answer so the bare-layout scenario can drive a turn without a live backend.
-fn install_bare_layout_success_claude_stub(
+async fn install_bare_layout_success_claude_stub(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
@@ -85,7 +87,7 @@ printf '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{BARE_LAY
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
 }
 
 /// Verify that Agentty can create a session and drive one turn to review when
@@ -95,11 +97,11 @@ printf '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{BARE_LAY
 /// snapshot failed the first turn with `this operation must be run in a work
 /// tree`. This test drives a full successful turn and asserts the session
 /// reaches the review-ready state instead of surfacing that error.
-#[test]
-fn bare_repo_worktree_layout_supports_session_turn() -> E2eResult {
+#[tokio::test]
+async fn bare_repo_worktree_layout_supports_session_turn() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("bare_repo_worktree_layout")
-        .setup(seed_bare_repo_worktree_project)
+        .setup(|env| Box::pin(async move { seed_bare_repo_worktree_project(env).await }))
         .zola(
             "Bare repository worktree layout",
             "Run sessions from a project that is a linked worktree of a bare shared repository.",
@@ -124,12 +126,18 @@ fn bare_repo_worktree_layout_supports_session_turn() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, BARE_LAYOUT_ANSWER_TEXT, &full);
-                assertion::assert_text_in_region(frame, "Enter: reply", &full);
-                assertion::assert_not_visible(frame, "this operation must be run in a work tree");
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, BARE_LAYOUT_ANSWER_TEXT, &full);
+                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(
+                        frame,
+                        "this operation must be run in a work tree",
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

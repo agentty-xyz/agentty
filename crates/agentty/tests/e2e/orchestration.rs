@@ -10,13 +10,12 @@ use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
 use agentty::domain::session_message::SessionMessageKind;
-use agentty::test_support;
 use testty::assertion;
 use testty::frame::TerminalFrame;
 use testty::region::Region;
 
-use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::{common, test_support};
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -38,8 +37,8 @@ async fn stabilize_controller_initial_selection(database: &Database) -> Result<(
 }
 
 /// Seeds one parked campaign plus a linked managed worker for UI proofs.
-fn seed_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
-    seed_orchestration_campaign_rows(env)?;
+async fn seed_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign_rows(env).await?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("controll"))?;
     std::fs::create_dir_all(env.agentty_root.join("wt").join("worker-a"))?;
@@ -49,13 +48,12 @@ fn seed_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
 
 /// Seeds a controller and managed worker with real diffs so startup and turn
 /// completion exercise role-scoped automatic review.
-fn seed_orchestrator_auto_review_scope(env: &BuilderEnv) -> E2eResult {
-    seed_orchestration_campaign_rows(env)?;
+async fn seed_orchestrator_auto_review_scope(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign_rows(env).await?;
     seed_orchestration_review_worktrees(env)?;
     install_auto_review_claude_stub(env)?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         for session_id in [CONTROLLER_ID, WORKER_ID] {
             database
@@ -111,23 +109,25 @@ fn seed_orchestrator_auto_review_scope(env: &BuilderEnv) -> E2eResult {
 
         Ok::<(), Box<dyn std::error::Error>>(())
     })
+    .await
 }
 
 /// Seeds the persisted rows for one parked campaign and linked managed worker.
-fn seed_orchestration_campaign_rows(env: &BuilderEnv) -> E2eResult {
+async fn seed_orchestration_campaign_rows(env: &BuilderEnv) -> E2eResult {
     common::seed_session(
         env,
         SessionSeed::regular(CONTROLLER_ID, "gpt-5.6-sol", "main", "Review")
             .with_title("Managed feature delivery"),
-    )?;
+    )
+    .await?;
     common::seed_session(
         env,
         SessionSeed::regular(WORKER_ID, "gpt-5.6-sol", "main", "InProgress")
             .with_title("Implement protocol contract"),
-    )?;
+    )
+    .await?;
 
-    let runtime = common::seed_runtime()?;
-    let seed_result = runtime.block_on(async {
+    let seed_result = (async {
         let database = common::open_database(env)
             .await
             .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
@@ -196,7 +196,8 @@ fn seed_orchestration_campaign_rows(env: &BuilderEnv) -> E2eResult {
         stabilize_controller_initial_selection(&database).await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
-    });
+    })
+    .await;
     seed_result?;
 
     Ok(())
@@ -282,11 +283,10 @@ fn run_git_command(working_directory: &Path, args: &[&str]) -> E2eResult {
 
 /// Seeds a completed read-only research task whose temporary worktree had
 /// edits so the campaign board proves both report capture and discard status.
-fn seed_reported_research_task(env: &BuilderEnv) -> E2eResult {
-    seed_orchestration_campaign(env)?;
+async fn seed_reported_research_task(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign(env).await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         sqlx::query(
             "UPDATE session_orchestration_task SET kind = 'Research', title = 'Architecture \
@@ -306,18 +306,18 @@ fn seed_reported_research_task(env: &BuilderEnv) -> E2eResult {
         .await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Seeds one managed worker executing its first accepted review-remediation
 /// continuation so the campaign board exposes stable remediation progress.
-fn seed_orchestration_review_remediation(env: &BuilderEnv) -> E2eResult {
-    seed_orchestration_campaign(env)?;
+async fn seed_orchestration_review_remediation(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign(env).await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         let task_id = sqlx::query_scalar::<_, i64>(
             "SELECT id FROM session_orchestration_task WHERE task_key = 'protocol'",
@@ -352,39 +352,40 @@ fn seed_orchestration_review_remediation(env: &BuilderEnv) -> E2eResult {
             .await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Seeds enough controller transcript output to exercise line-by-line scroll
 /// bounds in the compact chat pane below the campaign board.
-fn seed_scrollable_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
-    seed_orchestration_campaign(env)?;
+async fn seed_scrollable_orchestration_campaign(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign(env).await?;
 
     let output = (0..60)
         .map(|line_index| format!("Transcript line {line_index:02}"))
         .collect::<Vec<_>>()
         .join("\n");
     let output = format!("```text\n{output}\n```");
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
             .append_session_message(CONTROLLER_ID, SessionMessageKind::AssistantAnswer, &output)
             .await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Seeds one parked campaign whose managed worker is ready for review.
-fn seed_review_ready_managed_worker(env: &BuilderEnv) -> E2eResult {
-    seed_orchestration_campaign(env)?;
+async fn seed_review_ready_managed_worker(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign(env).await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -396,15 +397,15 @@ fn seed_review_ready_managed_worker(env: &BuilderEnv) -> E2eResult {
 
         Ok::<(), Box<dyn std::error::Error>>(())
     })
+    .await
 }
 
 /// Seeds a review-request campaign with one worker still awaiting its forge
 /// merge and one already integrated sibling.
-fn seed_review_request_campaign_awaiting_merge(env: &BuilderEnv) -> E2eResult {
-    seed_orchestration_campaign(env)?;
+async fn seed_review_request_campaign_awaiting_merge(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign(env).await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         sqlx::query!(
             "UPDATE session_orchestration SET status = 'Integrating', integration_approach = \
@@ -427,15 +428,15 @@ fn seed_review_request_campaign_awaiting_merge(env: &BuilderEnv) -> E2eResult {
 
         Ok::<(), Box<dyn std::error::Error>>(())
     })
+    .await
 }
 
 /// Seeds a review-request campaign whose forge review was closed without a
 /// merge so reconciliation must surface an integration failure.
-fn seed_review_request_campaign_with_closed_worker(env: &BuilderEnv) -> E2eResult {
-    seed_review_request_campaign_awaiting_merge(env)?;
+async fn seed_review_request_campaign_with_closed_worker(env: &BuilderEnv) -> E2eResult {
+    seed_review_request_campaign_awaiting_merge(env).await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         sqlx::query!(
             "UPDATE session SET status = 'Canceled' WHERE id = ?",
@@ -446,6 +447,7 @@ fn seed_review_request_campaign_with_closed_worker(env: &BuilderEnv) -> E2eResul
 
         Ok::<(), Box<dyn std::error::Error>>(())
     })
+    .await
 }
 
 /// Returns the numbered transcript rows visible in one captured frame.
@@ -465,11 +467,10 @@ fn visible_transcript_line_indexes(frame: &TerminalFrame) -> Vec<u16> {
 
 /// Seeds one completed managed worker whose worktree-independent review diff
 /// has already been archived by the merge workflow.
-fn seed_archived_managed_worker(env: &BuilderEnv) -> E2eResult {
-    seed_orchestration_campaign(env)?;
+async fn seed_archived_managed_worker(env: &BuilderEnv) -> E2eResult {
+    seed_orchestration_campaign(env).await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -494,14 +495,15 @@ fn seed_archived_managed_worker(env: &BuilderEnv) -> E2eResult {
 
         Ok::<(), Box<dyn std::error::Error>>(())
     })
+    .await
 }
 
-#[test]
-fn test_orchestration_campaign_board() -> E2eResult {
+#[tokio::test]
+async fn test_orchestration_campaign_board() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("orchestration_campaign_board")
         .with_git()
-        .setup(seed_orchestration_campaign)
+        .setup(|env| Box::pin(async move { seed_orchestration_campaign(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -511,34 +513,41 @@ fn test_orchestration_campaign_board() -> E2eResult {
                     .capture_labeled("campaign_board", "Parked orchestration campaign board")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "Campaign: Managed feature delivery",
-                    &full,
-                );
-                assertion::assert_text_in_region(frame, "Phase: AwaitingApproval", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Parallel workers: 3 (global setting)",
-                    &full,
-                );
-                assertion::assert_text_in_region(
-                    frame,
-                    "Protocol contract [protocol]: awaiting approval",
-                    &full,
-                );
-                assertion::assert_text_in_region(frame, "a approve  Enter discuss/revise", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Campaign: Managed feature delivery",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "Phase: AwaitingApproval", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Parallel workers: 3 (global setting)",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Protocol contract [protocol]: awaiting approval",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "a approve  Enter discuss/revise",
+                        &full,
+                    );
+                })
             },
         )
+        .await
 }
 
-#[test]
-fn test_orchestrator_auto_review_scope() -> E2eResult {
+#[tokio::test]
+async fn test_orchestrator_auto_review_scope() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("orchestrator_auto_review_scope")
         .with_git()
-        .setup(seed_orchestrator_auto_review_scope)
+        .setup(|env| Box::pin(async move { seed_orchestrator_auto_review_scope(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -572,52 +581,59 @@ fn test_orchestrator_auto_review_scope() -> E2eResult {
                     )
             },
             |frame, report| {
-                let controller_frame = common::frame_from_capture(&report.captures[0]);
-                let controller_full =
-                    Region::full(controller_frame.cols(), controller_frame.rows());
-                assertion::assert_text_in_region(
-                    &controller_frame,
-                    "Enter: reply",
-                    &controller_full,
-                );
-                assertion::assert_text_in_region(
-                    &controller_frame,
-                    "Phase: Running",
-                    &controller_full,
-                );
-                assertion::assert_not_visible(&controller_frame, "Reviewing changes with");
+                Box::pin(async move {
+                    let controller_frame = common::frame_from_capture(&report.captures[0]);
+                    let controller_full =
+                        Region::full(controller_frame.cols(), controller_frame.rows());
+                    assertion::assert_text_in_region(
+                        &controller_frame,
+                        "Enter: reply",
+                        &controller_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &controller_frame,
+                        "Phase: Running",
+                        &controller_full,
+                    );
+                    assertion::assert_not_visible(&controller_frame, "Reviewing changes with");
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
-                assertion::assert_text_in_region(frame, "Reviewing changes", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Claude · claude-haiku-4-5-20251001 · Extra-high reasoning · Normal",
-                    &full,
-                );
-                let heading_row = frame
-                    .find_text("Reviewing changes")
-                    .first()
-                    .expect("focused-review heading should be visible")
-                    .rect
-                    .row;
-                let metadata_row = frame
-                    .find_text("Claude · claude-haiku-4-5-20251001 · Extra-high reasoning · Normal")
-                    .first()
-                    .expect("focused-review metadata should be visible")
-                    .rect
-                    .row;
-                assert_eq!(metadata_row, heading_row.saturating_add(1));
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
+                    assertion::assert_text_in_region(frame, "Reviewing changes", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Claude · claude-haiku-4-5-20251001 · Extra-high reasoning · Normal",
+                        &full,
+                    );
+                    let heading_row = frame
+                        .find_text("Reviewing changes")
+                        .first()
+                        .expect("focused-review heading should be visible")
+                        .rect
+                        .row;
+                    let metadata_row = frame
+                        .find_text(
+                            "Claude · claude-haiku-4-5-20251001 · Extra-high reasoning · Normal",
+                        )
+                        .first()
+                        .expect("focused-review metadata should be visible")
+                        .rect
+                        .row;
+                    assert_eq!(metadata_row, heading_row.saturating_add(1));
+                })
             },
         )
+        .await
 }
 
-#[test]
-fn test_review_request_campaign_waits_for_worker_merge() -> E2eResult {
+#[tokio::test]
+async fn test_review_request_campaign_waits_for_worker_merge() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_campaign_waits_for_worker_merge")
         .with_git()
-        .setup(seed_review_request_campaign_awaiting_merge)
+        .setup(|env| {
+            Box::pin(async move { seed_review_request_campaign_awaiting_merge(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -644,35 +660,40 @@ fn test_review_request_campaign_waits_for_worker_merge() -> E2eResult {
                     )
             },
             |frame, report| {
-                let controller_frame = common::frame_from_capture(&report.captures[0]);
-                let controller_full =
-                    Region::full(controller_frame.cols(), controller_frame.rows());
-                assertion::assert_text_in_region(
-                    &controller_frame,
-                    "Phase: Integrating",
-                    &controller_full,
-                );
-                assertion::assert_text_in_region(
-                    &controller_frame,
-                    "Protocol contract [protocol]: review requested",
-                    &controller_full,
-                );
-                let controller_text = controller_frame.text_in_region(&controller_full);
-                assert!(!controller_text.contains("Campaign complete"));
+                Box::pin(async move {
+                    let controller_frame = common::frame_from_capture(&report.captures[0]);
+                    let controller_full =
+                        Region::full(controller_frame.cols(), controller_frame.rows());
+                    assertion::assert_text_in_region(
+                        &controller_frame,
+                        "Phase: Integrating",
+                        &controller_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &controller_frame,
+                        "Protocol contract [protocol]: review requested",
+                        &controller_full,
+                    );
+                    let controller_text = controller_frame.text_in_region(&controller_full);
+                    assert!(!controller_text.contains("Campaign complete"));
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
-                assertion::assert_text_in_region(frame, "Detach managed", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
+                    assertion::assert_text_in_region(frame, "Detach managed", &full);
+                })
             },
         )
+        .await
 }
 
-#[test]
-fn test_review_request_campaign_reports_closed_worker() -> E2eResult {
+#[tokio::test]
+async fn test_review_request_campaign_reports_closed_worker() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_campaign_reports_closed_worker")
         .with_git()
-        .setup(seed_review_request_campaign_with_closed_worker)
+        .setup(|env| {
+            Box::pin(async move { seed_review_request_campaign_with_closed_worker(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -686,25 +707,28 @@ fn test_review_request_campaign_reports_closed_worker() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Phase: Integrating", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Protocol contract [protocol]: integration failed",
-                    &full,
-                );
-                let text = frame.text_in_region(&full);
-                assert!(!text.contains("Campaign complete"));
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Phase: Integrating", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Protocol contract [protocol]: integration failed",
+                        &full,
+                    );
+                    let text = frame.text_in_region(&full);
+                    assert!(!text.contains("Campaign complete"));
+                })
             },
         )
+        .await
 }
 
-#[test]
-fn test_orchestration_review_remediation() -> E2eResult {
+#[tokio::test]
+async fn test_orchestration_review_remediation() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("orchestration_review_remediation")
         .with_git()
-        .setup(seed_orchestration_review_remediation)
+        .setup(|env| Box::pin(async move { seed_orchestration_review_remediation(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -720,22 +744,25 @@ fn test_orchestration_review_remediation() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "Protocol contract [protocol]: applying review; remediation 1/3",
-                    &full,
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Protocol contract [protocol]: applying review; remediation 1/3",
+                        &full,
+                    );
+                })
             },
         )
+        .await
 }
 
-#[test]
-fn test_orchestration_research_report() -> E2eResult {
+#[tokio::test]
+async fn test_orchestration_research_report() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("orchestration_research_report")
         .with_git()
-        .setup(seed_reported_research_task)
+        .setup(|env| Box::pin(async move { seed_reported_research_task(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -760,35 +787,46 @@ fn test_orchestration_research_report() -> E2eResult {
                     )
             },
             |frame, report| {
-                let report_frame = common::frame_from_capture(&report.captures[0]);
-                let report_full = Region::full(report_frame.cols(), report_frame.rows());
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    &report_frame,
-                    "[Research] Architecture review [protocol]: reported",
-                    &report_full,
-                );
-                assertion::assert_text_in_region(&report_frame, "report captured;", &report_full);
-                assertion::assert_text_in_region(
-                    &report_frame,
-                    "temporary edits discarded; verified",
-                    &report_full,
-                );
-                assertion::assert_text_in_region(frame, "Unexpected research write", &full);
-                assertion::assert_text_in_region(frame, "Inspect architecture boundaries", &full);
-                assertion::assert_text_in_region(frame, "policy.txt", &full);
-                assertion::assert_text_in_region(frame, "q/Esc: back", &full);
+                Box::pin(async move {
+                    let report_frame = common::frame_from_capture(&report.captures[0]);
+                    let report_full = Region::full(report_frame.cols(), report_frame.rows());
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        &report_frame,
+                        "[Research] Architecture review [protocol]: reported",
+                        &report_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &report_frame,
+                        "report captured;",
+                        &report_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &report_frame,
+                        "temporary edits discarded; verified",
+                        &report_full,
+                    );
+                    assertion::assert_text_in_region(frame, "Unexpected research write", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Inspect architecture boundaries",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "policy.txt", &full);
+                    assertion::assert_text_in_region(frame, "q/Esc: back", &full);
+                })
             },
         )
+        .await
 }
 
-#[test]
-fn test_orchestration_campaign_smooth_scroll() -> E2eResult {
+#[tokio::test]
+async fn test_orchestration_campaign_smooth_scroll() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("orchestration_campaign_smooth_scroll")
         .with_git()
         .with_terminal_size(80, 24)
-        .setup(seed_scrollable_orchestration_campaign)
+        .setup(|env| Box::pin(async move { seed_scrollable_orchestration_campaign(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -804,34 +842,37 @@ fn test_orchestration_campaign_smooth_scroll() -> E2eResult {
                     .capture_labeled("campaign_one_line_up", "Controller transcript one line up")
             },
             |_frame, report| {
-                assert_eq!(report.captures.len(), 2);
+                Box::pin(async move {
+                    assert_eq!(report.captures.len(), 2);
 
-                let bottom_frame = common::frame_from_capture(&report.captures[0]);
-                let one_line_up_frame = common::frame_from_capture(&report.captures[1]);
-                let bottom_lines = visible_transcript_line_indexes(&bottom_frame);
-                let one_line_up_lines = visible_transcript_line_indexes(&one_line_up_frame);
-                assert!(!bottom_lines.is_empty(), "expected bottom transcript rows");
-                assert!(
-                    !one_line_up_lines.is_empty(),
-                    "expected scrolled transcript rows"
-                );
-                assert_eq!(
-                    one_line_up_lines
-                        .first()
-                        .copied()
-                        .map(|line_index| line_index + 1),
-                    bottom_lines.first().copied()
-                );
+                    let bottom_frame = common::frame_from_capture(&report.captures[0]);
+                    let one_line_up_frame = common::frame_from_capture(&report.captures[1]);
+                    let bottom_lines = visible_transcript_line_indexes(&bottom_frame);
+                    let one_line_up_lines = visible_transcript_line_indexes(&one_line_up_frame);
+                    assert!(!bottom_lines.is_empty(), "expected bottom transcript rows");
+                    assert!(
+                        !one_line_up_lines.is_empty(),
+                        "expected scrolled transcript rows"
+                    );
+                    assert_eq!(
+                        one_line_up_lines
+                            .first()
+                            .copied()
+                            .map(|line_index| line_index + 1),
+                        bottom_lines.first().copied()
+                    );
+                })
             },
         )
+        .await
 }
 
-#[test]
-fn test_managed_worker_restricted_view() -> E2eResult {
+#[tokio::test]
+async fn test_managed_worker_restricted_view() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("managed_worker_restricted_view")
         .with_git()
-        .setup(seed_orchestration_campaign)
+        .setup(|env| Box::pin(async move { seed_orchestration_campaign(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -855,35 +896,38 @@ fn test_managed_worker_restricted_view() -> E2eResult {
                     .capture_labeled("managed_worker", "Managed worker restricted actions")
             },
             |frame, report| {
-                let running_frame = common::frame_from_capture(&report.captures[0]);
-                let running_full = Region::full(running_frame.cols(), running_frame.rows());
-                assertion::assert_text_in_region(&running_frame, "Working...", &running_full);
-                assertion::assert_text_in_region(
-                    &running_frame,
-                    "Managed by controller-0001",
-                    &running_full,
-                );
+                Box::pin(async move {
+                    let running_frame = common::frame_from_capture(&report.captures[0]);
+                    let running_full = Region::full(running_frame.cols(), running_frame.rows());
+                    assertion::assert_text_in_region(&running_frame, "Working...", &running_full);
+                    assertion::assert_text_in_region(
+                        &running_frame,
+                        "Managed by controller-0001",
+                        &running_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
-                assertion::assert_text_in_region(frame, "actions restricted", &full);
-                assertion::assert_text_in_region(frame, "d: Show diff", &full);
-                assertion::assert_text_in_region(frame, "Detach managed", &full);
-                let text = frame.text_in_region(&full);
-                assert!(!text.contains("Enter: Reply"));
-                assert!(!text.contains("p: Create or refresh"));
-                assert!(!text.contains("Review comments"));
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
+                    assertion::assert_text_in_region(frame, "actions restricted", &full);
+                    assertion::assert_text_in_region(frame, "d: Show diff", &full);
+                    assertion::assert_text_in_region(frame, "Detach managed", &full);
+                    let text = frame.text_in_region(&full);
+                    assert!(!text.contains("Enter: Reply"));
+                    assert!(!text.contains("p: Create or refresh"));
+                    assert!(!text.contains("Review comments"));
+                })
             },
         )
+        .await
 }
 
-#[test]
-fn test_managed_worker_review_open_action() -> E2eResult {
+#[tokio::test]
+async fn test_managed_worker_review_open_action() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("managed_worker_review_open_action")
         .env("TMUX", "/tmp/tmux-agentty-test/default,1,0")
         .with_git()
-        .setup(seed_review_ready_managed_worker)
+        .setup(|env| Box::pin(async move { seed_review_ready_managed_worker(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -908,28 +952,31 @@ fn test_managed_worker_review_open_action() -> E2eResult {
                     )
             },
             |frame, report| {
-                let help_frame = common::frame_from_capture(&report.captures[0]);
-                let help_full = Region::full(help_frame.cols(), help_frame.rows());
-                assertion::assert_text_in_region(&help_frame, "o: Open worktree", &help_full);
-                let help_text = help_frame.text_in_region(&help_full);
-                assert!(!help_text.contains("Enter: Reply"));
-                assert!(!help_text.contains("m: Add to merge queue"));
+                Box::pin(async move {
+                    let help_frame = common::frame_from_capture(&report.captures[0]);
+                    let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                    assertion::assert_text_in_region(&help_frame, "o: Open worktree", &help_full);
+                    let help_text = help_frame.text_in_region(&help_full);
+                    assert!(!help_text.contains("Enter: Reply"));
+                    assert!(!help_text.contains("m: Add to merge queue"));
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
-                assertion::assert_text_in_region(frame, "Open Managed Worktree", &full);
-                assertion::assert_text_in_region(frame, "This opens a writable", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
+                    assertion::assert_text_in_region(frame, "Open Managed Worktree", &full);
+                    assertion::assert_text_in_region(frame, "This opens a writable", &full);
+                })
             },
         )
+        .await
 }
 
-#[test]
-fn managed_worker_review_hides_open_outside_tmux() -> E2eResult {
+#[tokio::test]
+async fn managed_worker_review_hides_open_outside_tmux() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("managed_worker_review_hides_open_outside_tmux")
         .env("TMUX", "")
         .with_git()
-        .setup(seed_review_ready_managed_worker)
+        .setup(|env| Box::pin(async move { seed_review_ready_managed_worker(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -954,22 +1001,25 @@ fn managed_worker_review_hides_open_outside_tmux() -> E2eResult {
                     )
             },
             |frame, report| {
-                let help_frame = common::frame_from_capture(&report.captures[0]);
-                assertion::assert_not_visible(&help_frame, "o: Open worktree");
+                Box::pin(async move {
+                    let help_frame = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_not_visible(&help_frame, "o: Open worktree");
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
-                assertion::assert_not_visible(frame, "Open Managed Worktree");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Managed by controller-0001", &full);
+                    assertion::assert_not_visible(frame, "Open Managed Worktree");
+                })
             },
         )
+        .await
 }
 
-#[test]
-fn managed_worker_archived_diff() -> E2eResult {
+#[tokio::test]
+async fn managed_worker_archived_diff() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("managed_worker_archived_diff")
         .with_git()
-        .setup(seed_archived_managed_worker)
+        .setup(|env| Box::pin(async move { seed_archived_managed_worker(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -992,15 +1042,22 @@ fn managed_worker_archived_diff() -> E2eResult {
                     .capture_labeled("completed_campaign", "Completed campaign archive")
             },
             |frame, report| {
-                let diff_frame = common::frame_from_capture(&report.captures[0]);
-                let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
-                assertion::assert_text_in_region(&diff_frame, "Archived worker result", &diff_full);
-                assertion::assert_text_in_region(&diff_frame, "worker.txt", &diff_full);
-                assertion::assert_text_in_region(&diff_frame, "q/Esc: back", &diff_full);
+                Box::pin(async move {
+                    let diff_frame = common::frame_from_capture(&report.captures[0]);
+                    let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
+                    assertion::assert_text_in_region(
+                        &diff_frame,
+                        "Archived worker result",
+                        &diff_full,
+                    );
+                    assertion::assert_text_in_region(&diff_frame, "worker.txt", &diff_full);
+                    assertion::assert_text_in_region(&diff_frame, "q/Esc: back", &diff_full);
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Phase: Done", &full);
-                assertion::assert_text_in_region(frame, "Campaign complete", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Phase: Done", &full);
+                    assertion::assert_text_in_region(frame, "Campaign complete", &full);
+                })
             },
         )
+        .await
 }

@@ -6,18 +6,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ag_agent::{AgentAvailabilityProbe, AppServerClient, RealAgentAvailabilityProbe};
-#[cfg(test)]
-use ag_forge as forge;
 use ag_forge::{RealReviewRequestClient, ReviewRequestClient};
 use ag_git::{GitClient, GitError, RealGitClient};
-#[cfg(test)]
-use app::branch_publish::detected_forge_kind_from_git_push_error;
 use app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskSession, review_request_queued_label,
     run_branch_publish_action,
 };
-#[cfg(test)]
-use app::branch_publish::{BranchPublishTaskFailure, branch_push_failure, push_session_branch};
 use app::merge_queue::{MergeQueue, MergeQueueProgress};
 use app::project::ProjectManager;
 use app::review::{
@@ -35,21 +29,13 @@ use app::sync::{
 use app::tab::TabManager;
 use app::{sync, task};
 use session::StatusTransition;
-#[cfg(test)]
-use session::{SyncMainOutcome, SyncSessionStartError, TurnAppliedState};
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use super::events::AppEvent;
-#[cfg(test)]
-use super::events::{AppEventBatch, ReviewRequestStatusUpdate};
+use super::event::AppEvent;
 use crate::app;
 use crate::app::session_diff::PendingSessionDiffRequest;
 use crate::app::{AppError, session};
-#[cfg(test)]
-use crate::domain::agent::AgentCliInfo;
-#[cfg(test)]
-use crate::domain::agent::AgentSelection;
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
@@ -64,8 +50,6 @@ use crate::domain::transient_message::{
     TransientMessageSlot,
 };
 use crate::domain::turn_prompt::TurnPrompt;
-#[cfg(test)]
-use crate::infra::db;
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::personality::{PersonalityCatalogClient, RealPersonalityCatalogClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
@@ -74,7 +58,7 @@ use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffLineComments, DiffReviewComments,
     PromptModeSnapshot,
 };
-use crate::presentation::settings::SettingsPresentationState;
+use crate::presentation::setting::SettingsPresentationState;
 
 /// Relative directory name used for session git worktrees within the
 /// `agentty` home directory.
@@ -135,6 +119,7 @@ pub(crate) struct AppClients {
     pub(super) review_request_client: Arc<dyn ReviewRequestClient>,
     pub(super) sync_main_runner: Option<Arc<dyn SyncMainRunner>>,
     pub(super) tmux_client: Arc<dyn TmuxClient>,
+    pub(super) version_task_runner: Arc<dyn task::VersionTaskRunner>,
 }
 
 impl AppClients {
@@ -143,7 +128,7 @@ impl AppClients {
     pub(crate) fn new() -> Self {
         Self {
             agent_availability_probe: Arc::new(RealAgentAvailabilityProbe),
-            agent_cli_version_task_enabled: !cfg!(test),
+            agent_cli_version_task_enabled: true,
             app_server_client_override: None,
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
@@ -153,86 +138,8 @@ impl AppClients {
             review_request_client: Arc::new(RealReviewRequestClient::default()),
             sync_main_runner: None,
             tmux_client: Arc::new(RealTmuxClient),
+            version_task_runner: Arc::new(task::RealVersionTaskRunner),
         }
-    }
-
-    /// Replaces the startup agent-availability boundary while preserving the
-    /// remaining clients.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_agent_availability_probe(
-        mut self,
-        agent_availability_probe: Arc<dyn AgentAvailabilityProbe>,
-    ) -> Self {
-        self.agent_availability_probe = agent_availability_probe;
-
-        self
-    }
-
-    /// Replaces the default provider-owned app-server clients with one shared
-    /// override.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_app_server_client_override(
-        mut self,
-        app_server_client_override: Arc<dyn AppServerClient>,
-    ) -> Self {
-        self.app_server_client_override = Some(app_server_client_override);
-
-        self
-    }
-
-    /// Replaces the git boundary for deterministic app tests.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_git_client(mut self, git_client: Arc<dyn GitClient>) -> Self {
-        self.git_client = git_client;
-
-        self
-    }
-
-    /// Replaces the personality catalog boundary for deterministic app tests.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_personality_catalog_client(
-        mut self,
-        personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
-    ) -> Self {
-        self.personality_catalog_client = personality_catalog_client;
-
-        self
-    }
-
-    /// Replaces the startup project-discovery boundary while preserving the
-    /// remaining clients.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_project_discovery_client(
-        mut self,
-        project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
-    ) -> Self {
-        self.project_discovery_client = project_discovery_client;
-
-        self
-    }
-
-    /// Replaces the tmux boundary while preserving the remaining clients.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_tmux_client(mut self, tmux_client: Arc<dyn TmuxClient>) -> Self {
-        self.is_tmux_session = true;
-        self.tmux_client = tmux_client;
-
-        self
-    }
-
-    /// Overrides whether the test app is treated as running inside `tmux`.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_tmux_session(mut self, is_tmux_session: bool) -> Self {
-        self.is_tmux_session = is_tmux_session;
-
-        self
     }
 }
 
@@ -242,23 +149,69 @@ impl AppClients {
 pub struct App {
     /// Tracks the currently active UI mode and its transient state.
     pub mode: AppMode,
-    /// Tracks whether the foreground runtime should render a fresh frame.
-    pub(crate) needs_redraw: bool,
     /// Stores persisted and in-memory application settings for the active
     /// project.
     pub settings: SettingsManager,
-    /// Owns frontend-neutral selection and editor state for the settings tab.
-    pub(crate) settings_presentation: SettingsPresentationState,
     /// Manages the selected top-level list tab.
     pub tabs: TabManager,
-    /// Saves prompt composers per session so leaving chat focus with `q` and
-    /// reopening the session restores the complete typed draft. Entries are
-    /// consumed on restore and removed when their session is deleted.
-    pub(crate) prompt_progress: HashMap<SessionId, PromptModeSnapshot>,
+    /// Counts automatic focused-review remediation turns in the current
+    /// user-initiated cycle for each session.
+    pub(crate) auto_address_review_iterations: HashMap<SessionId, u8>,
+    /// Version label projected to the status bar by frontend snapshots.
+    pub(crate) current_version_display_text: String,
+    /// Retains automatic focused-review triggers for completed sessions whose
+    /// owning project is not currently loaded.
+    pub(crate) deferred_auto_review_session_ids: HashSet<SessionId>,
     /// Saves completed file and inline comments per session while Diff mode is
     /// closed. Entries are consumed when the diff reopens and cleared when a
     /// turn starts or the session is deleted.
     pub(crate) diff_comment_progress: HashMap<SessionId, DiffLineComments>,
+    /// Receives app events emitted by background tasks and workflows.
+    pub(super) event_rx: mpsc::UnboundedReceiver<AppEvent>,
+    /// Whether Agentty was launched from inside a `tmux` session.
+    pub(super) is_tmux_session: bool,
+    /// Tracks the last reduced observable-handle version for each session so
+    /// stale `SessionUpdated` events do not trigger redundant redraws.
+    pub(crate) last_seen_session_update_versions: HashMap<SessionId, u64>,
+    /// Stores the latest available stable `agentty` version when one is
+    /// detected.
+    pub(crate) latest_available_version: Option<String>,
+    /// Records the newest explicit sync operation requested for each project
+    /// so delayed completions cannot apply superseded reconciliation work.
+    pub(crate) latest_project_sync_operation_ids: HashMap<i64, u64>,
+    /// Serializes local merge requests so only one merge workflow runs at a
+    /// time.
+    pub(super) merge_queue: MergeQueue,
+    /// Tracks whether the foreground runtime should render a fresh frame.
+    pub(crate) needs_redraw: bool,
+    /// Monotonic identifier assigned to the next explicit project sync.
+    pub(crate) next_sync_operation_id: u64,
+    /// Retains focused-review cache generations until their durable writes
+    /// settle so project-scoped refreshes cannot discard off-project output.
+    pub(crate) pending_focused_review_persistence: HashMap<SessionId, FocusedReviewPersistence>,
+    /// Retains completed sync reconciliation until its owning project is
+    /// active.
+    pub(crate) pending_project_sync_completions: HashMap<i64, SyncMainCompletion>,
+    /// Retains explicit sync requests for other projects while one sync or a
+    /// base-checkout merge owns the foreground mutation slot.
+    pub(crate) pending_project_sync_requests: VecDeque<SyncMainRequest>,
+    /// Pending creation responses, completed only after foreground refresh.
+    pub(crate) pending_session_creations:
+        HashMap<String, crate::app::session_creation::PendingSessionCreation>,
+    /// Tracks background session-diff loads by request generation so stale
+    /// completions cannot change the active mode or review generation.
+    pub(crate) pending_session_diff_requests: HashMap<u64, PendingSessionDiffRequest>,
+    /// Latest non-modal explicit project-sync lifecycle state.
+    pub(crate) project_sync_status: Option<ProjectSyncStatus>,
+    /// Deadline after which the terminal project-sync result is removed.
+    pub(crate) project_sync_status_expires_at: Option<Instant>,
+    /// Owns project selection state, project metadata, and git status
+    /// snapshots.
+    pub(crate) projects: ProjectManager,
+    /// Saves prompt composers per session so leaving chat focus with `q` and
+    /// reopening the session restores the complete typed draft. Entries are
+    /// consumed on restore and removed when their session is deleted.
+    pub(crate) prompt_progress: HashMap<SessionId, PromptModeSnapshot>,
     /// Saves partially answered clarification progress per session so
     /// already-submitted answers survive leaving question mode with `q` and
     /// reopening the session. Entries are consumed on restore and cleared
@@ -279,71 +232,25 @@ pub struct App {
     /// switches independently of visible output. Lazily recovered after
     /// restart and removed when the session is deleted.
     pub(crate) review_diff_hashes: HashMap<SessionId, u64>,
-    /// Counts automatic focused-review remediation turns in the current
-    /// user-initiated cycle for each session.
-    pub(crate) auto_address_review_iterations: HashMap<SessionId, u8>,
-    /// Version label projected to the status bar by frontend snapshots.
-    pub(crate) current_version_display_text: String,
-    /// Retains automatic focused-review triggers for completed sessions whose
-    /// owning project is not currently loaded.
-    pub(crate) deferred_auto_review_session_ids: HashSet<SessionId>,
-    /// Retains focused-review cache generations until their durable writes
-    /// settle so project-scoped refreshes cannot discard off-project output.
-    pub(crate) pending_focused_review_persistence: HashMap<SessionId, FocusedReviewPersistence>,
-    /// Pending creation responses, completed only after foreground refresh.
-    pub(crate) pending_session_creations:
-        HashMap<String, crate::app::session_creation::PendingSessionCreation>,
-    /// Tracks background session-diff loads by request generation so stale
-    /// completions cannot change the active mode or review generation.
-    pub(crate) pending_session_diff_requests: HashMap<u64, PendingSessionDiffRequest>,
-    /// Records the newest explicit sync operation requested for each project
-    /// so delayed completions cannot apply superseded reconciliation work.
-    pub(crate) latest_project_sync_operation_ids: HashMap<i64, u64>,
-    /// Retains completed sync reconciliation until its owning project is
-    /// active.
-    pub(crate) pending_project_sync_completions: HashMap<i64, SyncMainCompletion>,
-    /// Retains explicit sync requests for other projects while one sync or a
-    /// base-checkout merge owns the foreground mutation slot.
-    pub(crate) pending_project_sync_requests: VecDeque<SyncMainRequest>,
-    /// Owns project selection state, project metadata, and git status
-    /// snapshots.
-    pub(crate) projects: ProjectManager,
     /// Shares application-wide services and external clients across workflows.
     pub(crate) services: AppServices,
-    /// Owns session state, worker coordination, and the bounded control
-    /// mailbox used by frontend-neutral callers.
-    pub(crate) sessions: SessionRuntime,
-    /// Runs sync-to-main workflows behind an injectable boundary.
-    pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
-    /// Latest non-modal explicit project-sync lifecycle state.
-    pub(crate) project_sync_status: Option<ProjectSyncStatus>,
-    /// Deadline after which the terminal project-sync result is removed.
-    pub(crate) project_sync_status_expires_at: Option<Instant>,
-    /// Owns the active-project sync orchestrator command and context
-    /// channels.
-    pub(crate) sync_handle: sync::SyncHandle,
-    /// Receives app events emitted by background tasks and workflows.
-    pub(super) event_rx: mpsc::UnboundedReceiver<AppEvent>,
-    /// Whether Agentty was launched from inside a `tmux` session.
-    pub(super) is_tmux_session: bool,
-    /// Stores the latest available stable `agentty` version when one is
-    /// detected.
-    pub(crate) latest_available_version: Option<String>,
-    /// Serializes local merge requests so only one merge workflow runs at a
-    /// time.
-    pub(super) merge_queue: MergeQueue,
     /// Tracks per-session thinking text rendered while background work is
     /// active.
     pub(crate) session_progress_messages: HashMap<SessionId, String>,
+    /// Owns session state, worker coordination, and the bounded control
+    /// mailbox used by frontend-neutral callers.
+    pub(crate) sessions: SessionRuntime,
+    /// Owns frontend-neutral selection and editor state for the settings tab.
+    pub(crate) settings_presentation: SettingsPresentationState,
+    /// Owns the active-project sync orchestrator command and context
+    /// channels.
+    pub(crate) sync_handle: sync::SyncHandle,
+    /// Runs sync-to-main workflows behind an injectable boundary.
+    pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
     /// Interacts with tmux panes for session-specific terminal workflows.
     pub(super) tmux_client: Arc<dyn TmuxClient>,
-    /// Tracks the last reduced observable-handle version for each session so
-    /// stale `SessionUpdated` events do not trigger redundant redraws.
-    pub(crate) last_seen_session_update_versions: HashMap<SessionId, u64>,
     /// Stores the current auto-update progress state when an update is running.
     pub(crate) update_status: Option<UpdateStatus>,
-    /// Monotonic identifier assigned to the next explicit project sync.
-    pub(crate) next_sync_operation_id: u64,
 }
 
 impl App {
@@ -2482,253 +2389,8 @@ impl App {
 
 #[cfg(test)]
 #[path = "state_test.rs"]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(test)]
-mod fork_tests {
-    use std::sync::Arc;
-
-    use super::*;
-    use crate::domain::session::{SessionDiffState, SessionStats};
-    use crate::domain::session_message::SessionMessageKind;
-    use crate::infra::tmux::MockTmuxClient;
-
-    /// Prompt text copied through fork snapshot tests.
-    const FORK_SOURCE_PROMPT: &str = "Build the fork workflow";
-    /// Assistant text copied through fork snapshot tests.
-    const FORK_SOURCE_ANSWER: &str = "Fork workflow complete";
-
-    /// Creates a real git-backed source session and marks it review-ready for
-    /// fork tests.
-    async fn create_review_source_session_for_fork_test(app: &mut App) -> String {
-        let source_session_id = app
-            .create_session()
-            .await
-            .expect("failed to create source session");
-        let source_status = Status::Review.to_string();
-        app.services
-            .db()
-            .sessions()
-            .update_session_status_with_timing_at(&source_session_id, &source_status, 0)
-            .await
-            .expect("failed to mark source as review");
-
-        persist_fork_source_runtime_linkage(app, &source_session_id).await;
-        persist_fork_source_transcript(app, &source_session_id).await;
-        let source_folder = app
-            .sessions
-            .session_for_id(&source_session_id)
-            .expect("missing source session")
-            .folder
-            .clone();
-        std::fs::write(source_folder.join("README.md"), "dirty source worktree")
-            .expect("failed to modify source worktree");
-        crate::test_support::set_session_status_for_test(app, &source_session_id, Status::Review);
-
-        source_session_id
-    }
-
-    /// Persists source-only linkage that a fork must intentionally clear.
-    async fn persist_fork_source_runtime_linkage(app: &App, source_session_id: &str) {
-        app.services
-            .db()
-            .sessions()
-            .update_session_provider_conversation_id(
-                source_session_id,
-                Some("provider-thread".to_string()),
-            )
-            .await
-            .expect("failed to persist provider conversation id");
-        app.services
-            .db()
-            .sessions()
-            .update_session_instruction_conversation_id(
-                source_session_id,
-                Some("instruction-thread".to_string()),
-            )
-            .await
-            .expect("failed to persist instruction conversation id");
-        app.services
-            .db()
-            .sessions()
-            .update_session_published_upstream_ref(
-                source_session_id,
-                Some("origin/wt/source".to_string()),
-            )
-            .await
-            .expect("failed to persist upstream ref");
-        app.services
-            .db()
-            .sessions()
-            .update_session_stats(
-                source_session_id,
-                &SessionStats {
-                    input_tokens: 13,
-                    output_tokens: 21,
-                    ..SessionStats::default()
-                },
-            )
-            .await
-            .expect("failed to persist source usage stats");
-        app.services
-            .db()
-            .sessions()
-            .update_session_diff_stats(1, 0, true, source_session_id, "XS")
-            .await
-            .expect("failed to persist source diff stats");
-    }
-
-    /// Persists source transcript rows that a fork must copy.
-    async fn persist_fork_source_transcript(app: &App, source_session_id: &str) {
-        app.services
-            .db()
-            .sessions()
-            .append_session_message(
-                source_session_id,
-                SessionMessageKind::UserPrompt,
-                FORK_SOURCE_PROMPT,
-            )
-            .await
-            .expect("failed to append source user prompt");
-        app.services
-            .db()
-            .sessions()
-            .append_session_message(
-                source_session_id,
-                SessionMessageKind::AssistantAnswer,
-                FORK_SOURCE_ANSWER,
-            )
-            .await
-            .expect("failed to append source assistant answer");
-    }
-
-    /// Asserts that a fork is open and contains the copied transcript without
-    /// source runtime linkage.
-    async fn assert_forked_session_snapshot(app: &App, forked_session_id: &str) {
-        assert!(matches!(
-            app.mode,
-            AppMode::View {
-                ref session_id,
-                ..
-            } if session_id.as_str() == forked_session_id
-        ));
-        assert!(matches!(
-            app.selected_session(),
-            Some(session) if session.id == forked_session_id
-                && session.status == Status::Review
-                && session.parent_session_id.is_none()
-                && session.published_upstream_ref.is_none()
-                && session.stats.added_lines == 0
-                && session.stats.deleted_lines == 0
-                && session.stats.diff_state == SessionDiffState::Unknown
-                && session.stats.input_tokens == 0
-                && session.stats.output_tokens == 0
-        ));
-        let forked_session = app
-            .sessions
-            .session_for_id(forked_session_id)
-            .expect("missing forked session");
-        assert_eq!(
-            std::fs::read_to_string(forked_session.folder.join("README.md"))
-                .expect("failed to read forked worktree"),
-            "test"
-        );
-
-        let forked_messages = app
-            .services
-            .db()
-            .sessions()
-            .load_session_messages(forked_session_id)
-            .await
-            .expect("failed to load forked messages");
-        assert_eq!(forked_messages.len(), 2);
-        assert_eq!(forked_messages[0].kind, "user_prompt");
-        assert_eq!(forked_messages[0].content, FORK_SOURCE_PROMPT);
-        assert_eq!(forked_messages[1].kind, "assistant_answer");
-        assert_eq!(forked_messages[1].content, FORK_SOURCE_ANSWER);
-        assert_eq!(
-            app.services
-                .db()
-                .sessions()
-                .get_session_provider_conversation_id(forked_session_id)
-                .await
-                .expect("failed to load fork provider conversation id"),
-            None
-        );
-        assert_eq!(
-            app.services
-                .db()
-                .sessions()
-                .get_session_instruction_conversation_id(forked_session_id)
-                .await
-                .expect("failed to load fork instruction conversation id"),
-            None
-        );
-    }
-
-    #[tokio::test]
-    async fn test_fork_session_from_dirty_source_prepares_frozen_snapshot() {
-        // Arrange
-        let (mut app, _base_dir) =
-            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-        let source_session_id = create_review_source_session_for_fork_test(&mut app).await;
-
-        // Act
-        let forked_session_id = app
-            .fork_session(&source_session_id)
-            .await
-            .expect("expected session fork to succeed");
-
-        crate::test_support::finish_session_creation_tasks(&mut app).await;
-
-        // Assert
-        assert_ne!(forked_session_id, source_session_id);
-        assert_forked_session_snapshot(&app, &forked_session_id).await;
-    }
-
-    #[tokio::test]
-    async fn test_fork_session_rejects_non_review_source_session() {
-        // Arrange
-        let (mut app, _base_dir) =
-            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-        let source_session_id = app
-            .create_session()
-            .await
-            .expect("failed to create source session");
-
-        // Act
-        let result = app.fork_session(&source_session_id).await;
-
-        // Assert
-        assert!(matches!(
-            result,
-            Err(AppError::Session(crate::app::SessionError::Workflow(message)))
-                if message == "Only root review-ready sessions can be forked"
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_fork_session_rejects_stacked_child_source_session() {
-        // Arrange
-        let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-            Arc::new(MockTmuxClient::new()),
-        )
-        .await;
-        let child_session = crate::test_support::SessionFixtureBuilder::new()
-            .id("child-source")
-            .parent_session_id(Some(SessionId::from("parent-session")))
-            .status(Status::Review)
-            .build();
-        app.sessions.push_session(child_session);
-
-        // Act
-        let result = app.fork_session("child-source").await;
-
-        // Assert
-        assert!(matches!(
-            result,
-            Err(AppError::Session(crate::app::SessionError::Workflow(message)))
-                if message == "Only root review-ready sessions can be forked"
-        ));
-    }
-}
+#[path = "state_fork_test.rs"]
+mod fork_tests;
