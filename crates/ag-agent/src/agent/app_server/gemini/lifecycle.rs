@@ -514,6 +514,7 @@ mod tests {
 
     fn turn_request(folder: PathBuf, permission_mode: PermissionMode) -> AppServerTurnRequest {
         AppServerTurnRequest {
+            provider_call_budget: None,
             folder,
             live_transcript: None,
             main_checkout_root: None,

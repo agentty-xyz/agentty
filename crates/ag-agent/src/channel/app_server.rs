@@ -122,6 +122,7 @@ impl AgentChannel for AppServerAgentChannel {
             .map_err(|error| AgentError::Backend(error.to_string()))?;
             let continuation = req.continuation.into_parts();
             let request = AppServerTurnRequest {
+                provider_call_budget: None,
                 folder: req.folder,
                 live_transcript: continuation.live_transcript,
                 main_checkout_root: req.main_checkout_root,
@@ -262,6 +263,7 @@ async fn parse_or_repair_app_server_response(
         .or_else(|| repair_request.provider_conversation_id.clone());
 
     let repair_turn_request = AppServerTurnRequest {
+        provider_call_budget: repair_request.provider_call_budget,
         folder: repair_request.folder,
         live_transcript: None,
         main_checkout_root: repair_request.main_checkout_root,

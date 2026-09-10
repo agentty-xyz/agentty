@@ -44,6 +44,9 @@ pub struct OneShotRequest {
     pub permission_mode: PermissionMode,
     /// Prompt text submitted to the agent.
     pub prompt: String,
+    /// Optional shared limit, charged for every provider turn including
+    /// repairs.
+    pub provider_call_budget: Option<crate::ProviderCallBudget>,
     /// Canonical request kind for this isolated prompt.
     pub request_kind: AgentRequestKind,
     /// Reasoning effort preference for the one-shot prompt.
@@ -90,6 +93,8 @@ impl OneShotError {
 #[async_trait]
 pub trait OneShotClient: Send + Sync {
     /// Executes one isolated prompt and returns its parsed response and usage.
+    /// Implementations must enforce `provider_call_budget` for every underlying
+    /// provider attempt, including protocol repairs and transport retries.
     async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError>;
 }
 
@@ -170,6 +175,7 @@ async fn submit_one_shot_with_app_server_client(
     let protocol_profile = request.request_kind.protocol_profile();
     let (stream_tx, _stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let turn_request = AppServerTurnRequest {
+        provider_call_budget: request.provider_call_budget.clone(),
         folder: request.folder.clone(),
         live_transcript: None,
         main_checkout_root: None,
@@ -335,6 +341,7 @@ async fn attempt_one_shot_app_server_repair(
 
     let (repair_stream_tx, _repair_stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let repair_turn_request = AppServerTurnRequest {
+        provider_call_budget: request.provider_call_budget.clone(),
         folder: request.folder,
         live_transcript: None,
         main_checkout_root: None,
@@ -384,6 +391,9 @@ async fn execute_one_shot_command(
     prompt: &str,
     request: OneShotRequest,
 ) -> Result<ParsedResponse, String> {
+    if let Some(budget) = &request.provider_call_budget {
+        budget.consume().map_err(|error| error.to_string())?;
+    }
     let prompt_payload = ag_protocol::TurnPrompt::from_agent_data(prompt.to_string());
     let build_request = BuildCommandRequest {
         attachments: &prompt_payload.attachments,
@@ -594,6 +604,7 @@ mod tests {
         });
         let client = MockAppServerClient::new();
         let request = OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Claude,
             child_pid: None,
             folder: folder.path().to_owned(),
@@ -641,6 +652,7 @@ mod tests {
         let error = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -684,6 +696,7 @@ mod tests {
         let response = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -728,6 +741,7 @@ mod tests {
         let error = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -776,6 +790,7 @@ mod tests {
         let error = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -829,6 +844,7 @@ mod tests {
         let response = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -881,6 +897,7 @@ mod tests {
         let response = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -946,6 +963,7 @@ mod tests {
         let response = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -987,6 +1005,7 @@ mod tests {
         let error = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -1033,6 +1052,7 @@ mod tests {
             submit_one_shot_with_backend(
                 &backend,
                 OneShotRequest {
+                    provider_call_budget: None,
                     agent_kind: AgentKind::Claude,
                     child_pid: None,
                     folder: temp_directory.path().to_path_buf(),
@@ -1071,6 +1091,7 @@ mod tests {
         let response = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -1114,6 +1135,7 @@ mod tests {
         let error = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -1156,6 +1178,7 @@ mod tests {
         let error = submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -1219,6 +1242,7 @@ mod tests {
         let response = submit_one_shot_with_app_server_client(
             &app_server_client,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -1269,6 +1293,7 @@ mod tests {
         let error = submit_one_shot_with_app_server_client(
             &app_server_client,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Codex,
                 child_pid: Some(Arc::clone(&child_pid)),
                 folder: temp_directory.path().to_path_buf(),
@@ -1320,6 +1345,7 @@ mod tests {
                     })
                 });
             let request = OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Gemini,
                 child_pid: None,
                 folder: folder.path().to_owned(),
@@ -1385,6 +1411,7 @@ mod tests {
         let error = submit_one_shot_with_app_server_client(
             &app_server_client,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -1442,6 +1469,7 @@ mod tests {
         let error = submit_one_shot_with_app_server_client(
             &app_server_client,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Codex,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -1462,3 +1490,7 @@ mod tests {
         assert!(error.contains("response:\nplain text"));
     }
 }
+
+#[cfg(test)]
+#[path = "submission_budget_test.rs"]
+mod budget_tests;

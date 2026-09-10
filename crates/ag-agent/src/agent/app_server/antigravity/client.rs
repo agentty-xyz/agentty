@@ -121,6 +121,7 @@ mod tests {
 
     fn request(folder: PathBuf) -> AppServerTurnRequest {
         AppServerTurnRequest {
+            provider_call_budget: None,
             folder,
             live_transcript: None,
             main_checkout_root: None,

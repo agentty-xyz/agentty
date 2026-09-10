@@ -182,6 +182,7 @@ mod tests {
         // Arrange
         let mut runtime = build_stopped_session_runtime("thread-permission");
         let mut request = AppServerTurnRequest {
+            provider_call_budget: None,
             folder: runtime.state.folder.clone(),
             live_transcript: None,
             main_checkout_root: None,

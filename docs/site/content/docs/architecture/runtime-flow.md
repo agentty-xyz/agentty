@@ -888,6 +888,16 @@ their triggers:
   every mutation permission request, avoiding plan-mode sandbox initialization;
   persistent read-only research sessions continue to use sandboxed plan mode.
 
+  Commit-message and review preparation share a bounded prompt pipeline. It budgets the
+  rendered prompt, reduces oversized diff and context chunks through isolated read-only
+  utility calls, and combines their summaries before submission. Summary input chunks
+  use the prompt budget independently of the final summary size. All chunk summaries,
+  recursive reductions, and final attempts share a limit of 64 provider turns. The
+  shared budget is charged immediately before CLI execution or each app-server attempt,
+  including protocol repairs and transport restart retries. Size rejection reduces the
+  budget instead of restarting the same request or entering commit repair. Reviews
+  prepared from summaries explicitly disclose limited coverage.
+
 - **Sync-main workflow** (list-mode `s`): captures an immutable project ID, operation
   ID, path, branch, and review-target snapshot before queueing pull/rebase/push through
   the sync orchestrator. Progress is rendered independently from `AppMode`, with

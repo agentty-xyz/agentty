@@ -125,6 +125,7 @@ mod tests {
     fn read_latest_replay_transcript_prefers_live_source() {
         // Arrange
         let request = AppServerTurnRequest {
+            provider_call_budget: None,
             folder: PathBuf::from("/tmp/test"),
             live_transcript: Some(live_transcript("live content")),
             main_checkout_root: None,
@@ -152,6 +153,7 @@ mod tests {
     fn read_latest_replay_transcript_falls_back_when_live_source_is_empty() {
         // Arrange
         let request = AppServerTurnRequest {
+            provider_call_budget: None,
             folder: PathBuf::from("/tmp/test"),
             live_transcript: Some(live_transcript("  ")),
             main_checkout_root: None,
@@ -179,6 +181,7 @@ mod tests {
     fn read_latest_replay_transcript_returns_none_when_no_replay_text() {
         // Arrange
         let request = AppServerTurnRequest {
+            provider_call_budget: None,
             folder: PathBuf::from("/tmp/test"),
             live_transcript: None,
             main_checkout_root: None,
@@ -335,6 +338,7 @@ mod tests {
     fn instruction_delivery_mode_for_runtime_reuses_matching_bootstrap_state() {
         // Arrange
         let request = AppServerTurnRequest {
+            provider_call_budget: None,
             folder: PathBuf::from("/tmp/test"),
             live_transcript: None,
             main_checkout_root: None,
