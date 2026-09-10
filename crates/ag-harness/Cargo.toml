@@ -1,11 +1,24 @@
 [package]
 name = "ag-harness"
+autotests = false
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 description.workspace = true
 repository.workspace = true
+
+[[test]]
+name = "benchmark_summary"
+
+[[test]]
+name = "lifecycle"
+
+[[test]]
+name = "public_api"
+
+[[test]]
+name = "telemetry"
 
 [[test]]
 name = "e2e"

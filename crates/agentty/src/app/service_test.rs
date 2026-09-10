@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -5,10 +6,26 @@ use std::time::Duration;
 use ag_orchestration::{OrchestrationEvent, OrchestrationEventSink};
 use tokio::sync::mpsc;
 use tokio::time;
+use tracing::instrument::WithSubscriber;
 
-use super::{app_event_label, wait_for_cleanup_task_handles};
-use crate::app::AppEvent;
-use crate::domain::session::SessionId;
+use crate::app::branch_publish::BranchPublishTaskFailure;
+use crate::app::service::AppServices;
+use crate::app::session::{SyncSessionStartError, TurnAppliedState};
+use crate::app::sync::{ProjectSyncContext, SyncMainCompletion};
+use crate::app::{AppEvent, UpdateStatus};
+use crate::domain::session::{PublishedBranchSyncStatus, SessionId, SessionStats};
+use crate::test_support::{FixedClock, TestSubscriber};
+
+/// Exercises failure while cancellation drops a task-owned resource.
+struct CleanupResource {
+    should_succeed: bool,
+}
+
+impl Drop for CleanupResource {
+    fn drop(&mut self) {
+        assert!(self.should_succeed, "injected cleanup failure");
+    }
+}
 
 #[tokio::test]
 async fn orchestration_notifications_reach_the_app_event_channel() {
@@ -55,7 +72,7 @@ fn app_event_label_names_session_review_comment_snapshot_loads() {
     };
 
     // Act
-    let label = app_event_label(&event);
+    let label = AppServices::app_event_label(&event);
 
     // Assert
     assert_eq!(label, "SessionReviewCommentSnapshotLoaded");
@@ -72,7 +89,7 @@ fn app_event_label_names_diff_preview_loads() {
     };
 
     // Act
-    let label = app_event_label(&event);
+    let label = AppServices::app_event_label(&event);
 
     // Assert
     assert_eq!(label, "DiffPreviewLoaded");
@@ -88,7 +105,7 @@ fn app_event_label_names_session_diff_loads() {
     };
 
     // Act
-    let label = app_event_label(&event);
+    let label = AppServices::app_event_label(&event);
 
     // Assert
     assert_eq!(label, "SessionDiffLoaded");
@@ -110,7 +127,7 @@ fn app_event_label_names_focused_review_persistence_retries() {
     };
 
     // Act
-    let label = app_event_label(&event);
+    let label = AppServices::app_event_label(&event);
 
     // Assert
     assert_eq!(label, "FocusedReviewPersistenceRetry");
@@ -127,7 +144,7 @@ fn app_event_label_names_deferred_auto_review_persistence_retries() {
     };
 
     // Act
-    let label = app_event_label(&event);
+    let label = AppServices::app_event_label(&event);
 
     // Assert
     assert_eq!(label, "DeferredAutoReviewPersistenceRetry");
@@ -142,7 +159,7 @@ fn app_event_label_names_session_diff_stats_updates() {
     };
 
     // Act
-    let label = app_event_label(&event);
+    let label = AppServices::app_event_label(&event);
 
     // Assert
     assert_eq!(label, "SessionDiffStatsUpdated");
@@ -157,7 +174,7 @@ fn app_event_label_names_orchestration_progress_updates() {
     };
 
     // Act
-    let label = app_event_label(&event);
+    let label = AppServices::app_event_label(&event);
 
     // Assert
     assert_eq!(label, "SessionOrchestrationProgressUpdated");
@@ -171,7 +188,7 @@ fn app_event_label_names_branch_publish_starts() {
     };
 
     // Act
-    let label = app_event_label(&event);
+    let label = AppServices::app_event_label(&event);
 
     // Assert
     assert_eq!(label, "BranchPublishActionStarted");
@@ -185,7 +202,7 @@ fn app_event_label_names_branch_publish_resolutions() {
     };
 
     // Act
-    let label = app_event_label(&event);
+    let label = AppServices::app_event_label(&event);
 
     // Assert
     assert_eq!(label, "BranchPublishActionResolved");
@@ -199,7 +216,7 @@ fn app_event_label_names_queued_sync_resolutions() {
     };
 
     // Act
-    let label = app_event_label(&event);
+    let label = AppServices::app_event_label(&event);
 
     // Assert
     assert_eq!(label, "SessionQueuedSyncResolved");
@@ -213,7 +230,7 @@ fn app_event_label_names_turn_starts() {
     };
 
     // Act
-    let label = app_event_label(&event);
+    let label = AppServices::app_event_label(&event);
 
     // Assert
     assert_eq!(label, "SessionTurnStarted");
@@ -368,12 +385,24 @@ async fn cleanup_task_wait_cancels_work_after_shared_deadline() {
     });
     let cleanup_task_handles = Mutex::new(vec![task_handle]);
     started_rx.await.expect("cleanup task should start");
+    let clock = FixedClock::new(
+        time::Instant::now()
+            .into_std()
+            .checked_sub(Duration::from_secs(2))
+            .expect("past deadline"),
+        std::time::SystemTime::UNIX_EPOCH,
+    );
 
     // Act
     time::timeout(
         Duration::from_secs(1),
-        wait_for_cleanup_task_handles(&cleanup_task_handles, Duration::from_millis(25)),
+        AppServices::wait_for_cleanup_task_handles(
+            &cleanup_task_handles,
+            &clock,
+            Duration::from_secs(1),
+        ),
     )
+    .with_subscriber(TestSubscriber)
     .await
     .expect("cleanup wait should honor its shared deadline");
 
@@ -384,4 +413,181 @@ async fn cleanup_task_wait_cancels_work_after_shared_deadline() {
             .expect("cleanup task mutex should remain available")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn cleanup_wait_settles_successful_and_failed_tasks() {
+    // Arrange
+    let success = tokio::spawn(async {});
+    let failure = tokio::spawn(async {
+        drop(CleanupResource {
+            should_succeed: false,
+        });
+    });
+    let handles = Mutex::new(vec![success, failure]);
+    let clock = FixedClock::unix_epoch();
+
+    // Act
+    AppServices::wait_for_cleanup_task_handles(&handles, &clock, Duration::from_secs(1)).await;
+
+    // Assert
+    assert!(handles.lock().expect("cleanup handles").is_empty());
+}
+
+#[tokio::test]
+async fn cleanup_wait_observes_resource_failure_during_cancellation() {
+    // Arrange
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let _resource = CleanupResource {
+            should_succeed: false,
+        };
+        started_tx.send(()).expect("task readiness");
+        future::pending::<()>().await;
+    });
+    started_rx.await.expect("cleanup task started");
+    let handles = Mutex::new(vec![task]);
+    let clock = FixedClock::new(
+        time::Instant::now()
+            .into_std()
+            .checked_sub(Duration::from_secs(1))
+            .expect("past deadline"),
+        std::time::SystemTime::UNIX_EPOCH,
+    );
+
+    // Act
+    AppServices::wait_for_cleanup_task_handles(&handles, &clock, Duration::ZERO).await;
+
+    // Assert
+    assert!(handles.lock().expect("cleanup handles").is_empty());
+}
+
+#[test]
+fn background_event_labels_preserve_variant_identity() {
+    // Arrange
+    let session_id = SessionId::from("background-session");
+    let operation = ProjectSyncContext {
+        default_branch: "main".to_string(),
+        operation_id: 1,
+        project_id: 1,
+        project_name: "example".to_string(),
+    };
+    let events = [
+        AppEvent::AtMentionEntriesLoaded {
+            entries: Vec::new(),
+            session_id: session_id.clone(),
+        },
+        AppEvent::GitStatusUpdated {
+            generation: 1,
+            session_statuses: HashMap::default(),
+            status: None,
+        },
+        AppEvent::VersionAvailabilityUpdated {
+            latest_available_version: None,
+        },
+        AppEvent::AgentCliVersionsUpdated {
+            agent_clis: Vec::new(),
+        },
+        AppEvent::UpdateStatusChanged {
+            update_status: UpdateStatus::InProgress {
+                version: "1.0".to_string(),
+            },
+        },
+        AppEvent::RefreshGitStatus,
+        AppEvent::SessionProgressUpdated {
+            progress_message: None,
+            session_id,
+        },
+        AppEvent::SyncMainCompleted {
+            completion: SyncMainCompletion {
+                operation: operation.clone(),
+                result: Err(SyncSessionStartError::Other("offline".to_string())),
+                review_request_updates: Vec::new(),
+            },
+        },
+        AppEvent::SyncMainConflictResolutionStarted {
+            conflicted_files: Vec::new(),
+            operation,
+        },
+    ];
+
+    // Act / Assert
+    assert_event_labels(events);
+}
+
+#[test]
+fn session_event_labels_preserve_variant_identity() {
+    // Arrange
+    let session_id = SessionId::from("session");
+    let events = [
+        AppEvent::SessionTitleGenerationFinished {
+            generation: 1,
+            session_id: session_id.clone(),
+        },
+        AppEvent::BranchPublishActionCompleted {
+            result: Box::new(Err(BranchPublishTaskFailure {
+                is_blocked: false,
+                message: "offline".to_string(),
+                title: "Publish".to_string(),
+            })),
+            session_id: session_id.clone(),
+        },
+        AppEvent::ReviewPrepared {
+            diff_hash: 1,
+            review_text: "Review".to_string(),
+            session_id: session_id.clone(),
+        },
+        AppEvent::ReviewPreparationFailed {
+            diff_hash: 1,
+            error: "offline".to_string(),
+            session_id: session_id.clone(),
+        },
+        AppEvent::AgentResponseReceived {
+            session_id: session_id.clone(),
+            turn_applied_state: TurnAppliedState {
+                follow_up_tasks: Vec::new(),
+                questions: Vec::new(),
+                token_usage_delta: SessionStats::default(),
+            },
+        },
+        AppEvent::StackedParentTurnCompleted {
+            session_id: session_id.clone(),
+        },
+        AppEvent::StackedParentSyncCompleted {
+            session_id: session_id.clone(),
+        },
+        AppEvent::StackedParentMergeCompleted {
+            child_session_ids: vec![session_id.clone()],
+        },
+        AppEvent::SessionWorkflowNoticeUpdated {
+            notice: "Working".to_string(),
+            session_id: session_id.clone(),
+        },
+        AppEvent::PublishedBranchSyncUpdated {
+            persistent_notice: None,
+            session_id: session_id.clone(),
+            sync_operation_id: "push".to_string(),
+            sync_status: PublishedBranchSyncStatus::Succeeded,
+        },
+        AppEvent::ReviewRequestStatusUpdated {
+            generation: 1,
+            result: Err("offline".to_string()),
+            session_id,
+        },
+    ];
+    // Act / Assert
+    assert_event_labels(events);
+}
+
+fn assert_event_labels(events: impl IntoIterator<Item = AppEvent>) {
+    for event in events {
+        let debug = format!("{event:?}");
+        let expected = debug.split_whitespace().next().expect("variant identity");
+
+        // Act
+        let label = AppServices::app_event_label(&event);
+
+        // Assert
+        assert_eq!(label, expected);
+    }
 }

@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 use std::ffi::OsStr;
-#[cfg(not(test))]
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -16,9 +15,7 @@ use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Map, Value};
 use thiserror::Error;
-#[cfg(not(test))]
-use tokio::io::BufReader;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader};
 
 const READ_ONLY_SYSTEM_PROMPT: &str = concat!(
     "You are operating in a read-only repository harness. The read tool supports file, list, ",
@@ -221,7 +218,6 @@ impl ChatMode {
     }
 }
 
-#[cfg(not(test))]
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();

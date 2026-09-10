@@ -4,11 +4,6 @@ use std::cell::Cell;
 
 use ratatui::style::Color;
 
-thread_local! {
-    static ACTIVE_RENDER_SETTINGS: Cell<TextRenderSettings> =
-        const { Cell::new(TextRenderSettings::DEFAULT) };
-}
-
 /// Semantic color tokens used by markdown, mermaid, and text renderers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TextPalette {
@@ -87,17 +82,6 @@ impl Default for TextRenderSettings {
     }
 }
 
-struct RenderSettingsScope<'settings> {
-    cell: &'settings Cell<TextRenderSettings>,
-    previous_settings: TextRenderSettings,
-}
-
-impl Drop for RenderSettingsScope<'_> {
-    fn drop(&mut self) {
-        self.cell.set(self.previous_settings);
-    }
-}
-
 pub(crate) mod palette {
     use ratatui::style::Color;
 
@@ -169,6 +153,22 @@ pub(crate) fn with_render_settings<Output>(
 
 pub(crate) fn active_theme_cache_version() -> u64 {
     active_settings().cache_version
+}
+
+thread_local! {
+    static ACTIVE_RENDER_SETTINGS: Cell<TextRenderSettings> =
+        const { Cell::new(TextRenderSettings::DEFAULT) };
+}
+
+struct RenderSettingsScope<'settings> {
+    cell: &'settings Cell<TextRenderSettings>,
+    previous_settings: TextRenderSettings,
+}
+
+impl Drop for RenderSettingsScope<'_> {
+    fn drop(&mut self) {
+        self.cell.set(self.previous_settings);
+    }
 }
 
 fn active_palette() -> TextPalette {

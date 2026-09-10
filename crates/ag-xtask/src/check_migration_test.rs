@@ -1,92 +1,237 @@
-use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::{fs, io};
 
+use mockall::Sequence;
+use mockall::predicate::eq;
 use tempfile::tempdir;
 
-use crate::check_migration::{check_prefixes, find_migration_dirs};
+use crate::check_migration::{FileSystem, MigrationCheck, MockFileSystem, RealFileSystem, run};
 
-#[test]
-fn test_check_prefixes_no_duplicates() {
-    // Arrange
-    let dir = tempdir().expect("Failed to create temp dir");
-    fs::write(dir.path().join("001_create_users.sql"), "").expect("write");
-    fs::write(dir.path().join("002_create_orders.sql"), "").expect("write");
+fn directory_entries(names: &[&str]) -> Vec<PathBuf> {
+    names.iter().map(PathBuf::from).collect()
+}
 
-    // Act
-    let result = check_prefixes(dir.path());
+fn prefix_file_system(names: &[&str]) -> MockFileSystem {
+    let entries = directory_entries(names);
+    let mut file_system = MockFileSystem::new();
+    file_system
+        .expect_read_dir()
+        .with(eq(Path::new("migration")))
+        .once()
+        .return_once(move |_| Ok(entries));
 
-    // Assert
-    assert!(result.is_ok());
+    file_system
 }
 
 #[test]
-fn test_check_prefixes_with_duplicates() {
+fn unique_prefixes_ignore_non_sql_files_and_accept_empty_directories() {
     // Arrange
-    let dir = tempdir().expect("Failed to create temp dir");
-    fs::write(dir.path().join("001_create_users.sql"), "").expect("write");
-    fs::write(dir.path().join("001_create_orders.sql"), "").expect("write");
+    for names in [
+        vec![],
+        vec!["002_second.sql", "001_first.sql", "001_note.md"],
+    ] {
+        let file_system = prefix_file_system(&names);
+        let check = MigrationCheck {
+            file_system: &file_system,
+        };
 
-    // Act
-    let result = check_prefixes(dir.path());
+        // Act
+        let result = check.check_prefixes(Path::new("migration"));
 
-    // Assert
-    assert!(result.is_err());
-    let err = result.expect_err("expected duplicate prefix error");
-    assert!(err.contains("Duplicate migration prefix `001`"), "{err}");
-    assert!(err.contains("001_create_orders.sql"), "{err}");
-    assert!(err.contains("001_create_users.sql"), "{err}");
+        // Assert
+        assert_eq!(result, Ok(()));
+    }
 }
 
 #[test]
-fn test_check_prefixes_ignores_non_sql() {
+fn duplicate_prefix_errors_are_sorted_and_include_file_names() {
     // Arrange
-    let dir = tempdir().expect("Failed to create temp dir");
-    fs::write(dir.path().join("001_create_users.sql"), "").expect("write");
-    fs::write(dir.path().join("001_readme.md"), "").expect("write");
+    let file_system = prefix_file_system(&["001_z.sql", "001_a.sql", "002_other.sql"]);
+    let check = MigrationCheck {
+        file_system: &file_system,
+    };
 
     // Act
-    let result = check_prefixes(dir.path());
+    let result = check.check_prefixes(Path::new("migration"));
 
     // Assert
-    assert!(result.is_ok());
+    assert_eq!(
+        result,
+        Err("Duplicate migration prefix `001` in migration: 001_a.sql, 001_z.sql".to_string())
+    );
 }
 
 #[test]
-fn test_check_prefixes_empty_dir() {
+fn discovery_sorts_migration_directories_and_skips_missing_ones() {
     // Arrange
-    let dir = tempdir().expect("Failed to create temp dir");
+    let mut file_system = MockFileSystem::new();
+    let mut sequence = Sequence::new();
+    file_system
+        .expect_read_dir()
+        .with(eq(Path::new("crates")))
+        .once()
+        .in_sequence(&mut sequence)
+        .return_once(|_| Ok(directory_entries(&["crates/z", "crates/empty", "crates/a"])));
+    for (name, is_directory) in [("z", true), ("empty", false), ("a", true)] {
+        file_system
+            .expect_is_dir()
+            .with(eq(PathBuf::from(format!("crates/{name}/migrations"))))
+            .once()
+            .in_sequence(&mut sequence)
+            .return_once(move |_| Ok(is_directory));
+    }
+    for name in ["a", "z"] {
+        file_system
+            .expect_read_dir()
+            .with(eq(PathBuf::from(format!("crates/{name}/migrations"))))
+            .once()
+            .in_sequence(&mut sequence)
+            .return_once(|_| Ok(Vec::new()));
+    }
+    let check = MigrationCheck {
+        file_system: &file_system,
+    };
 
     // Act
-    let result = check_prefixes(dir.path());
+    let result = check.run(Path::new("crates"));
 
     // Assert
-    assert!(result.is_ok());
+    assert_eq!(result, Ok(()));
 }
 
 #[test]
-fn test_find_migration_dirs() {
+fn discovery_and_validation_report_read_failures() {
     // Arrange
-    let dir = tempdir().expect("Failed to create temp dir");
-    let crate_dir = dir.path().join("my-crate");
-    fs::create_dir_all(crate_dir.join("migrations")).expect("mkdir");
+    for is_root in [true, false] {
+        let mut file_system = MockFileSystem::new();
+        file_system
+            .expect_read_dir()
+            .once()
+            .return_once(|_| Err(io::Error::other("read failed")));
+        let check = MigrationCheck {
+            file_system: &file_system,
+        };
 
-    // Act
-    let dirs = find_migration_dirs(dir.path());
+        // Act
+        let result = if is_root {
+            check.run(Path::new("crates"))
+        } else {
+            check.check_prefixes(Path::new("crates"))
+        };
 
-    // Assert
-    assert_eq!(dirs.len(), 1);
-    assert!(dirs[0].ends_with("migrations"));
+        // Assert
+        assert_eq!(
+            result,
+            Err("Failed to read crates: read failed".to_string())
+        );
+    }
 }
 
 #[test]
-fn test_find_migration_dirs_no_migrations() {
+fn discovery_reports_metadata_failures() {
     // Arrange
-    let dir = tempdir().expect("Failed to create temp dir");
-    fs::create_dir_all(dir.path().join("my-crate/src")).expect("mkdir");
+    let mut file_system = MockFileSystem::new();
+    file_system
+        .expect_read_dir()
+        .once()
+        .return_once(|_| Ok(directory_entries(&["crates/a"])));
+    file_system
+        .expect_is_dir()
+        .once()
+        .return_once(|_| Err(io::Error::other("metadata failed")));
+    let check = MigrationCheck {
+        file_system: &file_system,
+    };
 
     // Act
-    let dirs = find_migration_dirs(dir.path());
+    let result = check.run(Path::new("crates"));
 
     // Assert
-    assert_eq!(dirs, Vec::<PathBuf>::new());
+    assert_eq!(
+        result,
+        Err("Failed to inspect crates/a/migrations: metadata failed".to_string())
+    );
+}
+
+#[test]
+fn workflow_propagates_duplicate_prefixes() {
+    // Arrange
+    let mut file_system = MockFileSystem::new();
+    file_system
+        .expect_read_dir()
+        .with(eq(Path::new("crates")))
+        .once()
+        .return_once(|_| Ok(directory_entries(&["crates/a"])));
+    file_system.expect_is_dir().once().return_once(|_| Ok(true));
+    file_system
+        .expect_read_dir()
+        .with(eq(Path::new("crates/a/migrations")))
+        .once()
+        .return_once(|_| Ok(directory_entries(&["001_first.sql", "001_second.sql"])));
+    let check = MigrationCheck {
+        file_system: &file_system,
+    };
+
+    // Act
+    let result = check.run(Path::new("crates"));
+
+    // Assert
+    assert!(
+        result
+            .expect_err("duplicate migration")
+            .contains("001_first.sql, 001_second.sql")
+    );
+}
+
+#[test]
+fn real_file_system_lists_entries_and_distinguishes_directories() {
+    // Arrange
+    let directory = tempdir().expect("temporary directory");
+    let file = directory.path().join("001_example.sql");
+    fs::write(&file, "").expect("migration file");
+    let file_system = RealFileSystem;
+
+    // Act
+    let entries = file_system
+        .read_dir(directory.path())
+        .expect("directory entries");
+    let directory_exists = file_system
+        .is_dir(directory.path())
+        .expect("directory metadata");
+    let file_is_directory = file_system.is_dir(&file).expect("file metadata");
+    let missing_is_directory = file_system
+        .is_dir(&directory.path().join("missing"))
+        .expect("missing metadata");
+    let missing_entries = file_system.read_dir(&directory.path().join("missing"));
+    let file_child_is_directory = file_system
+        .is_dir(&file.join("child"))
+        .expect("file child metadata");
+    let invalid_metadata = file_system.is_dir(&directory.path().join("x".repeat(300)));
+
+    // Assert
+    assert_eq!(entries, vec![file]);
+    assert!(directory_exists);
+    assert!(!file_is_directory);
+    assert!(!missing_is_directory);
+    assert!(!file_child_is_directory);
+    assert!(missing_entries.is_err());
+    assert!(invalid_metadata.is_err());
+}
+
+#[test]
+fn production_composition_reports_a_missing_workspace_root() {
+    // Arrange
+    // Cargo runs unit tests in the package directory, outside the workspace
+    // root.
+    assert!(!Path::new("crates").exists());
+
+    // Act
+    let result = run();
+
+    // Assert
+    assert!(
+        result
+            .expect_err("missing workspace root")
+            .starts_with("Failed to read crates:")
+    );
 }

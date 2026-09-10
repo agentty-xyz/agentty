@@ -5,75 +5,61 @@
 //!
 //! Run with: `cargo run --example journey_composition -p testty`
 
-#![allow(clippy::print_stdout)]
+use std::io::{self, Write};
 
 use testty::journey::{Journey, StartupWait};
 use testty::scenario::Scenario;
 use testty::step::Step;
 
-/// Print a one-line summary for a journey using its name, step count,
-/// and optional description so the showcase output stays compact.
-fn print_journey(journey: &Journey) {
-    println!(
-        "  Journey '{}': {} step(s) — {}",
-        journey.name,
-        journey.steps.len(),
-        journey.description.as_deref().unwrap_or("(no description)"),
-    );
+fn main() -> io::Result<()> {
+    run(&mut io::stdout().lock())
 }
 
-/// Print a one-line summary for a startup-wait preset alongside its
-/// documented `(stable_ms, timeout_ms)` pair so the example can advertise
-/// the named profiles without repeating the formatting boilerplate.
-fn print_startup_preset(label: &str, journey: &Journey, preset: StartupWait) {
-    println!(
-        "  Journey '{}': {} step(s) — {label} preset ({}ms stable / {}ms timeout)",
-        journey.name,
-        journey.steps.len(),
-        preset.stable_ms(),
-        preset.timeout_ms(),
-    );
-}
-
-fn main() {
-    println!("=== Testty Journey Composition Showcase ===\n");
+fn run(output: &mut impl Write) -> io::Result<()> {
+    writeln!(output, "=== Testty Journey Composition Showcase ===\n")?;
 
     // --- Part 1: Building reusable journeys ---
-    println!("--- Part 1: Reusable Journey Building Blocks ---\n");
+    writeln!(output, "--- Part 1: Reusable Journey Building Blocks ---\n")?;
 
     let startup = Journey::wait_for_startup_default();
-    print_startup_preset("default", &startup, StartupWait::Default);
+    print_startup_preset("default", &startup, StartupWait::Default, output)?;
 
     let startup_fast = Journey::wait_for_startup_preset(StartupWait::FastNative);
-    print_startup_preset("fast-native", &startup_fast, StartupWait::FastNative);
+    print_startup_preset(
+        "fast-native",
+        &startup_fast,
+        StartupWait::FastNative,
+        output,
+    )?;
 
     let startup_slow = Journey::wait_for_startup_preset(StartupWait::SlowNode);
-    print_startup_preset("slow-node", &startup_slow, StartupWait::SlowNode);
+    print_startup_preset("slow-node", &startup_slow, StartupWait::SlowNode, output)?;
 
     let navigate_settings = Journey::navigate_with_key("Tab", "Settings", 3000);
-    print_journey(&navigate_settings);
+    print_journey(&navigate_settings, output)?;
 
     let type_search = Journey::type_and_confirm("hello world");
-    print_journey(&type_search);
+    print_journey(&type_search, output)?;
 
     let dismiss_dialog = Journey::press_and_wait("Escape", 200);
-    print_journey(&dismiss_dialog);
+    print_journey(&dismiss_dialog, output)?;
 
     let snapshot = Journey::capture_labeled("final_state", "Application final state");
-    print_journey(&snapshot);
+    print_journey(&snapshot, output)?;
 
     // --- Part 2: Composing scenarios from journeys ---
-    println!("\n--- Part 2: Scenario Composition ---\n");
+    writeln!(output, "\n--- Part 2: Scenario Composition ---\n")?;
 
     let quick_scenario = Scenario::new("smoke_startup")
         .compose(&startup)
         .capture_labeled("launched", "App reached stable state");
 
-    println!(
+    writeln!(
+        output,
         "  Scenario '{}': {} steps",
         quick_scenario.name,
         quick_scenario.steps.len(),
-    );
+    )?;
 
     let nav_scenario = Scenario::new("settings_navigation")
         .compose(&startup)
@@ -81,11 +67,12 @@ fn main() {
         .capture_labeled("settings_visible", "Settings tab is active")
         .compose(&dismiss_dialog);
 
-    println!(
+    writeln!(
+        output,
         "  Scenario '{}': {} steps",
         nav_scenario.name,
         nav_scenario.steps.len(),
-    );
+    )?;
 
     let full_scenario = Scenario::new("full_workflow")
         .compose(&startup)
@@ -96,14 +83,15 @@ fn main() {
         .compose(&dismiss_dialog)
         .compose(&snapshot);
 
-    println!(
+    writeln!(
+        output,
         "  Scenario '{}': {} steps",
         full_scenario.name,
         full_scenario.steps.len(),
-    );
+    )?;
 
     // --- Part 3: Build a scenario from raw steps ---
-    println!("\n--- Part 3: Raw Step Building ---\n");
+    writeln!(output, "\n--- Part 3: Raw Step Building ---\n")?;
 
     let manual_scenario = Scenario::new("manual_test")
         .step(Step::wait_for_stable_frame(200, 3000))
@@ -115,11 +103,53 @@ fn main() {
             "Directory listing visible",
         ));
 
-    println!(
+    writeln!(
+        output,
         "  Scenario '{}': {} steps (built from raw steps)",
         manual_scenario.name,
         manual_scenario.steps.len(),
-    );
+    )?;
 
-    println!("\n=== Journey composition showcase complete! ===");
+    writeln!(output, "\n=== Journey composition showcase complete! ===")?;
+
+    Ok(())
 }
+
+/// Print a one-line summary for a startup-wait preset alongside its
+/// documented `(stable_ms, timeout_ms)` pair so the example can advertise
+/// the named profiles without repeating the formatting boilerplate.
+fn print_startup_preset(
+    label: &str,
+    journey: &Journey,
+    preset: StartupWait,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    writeln!(
+        output,
+        "  Journey '{}': {} step(s) — {label} preset ({}ms stable / {}ms timeout)",
+        journey.name,
+        journey.steps.len(),
+        preset.stable_ms(),
+        preset.timeout_ms(),
+    )?;
+
+    Ok(())
+}
+
+/// Print a one-line summary for a journey using its name, step count,
+/// and optional description so the showcase output stays compact.
+fn print_journey(journey: &Journey, output: &mut impl Write) -> io::Result<()> {
+    writeln!(
+        output,
+        "  Journey '{}': {} step(s) — {}",
+        journey.name,
+        journey.steps.len(),
+        journey.description.as_deref().unwrap_or("(no description)"),
+    )?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "journey_composition_test.rs"]
+mod tests;

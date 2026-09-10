@@ -132,7 +132,13 @@ Apply the same rule to filesystem discovery and path probes in `app/` and `runti
 route directory walking, `exists` checks, `canonicalize`, and file copy or persistence
 helpers through an infra boundary instead of calling `std::fs` or `Path` helpers
 directly from orchestration code. Likewise, route `Instant::now()` and
-`SystemTime::now()` through the shared `Clock` boundary.
+`SystemTime::now()` through the shared `Clock` boundary. Cleanup tasks also derive their
+shared shutdown deadline from that injected clock.
+
+Workspace migration validation injects directory listing and metadata operations.
+Deterministic tests cover discovery order, duplicate prefixes, and I/O failures;
+isolated filesystem and CLI tests cover the host adapter. Unreadable migration
+directories fail validation instead of being treated as empty.
 
 ## TUI E2E Testing Framework (`testty`)
 
