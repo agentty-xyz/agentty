@@ -1,5 +1,9 @@
 //! External-consumer coverage for the `ag-harness` model traits.
 
+#[cfg(test)]
+#[path = "support/repository.rs"]
+mod repository;
+
 use std::error::Error;
 use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
@@ -146,7 +150,7 @@ async fn external_model_reads_tool_results_and_retains_chat_history() -> Result<
             requests: Arc::clone(&requests),
         };
         let directory = tempfile::tempdir()?;
-        let repository = Repository::new(directory.path(), std::env::current_exe()?)?;
+        let repository = repository::repository_with_host_git(directory.path());
         let harness = Harness::new(model)
             .database(directory.path().join("harness.db"))
             .repository(repository)

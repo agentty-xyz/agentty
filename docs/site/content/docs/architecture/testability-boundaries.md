@@ -50,7 +50,20 @@ adapter runs a locale-stable, time-limited `ps` command between native creation-
 queries for the tracked roots. Native queries run off the async executor. Deterministic
 snapshots test process-tree attribution, same-second PID reuse, refresh throttling, and
 invalidation without host-dependent resource assertions. Isolated host tests check both
-accounting and native identity access.
+accounting and native identity access. The same adapter reads CPU temperature sensors
+through `sysinfo` on a dedicated thread, scheduling reads at most every ten seconds. It
+polls one retained worker without awaiting sensor I/O, so stalled reads cannot block
+accounting, accumulate replacement workers, or hold up Tokio shutdown. Cached readings
+remain visible during refresh but expire after twenty seconds. Channel-controlled tests
+cover stalls, recovery, and continued process accounting; worker failures retry after
+the cooldown. Pure sensor-selection tests exclude unrelated and invalid readings;
+snapshot tests verify host temperature is carried without summing it across descendants.
+The public `SessionResources` type retains only process totals. An internal temperature
+sidecar follows the same root identity and invalidation rules, and temperature-only
+changes request a redraw without changing the public accounting snapshot. Debug-build
+feature recordings pin `AGENTTY_CPU_TEMPERATURE_CELSIUS` to keep temperature text
+independent of host hardware and load; `--` pins an unavailable reading. Release builds
+do not read this override.
 
 Beyond these, narrower internal command-runner boundaries (for example
 `ForgeCommandRunner`, `GitCommandRunner`, `CompatibilityMergeRunner`,

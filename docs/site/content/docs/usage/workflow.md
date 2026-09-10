@@ -86,6 +86,13 @@ process, a retry replacement is starting, or accounting is unavailable. Detached
 processes, other Agentty instances, and Agentty's own resource use are outside these
 totals.
 
+`Host CPU temp` shows the hottest recognized CPU sensor in `°C` alongside a valid
+process sample, with sensors polled at most every ten seconds. It measures the whole
+host, including other workloads. Supported sensors include the numbered CPU die probes
+on Apple M5 Macs. Sensor support varies by hardware and operating system; unavailable
+readings display `--`. If a sensor read stalls, the previous temperature expires after
+twenty seconds; process CPU and memory updates continue independently.
+
 The top status bar shows the current version, update status, and the latest explicit
 project-sync phase. Project-sync progress temporarily takes the place of the rotating
 page-scoped `FYI:` message without changing the current page or popup.

@@ -213,22 +213,25 @@ focused-review state application and persistence run afterward. Key behaviors:
 
 The session manager schedules a bounded background process-table sample every two
 seconds through `ResourceClient`. Foreground ticks reduce completed samples into a
-session-keyed cache and bind each root to its first observed native creation identity
-(microseconds on macOS, monotonic start ticks on Linux). The sampler checks that
-identity before and after collecting accounting, discarding roots replaced during the
-sample. Missing, exited (including zombie), or changed process identities invalidate
+session-keyed cache. Host CPU temperature is polled at most every ten seconds and reused
+between sensor polls. One independent sensor worker runs at a time while process
+accounting continues. Cached temperature expires after twenty seconds if the worker
+stalls. The process samples bind each root to its first observed native creation
+identity (microseconds on macOS, monotonic start ticks on Linux). The sampler checks
+that identity before and after collecting accounting, discarding roots replaced during
+the sample. Missing, exited (including zombie), or changed process identities invalidate
 that root until the tracked PID is removed or replaced; failed samples leave the
 identity intact while showing unavailable accounting. The immutable view carries those
-totals to chat, whose resource row reserves the same height for painting and scroll
-calculations. App-server transports announce their runtime PID before each turn attempt,
-including retries and schema repair. Repair responses publish their retained PID or
-clear it after shutdown. Runtime shutdown clears accounting before releasing the PID,
-including during delayed retry startup. Every terminal turn error also clears the
-tracked PID. Cancellation signals only CLI children; app-server cancellation uses
-runtime-owned channel shutdown and never signals accounting PIDs, including during
-rebase assistance. App-server one-shot assistance receives no session PID slot, so
-auto-commit recovery preserves the retained chat runtime's accounting root. CLI
-assistance still shares the cancellation slot.
+totals and the hottest recognized host CPU temperature to chat, whose resource row
+reserves the same height for painting and scroll calculations. App-server transports
+announce their runtime PID before each turn attempt, including retries and schema
+repair. Repair responses publish their retained PID or clear it after shutdown. Runtime
+shutdown clears accounting before releasing the PID, including during delayed retry
+startup. Every terminal turn error also clears the tracked PID. Cancellation signals
+only CLI children; app-server cancellation uses runtime-owned channel shutdown and never
+signals accounting PIDs, including during rebase assistance. App-server one-shot
+assistance receives no session PID slot, so auto-commit recovery preserves the retained
+chat runtime's accounting root. CLI assistance still shares the cancellation slot.
 
 <a id="architecture-runtime-flow-session-chat"></a> The session chat panel is rendered
 by `crates/agentty/src/ui/page/session_chat.rs` and
