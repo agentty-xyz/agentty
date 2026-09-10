@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use super::*;
+use crate::prompt::{
+    TurnPrompt, TurnPromptAttachment, TurnPromptContentPart, TurnPromptTextSource,
+    split_turn_prompt_content,
+};
 
 #[test]
 /// Ensures attachment JSON accepts either object key order while

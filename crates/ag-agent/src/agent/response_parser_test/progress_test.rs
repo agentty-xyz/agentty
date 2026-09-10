@@ -1,4 +1,4 @@
-use super::*;
+use crate::agent::response_parser::compact_progress_message_from_stream_label;
 
 #[test]
 fn test_compact_progress_message_from_stream_label_maps_compaction_labels() {

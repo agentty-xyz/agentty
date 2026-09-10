@@ -1,4 +1,13 @@
-use super::*;
+use std::sync::Arc;
+
+use ag_session::{OrchestrationTaskStatus, SessionError, SessionStatus};
+use ag_store::MockOrchestrationRepository;
+use tokio::sync::mpsc;
+
+use super::support::{
+    TestSessionBackend, mock_task_snapshots, orchestration, task, with_child_observation,
+};
+use crate::coordinator::OrchestrationCoordinator;
 
 #[tokio::test]
 async fn failed_child_prompt_cancels_the_child_and_queues_a_retry() {

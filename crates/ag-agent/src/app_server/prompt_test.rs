@@ -1,8 +1,15 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::*;
-use crate::channel::LiveTranscript;
+use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
+
+use crate::agent;
+use crate::agent::InstructionDeliveryMode;
+use crate::app_server::contract::AppServerTurnRequest;
+use crate::app_server::prompt::{
+    instruction_delivery_mode_for_runtime, read_latest_replay_transcript, turn_prompt_for_runtime,
+};
+use crate::channel::{AgentRequestKind, LiveTranscript};
 use crate::model::agent::ReasoningLevel;
 
 /// Workspace root used by app-server prompt shaping tests.
@@ -37,6 +44,7 @@ fn persisted_instruction_conversation_id_for_session_turn(
 fn read_latest_replay_transcript_prefers_live_source() {
     // Arrange
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp/test"),
         live_transcript: Some(live_transcript("live content")),
         main_checkout_root: None,
@@ -64,6 +72,7 @@ fn read_latest_replay_transcript_prefers_live_source() {
 fn read_latest_replay_transcript_falls_back_when_live_source_is_empty() {
     // Arrange
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp/test"),
         live_transcript: Some(live_transcript("  ")),
         main_checkout_root: None,
@@ -91,6 +100,7 @@ fn read_latest_replay_transcript_falls_back_when_live_source_is_empty() {
 fn read_latest_replay_transcript_returns_none_when_no_replay_text() {
     // Arrange
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp/test"),
         live_transcript: None,
         main_checkout_root: None,
@@ -247,6 +257,7 @@ fn turn_prompt_for_runtime_preserves_generated_at_tokens_for_agent_data() {
 fn instruction_delivery_mode_for_runtime_reuses_matching_bootstrap_state() {
     // Arrange
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp/test"),
         live_transcript: None,
         main_checkout_root: None,

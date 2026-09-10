@@ -1,4 +1,6 @@
-use super::*;
+use std::error::Error;
+
+use crate::agent::backend::{AgentBackendError, AgentTransport};
 
 #[test]
 fn test_agent_transport_app_server_uses_app_server() {

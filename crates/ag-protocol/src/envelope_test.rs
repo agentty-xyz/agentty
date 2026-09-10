@@ -1,4 +1,10 @@
-use super::*;
+use std::path::Path;
+
+use crate::envelope::{
+    ProtocolSchemaInstructionMode, REPAIR_PARSE_ERROR_MAX_BYTES, REPAIR_PAYLOAD_MAX_BYTES,
+    build_protocol_repair_prompt, prepend_protocol_instructions, prepend_protocol_refresh_reminder,
+};
+use crate::model::ProtocolRequestProfile;
 
 /// Returns the workspace root used by envelope rendering tests.
 fn test_workspace_root() -> &'static Path {

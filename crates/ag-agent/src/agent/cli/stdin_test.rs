@@ -1,4 +1,10 @@
-use super::*;
+use std::io;
+
+use tokio::task::JoinHandle;
+
+use crate::agent::cli::stdin::{
+    await_optional_stdin_write, is_broken_pipe_error, spawn_optional_stdin_write,
+};
 
 /// Test-only error type used to verify generic error formatting.
 #[derive(Debug, PartialEq)]

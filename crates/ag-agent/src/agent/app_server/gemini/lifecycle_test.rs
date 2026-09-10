@@ -1,17 +1,31 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::v1::CLIENT_METHOD_NAMES;
+use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v1::{
+    AGENT_METHOD_NAMES, CLIENT_METHOD_NAMES, InitializeResponse, NewSessionResponse,
+};
 use mockall::Sequence;
+use serde_json::Value;
 use tempfile::tempdir;
+use tokio::sync::mpsc;
 
-use super::*;
+use crate::agent::app_server::gemini::lifecycle::{
+    bootstrap_response_timeout, bootstrap_runtime_session, initialize_runtime,
+    prompt_image_mime_type, run_turn_with_runtime, start_runtime, start_runtime_with_built_command,
+    start_session,
+};
 use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport;
+use crate::app_server::AppServerTurnRequest;
+use crate::app_server_transport;
 use crate::model::agent::{AgentModel, ReasoningLevel};
+use crate::model::permission::PermissionMode;
 use crate::model::session::SpeedMode;
 
 fn turn_request(folder: PathBuf, permission_mode: PermissionMode) -> AppServerTurnRequest {
     AppServerTurnRequest {
+        provider_call_budget: None,
         folder,
         live_transcript: None,
         main_checkout_root: None,

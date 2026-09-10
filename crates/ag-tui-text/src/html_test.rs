@@ -1,6 +1,12 @@
 use ratatui::style::Modifier;
+use ratatui::text::Line;
 
-use super::*;
+use crate::html::{
+    HTML_INPUT_TRUNCATION_NOTICE, MAX_HTML_ENTITY_BYTE_COUNT, MAX_HTML_INPUT_BYTE_COUNT,
+    MAX_HTML_TAG_BYTE_COUNT, append_line_prefix, decode_html_entity, html_to_markdown, render_html,
+    render_html_with_settings,
+};
+use crate::style::TextRenderSettings;
 
 #[test]
 fn test_render_html_normalizes_block_and_inline_markup() {

@@ -1,4 +1,6 @@
-use super::*;
+use crate::model::agent::{
+    AgentKind, AgentModel, AgentSelection, parse_persisted_session_agent_model,
+};
 
 #[test]
 /// Ensures the retirement registry maps retired ids to replacements and

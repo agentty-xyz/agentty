@@ -1,4 +1,8 @@
-use super::*;
+use ag_protocol::ProtocolRequestProfile;
+
+use crate::channel::contract::{
+    AgentRequestKind, PersonalityPrompt, PersonalityPromptUpdate, TurnContinuation,
+};
 
 #[test]
 fn test_personality_prompt_tracks_active_change_and_clear_state() {

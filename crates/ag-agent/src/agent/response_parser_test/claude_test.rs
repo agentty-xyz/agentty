@@ -1,4 +1,6 @@
-use super::*;
+use crate::agent::response_parser::{
+    parse_claude_response_with_fallback, parse_claude_stream_output_line,
+};
 
 #[test]
 fn test_claude_parse_response_reads_result_payload() {

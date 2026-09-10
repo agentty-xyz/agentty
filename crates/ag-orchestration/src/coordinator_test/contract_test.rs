@@ -1,4 +1,26 @@
-use super::*;
+use ag_protocol::AgentResponse;
+use ag_session::{
+    FocusedReviewStatus, MAX_AUTOMATED_REVIEW_ITERATIONS, OrchestrationStatus,
+    OrchestrationTaskKind, OrchestrationTaskStatus, SessionId, SessionStatus,
+};
+use ag_store::SessionOrchestrationMetadataRow;
+use askama::Template;
+
+use super::support::{
+    controller_database, focused_review_task, orchestration, persist_approved_two_task_plan,
+    research_subtask, review_applying_task, subtask, task,
+};
+use crate::coordinator::{
+    CONTROLLER_SNAPSHOT_MAX_CHARS, CONTROLLER_SNAPSHOT_TRUNCATION_SUFFIX,
+    OrchestrationChildPromptTemplate, OrchestratorControllerPromptTemplate,
+    RESEARCH_REPORT_MAX_CHARS, RESULT_SUMMARY_MAX_CHARS, active_subtask_validation_question,
+    area_compliance_evidence, area_violations, bounded_goal, bounded_research_report,
+    bounded_summary, campaign_status_message, campaign_task_evidence, child_prompt,
+    child_session_is_stopped, continuation_message, controller_campaign_snapshot, rollup_message,
+    rollup_operation_id, rollup_review_evidence, route_active_subtasks, session_metadata_from_row,
+    task_as_subtask, task_blocks_integration_approval, task_is_integration_settled,
+    touched_area_hints, validate_subtasks,
+};
 
 #[test]
 fn controller_template_renders_the_complete_campaign_contract() {

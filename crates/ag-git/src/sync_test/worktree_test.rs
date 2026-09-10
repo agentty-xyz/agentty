@@ -1,4 +1,13 @@
-use super::*;
+use std::fs;
+use std::path::Path;
+
+use tempfile::tempdir;
+
+use crate::error::GitError;
+use crate::sync::{
+    MAX_WORKTREE_FILE_BYTE_COUNT, WorktreeFileContent, copy_git_index_to_temp, read_worktree_file,
+    run_git_command_with_index_sync,
+};
 
 #[tokio::test]
 async fn read_worktree_file_returns_text_for_safe_nested_path() {

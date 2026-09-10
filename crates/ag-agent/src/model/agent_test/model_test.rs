@@ -1,4 +1,4 @@
-use super::*;
+use crate::model::agent::{AgentKind, AgentModel, AgentSelectionMetadata};
 
 #[test]
 /// Ensures model parsing is constrained to the selected provider.

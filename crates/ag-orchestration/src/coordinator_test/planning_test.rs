@@ -1,4 +1,18 @@
-use super::*;
+use ag_protocol::{
+    AgentResponse, QuestionItem, SubtaskItem, TurnPrompt, TurnPromptTextSource,
+    VerificationVerdict, VerificationVerdictItem,
+};
+use ag_session::{
+    OrchestrationStatus, OrchestrationTaskKind, OrchestrationTaskStatus, SettingName,
+};
+
+use super::support::{
+    controller_database, insert_managed_child, persist_approved_two_task_plan, research_subtask,
+    subtask,
+};
+use crate::coordinator::{
+    approve_orchestration, controller_prompt, controller_snapshot, persist_controller_plan,
+};
 
 #[tokio::test]
 async fn controller_response_without_subtasks_does_not_create_plan() {

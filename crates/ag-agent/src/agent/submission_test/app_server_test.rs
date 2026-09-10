@@ -1,4 +1,15 @@
-use super::*;
+use std::sync::{Arc, Mutex};
+
+use tempfile::tempdir;
+
+use crate::agent::submission::{
+    OneShotRequest, attempt_one_shot_app_server_repair, submit_one_shot_with_app_server_client,
+};
+use crate::app_server::{AppServerError, AppServerTurnResponse, MockAppServerClient};
+use crate::channel::AgentRequestKind;
+use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::model::permission::PermissionMode;
+use crate::model::session::SpeedMode;
 
 #[tokio::test]
 /// Verifies app-server-backed one-shot execution returns the parsed
@@ -40,6 +51,7 @@ async fn test_submit_one_shot_with_app_server_client_returns_protocol_response()
     let response = submit_one_shot_with_app_server_client(
         &app_server_client,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Codex,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
@@ -90,6 +102,7 @@ async fn test_submit_one_shot_with_app_server_client_clears_pid_after_turn_failu
     let error = submit_one_shot_with_app_server_client(
         &app_server_client,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Codex,
             child_pid: Some(Arc::clone(&child_pid)),
             folder: temp_directory.path().to_path_buf(),
@@ -141,6 +154,7 @@ async fn one_shot_app_server_repair_preserves_permissions_and_conversation() {
                 })
             });
         let request = OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Gemini,
             child_pid: None,
             folder: folder.path().to_owned(),
@@ -206,6 +220,7 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_utility_
     let error = submit_one_shot_with_app_server_client(
         &app_server_client,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Codex,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
@@ -263,6 +278,7 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_non_util
     let error = submit_one_shot_with_app_server_client(
         &app_server_client,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Codex,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),

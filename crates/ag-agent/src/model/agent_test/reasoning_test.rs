@@ -1,4 +1,4 @@
-use super::*;
+use crate::model::agent::ReasoningLevel;
 
 #[test]
 /// Ensures reasoning-level parsing accepts all supported persisted values.

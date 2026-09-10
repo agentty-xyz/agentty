@@ -1,4 +1,15 @@
-use super::*;
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+use std::path::PathBuf;
+
+use ag_protocol::TurnPromptAttachment;
+
+use crate::agent::backend::AgentBackendError;
+use crate::agent::prompt::{
+    CliPromptAccessRootMode, cli_prompt_access_directories, render_prompt_with_local_images,
+};
 
 #[test]
 /// Ensures CLI prompt rendering replaces image placeholders with local

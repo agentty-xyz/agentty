@@ -1,4 +1,15 @@
-use super::*;
+use std::ffi::OsStr;
+use std::path::Path;
+
+use serde_json::Value;
+use tempfile::tempdir;
+
+use super::support::{session_start_request_kind, settings_argument};
+use crate::agent::backend::{AgentBackend, BuildCommandRequest};
+use crate::agent::claude::{
+    CLAUDE_ALLOWED_TOOLS, CLAUDE_READ_ONLY_TOOLS, ClaudeBackend, claude_absolute_permission_path,
+};
+use crate::model::agent::ReasoningLevel;
 
 #[test]
 /// Verifies Claude permission-rule paths use slash separators for glob

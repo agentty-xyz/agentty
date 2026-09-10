@@ -1,4 +1,18 @@
-use super::*;
+use std::sync::Arc;
+use std::time::Duration;
+
+use ag_protocol::TurnPrompt;
+use tempfile::tempdir;
+use tokio::sync::mpsc;
+
+use super::support::make_turn_request;
+use crate::agent::{AgentBackend, BuildCommandRequest, MockAgentBackend};
+use crate::channel::cli::{
+    CliAgentChannel, execute_cli_repair_command, execute_cli_repair_turn,
+    parse_or_repair_cli_response,
+};
+use crate::channel::contract::{AgentChannel, AgentRequestKind, TurnEvent};
+use crate::model::agent::{AgentKind, ReasoningLevel};
 
 #[tokio::test]
 async fn test_parse_or_repair_cli_response_reports_repair_transport_failure() {

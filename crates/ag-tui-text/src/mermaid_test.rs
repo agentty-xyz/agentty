@@ -1,6 +1,13 @@
 use std::fmt::Write;
+use std::sync::Arc;
 
-use super::*;
+use crate::mermaid::{
+    MAX_EDGE_COUNT, MAX_LABEL_WIDTH, MAX_NODE_COUNT, MAX_SOURCE_BYTE_COUNT, MAX_SOURCE_LINE_COUNT,
+    MermaidDiagram, PARSED_MERMAID_CACHE, PARSED_MERMAID_CACHE_ENTRY_LIMIT, parsed_mermaid,
+    render_mermaid, render_mermaid_for_width, render_mermaid_with_settings,
+};
+use crate::style;
+use crate::style::TextRenderSettings;
 
 fn diagram_text(diagram: &MermaidDiagram) -> String {
     diagram

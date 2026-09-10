@@ -1,7 +1,16 @@
 use std::path::PathBuf;
 
-use super::*;
-use crate::model::agent::AgentModel;
+use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
+use tokio::sync::mpsc;
+
+use crate::agent::app_server::client::{RuntimeClientProvider, RuntimeClientRuntime};
+use crate::agent::app_server::gemini::client::{GeminiRuntimeProvider, GeminiSessionRuntime};
+use crate::agent::app_server::gemini::lifecycle::GeminiRuntimeState;
+use crate::agent::app_server::stdio_transport::AppServerStdioTransport;
+use crate::app_server::{AppServerError, AppServerTurnRequest};
+use crate::app_server_transport;
+use crate::model::agent::{AgentModel, ReasoningLevel};
+use crate::model::session::SpeedMode;
 
 /// Builds one Gemini session runtime whose stdin is already closed so turn
 /// writes fail deterministically without a live ACP process.
@@ -35,6 +44,7 @@ async fn runtime_reuse_requires_matching_permission_mode() {
     // Arrange
     let mut runtime = build_stopped_session_runtime();
     let mut request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: runtime.state.folder.clone(),
         live_transcript: None,
         main_checkout_root: None,

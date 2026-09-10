@@ -1,4 +1,4 @@
-use super::*;
+use crate::model::session::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};
 
 #[test]
 fn response_style_round_trips_persisted_values() {

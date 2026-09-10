@@ -1,4 +1,12 @@
-use super::*;
+use std::sync::Arc;
+
+use tokio::sync::mpsc;
+
+use super::support::{make_ok_response, make_turn_request};
+use crate::app_server::{AppServerStreamEvent, MockAppServerClient};
+use crate::channel::app_server::AppServerAgentChannel;
+use crate::channel::contract::{AgentChannel, TurnEvent};
+use crate::model::agent::AgentKind;
 
 #[tokio::test]
 /// Verifies non-thought assistant deltas are withheld from the unified

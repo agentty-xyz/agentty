@@ -1,4 +1,21 @@
-use super::*;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
+
+use super::support::{
+    TestRuntime, live_transcript, session_resume_request_kind, session_start_request_kind,
+};
+use crate::agent::replay::ReplayContext;
+use crate::app_server::contract::AppServerTurnRequest;
+use crate::app_server::error::AppServerError;
+use crate::app_server::registry::AppServerSessionRegistry;
+use crate::app_server::retry::{
+    RuntimeInspector, build_attempt_prompt, finish_prompt_preparation, run_turn_with_restart_retry,
+};
+use crate::channel::AgentRequestKind;
+use crate::model::agent::ReasoningLevel;
 
 #[tokio::test]
 async fn replay_attempt_owns_archive_and_stops_runtime_on_archive_error() {
@@ -9,6 +26,7 @@ async fn replay_attempt_owns_archive_and_stops_runtime_on_archive_error() {
         model: "model-a".into(),
     };
     let mut request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: folder.path().to_owned(),
         live_transcript: None,
         main_checkout_root: None,
@@ -102,6 +120,7 @@ async fn run_turn_with_restart_retry_uses_live_output_on_retry() {
     // Arrange
     let sessions = AppServerSessionRegistry::new("Test");
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: Some(live_transcript("streamed before crash")),
         main_checkout_root: Some(PathBuf::from("/tmp/project")),
@@ -184,6 +203,7 @@ async fn successful_turn_shuts_down_runtime_when_retention_is_disabled() {
     // Arrange
     let sessions = AppServerSessionRegistry::new("Test");
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: None,
         main_checkout_root: None,
@@ -255,6 +275,7 @@ async fn run_turn_with_restart_retry_restarts_once_after_first_failure() {
     let history = "previous transcript".repeat(4096);
     let archives = Arc::new(Mutex::new(Vec::new()));
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: folder.path().to_owned(),
         live_transcript: None,
         main_checkout_root: None,
@@ -289,7 +310,6 @@ async fn run_turn_with_restart_retry_restarts_once_after_first_failure() {
         {
             let start_count = Arc::clone(&start_count);
             move |request: &AppServerTurnRequest| {
-                let start_count = Arc::clone(&start_count);
                 let model = request.model.clone();
                 assert!(
                     std::fs::read_dir(&request.folder)
@@ -298,11 +318,9 @@ async fn run_turn_with_restart_retry_restarts_once_after_first_failure() {
                         .is_none()
                 );
 
-                Box::pin(async move {
-                    start_count.fetch_add(1, Ordering::SeqCst);
+                start_count.fetch_add(1, Ordering::SeqCst);
 
-                    Ok(TestRuntime { model })
-                })
+                Box::pin(async move { Ok(TestRuntime { model }) })
             }
         },
         {
@@ -366,6 +384,7 @@ async fn run_turn_with_restart_retry_shutdown_signal_interrupts_in_flight_runtim
     // Arrange
     let sessions = AppServerSessionRegistry::new("Test");
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: None,
         main_checkout_root: None,
@@ -443,6 +462,7 @@ async fn run_turn_with_restart_retry_skips_replay_when_runtime_restores_context(
     // Arrange
     let sessions = AppServerSessionRegistry::new("Test");
     let request = AppServerTurnRequest {
+        provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: None,
         main_checkout_root: None,
@@ -512,4 +532,114 @@ async fn run_turn_with_restart_retry_skips_replay_when_runtime_restores_context(
     assert!(captured_prompt.contains("repository-root-relative POSIX paths"));
     assert!(captured_prompt.ends_with("Do work"));
     assert!(!captured_prompt.contains("previous transcript"));
+}
+
+#[tokio::test]
+async fn size_rejections_shutdown_without_restarting() {
+    // Arrange
+    for diagnostic in [
+        "Input exceeds the maximum length of 1048576 characters.",
+        "contextWindowExceeded",
+        "context_window_exceeded",
+        "context window exceeded",
+        "Maximum context length is 8192",
+        "Prompt is too long",
+    ] {
+        let sessions = AppServerSessionRegistry::new("Test");
+        let request = AppServerTurnRequest {
+            provider_call_budget: None,
+            folder: PathBuf::from("."),
+            live_transcript: None,
+            main_checkout_root: None,
+            model: "test".into(),
+            permission_mode: crate::PermissionMode::ReadOnly,
+            personality: crate::channel::PersonalityPrompt::default(),
+            prompt: "input".into(),
+            request_kind: AgentRequestKind::UtilityPrompt,
+            replay_transcript: None,
+            provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
+            reasoning_level: ReasoningLevel::default(),
+            session_id: "size-error".into(),
+            speed_mode: crate::SpeedMode::default(),
+        };
+        let starts = AtomicUsize::new(0);
+        let shutdowns = AtomicUsize::new(0);
+
+        // Act
+        let result = run_turn_with_restart_retry(
+            &sessions,
+            request,
+            RuntimeInspector {
+                matches_request: |_: &TestRuntime, _| true,
+                pid: |_| None,
+                provider_conversation_id: |_| None,
+                retain_runtime_after_turn: false,
+                restored_context: |_| false,
+            },
+            ProtocolSchemaInstructionMode::PromptSchema,
+            |_| {
+                starts.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Ok(TestRuntime {
+                        model: "test".into(),
+                    })
+                })
+            },
+            |_, _| Box::pin(async move { Err(AppServerError::Provider(diagnostic.into())) }),
+            |_| {
+                shutdowns.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {})
+            },
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            result.expect_err("operation should fail").to_string(),
+            diagnostic
+        );
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn rendering_failure_shuts_down_runtime_and_removes_replay_archive() {
+    // Arrange
+    let folder = tempfile::tempdir().expect("workspace");
+    let replay = ReplayContext::prepare(folder.path().to_owned(), Some("history".repeat(8192)))
+        .await
+        .expect("archive");
+    assert!(
+        std::fs::read_dir(folder.path())
+            .expect("archives")
+            .next()
+            .is_some()
+    );
+    let mut runtime = TestRuntime {
+        model: "running".into(),
+    };
+    let mut shutdown = TestRuntime::shutdown;
+
+    // Act
+    let result = finish_prompt_preparation(
+        Err(AppServerError::PromptRender("renderer failed".into())),
+        replay,
+        &mut shutdown,
+        &mut runtime,
+    )
+    .await;
+
+    // Assert
+    assert!(
+        matches!(result, Err(AppServerError::PromptRender(message)) if message == "renderer failed")
+    );
+    assert_eq!(runtime.model, "stopped");
+    assert!(
+        std::fs::read_dir(folder.path())
+            .expect("archives")
+            .next()
+            .is_none()
+    );
 }

@@ -1,4 +1,20 @@
-use super::*;
+use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use tempfile::tempdir;
+
+use super::support::{mock_shell_command, stdin_capture_shell_command};
+use crate::agent::MockAgentBackend;
+use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver};
+use crate::agent::submission::{
+    OneShotCliObserver, OneShotRequest, format_one_shot_execution_error,
+    submit_one_shot_with_backend,
+};
+use crate::channel::AgentRequestKind;
+use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::model::permission::PermissionMode;
+use crate::model::session::SpeedMode;
 
 #[test]
 fn test_format_one_shot_execution_error_preserves_build_context() {
@@ -67,6 +83,7 @@ async fn test_submit_one_shot_with_backend_reports_signal_interruption() {
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Codex,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
@@ -110,6 +127,7 @@ async fn test_submit_one_shot_with_backend_returns_protocol_response() {
     let response = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Claude,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
@@ -157,6 +175,7 @@ async fn test_submit_one_shot_with_backend_writes_large_stdin_concurrently() {
         submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: AgentKind::Claude,
                 child_pid: None,
                 folder: temp_directory.path().to_path_buf(),
@@ -195,6 +214,7 @@ async fn test_submit_one_shot_with_backend_writes_prompt_to_stdin() {
     let response = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Claude,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
@@ -238,6 +258,7 @@ async fn test_submit_one_shot_with_backend_preserves_exit_error_after_broken_pip
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Claude,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
@@ -280,6 +301,7 @@ async fn test_submit_one_shot_with_backend_surfaces_claude_auth_guidance() {
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Claude,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),

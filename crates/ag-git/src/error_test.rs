@@ -1,4 +1,6 @@
-use super::*;
+use std::time::Duration;
+
+use crate::error::GitError;
 
 #[test]
 fn index_lock_classification_requires_a_matching_command_failure() {

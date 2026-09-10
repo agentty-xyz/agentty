@@ -1,4 +1,9 @@
-use super::*;
+use crate::model::agent::{
+    AgentKind, AgentModel, AgentSelection, resolve_agent_selection_for_model,
+    resolve_model_for_available_agent_kinds, resolve_prompt_model_agent_kind,
+    selectable_models_for_agent_kinds,
+};
+use crate::model::session::SpeedMode;
 
 #[test]
 /// Ensures Fast compatibility is exact and selects required fallback

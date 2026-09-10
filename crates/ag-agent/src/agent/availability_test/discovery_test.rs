@@ -1,4 +1,11 @@
-use super::*;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::{env, fs};
+
+use tempfile::tempdir;
+
+use crate::agent::availability::{available_agent_kinds_from_path, executable_name};
+use crate::model::agent::AgentKind;
 
 #[test]
 /// Ensures executable names stay aligned with provider command names.

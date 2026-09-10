@@ -1,4 +1,10 @@
-use super::*;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::process::{Command, Output};
+
+use crate::repo::AsyncGitCommandOutput;
 
 /// Builds captured asynchronous git output for command-runner tests.
 pub(super) fn async_git_output(

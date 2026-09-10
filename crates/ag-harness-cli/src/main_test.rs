@@ -1,13 +1,23 @@
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{env, io};
 
+use ag_harness::{Harness, ModelConfigurationError, ModelProvider, Repository, Tool};
 use async_trait::async_trait;
-use serde_json::json;
+use clap::Parser;
+use serde_json::{Value, json};
+use tokio::io::BufReader;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::*;
+use crate::{
+    ChatMode, Cli, CliError, Command, READ_WRITE_SYSTEM_PROMPT, ResumeArgs, RunArgs,
+    assistant_text, chat_schema, database_path, execute, format_duration, format_usage,
+    report_exit, repository_from_path, repository_or_default, run_chat, single_line_terminal_text,
+    stored_model_identity_parts, terminal_text, trim_line_ending,
+};
 
 struct FixedModel(Value);
 

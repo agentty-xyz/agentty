@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::*;
+use crate::agent::app_server::gemini::usage::extract_prompt_result_text;
 
 #[test]
 fn prompt_result_text_flattens_nested_content_parts() {

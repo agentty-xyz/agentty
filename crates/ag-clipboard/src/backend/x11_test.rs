@@ -1,16 +1,25 @@
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::thread;
+use std::time::{Duration, Instant};
 
+use rustix::event;
+use rustix::event::Timespec;
+use x11rb::NONE;
 use x11rb::protocol::xproto::{
-    CONVERT_SELECTION_REQUEST, DELETE_PROPERTY_REQUEST, GET_PROPERTY_REQUEST,
-    PROPERTY_NOTIFY_EVENT, PropertyNotifyEvent, SELECTION_NOTIFY_EVENT, Screen,
-    SelectionNotifyEvent, Setup,
+    Atom, CONVERT_SELECTION_REQUEST, DELETE_PROPERTY_REQUEST, GET_PROPERTY_REQUEST,
+    GetPropertyReply, PROPERTY_NOTIFY_EVENT, Property, PropertyNotifyEvent, SELECTION_NOTIFY_EVENT,
+    Screen, SelectionNotifyEvent, Setup,
 };
-use x11rb::rust_connection::DefaultStream;
+use x11rb::rust_connection::{DefaultStream, RustConnection};
 use x11rb::x11_utils::Serialize;
 
-use super::*;
+use crate::backend::contract::ClipboardBackend;
+use crate::backend::x11::{
+    AtomCollection, INCR_RESERVATION_BYTE_CAP, INCR_SEGMENT_TIMEOUT, IncrTransfer,
+    MAX_CLIPBOARD_BYTE_COUNT, X11Clipboard, checked_clipboard_byte_count,
+};
+use crate::error::ClipboardError;
 
 const MAX_CLIPBOARD_BYTE_COUNT_U32: u32 = 64 * 1024 * 1024;
 const TEST_WINDOW_ID: u32 = 42;

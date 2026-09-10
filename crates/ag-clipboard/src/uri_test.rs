@@ -1,4 +1,6 @@
-use super::*;
+use std::path::PathBuf;
+
+use crate::uri::{path_from_file_url_text, paths_from_uri_list};
 
 #[test]
 fn test_paths_from_uri_list_ignores_comments_and_decodes_file_paths() {

@@ -1,4 +1,18 @@
-use super::*;
+use std::process::Command;
+use std::sync::Arc;
+
+use tempfile::tempdir;
+
+use super::support::mock_shell_command;
+use crate::agent::MockAgentBackend;
+use crate::agent::submission::{
+    OneShotRequest, attempt_one_shot_app_server_repair, submit_one_shot_with_backend,
+};
+use crate::app_server::MockAppServerClient;
+use crate::channel::AgentRequestKind;
+use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::model::permission::PermissionMode;
+use crate::model::session::SpeedMode;
 
 #[tokio::test]
 async fn oversized_one_shot_responses_do_not_launch_repair() {
@@ -16,6 +30,7 @@ async fn oversized_one_shot_responses_do_not_launch_repair() {
     });
     let client = MockAppServerClient::new();
     let request = OneShotRequest {
+        provider_call_budget: None,
         agent_kind: AgentKind::Claude,
         child_pid: None,
         folder: folder.path().to_owned(),
@@ -70,6 +85,7 @@ async fn test_submit_one_shot_with_backend_rejects_plain_text_utility_output() {
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Codex,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
@@ -118,6 +134,7 @@ async fn test_submit_one_shot_with_backend_rejects_wrapped_plain_text_utility_ou
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Claude,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
@@ -171,6 +188,7 @@ async fn test_submit_one_shot_with_backend_recovers_wrapped_protocol_output() {
     let response = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Claude,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
@@ -223,6 +241,7 @@ async fn test_submit_one_shot_with_backend_recovers_via_protocol_repair() {
     let response = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Codex,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
@@ -288,6 +307,7 @@ async fn focused_review_repairs_trailing_text_with_direct_review_schema() {
     let response = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Claude,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
@@ -329,6 +349,7 @@ async fn test_submit_one_shot_with_backend_rejects_blank_utility_output() {
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            provider_call_budget: None,
             agent_kind: AgentKind::Codex,
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),

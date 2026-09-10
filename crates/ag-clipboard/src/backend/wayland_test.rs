@@ -1,8 +1,14 @@
+use std::path::PathBuf;
+
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use mockall::predicate;
 
-use super::*;
+use crate::backend::contract::ClipboardBackend;
+use crate::backend::wayland::{
+    MockWaylandCommandRunner, WL_PASTE_LIST_TYPES_ARGS, WaylandClipboard, WaylandCommandOutput,
+};
+use crate::error::ClipboardError;
 
 #[test]
 fn test_run_successful_reports_backend_failure_for_unsuccessful_command() {

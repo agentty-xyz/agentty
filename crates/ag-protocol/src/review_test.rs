@@ -1,4 +1,4 @@
-use super::*;
+use crate::review::{FocusedReview, FocusedReviewSeverity, FocusedReviewSuggestion};
 
 #[test]
 fn focused_review_formats_structured_fields_as_markdown() {

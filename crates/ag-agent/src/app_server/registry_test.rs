@@ -1,4 +1,4 @@
-use super::*;
+use crate::app_server::registry::AppServerSessionRegistry;
 
 #[test]
 fn new_returns_registry_with_provider_name() {

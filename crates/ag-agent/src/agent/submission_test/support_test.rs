@@ -1,4 +1,5 @@
-use super::*;
+use std::path::Path;
+use std::process::Command;
 
 /// Builds one shell command that emits controlled stdout/stderr and exits.
 pub(super) fn mock_shell_command(stdout: &str, stderr: &str, exit_code: i32) -> Command {

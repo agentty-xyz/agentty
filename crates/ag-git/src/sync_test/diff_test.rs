@@ -1,4 +1,15 @@
-use super::*;
+use std::fs;
+use std::path::PathBuf;
+
+use tempfile::tempdir;
+
+use super::support::{git_command_output, run_git_command, setup_test_git_repo};
+use crate::error::GitError;
+use crate::sync::{
+    classify_diff_repository_error, delete_branch, diff, diff_changed_files,
+    diff_output_after_index_resolution, diff_repository_probe_is_unavailable,
+    resolve_diff_index_path,
+};
 
 #[tokio::test]
 async fn delete_branch_removes_branch_from_isolated_repository() {
