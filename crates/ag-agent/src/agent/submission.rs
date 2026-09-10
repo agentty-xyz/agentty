@@ -47,10 +47,10 @@ pub struct OneShotRequest {
     /// Optional shared limit, charged for every provider turn including
     /// repairs.
     pub provider_call_budget: Option<crate::ProviderCallBudget>,
-    /// Canonical request kind for this isolated prompt.
-    pub request_kind: AgentRequestKind,
     /// Reasoning effort preference for the one-shot prompt.
     pub reasoning_level: ReasoningLevel,
+    /// Canonical request kind for this isolated prompt.
+    pub request_kind: AgentRequestKind,
     /// Response-speed preference for the one-shot prompt.
     pub speed_mode: SpeedMode,
 }

@@ -504,12 +504,12 @@ pub(super) struct CodexTurnEventLoopInput<'a> {
     pub(super) folder: &'a Path,
     /// Model id requested for the turn.
     pub(super) model: &'a str,
+    /// Provider permission policy enforced for this turn.
+    pub(super) permission_mode: PermissionMode,
     /// Prompt payload sent to the runtime.
     pub(super) prompt: TurnPrompt,
     /// Structured response contract enforced for this turn.
     pub(super) protocol_profile: ProtocolRequestProfile,
-    /// Provider permission policy enforced for this turn.
-    pub(super) permission_mode: PermissionMode,
     /// Reasoning level sent to the runtime.
     pub(super) reasoning_level: ReasoningLevel,
     /// Response-speed preference sent to Codex.
