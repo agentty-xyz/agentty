@@ -30,3 +30,7 @@ pub mod step;
 pub mod vhs;
 
 pub(crate) mod renderer;
+
+#[cfg(test)]
+#[path = "support_test.rs"]
+mod test_support;

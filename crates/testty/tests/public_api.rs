@@ -16,16 +16,14 @@
 //!   `#[non_exhaustive]` lock-down does not regress to struct-literal syntax in
 //!   downstream code.
 
-#![allow(unused_imports)]
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use testty::assertion::{self, AssertionFailure, Expected, MatchResult, SoftAssertions};
 use testty::feature::{
-    self, FeatureDemo, FeatureMeta, FeatureResult, GifMode, GifStatus, Redaction,
-    compute_frame_hash, compute_gif_hash, hash_sidecar_path,
+    FeatureDemo, FeatureMeta, FeatureResult, GifMode, GifStatus, Redaction, compute_frame_hash,
+    compute_gif_hash, hash_sidecar_path,
 };
 use testty::frame::{CellColor, CellStyle, TerminalFrame};
 use testty::journey::{Journey, StartupWait};
@@ -68,6 +66,16 @@ type LoweredRunResult = Result<(TerminalFrame, Vec<AssertionFailure>), PtySessio
 fn public_surface_is_stable() {
     // Arrange, Act, Assert: compile-time references exercise the documented
     // per-module public API.
+    let _: fn(&GifStatus) -> &'static str = gif_status_destructuring_is_stable;
+    let _: fn(&Step) -> &'static str = step_eventually_destructuring_is_stable;
+    let _: fn(&ProofError) -> &'static str = proof_error_destructuring_is_stable;
+    let _: fn(&AssertionFailure) -> &'static str = assertion_failure_destructuring_is_stable;
+    let _: fn(&AssertionResult) = assertion_result_destructuring_is_stable;
+    let _: fn(&SnapshotError) -> &'static str = snapshot_error_destructuring_is_stable;
+    let _: fn(&StepSpec) -> &'static str = step_spec_destructuring_is_stable;
+    let _: fn(&ExpectSpec) -> &'static str = expect_spec_destructuring_is_stable;
+    let _: fn(&SpecError) -> &'static str = spec_error_destructuring_is_stable;
+
     let _: Region = Region::new(0, 0, 1, 1);
     let _: CellColor = CellColor::new(0, 0, 0);
     let _: CellStyle = CellStyle::default();
@@ -242,7 +250,6 @@ fn auxiliary_surface_is_stable() {
 /// Downstream callers must include a fallback `_` arm and any field
 /// destructuring must use the `..` rest-pattern. Compiled (not run) so
 /// accidental renames break the build before publication.
-#[allow(dead_code)]
 fn gif_status_destructuring_is_stable(status: &GifStatus) -> &'static str {
     match status {
         GifStatus::Generated(path) => {
@@ -288,7 +295,6 @@ fn gif_status_destructuring_is_stable(status: &GifStatus) -> &'static str {
 /// non-breaking. The function is compiled (not run) so accidental
 /// renames of the field names or the variant fail the build before
 /// publication.
-#[allow(dead_code)]
 fn step_eventually_destructuring_is_stable(step: &Step) -> &'static str {
     match step {
         Step::Eventually {
@@ -311,7 +317,6 @@ fn step_eventually_destructuring_is_stable(step: &Step) -> &'static str {
 /// Downstream callers that match on it must include a fallback `_` arm. This
 /// function is compiled (not run) so accidental renames of the documented
 /// variants fail the build before publication.
-#[allow(dead_code)]
 fn proof_error_destructuring_is_stable(error: &ProofError) -> &'static str {
     match error {
         ProofError::Io(_err) => "io",
@@ -363,7 +368,6 @@ fn public_struct_literals_are_stable() {
 /// publication. The bound values are referenced in each arm so clippy
 /// keeps the compatibility check explicit instead of collapsing the named
 /// fields into the trailing `..`.
-#[allow(dead_code)]
 fn assertion_failure_destructuring_is_stable(failure: &AssertionFailure) -> &'static str {
     let AssertionFailure {
         message,
@@ -425,7 +429,6 @@ fn assertion_failure_destructuring_is_stable(failure: &AssertionFailure) -> &'st
 /// of destructured field names fail the build before publication. The
 /// bound values are referenced after the destructure so clippy keeps the
 /// compatibility check explicit.
-#[allow(dead_code)]
 fn assertion_result_destructuring_is_stable(result: &AssertionResult) {
     let AssertionResult {
         passed,
@@ -445,7 +448,6 @@ fn assertion_result_destructuring_is_stable(result: &AssertionResult) {
 /// the build before publication. The bound values are referenced in each
 /// arm so clippy keeps the compatibility check explicit instead of
 /// collapsing the named fields into the trailing `..`.
-#[allow(dead_code)]
 fn snapshot_error_destructuring_is_stable(error: &SnapshotError) -> &'static str {
     match error {
         SnapshotError::MissingBaseline {
@@ -492,7 +494,6 @@ fn snapshot_error_destructuring_is_stable(error: &SnapshotError) -> &'static str
 /// long as external matchers keep a fallback `_` arm; struct-variant fields use
 /// a trailing `..`. Compiled (not run) so a rename of a documented variant or
 /// field fails the build before publication.
-#[allow(dead_code)]
 fn step_spec_destructuring_is_stable(step: &StepSpec) -> &'static str {
     match step {
         StepSpec::PressKey(key) => {
@@ -551,7 +552,6 @@ fn step_spec_destructuring_is_stable(step: &StepSpec) -> &'static str {
 /// Lock the supported pattern for matching `ExpectSpec`.
 ///
 /// `ExpectSpec` is `#[non_exhaustive]`; external matchers keep a `_` arm.
-#[allow(dead_code)]
 fn expect_spec_destructuring_is_stable(expect: &ExpectSpec) -> &'static str {
     match expect {
         ExpectSpec::SelectedTab(_) => "selected_tab",
@@ -574,7 +574,6 @@ fn expect_spec_destructuring_is_stable(expect: &ExpectSpec) -> &'static str {
 /// Lock the supported pattern for matching `SpecError`.
 ///
 /// `SpecError` is `#[non_exhaustive]`; external callers keep a `_` arm.
-#[allow(dead_code)]
 fn spec_error_destructuring_is_stable(error: &SpecError) -> &'static str {
     match error {
         SpecError::Io(_) => "io",

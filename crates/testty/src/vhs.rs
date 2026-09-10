@@ -23,32 +23,18 @@ const MAX_VHS_RETRIES: u8 = 3;
 /// showcase recordings.
 #[derive(Debug, Clone)]
 pub struct VhsTapeSettings {
-    /// Terminal width in pixels.
-    pub width: u16,
-    /// Terminal height in pixels.
-    pub height: u16,
     /// Font size in points.
     pub font_size: u16,
-    /// VHS theme name (e.g. `"OneDark"`, `"Dracula"`).
-    pub theme: String,
     /// GIF framerate in frames per second.
     pub framerate: u16,
+    /// Terminal height in pixels.
+    pub height: u16,
     /// Terminal padding in pixels.
     pub padding: u16,
-}
-
-impl Default for VhsTapeSettings {
-    /// Return compact settings matching the legacy VHS tape defaults.
-    fn default() -> Self {
-        Self {
-            width: 1200,
-            height: 600,
-            font_size: 14,
-            theme: String::new(),
-            framerate: 0,
-            padding: 0,
-        }
-    }
+    /// VHS theme name (e.g. `"OneDark"`, `"Dracula"`).
+    pub theme: String,
+    /// Terminal width in pixels.
+    pub width: u16,
 }
 
 impl VhsTapeSettings {
@@ -63,6 +49,20 @@ impl VhsTapeSettings {
             font_size: 18,
             theme: "OneDark".to_string(),
             framerate: 30,
+            padding: 0,
+        }
+    }
+}
+
+impl Default for VhsTapeSettings {
+    /// Return compact settings matching the legacy VHS tape defaults.
+    fn default() -> Self {
+        Self {
+            width: 1200,
+            height: 600,
+            font_size: 14,
+            theme: String::new(),
+            framerate: 0,
             padding: 0,
         }
     }
@@ -240,6 +240,20 @@ pub enum VhsError {
     /// I/O error writing or reading files.
     #[error("I/O error: {0}")]
     IoError(String),
+}
+
+/// Verify that VHS is installed and available on `PATH`.
+///
+/// # Errors
+///
+/// Returns [`VhsError::NotInstalled`] when `vhs --version` cannot be
+/// executed (binary missing or not on `PATH`).
+pub fn check_vhs_installed() -> Result<(), VhsError> {
+    Command::new("vhs").arg("--version").output().map_err(|_| {
+        VhsError::NotInstalled("VHS is not installed. Install with: brew install vhs".to_string())
+    })?;
+
+    Ok(())
 }
 
 /// Compile a scenario into VHS tape syntax.
@@ -474,483 +488,6 @@ fn escape_vhs_regex(value: &str) -> String {
     escaped
 }
 
-/// Verify that VHS is installed and available on `PATH`.
-///
-/// # Errors
-///
-/// Returns [`VhsError::NotInstalled`] when `vhs --version` cannot be
-/// executed (binary missing or not on `PATH`).
-pub fn check_vhs_installed() -> Result<(), VhsError> {
-    Command::new("vhs").arg("--version").output().map_err(|_| {
-        VhsError::NotInstalled("VHS is not installed. Install with: brew install vhs".to_string())
-    })?;
-
-    Ok(())
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn compile_tape_includes_header_settings() {
-        // Arrange
-        let scenario = Scenario::new("test").sleep_ms(100).capture();
-        let settings = VhsTapeSettings::default();
-
-        // Act
-        let tape = compile_tape(
-            &scenario,
-            Path::new("/usr/bin/echo"),
-            Path::new("/tmp/shot.gif"),
-            Path::new("/tmp/shot.png"),
-            &[],
-            &settings,
-        );
-
-        // Assert
-        assert!(tape.contains("Set Shell \"bash\""));
-        assert!(tape.contains(&format!("Set FontSize {}", settings.font_size)));
-        assert!(tape.contains(&format!("Set Width {}", settings.width)));
-        assert!(tape.contains("Set Padding 0"));
-    }
-
-    #[test]
-    fn compile_tape_includes_env_vars() {
-        // Arrange
-        let scenario = Scenario::new("test").capture();
-
-        // Act
-        let tape = compile_tape(
-            &scenario,
-            Path::new("/usr/bin/echo"),
-            Path::new("/tmp/shot.gif"),
-            Path::new("/tmp/shot.png"),
-            &[("AGENTTY_ROOT", "/tmp/root")],
-            &VhsTapeSettings::default(),
-        );
-
-        // Assert
-        assert!(tape.contains("export AGENTTY_ROOT='/tmp/root'"));
-    }
-
-    #[test]
-    fn compile_tape_includes_screenshot() {
-        // Arrange
-        let scenario = Scenario::new("test").capture();
-
-        // Act
-        let tape = compile_tape(
-            &scenario,
-            Path::new("/usr/bin/echo"),
-            Path::new("/tmp/shot.gif"),
-            Path::new("/tmp/shot.png"),
-            &[],
-            &VhsTapeSettings::default(),
-        );
-
-        // Assert
-        assert!(tape.contains("Screenshot \"/tmp/shot.png\""));
-    }
-
-    #[test]
-    fn key_to_vhs_command_maps_common_keys() {
-        // Arrange / Act / Assert
-        assert_eq!(key_to_vhs_command("Enter"), "Enter");
-        assert_eq!(key_to_vhs_command("tab"), "Tab");
-        assert_eq!(key_to_vhs_command("BackTab"), "Shift+Tab");
-        assert_eq!(key_to_vhs_command("shift+tab"), "Shift+Tab");
-        assert_eq!(key_to_vhs_command("escape"), "Escape");
-        assert_eq!(key_to_vhs_command("up"), "Up");
-        assert_eq!(key_to_vhs_command("ctrl+c"), "Ctrl+C");
-    }
-
-    #[test]
-    fn compile_step_wait_for_text_emits_wait_screen_with_regex() {
-        // Arrange
-        let step = Step::wait_for_text("Loading", 5000);
-        let mut tape = String::new();
-
-        // Act
-        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
-
-        // Assert
-        assert!(tape.contains("Wait+Screen@5s /Loading/"));
-    }
-
-    #[test]
-    fn compile_step_wait_for_text_formats_fractional_timeout_as_milliseconds() {
-        // Arrange
-        let step = Step::wait_for_text("Startup", 1500);
-        let mut tape = String::new();
-
-        // Act
-        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
-
-        // Assert
-        assert!(tape.contains("Wait+Screen@1500ms /Startup/"));
-    }
-
-    #[test]
-    fn compile_step_wait_for_text_escapes_regex_metacharacters() {
-        // Arrange
-        let step = Step::wait_for_text("[test] foo.bar", 3000);
-        let mut tape = String::new();
-
-        // Act
-        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
-
-        // Assert — brackets and dot are escaped.
-        assert!(tape.contains(r"Wait+Screen@3s /\[test\] foo\.bar/"));
-    }
-
-    #[test]
-    fn compile_step_viewing_pause_emits_sleep_seconds() {
-        // Arrange
-        let step = Step::viewing_pause_ms(2000);
-        let mut tape = String::new();
-
-        // Act
-        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
-
-        // Assert
-        assert!(tape.contains("Sleep 2s"));
-    }
-
-    #[test]
-    fn compile_step_viewing_pause_emits_sleep_milliseconds() {
-        // Arrange
-        let step = Step::viewing_pause_ms(1500);
-        let mut tape = String::new();
-
-        // Act
-        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
-
-        // Assert
-        assert!(tape.contains("Sleep 1500ms"));
-    }
-
-    /// Verifies `Step::Eventually` emits a fallback `Sleep` for the full
-    /// timeout in seconds when the timeout is an even multiple of one
-    /// second, so VHS playback waits at least the upper bound the PTY
-    /// executor would have observed before the next step fires.
-    #[test]
-    fn compile_step_eventually_emits_sleep_seconds_for_even_timeout() {
-        // Arrange
-        let step = Step::eventually(
-            std::time::Duration::from_secs(5),
-            std::time::Duration::from_millis(50),
-            |_frame| Ok(()),
-        );
-        let mut tape = String::new();
-
-        // Act
-        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
-
-        // Assert
-        assert!(
-            tape.contains("Sleep 5s"),
-            "expected Sleep 5s fallback, got: {tape}"
-        );
-    }
-
-    /// Verifies `Step::Eventually` falls back to a millisecond `Sleep` for
-    /// fractional timeouts so the upper bound stays accurate for short
-    /// predicate windows.
-    #[test]
-    fn compile_step_eventually_emits_sleep_milliseconds_for_fractional_timeout() {
-        // Arrange
-        let step = Step::eventually(
-            std::time::Duration::from_millis(750),
-            std::time::Duration::from_millis(25),
-            |_frame| Ok(()),
-        );
-        let mut tape = String::new();
-
-        // Act
-        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
-
-        // Assert
-        assert!(
-            tape.contains("Sleep 750ms"),
-            "expected Sleep 750ms fallback, got: {tape}"
-        );
-    }
-
-    #[test]
-    fn compile_step_sleep_uses_seconds_when_even() {
-        // Arrange
-        let step = Step::sleep_ms(3000);
-        let mut tape = String::new();
-
-        // Act
-        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
-
-        // Assert
-        assert!(tape.contains("Sleep 3s"));
-    }
-
-    #[test]
-    fn compile_step_sleep_uses_milliseconds_when_fractional() {
-        // Arrange
-        let step = Step::sleep_ms(500);
-        let mut tape = String::new();
-
-        // Act
-        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
-
-        // Assert
-        assert!(tape.contains("Sleep 500ms"));
-    }
-
-    #[test]
-    fn escape_vhs_double_quote_escapes_quotes_and_backslashes() {
-        // Arrange / Act / Assert
-        assert_eq!(escape_vhs_double_quote(r#"hello"world"#), r#"hello\"world"#);
-        assert_eq!(escape_vhs_double_quote(r"back\slash"), r"back\\slash");
-        assert_eq!(escape_vhs_double_quote("clean"), "clean");
-    }
-
-    #[test]
-    fn escape_shell_single_quote_wraps_internal_quotes() {
-        // Arrange / Act / Assert
-        assert_eq!(escape_shell_single_quote("it's"), "it'\\''s");
-        assert_eq!(escape_shell_single_quote("clean"), "clean");
-    }
-
-    #[test]
-    fn escape_vhs_regex_escapes_metacharacters() {
-        // Arrange / Act / Assert
-        assert_eq!(escape_vhs_regex("plain"), "plain");
-        assert_eq!(escape_vhs_regex("a.b"), r"a\.b");
-        assert_eq!(escape_vhs_regex("[x]"), r"\[x\]");
-        assert_eq!(escape_vhs_regex("a/b"), r"a\/b");
-        assert_eq!(escape_vhs_regex("a+b*c?"), r"a\+b\*c\?");
-        assert_eq!(escape_vhs_regex(r"back\slash"), r"back\\slash");
-    }
-
-    #[test]
-    fn format_vhs_duration_uses_seconds_for_even_multiples() {
-        // Arrange / Act / Assert
-        assert_eq!(format_vhs_duration(1000), "1s");
-        assert_eq!(format_vhs_duration(5000), "5s");
-        assert_eq!(format_vhs_duration(30000), "30s");
-    }
-
-    #[test]
-    fn format_vhs_duration_uses_milliseconds_for_fractional() {
-        // Arrange / Act / Assert
-        assert_eq!(format_vhs_duration(500), "500ms");
-        assert_eq!(format_vhs_duration(1500), "1500ms");
-        assert_eq!(format_vhs_duration(100), "100ms");
-    }
-
-    #[test]
-    fn compile_tape_escapes_env_value_with_single_quote() {
-        // Arrange
-        let scenario = Scenario::new("test").capture();
-
-        // Act
-        let tape = compile_tape(
-            &scenario,
-            Path::new("/usr/bin/echo"),
-            Path::new("/tmp/shot.gif"),
-            Path::new("/tmp/shot.png"),
-            &[("KEY", "it's a value")],
-            &VhsTapeSettings::default(),
-        );
-
-        // Assert — the single quote is shell-escaped to '\'' and the
-        // backslash is then VHS-double-quote-escaped to '\\', giving '\\''
-        // in the final tape string.
-        assert!(tape.contains(r"it'\\''s a value"));
-    }
-
-    #[test]
-    fn compile_tape_shell_quotes_binary_path() {
-        // Arrange
-        let scenario = Scenario::new("test").capture();
-
-        // Act
-        let tape = compile_tape(
-            &scenario,
-            Path::new("/usr/bin/echo"),
-            Path::new("/tmp/shot.gif"),
-            Path::new("/tmp/shot.png"),
-            &[],
-            &VhsTapeSettings::default(),
-        );
-
-        // Assert — binary path is wrapped in single quotes for the shell.
-        assert!(tape.contains("Type \"'/usr/bin/echo'\""));
-    }
-
-    #[test]
-    fn compile_tape_clears_terminal_and_launches_binary_before_show() {
-        // Arrange
-        let scenario = Scenario::new("test").capture();
-
-        // Act
-        let tape = compile_tape(
-            &scenario,
-            Path::new("/usr/bin/echo"),
-            Path::new("/tmp/shot.gif"),
-            Path::new("/tmp/shot.png"),
-            &[("KEY", "val")],
-            &VhsTapeSettings::default(),
-        );
-
-        // Assert — clear and binary launch happen inside the Hide section,
-        // and Show comes after all of them.
-        let hide_pos = tape.find("Hide").expect("tape must contain Hide");
-        let clear_pos = tape
-            .find("Type \"clear\"")
-            .expect("tape must contain clear");
-        let binary_pos = tape
-            .find("Type \"'/usr/bin/echo'\"")
-            .expect("tape must contain binary launch");
-        let show_pos = tape.find("Show").expect("tape must contain Show");
-
-        assert!(hide_pos < clear_pos, "Hide must precede clear");
-        assert!(clear_pos < binary_pos, "clear must precede binary launch");
-        assert!(binary_pos < show_pos, "binary launch must precede Show");
-    }
-
-    #[test]
-    fn compile_tape_shell_quotes_binary_path_with_spaces() {
-        // Arrange
-        let scenario = Scenario::new("test").capture();
-
-        // Act
-        let tape = compile_tape(
-            &scenario,
-            Path::new("/path with spaces/bin"),
-            Path::new("/tmp/shot.gif"),
-            Path::new("/tmp/shot.png"),
-            &[],
-            &VhsTapeSettings::default(),
-        );
-
-        // Assert — spaces are safe inside single quotes.
-        assert!(tape.contains("Type \"'/path with spaces/bin'\""));
-    }
-
-    #[test]
-    fn feature_demo_settings_have_expected_values() {
-        // Arrange / Act
-        let settings = VhsTapeSettings::feature_demo();
-
-        // Assert
-        assert_eq!(settings.width, 1600);
-        assert_eq!(settings.height, 800);
-        assert_eq!(settings.font_size, 18);
-        assert_eq!(settings.theme, "OneDark");
-        assert_eq!(settings.framerate, 30);
-        assert_eq!(settings.padding, 0);
-    }
-
-    #[test]
-    fn default_settings_match_legacy_constants() {
-        // Arrange / Act
-        let settings = VhsTapeSettings::default();
-
-        // Assert
-        assert_eq!(settings.width, 1200);
-        assert_eq!(settings.height, 600);
-        assert_eq!(settings.font_size, 14);
-        assert_eq!(settings.theme, "");
-        assert_eq!(settings.framerate, 0);
-        assert_eq!(settings.padding, 0);
-    }
-
-    #[test]
-    fn from_scenario_with_settings_applies_feature_demo() {
-        // Arrange
-        let scenario = Scenario::new("feature_test").sleep_ms(100).capture();
-        let settings = VhsTapeSettings::feature_demo();
-
-        // Act
-        let tape = VhsTape::from_scenario_with_settings(
-            &scenario,
-            Path::new("/usr/bin/echo"),
-            Path::new("/tmp/shot.png"),
-            &[],
-            &settings,
-        );
-
-        // Assert
-        let content = tape.render();
-        assert!(content.contains("Set FontSize 18"));
-        assert!(content.contains("Set Width 1600"));
-        assert!(content.contains("Set Height 800"));
-        assert!(content.contains("Set Theme \"OneDark\""));
-        assert!(content.contains("Set Framerate 30"));
-    }
-
-    #[test]
-    fn from_scenario_with_output_path_separates_gif_and_screenshot() {
-        // Arrange
-        let scenario = Scenario::new("separate_paths").capture();
-        let settings = VhsTapeSettings::feature_demo();
-        let gif_path = Path::new("/tmp/feature.gif");
-        let screenshot_path = Path::new("/tmp/.feature.capture.png");
-
-        // Act
-        let tape = VhsTape::from_scenario_with_output_path(
-            &scenario,
-            Path::new("/usr/bin/echo"),
-            gif_path,
-            screenshot_path,
-            &[],
-            &settings,
-        );
-
-        // Assert
-        assert!(tape.render().contains("Output \"/tmp/feature.gif\""));
-        assert!(
-            tape.render()
-                .contains("Screenshot \"/tmp/.feature.capture.png\"")
-        );
-        assert_eq!(tape.screenshot_path(), screenshot_path);
-    }
-
-    #[test]
-    fn from_scenario_with_settings_omits_empty_theme() {
-        // Arrange
-        let scenario = Scenario::new("no_theme").capture();
-        let settings = VhsTapeSettings::default();
-
-        // Act
-        let tape = VhsTape::from_scenario_with_settings(
-            &scenario,
-            Path::new("/usr/bin/echo"),
-            Path::new("/tmp/shot.png"),
-            &[],
-            &settings,
-        );
-
-        // Assert — default settings have empty theme, so no Theme line.
-        let content = tape.render();
-        assert!(!content.contains("Set Theme"));
-    }
-
-    #[test]
-    fn from_scenario_with_settings_omits_zero_framerate() {
-        // Arrange
-        let scenario = Scenario::new("no_framerate").capture();
-        let settings = VhsTapeSettings::default();
-
-        // Act
-        let tape = VhsTape::from_scenario_with_settings(
-            &scenario,
-            Path::new("/usr/bin/echo"),
-            Path::new("/tmp/shot.png"),
-            &[],
-            &settings,
-        );
-
-        // Assert — default settings have framerate 0, so no Framerate line.
-        let content = tape.render();
-        assert!(!content.contains("Set Framerate"));
-    }
-}
+#[path = "vhs_test.rs"]
+mod tests;
