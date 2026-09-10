@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 
-use crate::SessionStatus;
+use crate::model::SessionStatus;
 
 /// Maximum number of automatic focused-review remediation turns per managed
 /// worker settlement wave.
@@ -371,13 +371,47 @@ impl OrchestrationTaskStatus {
     }
 }
 
+impl fmt::Display for OrchestrationTaskStatus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.labels().0)
+    }
+}
+
+impl FromStr for OrchestrationTaskStatus {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "Proposed" => Ok(OrchestrationTaskStatus::Proposed),
+            "Planned" => Ok(OrchestrationTaskStatus::Planned),
+            "Creating" => Ok(OrchestrationTaskStatus::Creating),
+            "Running" => Ok(OrchestrationTaskStatus::Running),
+            "Reviewing" => Ok(OrchestrationTaskStatus::Reviewing),
+            "ReviewApplying" => Ok(OrchestrationTaskStatus::ReviewApplying),
+            "WaitingForInput" => Ok(OrchestrationTaskStatus::WaitingForInput),
+            "Ready" => Ok(OrchestrationTaskStatus::Ready),
+            "Reported" => Ok(OrchestrationTaskStatus::Reported),
+            "ContinuationPending" => Ok(OrchestrationTaskStatus::ContinuationPending),
+            "AwaitingIntegration" => Ok(OrchestrationTaskStatus::AwaitingIntegration),
+            "Merging" => Ok(OrchestrationTaskStatus::Merging),
+            "Integrated" => Ok(OrchestrationTaskStatus::Integrated),
+            "ReviewRequested" => Ok(OrchestrationTaskStatus::ReviewRequested),
+            "IntegrationFailed" => Ok(OrchestrationTaskStatus::IntegrationFailed),
+            "Detached" => Ok(OrchestrationTaskStatus::Detached),
+            "Failed" => Ok(OrchestrationTaskStatus::Failed),
+            "Canceled" => Ok(OrchestrationTaskStatus::Canceled),
+            _ => Err(format!("Unknown orchestration task status: {value}")),
+        }
+    }
+}
+
 /// Pure scheduling decision derived from one orchestration task snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OrchestrationScheduleDecision {
-    /// Number of planned tasks that may claim a parallelism slot.
-    pub spawn_count: usize,
     /// Whether every non-empty task has settled and roll-up can be claimed.
     pub should_submit: bool,
+    /// Number of planned tasks that may claim a parallelism slot.
+    pub spawn_count: usize,
 }
 
 /// Pure orchestration policy over typed task observations.
@@ -407,8 +441,8 @@ impl OrchestrationPolicy {
                 .all(|status| status.is_some_and(OrchestrationTaskStatus::is_settled));
 
         OrchestrationScheduleDecision {
-            spawn_count,
             should_submit,
+            spawn_count,
         }
     }
 }
@@ -450,9 +484,11 @@ pub fn validate_subtasks(subtasks: &[OrchestrationPlanTask], is_retry: bool) -> 
             "research and implementation tasks must be proposed in separate waves.".to_string(),
         );
     }
+
     if subtasks.len() < 2 && !is_retry && !is_research_wave {
         return Err("a meaningful orchestration requires at least two subtasks.".to_string());
     }
+
     let mut task_keys = HashSet::new();
     for subtask in subtasks {
         if !is_kebab_case_task_key(&subtask.task_key)
@@ -460,6 +496,7 @@ pub fn validate_subtasks(subtasks: &[OrchestrationPlanTask], is_retry: bool) -> 
         {
             return Err("every subtask needs a unique kebab-case task key.".to_string());
         }
+
         if subtask.prompt.trim().is_empty()
             || subtask.title.trim().is_empty()
             || subtask
@@ -507,6 +544,7 @@ fn normalized_scope(area: &str) -> Result<String, &'static str> {
     {
         return Err("use a non-empty repository-relative path");
     }
+
     if normalized.contains(['*', '?', '[', ']', '{', '}']) {
         return Err("use a literal file or directory path; wildcard patterns are not supported");
     }
@@ -514,490 +552,6 @@ fn normalized_scope(area: &str) -> Result<String, &'static str> {
     Ok(normalized.to_string())
 }
 
-impl fmt::Display for OrchestrationTaskStatus {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.labels().0)
-    }
-}
-
-impl FromStr for OrchestrationTaskStatus {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "Proposed" => Ok(OrchestrationTaskStatus::Proposed),
-            "Planned" => Ok(OrchestrationTaskStatus::Planned),
-            "Creating" => Ok(OrchestrationTaskStatus::Creating),
-            "Running" => Ok(OrchestrationTaskStatus::Running),
-            "Reviewing" => Ok(OrchestrationTaskStatus::Reviewing),
-            "ReviewApplying" => Ok(OrchestrationTaskStatus::ReviewApplying),
-            "WaitingForInput" => Ok(OrchestrationTaskStatus::WaitingForInput),
-            "Ready" => Ok(OrchestrationTaskStatus::Ready),
-            "Reported" => Ok(OrchestrationTaskStatus::Reported),
-            "ContinuationPending" => Ok(OrchestrationTaskStatus::ContinuationPending),
-            "AwaitingIntegration" => Ok(OrchestrationTaskStatus::AwaitingIntegration),
-            "Merging" => Ok(OrchestrationTaskStatus::Merging),
-            "Integrated" => Ok(OrchestrationTaskStatus::Integrated),
-            "ReviewRequested" => Ok(OrchestrationTaskStatus::ReviewRequested),
-            "IntegrationFailed" => Ok(OrchestrationTaskStatus::IntegrationFailed),
-            "Detached" => Ok(OrchestrationTaskStatus::Detached),
-            "Failed" => Ok(OrchestrationTaskStatus::Failed),
-            "Canceled" => Ok(OrchestrationTaskStatus::Canceled),
-            _ => Err(format!("Unknown orchestration task status: {value}")),
-        }
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    /// Round-trips every orchestration status through its persisted form.
-    fn test_orchestration_status_round_trips_persisted_values() {
-        // Arrange
-        let statuses = [
-            OrchestrationStatus::AwaitingApproval,
-            OrchestrationStatus::Running,
-            OrchestrationStatus::Canceling,
-            OrchestrationStatus::Verifying,
-            OrchestrationStatus::AwaitingIntegration,
-            OrchestrationStatus::Integrating,
-            OrchestrationStatus::Done,
-            OrchestrationStatus::Canceled,
-        ];
-
-        // Act
-        let round_tripped = statuses.map(|status| {
-            status
-                .to_string()
-                .parse::<OrchestrationStatus>()
-                .expect("status should parse")
-        });
-
-        // Assert
-        assert_eq!(round_tripped, statuses);
-        assert!("Unknown".parse::<OrchestrationStatus>().is_err());
-    }
-
-    #[test]
-    fn integration_approach_round_trips_persisted_values() {
-        // Arrange
-        let approaches = [
-            IntegrationApproach::LocalMerge,
-            IntegrationApproach::ReviewRequest,
-        ];
-
-        // Act
-        let round_tripped = approaches.map(|approach| {
-            approach
-                .to_string()
-                .parse::<IntegrationApproach>()
-                .expect("approach should parse")
-        });
-
-        // Assert
-        assert_eq!(round_tripped, approaches);
-        assert!("Unknown".parse::<IntegrationApproach>().is_err());
-    }
-
-    #[test]
-    fn orchestration_task_kind_round_trips_persisted_values() {
-        // Arrange
-        let kinds = [
-            OrchestrationTaskKind::Implementation,
-            OrchestrationTaskKind::Research,
-        ];
-
-        // Act
-        let round_tripped = kinds.map(|kind| {
-            kind.to_string()
-                .parse::<OrchestrationTaskKind>()
-                .expect("kind should parse")
-        });
-
-        // Assert
-        assert_eq!(round_tripped, kinds);
-        assert_eq!(OrchestrationTaskKind::default(), kinds[0]);
-        assert!("Unknown".parse::<OrchestrationTaskKind>().is_err());
-    }
-
-    #[test]
-    /// Restricts restart re-linking to orchestrations that still need work.
-    fn test_only_unsettled_orchestrations_are_active() {
-        // Arrange / Act / Assert
-        assert!(OrchestrationStatus::AwaitingApproval.is_active());
-        assert!(OrchestrationStatus::Running.is_active());
-        assert!(OrchestrationStatus::Canceling.is_active());
-        assert!(OrchestrationStatus::Verifying.is_active());
-        assert!(OrchestrationStatus::AwaitingIntegration.is_active());
-        assert!(OrchestrationStatus::Integrating.is_active());
-        assert!(!OrchestrationStatus::Done.is_active());
-        assert!(!OrchestrationStatus::Canceled.is_active());
-    }
-
-    #[test]
-    /// Round-trips every task status through its persisted form.
-    fn test_orchestration_task_status_round_trips_persisted_values() {
-        // Arrange
-        let statuses = [
-            OrchestrationTaskStatus::Proposed,
-            OrchestrationTaskStatus::Planned,
-            OrchestrationTaskStatus::Creating,
-            OrchestrationTaskStatus::Running,
-            OrchestrationTaskStatus::Reviewing,
-            OrchestrationTaskStatus::ReviewApplying,
-            OrchestrationTaskStatus::WaitingForInput,
-            OrchestrationTaskStatus::Ready,
-            OrchestrationTaskStatus::Reported,
-            OrchestrationTaskStatus::ContinuationPending,
-            OrchestrationTaskStatus::AwaitingIntegration,
-            OrchestrationTaskStatus::Merging,
-            OrchestrationTaskStatus::Integrated,
-            OrchestrationTaskStatus::ReviewRequested,
-            OrchestrationTaskStatus::IntegrationFailed,
-            OrchestrationTaskStatus::Detached,
-            OrchestrationTaskStatus::Failed,
-            OrchestrationTaskStatus::Canceled,
-        ];
-
-        // Act
-        let round_tripped = statuses.map(|status| {
-            status
-                .to_string()
-                .parse::<OrchestrationTaskStatus>()
-                .expect("status should parse")
-        });
-
-        // Assert
-        assert_eq!(round_tripped, statuses);
-        assert!("Unknown".parse::<OrchestrationTaskStatus>().is_err());
-    }
-
-    #[test]
-    /// Treats a canceled straggler as settled so fan-in is not blocked by
-    /// out-of-band cancellation.
-    fn test_settled_task_statuses_include_cancellation() {
-        // Arrange / Act / Assert
-        assert!(OrchestrationTaskStatus::Ready.is_settled());
-        assert!(OrchestrationTaskStatus::Reported.is_settled());
-        assert!(OrchestrationTaskStatus::Integrated.is_settled());
-        assert!(OrchestrationTaskStatus::ReviewRequested.is_settled());
-        assert!(OrchestrationTaskStatus::IntegrationFailed.is_settled());
-        assert!(OrchestrationTaskStatus::Failed.is_settled());
-        assert!(OrchestrationTaskStatus::Canceled.is_settled());
-        assert!(!OrchestrationTaskStatus::Planned.is_settled());
-        assert!(!OrchestrationTaskStatus::Creating.is_settled());
-        assert!(!OrchestrationTaskStatus::Running.is_settled());
-        assert!(!OrchestrationTaskStatus::Reviewing.is_settled());
-        assert!(!OrchestrationTaskStatus::ReviewApplying.is_settled());
-        assert!(!OrchestrationTaskStatus::WaitingForInput.is_settled());
-    }
-
-    #[test]
-    /// Counts a task waiting for user input against the parallelism cap
-    /// because it still owns a live child session and worktree.
-    fn test_parallelism_slots_cover_every_live_child() {
-        // Arrange / Act / Assert
-        assert!(OrchestrationTaskStatus::Creating.occupies_parallelism_slot());
-        assert!(OrchestrationTaskStatus::Running.occupies_parallelism_slot());
-        assert!(OrchestrationTaskStatus::Reviewing.occupies_parallelism_slot());
-        assert!(OrchestrationTaskStatus::ReviewApplying.occupies_parallelism_slot());
-        assert!(OrchestrationTaskStatus::WaitingForInput.occupies_parallelism_slot());
-        assert!(!OrchestrationTaskStatus::Planned.occupies_parallelism_slot());
-        assert!(!OrchestrationTaskStatus::Ready.occupies_parallelism_slot());
-        assert!(!OrchestrationTaskStatus::Failed.occupies_parallelism_slot());
-        assert!(!OrchestrationTaskStatus::Canceled.occupies_parallelism_slot());
-    }
-
-    #[test]
-    /// Allows the fan-out, question, settle, and retry transitions the
-    /// coordinator drives, and rejects skipping creation.
-    fn test_task_status_transitions_cover_fan_out_and_retry() {
-        // Arrange / Act / Assert
-        assert!(
-            OrchestrationTaskStatus::Planned.can_transition_to(OrchestrationTaskStatus::Creating)
-        );
-        assert!(
-            OrchestrationTaskStatus::Creating.can_transition_to(OrchestrationTaskStatus::Running)
-        );
-        assert!(
-            OrchestrationTaskStatus::Running
-                .can_transition_to(OrchestrationTaskStatus::WaitingForInput)
-        );
-        assert!(
-            OrchestrationTaskStatus::WaitingForInput
-                .can_transition_to(OrchestrationTaskStatus::Running)
-        );
-        assert!(OrchestrationTaskStatus::Running.can_transition_to(OrchestrationTaskStatus::Ready));
-        assert!(
-            OrchestrationTaskStatus::Running.can_transition_to(OrchestrationTaskStatus::Reported)
-        );
-        assert!(
-            OrchestrationTaskStatus::Running.can_transition_to(OrchestrationTaskStatus::Reviewing)
-        );
-        assert!(
-            OrchestrationTaskStatus::Reviewing
-                .can_transition_to(OrchestrationTaskStatus::ReviewApplying)
-        );
-        assert!(
-            OrchestrationTaskStatus::ReviewApplying
-                .can_transition_to(OrchestrationTaskStatus::Reviewing)
-        );
-        assert!(
-            OrchestrationTaskStatus::Running.can_transition_to(OrchestrationTaskStatus::Canceled)
-        );
-        assert!(
-            OrchestrationTaskStatus::Failed.can_transition_to(OrchestrationTaskStatus::Creating)
-        );
-        assert!(OrchestrationTaskStatus::Ready.can_transition_to(OrchestrationTaskStatus::Ready));
-        assert!(
-            !OrchestrationTaskStatus::Planned.can_transition_to(OrchestrationTaskStatus::Running)
-        );
-        assert!(
-            !OrchestrationTaskStatus::Canceled.can_transition_to(OrchestrationTaskStatus::Ready)
-        );
-    }
-
-    #[test]
-    fn integration_settlement_waits_for_review_request_merge() {
-        // Arrange
-        let settled = [
-            OrchestrationTaskStatus::Integrated,
-            OrchestrationTaskStatus::Detached,
-            OrchestrationTaskStatus::Canceled,
-            OrchestrationTaskStatus::Failed,
-        ];
-        // Act / Assert
-        assert!(
-            settled
-                .into_iter()
-                .all(OrchestrationTaskStatus::is_integration_settled)
-        );
-        assert!(!OrchestrationTaskStatus::Reported.is_integration_settled());
-        assert!(!OrchestrationTaskStatus::AwaitingIntegration.is_integration_settled());
-        assert!(!OrchestrationTaskStatus::ReviewRequested.is_integration_settled());
-        assert!(
-            OrchestrationTaskStatus::Merging
-                .can_transition_to(OrchestrationTaskStatus::ReviewRequested)
-        );
-        assert!(
-            OrchestrationTaskStatus::ReviewRequested
-                .can_transition_to(OrchestrationTaskStatus::Integrated)
-        );
-        assert!(
-            OrchestrationTaskStatus::ReviewRequested
-                .can_transition_to(OrchestrationTaskStatus::IntegrationFailed)
-        );
-    }
-
-    #[test]
-    fn campaign_labels_cover_every_task_status() {
-        // Arrange
-        let statuses = [
-            OrchestrationTaskStatus::Proposed,
-            OrchestrationTaskStatus::Planned,
-            OrchestrationTaskStatus::Creating,
-            OrchestrationTaskStatus::Running,
-            OrchestrationTaskStatus::Reviewing,
-            OrchestrationTaskStatus::ReviewApplying,
-            OrchestrationTaskStatus::WaitingForInput,
-            OrchestrationTaskStatus::Ready,
-            OrchestrationTaskStatus::Reported,
-            OrchestrationTaskStatus::ContinuationPending,
-            OrchestrationTaskStatus::AwaitingIntegration,
-            OrchestrationTaskStatus::Merging,
-            OrchestrationTaskStatus::Integrated,
-            OrchestrationTaskStatus::ReviewRequested,
-            OrchestrationTaskStatus::IntegrationFailed,
-            OrchestrationTaskStatus::Detached,
-            OrchestrationTaskStatus::Failed,
-            OrchestrationTaskStatus::Canceled,
-        ];
-
-        // Act
-        let labels = statuses.map(OrchestrationTaskStatus::campaign_label);
-
-        // Assert
-        assert_eq!(
-            labels,
-            [
-                "awaiting approval",
-                "waiting",
-                "starting",
-                "running",
-                "reviewing",
-                "applying review",
-                "waiting on you",
-                "ready",
-                "reported",
-                "continuing",
-                "awaiting integration",
-                "integrating",
-                "integrated",
-                "review requested",
-                "integration failed",
-                "detached",
-                "failed",
-                "canceled",
-            ]
-        );
-    }
-
-    #[test]
-    fn validation_allows_one_research_task_and_ignores_its_touched_areas() {
-        // Arrange
-        let plan = [OrchestrationPlanTask {
-            acceptance_criteria: vec!["Architecture questions are answered".to_string()],
-            kind: OrchestrationTaskKind::Research,
-            prompt: "Inspect the architecture".to_string(),
-            task_key: "architecture".to_string(),
-            title: "Architecture research".to_string(),
-            touched_areas: vec!["**".to_string()],
-        }];
-
-        // Act
-        let result = validate_subtasks(&plan, false);
-
-        // Assert
-        assert_eq!(result, Ok(()));
-    }
-
-    #[test]
-    fn validation_rejects_one_implementation_task_and_invalid_implementation_scope() {
-        // Arrange
-        let single = [OrchestrationPlanTask {
-            acceptance_criteria: vec!["Feature is complete".to_string()],
-            kind: OrchestrationTaskKind::Implementation,
-            prompt: "Implement the feature".to_string(),
-            task_key: "feature".to_string(),
-            title: "Feature".to_string(),
-            touched_areas: Vec::new(),
-        }];
-        let invalid_scope = [
-            OrchestrationPlanTask {
-                touched_areas: vec!["crates/one/**".to_string()],
-                ..single[0].clone()
-            },
-            OrchestrationPlanTask {
-                task_key: "tests".to_string(),
-                touched_areas: Vec::new(),
-                ..single[0].clone()
-            },
-        ];
-        let mixed = [
-            OrchestrationPlanTask {
-                kind: OrchestrationTaskKind::Research,
-                ..single[0].clone()
-            },
-            OrchestrationPlanTask {
-                task_key: "implementation".to_string(),
-                ..single[0].clone()
-            },
-        ];
-
-        // Act
-        let single_result = validate_subtasks(&single, false);
-        let empty_result = validate_subtasks(&[], false);
-        let scope_result = validate_subtasks(&invalid_scope, false);
-        let mixed_result = validate_subtasks(&mixed, false);
-
-        // Assert
-        assert_eq!(
-            single_result,
-            Err("a meaningful orchestration requires at least two subtasks.".to_string())
-        );
-        assert_eq!(
-            empty_result,
-            Err("a meaningful orchestration requires at least two subtasks.".to_string())
-        );
-        assert!(scope_result.is_err_and(|reason| reason.contains("wildcard patterns")));
-        assert_eq!(
-            mixed_result,
-            Err(
-                "research and implementation tasks must be proposed in separate waves.".to_string()
-            )
-        );
-    }
-
-    #[test]
-    /// Derives fan-out capacity and roll-up readiness from typed task states.
-    fn test_orchestration_policy_schedules_available_slots_and_settlement() {
-        // Arrange
-        let active_statuses = [
-            Some(OrchestrationTaskStatus::Running),
-            Some(OrchestrationTaskStatus::WaitingForInput),
-            Some(OrchestrationTaskStatus::Planned),
-            Some(OrchestrationTaskStatus::Planned),
-        ];
-        let settled_statuses = [
-            Some(OrchestrationTaskStatus::Ready),
-            Some(OrchestrationTaskStatus::Failed),
-            Some(OrchestrationTaskStatus::Canceled),
-        ];
-        let invalid_statuses = [Some(OrchestrationTaskStatus::Ready), None];
-
-        // Act
-        let active_decision = OrchestrationPolicy::schedule(3, &active_statuses);
-        let settled_decision = OrchestrationPolicy::schedule(3, &settled_statuses);
-        let empty_decision = OrchestrationPolicy::schedule(3, &[]);
-        let invalid_decision = OrchestrationPolicy::schedule(3, &invalid_statuses);
-
-        // Assert
-        assert_eq!(
-            active_decision,
-            OrchestrationScheduleDecision {
-                spawn_count: 1,
-                should_submit: false,
-            }
-        );
-        assert_eq!(
-            settled_decision,
-            OrchestrationScheduleDecision {
-                spawn_count: 0,
-                should_submit: true,
-            }
-        );
-        assert_eq!(
-            empty_decision,
-            OrchestrationScheduleDecision {
-                spawn_count: 0,
-                should_submit: false,
-            }
-        );
-        assert!(!invalid_decision.should_submit);
-    }
-
-    #[test]
-    /// Maps every child-session lifecycle family into orchestration policy.
-    fn test_task_status_from_child_status_covers_session_lifecycle() {
-        // Arrange
-        let cases = [
-            (SessionStatus::Draft, OrchestrationTaskStatus::Running),
-            (SessionStatus::InProgress, OrchestrationTaskStatus::Running),
-            (SessionStatus::Queued, OrchestrationTaskStatus::Running),
-            (SessionStatus::Rebasing, OrchestrationTaskStatus::Running),
-            (SessionStatus::Merging, OrchestrationTaskStatus::Running),
-            (
-                SessionStatus::Question,
-                OrchestrationTaskStatus::WaitingForInput,
-            ),
-            (SessionStatus::Review, OrchestrationTaskStatus::Reviewing),
-            (
-                SessionStatus::AgentReview,
-                OrchestrationTaskStatus::Reviewing,
-            ),
-            (SessionStatus::Merged, OrchestrationTaskStatus::Ready),
-            (SessionStatus::Done, OrchestrationTaskStatus::Ready),
-            (SessionStatus::Canceled, OrchestrationTaskStatus::Failed),
-        ];
-
-        // Act / Assert
-        for (session_status, expected_task_status) in cases {
-            assert_eq!(
-                OrchestrationTaskStatus::from_child_status(session_status),
-                expected_task_status
-            );
-        }
-    }
-}
+#[path = "orchestration_test.rs"]
+mod tests;
