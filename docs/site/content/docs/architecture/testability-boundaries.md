@@ -46,6 +46,11 @@ an in-memory event channel, deterministic schedule, repository mocks, and a
 `SessionBackend` without constructing the TUI. Agentty tests its event translation at
 the application boundary.
 
+`ag-store` keeps repository contracts identical in ordinary and test builds. Its
+`test-utils` feature exposes shared in-memory repository fixtures and orchestration
+mocks; fixture construction stays in separate test-support files. Persistence suites
+exercise the real SQLite adapters and inject timestamp sources for clock assertions.
+
 `OrchestrationRepository` also bulk-loads session-list progress and controller-child
 adjacency per project, and atomically claims roll-up submission before the session API
 uses its stable operation identifier.
