@@ -5,9 +5,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
-use super::status;
 use crate::timestamp::TimestampSource;
-use crate::{DbError, DbResultExt};
+use crate::{DbError, DbResultExt, status};
 
 /// Persisted operation lifecycle state for one session command.
 pub struct SessionOperationRow {
@@ -109,22 +108,12 @@ impl SqliteOperationRepository {
             timestamp_source,
         }
     }
-
-    /// Returns the shared persistence timestamp in Unix seconds.
-    fn now(&self) -> i64 {
-        self.timestamp_source.now_timestamp_seconds()
-    }
-}
-
-/// Row returned when loading one non-null boolean scalar value.
-struct RequiredBoolValueRow {
-    value: bool,
 }
 
 #[async_trait]
 impl OperationRepository for SqliteOperationRepository {
     async fn fail_unfinished_session_operations(&self, reason: &str) -> Result<(), DbError> {
-        let now = self.now();
+        let now = self.timestamp_source.now_timestamp_seconds();
 
         sqlx::query!(
             r"
@@ -215,7 +204,7 @@ ORDER BY queued_at ASC, id ASC
         operation_id: &str,
         reason: &str,
     ) -> Result<(), DbError> {
-        let now = self.now();
+        let now = self.timestamp_source.now_timestamp_seconds();
 
         sqlx::query!(
             r"
@@ -238,7 +227,7 @@ WHERE id = ?
     }
 
     async fn mark_session_operation_done(&self, operation_id: &str) -> Result<(), DbError> {
-        let now = self.now();
+        let now = self.timestamp_source.now_timestamp_seconds();
 
         sqlx::query!(
             r"
@@ -264,7 +253,7 @@ WHERE id = ?
         operation_id: &str,
         error: &str,
     ) -> Result<(), DbError> {
-        let now = self.now();
+        let now = self.timestamp_source.now_timestamp_seconds();
 
         sqlx::query!(
             r"
@@ -287,7 +276,7 @@ WHERE id = ?
     }
 
     async fn mark_session_operation_running(&self, operation_id: &str) -> Result<(), DbError> {
-        let now = self.now();
+        let now = self.timestamp_source.now_timestamp_seconds();
 
         sqlx::query!(
             r"
@@ -314,7 +303,7 @@ WHERE id = ?
         session_id: &str,
         kind: &str,
     ) -> Result<bool, DbError> {
-        let queued_at = self.now();
+        let queued_at = self.timestamp_source.now_timestamp_seconds();
 
         let claimed = sqlx::query!(
             r#"
@@ -351,7 +340,7 @@ RETURNING id AS "id!: String"
         session_id: &str,
         kind: &str,
     ) -> Result<(), DbError> {
-        let queued_at = self.now();
+        let queued_at = self.timestamp_source.now_timestamp_seconds();
 
         sqlx::query!(
             r"
@@ -386,91 +375,11 @@ WHERE session_id = ?
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::{AppRepositories, DbError};
-
-    #[tokio::test]
-    /// Claims new and failed idempotent operations while leaving accepted
-    /// operations untouched.
-    async fn test_claim_session_operation_recovers_only_terminal_failures() {
-        // Arrange
-        let database = AppRepositories::in_memory().await.expect("db should open");
-        let project_id = database
-            .projects()
-            .upsert_project("/tmp/operation-project", Some("main".to_string()))
-            .await
-            .expect("failed to insert project");
-        database
-            .sessions()
-            .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
-            .await
-            .expect("failed to insert session");
-
-        // Act
-        let first_claim = database
-            .operations()
-            .claim_session_operation("rollup-1", "session-a", "reply")
-            .await
-            .expect("failed to claim new operation");
-        let queued_claim = database
-            .operations()
-            .claim_session_operation("rollup-1", "session-a", "reply")
-            .await
-            .expect("failed to inspect queued operation");
-        database
-            .operations()
-            .mark_session_operation_failed("rollup-1", "restart")
-            .await
-            .expect("failed to mark operation failed");
-        let recovered_claim = database
-            .operations()
-            .claim_session_operation("rollup-1", "session-a", "reply")
-            .await
-            .expect("failed to reclaim failed operation");
-        database
-            .operations()
-            .mark_session_operation_done("rollup-1")
-            .await
-            .expect("failed to mark operation done");
-        let done_claim = database
-            .operations()
-            .claim_session_operation("rollup-1", "session-a", "reply")
-            .await
-            .expect("failed to inspect completed operation");
-
-        // Assert
-        assert!(first_claim);
-        assert!(!queued_claim);
-        assert!(recovered_claim);
-        assert!(!done_claim);
-    }
-
-    #[tokio::test]
-    async fn recovery_failure_reports_semantic_operation_context() {
-        // Arrange
-        let (database, pool) = AppRepositories::in_memory_with_pool()
-            .await
-            .expect("db should open");
-        sqlx::query("DROP TABLE session_operation")
-            .execute(&pool)
-            .await
-            .expect("failed to drop operation table");
-
-        // Act
-        let error = database
-            .operations()
-            .fail_unfinished_session_operations("restart")
-            .await
-            .expect_err("recovery should fail without its table");
-
-        // Assert
-        assert!(matches!(
-            error,
-            DbError::QueryContext {
-                operation: "fail unfinished session operations",
-                ..
-            }
-        ));
-    }
+/// Row returned when loading one non-null boolean scalar value.
+struct RequiredBoolValueRow {
+    value: bool,
 }
+
+#[cfg(test)]
+#[path = "operation_test.rs"]
+mod tests;

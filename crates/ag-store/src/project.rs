@@ -68,11 +68,6 @@ pub trait ProjectRepository: Send + Sync {
     /// Loads all configured projects with aggregated session stats.
     async fn load_projects_with_stats(&self) -> Result<Vec<ProjectListRow>, DbError>;
 
-    #[cfg(test)]
-    /// Updates favorite state for one project.
-    async fn set_project_favorite(&self, project_id: i64, is_favorite: bool)
-    -> Result<(), DbError>;
-
     /// Marks a project as recently opened at the current Unix timestamp.
     async fn touch_project_last_opened(&self, project_id: i64) -> Result<(), DbError>;
 
@@ -93,71 +88,6 @@ impl SqliteProjectRepository {
         Self {
             pool,
             timestamp_source,
-        }
-    }
-
-    /// Returns the shared persistence timestamp in Unix seconds.
-    fn now(&self) -> i64 {
-        self.timestamp_source.now_timestamp_seconds()
-    }
-}
-
-/// Scalar row used to return one required project identifier.
-struct ProjectIdValueRow {
-    value: i64,
-}
-
-/// Macro-mapped row returned when loading one project with optional joined
-/// session aggregates.
-struct ProjectListQueryRow {
-    active_session_count: Option<i64>,
-    created_at: i64,
-    display_name: Option<String>,
-    git_branch: Option<String>,
-    id: i64,
-    input_tokens: Option<i64>,
-    is_favorite: bool,
-    last_opened_at: Option<i64>,
-    last_session_updated_at: Option<i64>,
-    output_tokens: Option<i64>,
-    path: String,
-    session_count: Option<i64>,
-    updated_at: i64,
-}
-
-impl ProjectListQueryRow {
-    /// Converts optional joined aggregate values into the public row shape.
-    fn into_project_list_row(self) -> ProjectListRow {
-        let Self {
-            active_session_count,
-            created_at,
-            display_name,
-            git_branch,
-            id,
-            input_tokens,
-            is_favorite,
-            last_opened_at,
-            last_session_updated_at,
-            output_tokens,
-            path,
-            session_count,
-            updated_at,
-        } = self;
-
-        ProjectListRow {
-            active_session_count: active_session_count.unwrap_or(0),
-            created_at,
-            display_name,
-            git_branch,
-            id,
-            input_tokens: input_tokens.unwrap_or(0),
-            is_favorite,
-            last_opened_at,
-            last_session_updated_at,
-            output_tokens: output_tokens.unwrap_or(0),
-            path,
-            session_count: session_count.unwrap_or(0),
-            updated_at,
         }
     }
 }
@@ -233,33 +163,8 @@ ORDER BY p.is_favorite DESC,
             .collect())
     }
 
-    #[cfg(test)]
-    async fn set_project_favorite(
-        &self,
-        project_id: i64,
-        is_favorite: bool,
-    ) -> Result<(), DbError> {
-        let now = self.now();
-
-        sqlx::query!(
-            r"
-UPDATE project
-SET is_favorite = ?,
-    updated_at = ?
-WHERE id = ?
-",
-            i64::from(is_favorite),
-            now,
-            project_id
-        )
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
     async fn touch_project_last_opened(&self, project_id: i64) -> Result<(), DbError> {
-        let now = self.now();
+        let now = self.timestamp_source.now_timestamp_seconds();
 
         sqlx::query!(
             r"
@@ -279,7 +184,7 @@ WHERE id = ?
     }
 
     async fn upsert_project(&self, path: &str, git_branch: Option<String>) -> Result<i64, DbError> {
-        let now = self.now();
+        let now = self.timestamp_source.now_timestamp_seconds();
 
         sqlx::query(
             r"
@@ -310,5 +215,65 @@ WHERE path = ?
         .await?;
 
         Ok(row.value)
+    }
+}
+
+/// Scalar row used to return one required project identifier.
+struct ProjectIdValueRow {
+    value: i64,
+}
+
+/// Macro-mapped row returned when loading one project with optional joined
+/// session aggregates.
+struct ProjectListQueryRow {
+    active_session_count: Option<i64>,
+    created_at: i64,
+    display_name: Option<String>,
+    git_branch: Option<String>,
+    id: i64,
+    input_tokens: Option<i64>,
+    is_favorite: bool,
+    last_opened_at: Option<i64>,
+    last_session_updated_at: Option<i64>,
+    output_tokens: Option<i64>,
+    path: String,
+    session_count: Option<i64>,
+    updated_at: i64,
+}
+
+impl ProjectListQueryRow {
+    /// Converts optional joined aggregate values into the public row shape.
+    fn into_project_list_row(self) -> ProjectListRow {
+        let Self {
+            active_session_count,
+            created_at,
+            display_name,
+            git_branch,
+            id,
+            input_tokens,
+            is_favorite,
+            last_opened_at,
+            last_session_updated_at,
+            output_tokens,
+            path,
+            session_count,
+            updated_at,
+        } = self;
+
+        ProjectListRow {
+            active_session_count: active_session_count.unwrap_or(0),
+            created_at,
+            display_name,
+            git_branch,
+            id,
+            input_tokens: input_tokens.unwrap_or(0),
+            is_favorite,
+            last_opened_at,
+            last_session_updated_at,
+            output_tokens: output_tokens.unwrap_or(0),
+            path,
+            session_count: session_count.unwrap_or(0),
+            updated_at,
+        }
     }
 }

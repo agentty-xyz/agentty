@@ -4,10 +4,9 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
-use super::session::ForkSessionSnapshot;
-use super::status;
+use crate::session::ForkSessionSnapshot;
 use crate::timestamp::TimestampSource;
-use crate::{DbError, DbResultExt};
+use crate::{DbError, DbResultExt, status};
 
 const FORK_SESSION_SNAPSHOT: &str = "fork session snapshot";
 
@@ -113,37 +112,5 @@ ORDER BY position, id
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::AppRepositories;
-    use crate::connection::open_in_memory_pool;
-
-    #[tokio::test]
-    async fn missing_snapshot_source_reports_semantic_operation_context() {
-        // Arrange
-        let pool = open_in_memory_pool(1)
-            .await
-            .expect("failed to open in-memory db");
-        let repositories = AppRepositories::from_pool(pool);
-
-        // Act
-        let error = repositories
-            .sessions()
-            .fork_session_snapshot(ForkSessionSnapshot {
-                new_session_id: "fork-session",
-                source_session_id: "missing-session",
-                status: "Draft",
-            })
-            .await
-            .expect_err("fork should fail");
-
-        // Assert
-        assert!(matches!(
-            error,
-            DbError::QueryContext {
-                operation: FORK_SESSION_SNAPSHOT,
-                source: sqlx::Error::RowNotFound,
-            }
-        ));
-    }
-}
+#[path = "session_snapshot_test.rs"]
+mod tests;

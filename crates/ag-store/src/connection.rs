@@ -8,8 +8,8 @@ use std::time::Duration;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
-use super::{AppRepositories, DbError, TimestampSource};
 use crate::timestamp::system_timestamp_source;
+use crate::{AppRepositories, DbError, TimestampSource};
 
 /// Maximum number of pooled `SQLite` connections for the on-disk database.
 ///

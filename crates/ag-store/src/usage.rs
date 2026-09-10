@@ -58,10 +58,6 @@ impl SqliteUsageRepository {
             timestamp_source,
         }
     }
-
-    fn now(&self) -> i64 {
-        self.timestamp_source.now_timestamp_seconds()
-    }
 }
 
 #[async_trait]
@@ -93,7 +89,7 @@ ORDER BY model
             return Ok(());
         }
 
-        let now = self.now();
+        let now = self.timestamp_source.now_timestamp_seconds();
 
         sqlx::query!(
             r"

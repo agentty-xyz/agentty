@@ -9,11 +9,9 @@ use crate::DbError;
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait ActivityRepository: Send + Sync {
-    #[cfg(any(test, feature = "test-utils"))]
     /// Rebuilds `session_activity` rows from current `session.created_at`.
     async fn backfill_session_activity_from_sessions(&self) -> Result<(), DbError>;
 
-    #[cfg(any(test, feature = "test-utils"))]
     /// Deletes all rows from `session_activity`.
     async fn clear_session_activity(&self) -> Result<(), DbError>;
 
@@ -41,14 +39,8 @@ impl SqliteActivityRepository {
     }
 }
 
-/// Row returned when loading one session activity timestamp.
-struct TimestampValueRow {
-    created_at: i64,
-}
-
 #[async_trait]
 impl ActivityRepository for SqliteActivityRepository {
-    #[cfg(any(test, feature = "test-utils"))]
     async fn backfill_session_activity_from_sessions(&self) -> Result<(), DbError> {
         sqlx::query!(
             r"
@@ -63,7 +55,6 @@ FROM session
         Ok(())
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
     async fn clear_session_activity(&self) -> Result<(), DbError> {
         sqlx::query!(
             r"
@@ -110,4 +101,9 @@ ORDER BY id
 
         Ok(rows.into_iter().map(|row| row.created_at).collect())
     }
+}
+
+/// Row returned when loading one session activity timestamp.
+struct TimestampValueRow {
+    created_at: i64,
 }
