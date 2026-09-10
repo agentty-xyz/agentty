@@ -1018,6 +1018,7 @@ mod tests {
         // Arrange
         let runtime_parent = tempdir().expect("create runtime parent");
         let request = AppServerTurnRequest {
+            provider_call_budget: None,
             folder: runtime_parent.path().join("missing-runtime"),
             live_transcript: None,
             main_checkout_root: None,
@@ -1054,6 +1055,7 @@ mod tests {
         // Arrange
         let folder = tempdir().expect("create runtime folder");
         let request = AppServerTurnRequest {
+            provider_call_budget: None,
             folder: folder.path().to_path_buf(),
             live_transcript: None,
             main_checkout_root: None,

@@ -537,6 +537,7 @@ impl RealSyncAssistClient {
         // Success payload unused; run for side effects only.
         let _ = one_shot_client
             .submit(agent::OneShotRequest {
+                provider_call_budget: None,
                 agent_kind: session_agent.kind(),
                 child_pid: None,
                 folder,

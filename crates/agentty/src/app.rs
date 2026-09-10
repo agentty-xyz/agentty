@@ -7,6 +7,7 @@ mod assist;
 pub(crate) mod at_mention_task;
 mod branch_publish;
 mod core;
+mod diff_prompt;
 mod error;
 mod merge_queue;
 mod project;

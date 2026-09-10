@@ -3120,6 +3120,7 @@ impl SessionManager {
         for attempt in 1..=SESSION_TITLE_GENERATION_MAX_ATTEMPTS {
             let result = one_shot_client
                 .submit(agent::OneShotRequest {
+                    provider_call_budget: None,
                     agent_kind: session_agent.kind(),
                     child_pid: None,
                     folder: folder.to_path_buf(),

@@ -285,6 +285,7 @@ mod tests {
 
     fn make_request() -> AppServerTurnRequest {
         AppServerTurnRequest {
+            provider_call_budget: None,
             folder: std::env::temp_dir(),
             live_transcript: None,
             main_checkout_root: None,

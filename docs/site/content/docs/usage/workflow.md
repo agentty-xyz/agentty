@@ -458,6 +458,13 @@ amends `HEAD`, and refreshes the session title from the commit text. If a later 
 reverts every change, the empty session commit is dropped. Commit and merge notices
 appear as transient status rows rather than persisted transcript messages.
 
+Large changes are summarized in bounded chunks before generating the commit message.
+This preserves the complete worktree and the single evolving commit. Input-size failures
+retry only with smaller prompts; they do not invoke code-repair assistance. Focused
+review also bounds large diffs and history, and reports limited coverage when it uses
+summaries. Preparation stops if its provider-call limit is reached, leaving your changes
+intact.
+
 Auto-commit waits up to five seconds in total for a busy Git index to become available.
 If an index lock still blocks auto-commit, Agentty stops and records a `[Commit Error]`
 with recovery guidance instead of invoking commit assistance. Your changes and the lock

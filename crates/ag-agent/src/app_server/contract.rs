@@ -70,6 +70,8 @@ pub struct AppServerTurnRequest {
     pub personality: PersonalityPrompt,
     /// Structured prompt payload for this turn.
     pub prompt: TurnPrompt,
+    /// Optional shared limit, charged for every underlying attempt and retry.
+    pub provider_call_budget: Option<crate::ProviderCallBudget>,
     /// Canonical request kind that drives transport behavior and protocol
     /// semantics for this turn.
     pub request_kind: AgentRequestKind,
@@ -113,6 +115,8 @@ pub struct AppServerTurnResponse {
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 pub trait AppServerClient: Send + Sync {
     /// Executes one prompt turn for a session and returns normalized output.
+    /// Implementations must charge `provider_call_budget` before each
+    /// underlying provider attempt, including restart retries.
     ///
     /// Intermediate events (agent messages, progress updates) are sent through
     /// `stream_tx` as they arrive, enabling the caller to display streaming
