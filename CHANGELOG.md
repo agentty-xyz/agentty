@@ -7,6 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.15.15] - 2026-09-10
+
+### Added
+
+- ag-harness: support configurable model reasoning effort.
+- agentty: show host CPU temperature in session resources.
+
+### Changed
+
+- ag-harness: share one database pool across durable sessions.
+- workspace: organize tests into focused modules and strengthen persistence testability.
+- release: bump workspace crate metadata and lockfile package versions to `0.15.15`.
+
+### Fixed
+
+- agentty: bound oversized agent prompts and recover session commits after input limits.
+- ag-harness: clear stale provider continuations after interruptions.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.15.14] - 2026-09-09
 
 ### Added
