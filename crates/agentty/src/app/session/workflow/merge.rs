@@ -2052,6 +2052,7 @@ impl SessionManager {
             ),
             input.one_shot_client.as_ref(),
             include_coauthored_by_agentty,
+            input.transcript.as_ref(),
         )
         .await
         {
