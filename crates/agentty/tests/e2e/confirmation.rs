@@ -3,37 +3,37 @@
 
 use std::time::Duration;
 
-use agentty::test_support;
 use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
-use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::{common, test_support};
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
 /// Seeds one unstarted draft session for list-mode cancel confirmation.
-fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
+async fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
     common::seed_session(
         env,
         SessionSeed::draft("draft-cancel-0001", "gpt-5.6-sol", "main", "Draft")
             .with_title("Cancel staged draft from list"),
     )
+    .await
 }
 
 /// Seeds one draft orchestrator with its materialized controller worktree.
-fn seed_cancelable_draft_orchestrator(env: &BuilderEnv) -> E2eResult {
+async fn seed_cancelable_draft_orchestrator(env: &BuilderEnv) -> E2eResult {
     let session_id = "orchdraft-0001";
 
     common::seed_session(
         env,
         SessionSeed::regular(session_id, "gpt-5.6-sol", "main", "Draft")
             .with_title("Cancel draft orchestrator"),
-    )?;
+    )
+    .await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         sqlx::query!(
             "UPDATE session SET role = 'Orchestrator' WHERE id = ?",
@@ -43,7 +43,8 @@ fn seed_cancelable_draft_orchestrator(env: &BuilderEnv) -> E2eResult {
         .await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
-    })?;
+    })
+    .await?;
 
     std::fs::create_dir_all(test_support::session_folder(
         &env.agentty_root.join("wt"),
@@ -54,14 +55,15 @@ fn seed_cancelable_draft_orchestrator(env: &BuilderEnv) -> E2eResult {
 }
 
 /// Seeds one running session for list-mode cancel confirmation.
-fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
+async fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
     let session_id = "running-cancel-0001";
 
     common::seed_session(
         env,
         SessionSeed::regular(session_id, "gpt-5.6-sol", "main", "InProgress")
             .with_title("Cancel running session"),
-    )?;
+    )
+    .await?;
 
     let worktree_name = &session_id[..8];
     // Match `session_folder()` so the seeded in-progress row remains visible
@@ -72,7 +74,7 @@ fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
 }
 
 /// Seeds a review-ready parent with one cancelable stacked draft child.
-fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
+async fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
     let parent_session_id = "parentca-0001";
     let child_session_id = "childcan-0001";
 
@@ -80,7 +82,8 @@ fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
         env,
         SessionSeed::regular(parent_session_id, "gpt-5.6-sol", "main", "Review")
             .with_title("Parent for child cancel"),
-    )?;
+    )
+    .await?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
@@ -91,7 +94,8 @@ fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
             parent_session_id,
         )
         .with_title("Stacked child cancel archive"),
-    )?;
+    )
+    .await?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("parentca"))?;
 
@@ -100,7 +104,7 @@ fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
 
 /// Seeds a review-ready stack parent with a nested descendant waiting on a
 /// question so parent cancellation must stop non-`InProgress` branch work.
-fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv) -> E2eResult {
+async fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv) -> E2eResult {
     let parent_session_id = "cascadep-0001";
     let child_session_id = "cascadec-0001";
     let grandchild_session_id = "cascadeg-0001";
@@ -109,7 +113,8 @@ fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv) -> E2
         env,
         SessionSeed::regular(parent_session_id, "gpt-5.6-sol", "main", "Review")
             .with_title("Cancel cascade parent"),
-    )?;
+    )
+    .await?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
@@ -120,7 +125,8 @@ fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv) -> E2
             parent_session_id,
         )
         .with_title("Cancel cascade child"),
-    )?;
+    )
+    .await?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
@@ -131,10 +137,10 @@ fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv) -> E2
             child_session_id,
         )
         .with_title("Active cascade grandchild"),
-    )?;
+    )
+    .await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         for (session_id, updated_at) in [
             (grandchild_session_id, 1),
@@ -148,7 +154,8 @@ fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv) -> E2
         }
 
         Ok::<(), Box<dyn std::error::Error>>(())
-    })?;
+    })
+    .await?;
 
     for session_id in [parent_session_id, child_session_id, grandchild_session_id] {
         std::fs::create_dir_all(test_support::session_folder(
@@ -167,10 +174,10 @@ fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv) -> E2
 /// process terminates successfully. The exit wait is intentionally longer
 /// than a regular PTY assertion because coverage builds and CI hosts can
 /// take extra time to unwind terminal cleanup on shutdown.
-#[test]
-fn quit_confirm_yes_exits() {
+#[tokio::test]
+async fn quit_confirm_yes_exits() {
     // Arrange
-    let _test_guard = common::acquire_e2e_test_lock();
+    let _test_guard = common::acquire_e2e_test_lock().await;
     let temp = tempfile::TempDir::new().expect("failed to create temp dir");
     let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
     let mut session = env.builder().spawn().expect("failed to spawn session");
@@ -198,8 +205,8 @@ fn quit_confirm_yes_exits() {
 ///
 /// Opens the quit dialog twice: first dismisses with `n`, then with `Esc`.
 /// After each dismissal, asserts that the app is back on the Projects tab.
-#[test]
-fn quit_confirm_dismiss_returns() {
+#[tokio::test]
+async fn quit_confirm_dismiss_returns() {
     // Arrange, Act, Assert
     FeatureTest::new("quit_dismiss")
         .with_git()
@@ -229,45 +236,52 @@ fn quit_confirm_dismiss_returns() {
                     .capture_labeled("after_esc", "App restored after Esc")
             },
             |frame, report| {
-                let dialog_n_frame = common::frame_from_capture(&report.captures[0]);
-                let full = Region::full(dialog_n_frame.cols(), dialog_n_frame.rows());
-                assertion::assert_text_in_region(&dialog_n_frame, "Confirm Quit", &full);
+                Box::pin(async move {
+                    let dialog_n_frame = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(dialog_n_frame.cols(), dialog_n_frame.rows());
+                    assertion::assert_text_in_region(&dialog_n_frame, "Confirm Quit", &full);
 
-                let dialog_esc_frame = common::frame_from_capture(&report.captures[2]);
-                let full_esc = Region::full(dialog_esc_frame.cols(), dialog_esc_frame.rows());
-                assertion::assert_text_in_region(&dialog_esc_frame, "Confirm Quit", &full_esc);
+                    let dialog_esc_frame = common::frame_from_capture(&report.captures[2]);
+                    let full_esc = Region::full(dialog_esc_frame.cols(), dialog_esc_frame.rows());
+                    assertion::assert_text_in_region(&dialog_esc_frame, "Confirm Quit", &full_esc);
 
-                let after_n_frame = common::frame_from_capture(&report.captures[1]);
-                let restored_full = Region::full(after_n_frame.cols(), after_n_frame.rows());
-                assertion::assert_text_in_region(&after_n_frame, "test-project", &restored_full);
+                    let after_n_frame = common::frame_from_capture(&report.captures[1]);
+                    let restored_full = Region::full(after_n_frame.cols(), after_n_frame.rows());
+                    assertion::assert_text_in_region(
+                        &after_n_frame,
+                        "test-project",
+                        &restored_full,
+                    );
 
-                let after_n_text = after_n_frame.text_in_region(&restored_full);
-                assert!(
-                    !after_n_text.contains("Confirm Quit"),
-                    "Quit dialog should be dismissed after 'n'"
-                );
+                    let after_n_text = after_n_frame.text_in_region(&restored_full);
+                    assert!(
+                        !after_n_text.contains("Confirm Quit"),
+                        "Quit dialog should be dismissed after 'n'"
+                    );
 
-                let final_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "test-project", &final_full);
+                    let final_full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "test-project", &final_full);
 
-                let final_text = frame.text_in_region(&final_full);
-                assert!(
-                    !final_text.contains("Confirm Quit"),
-                    "Quit dialog should be dismissed after Esc"
-                );
+                    let final_text = frame.text_in_region(&final_full);
+                    assert!(
+                        !final_text.contains("Confirm Quit"),
+                        "Quit dialog should be dismissed after Esc"
+                    );
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }
 
 /// Verify that an unstarted draft session can be canceled directly from the
 /// session list.
-#[test]
-fn draft_session_cancel_confirmation() -> E2eResult {
+#[tokio::test]
+async fn draft_session_cancel_confirmation() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("draft_session_cancel")
         .with_git()
-        .setup(seed_cancelable_draft_session)
+        .setup(|env| Box::pin(async move { seed_cancelable_draft_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -295,42 +309,45 @@ fn draft_session_cancel_confirmation() -> E2eResult {
                     )
             },
             |frame, report| {
-                let list_frame = common::frame_from_capture(&report.captures[0]);
-                let list_full = Region::full(list_frame.cols(), list_frame.rows());
-                assertion::assert_text_in_region(
-                    &list_frame,
-                    "Cancel staged draft from list",
-                    &list_full,
-                );
-                assertion::assert_text_in_region(&list_frame, "Draft", &list_full);
-                assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
+                Box::pin(async move {
+                    let list_frame = common::frame_from_capture(&report.captures[0]);
+                    let list_full = Region::full(list_frame.cols(), list_frame.rows());
+                    assertion::assert_text_in_region(
+                        &list_frame,
+                        "Cancel staged draft from list",
+                        &list_full,
+                    );
+                    assertion::assert_text_in_region(&list_frame, "Draft", &list_full);
+                    assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
 
-                let confirmation_frame = common::frame_from_capture(&report.captures[1]);
-                let confirmation_full =
-                    Region::full(confirmation_frame.cols(), confirmation_frame.rows());
-                assertion::assert_text_in_region(
-                    &confirmation_frame,
-                    "Confirm Cancel",
-                    &confirmation_full,
-                );
+                    let confirmation_frame = common::frame_from_capture(&report.captures[1]);
+                    let confirmation_full =
+                        Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                    assertion::assert_text_in_region(
+                        &confirmation_frame,
+                        "Confirm Cancel",
+                        &confirmation_full,
+                    );
 
-                let final_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "ARCHIVE —— 1", &final_full);
-                assertion::assert_text_in_region(frame, "Canceled", &final_full);
+                    let final_full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "ARCHIVE —— 1", &final_full);
+                    assertion::assert_text_in_region(frame, "Canceled", &final_full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that a draft orchestrator can be canceled directly from the session
 /// list before its first goal is submitted.
-#[test]
-fn test_draft_orchestrator_cancel() -> E2eResult {
+#[tokio::test]
+async fn test_draft_orchestrator_cancel() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("draft_orchestrator_cancel")
         .with_git()
-        .setup(seed_cancelable_draft_orchestrator)
+        .setup(|env| Box::pin(async move { seed_cancelable_draft_orchestrator(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -355,42 +372,45 @@ fn test_draft_orchestrator_cancel() -> E2eResult {
                     )
             },
             |frame, report| {
-                let list_frame = common::frame_from_capture(&report.captures[0]);
-                let list_full = Region::full(list_frame.cols(), list_frame.rows());
-                assertion::assert_text_in_region(
-                    &list_frame,
-                    "Cancel draft orchestrator",
-                    &list_full,
-                );
-                assertion::assert_text_in_region(&list_frame, "Draft", &list_full);
-                assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
+                Box::pin(async move {
+                    let list_frame = common::frame_from_capture(&report.captures[0]);
+                    let list_full = Region::full(list_frame.cols(), list_frame.rows());
+                    assertion::assert_text_in_region(
+                        &list_frame,
+                        "Cancel draft orchestrator",
+                        &list_full,
+                    );
+                    assertion::assert_text_in_region(&list_frame, "Draft", &list_full);
+                    assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
 
-                let confirmation_frame = common::frame_from_capture(&report.captures[1]);
-                let confirmation_full =
-                    Region::full(confirmation_frame.cols(), confirmation_frame.rows());
-                assertion::assert_text_in_region(
-                    &confirmation_frame,
-                    "Confirm Cancel",
-                    &confirmation_full,
-                );
+                    let confirmation_frame = common::frame_from_capture(&report.captures[1]);
+                    let confirmation_full =
+                        Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                    assertion::assert_text_in_region(
+                        &confirmation_frame,
+                        "Confirm Cancel",
+                        &confirmation_full,
+                    );
 
-                let final_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "ARCHIVE", &final_full);
-                assertion::assert_text_in_region(frame, "Canceled", &final_full);
+                    let final_full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "ARCHIVE", &final_full);
+                    assertion::assert_text_in_region(frame, "Canceled", &final_full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that a running session can be canceled directly from the session
 /// list.
-#[test]
-fn running_session_cancel_confirmation() -> E2eResult {
+#[tokio::test]
+async fn running_session_cancel_confirmation() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("running_session_cancel")
         .with_git()
-        .setup(seed_cancelable_running_session)
+        .setup(|env| Box::pin(async move { seed_cancelable_running_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -418,37 +438,44 @@ fn running_session_cancel_confirmation() -> E2eResult {
                     )
             },
             |frame, report| {
-                let list_frame = common::frame_from_capture(&report.captures[0]);
-                let list_full = Region::full(list_frame.cols(), list_frame.rows());
-                assertion::assert_text_in_region(&list_frame, "Cancel running session", &list_full);
-                assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
+                Box::pin(async move {
+                    let list_frame = common::frame_from_capture(&report.captures[0]);
+                    let list_full = Region::full(list_frame.cols(), list_frame.rows());
+                    assertion::assert_text_in_region(
+                        &list_frame,
+                        "Cancel running session",
+                        &list_full,
+                    );
+                    assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
 
-                let confirmation_frame = common::frame_from_capture(&report.captures[1]);
-                let confirmation_full =
-                    Region::full(confirmation_frame.cols(), confirmation_frame.rows());
-                assertion::assert_text_in_region(
-                    &confirmation_frame,
-                    "Confirm Cancel",
-                    &confirmation_full,
-                );
+                    let confirmation_frame = common::frame_from_capture(&report.captures[1]);
+                    let confirmation_full =
+                        Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                    assertion::assert_text_in_region(
+                        &confirmation_frame,
+                        "Confirm Cancel",
+                        &confirmation_full,
+                    );
 
-                let final_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "ARCHIVE", &final_full);
-                assertion::assert_text_in_region(frame, "Canceled", &final_full);
+                    let final_full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "ARCHIVE", &final_full);
+                    assertion::assert_text_in_region(frame, "Canceled", &final_full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that canceling a stacked child moves it into the archive group when
 /// its parent remains active.
-#[test]
-fn stacked_child_cancel_confirmation_archives_child() -> E2eResult {
+#[tokio::test]
+async fn stacked_child_cancel_confirmation_archives_child() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("stacked_child_cancel_archive")
         .with_git()
-        .setup(seed_cancelable_stacked_child_session)
+        .setup(|env| Box::pin(async move { seed_cancelable_stacked_child_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -476,47 +503,58 @@ fn stacked_child_cancel_confirmation_archives_child() -> E2eResult {
                     )
             },
             |frame, report| {
-                let list_frame = common::frame_from_capture(&report.captures[0]);
-                let list_full = Region::full(list_frame.cols(), list_frame.rows());
-                assertion::assert_text_in_region(
-                    &list_frame,
-                    "Parent for child cancel",
-                    &list_full,
-                );
-                assertion::assert_text_in_region(&list_frame, "└ [XS] Stacked child", &list_full);
+                Box::pin(async move {
+                    let list_frame = common::frame_from_capture(&report.captures[0]);
+                    let list_full = Region::full(list_frame.cols(), list_frame.rows());
+                    assertion::assert_text_in_region(
+                        &list_frame,
+                        "Parent for child cancel",
+                        &list_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &list_frame,
+                        "└ [XS] Stacked child",
+                        &list_full,
+                    );
 
-                let confirmation_frame = common::frame_from_capture(&report.captures[1]);
-                let confirmation_full =
-                    Region::full(confirmation_frame.cols(), confirmation_frame.rows());
-                assertion::assert_text_in_region(
-                    &confirmation_frame,
-                    "Confirm Cancel",
-                    &confirmation_full,
-                );
+                    let confirmation_frame = common::frame_from_capture(&report.captures[1]);
+                    let confirmation_full =
+                        Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                    assertion::assert_text_in_region(
+                        &confirmation_frame,
+                        "Confirm Cancel",
+                        &confirmation_full,
+                    );
 
-                let final_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "ARCHIVE", &final_full);
-                assertion::assert_text_in_region(frame, "Canceled", &final_full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Stacked child cancel archive",
-                    &final_full,
-                );
-                assertion::assert_not_visible(frame, "└ [XS] Stacked child");
+                    let final_full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "ARCHIVE", &final_full);
+                    assertion::assert_text_in_region(frame, "Canceled", &final_full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Stacked child cancel archive",
+                        &final_full,
+                    );
+                    assertion::assert_not_visible(frame, "└ [XS] Stacked child");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that canceling a stack parent also cancels a nested descendant in
 /// active non-`InProgress` branch work.
-#[test]
-fn stacked_parent_cancel_cascades_active_descendant() -> E2eResult {
+#[tokio::test]
+async fn stacked_parent_cancel_cascades_active_descendant() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("stacked_parent_cancel_cascade")
         .with_git()
-        .setup(seed_cancelable_parent_with_active_stacked_descendant)
+        .setup(|env| {
+            Box::pin(
+                async move { seed_cancelable_parent_with_active_stacked_descendant(env).await },
+            )
+        })
         .zola(
             "Stacked cancellation cascade",
             "Cancel a stack parent and stop every active nested descendant.",
@@ -548,32 +586,39 @@ fn stacked_parent_cancel_cascades_active_descendant() -> E2eResult {
                     )
             },
             |frame, report| {
-                let active_frame = common::frame_from_capture(&report.captures[0]);
-                let active_full = Region::full(active_frame.cols(), active_frame.rows());
-                assertion::assert_text_in_region(
-                    &active_frame,
-                    "Active cascade grandchild",
-                    &active_full,
-                );
-                assertion::assert_text_in_region(&active_frame, "Question", &active_full);
+                Box::pin(async move {
+                    let active_frame = common::frame_from_capture(&report.captures[0]);
+                    let active_full = Region::full(active_frame.cols(), active_frame.rows());
+                    assertion::assert_text_in_region(
+                        &active_frame,
+                        "Active cascade grandchild",
+                        &active_full,
+                    );
+                    assertion::assert_text_in_region(&active_frame, "Question", &active_full);
 
-                let confirmation_frame = common::frame_from_capture(&report.captures[1]);
-                let confirmation_full =
-                    Region::full(confirmation_frame.cols(), confirmation_frame.rows());
-                assertion::assert_text_in_region(
-                    &confirmation_frame,
-                    "Confirm Cancel",
-                    &confirmation_full,
-                );
+                    let confirmation_frame = common::frame_from_capture(&report.captures[1]);
+                    let confirmation_full =
+                        Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                    assertion::assert_text_in_region(
+                        &confirmation_frame,
+                        "Confirm Cancel",
+                        &confirmation_full,
+                    );
 
-                let final_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Cancel cascade parent", &final_full);
-                assertion::assert_text_in_region(frame, "Cancel cascade child", &final_full);
-                assertion::assert_text_in_region(frame, "Active cascade grandchild", &final_full);
-                let final_text = frame.text_in_region(&final_full);
-                assert_eq!(final_text.matches("Canceled").count(), 3);
+                    let final_full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Cancel cascade parent", &final_full);
+                    assertion::assert_text_in_region(frame, "Cancel cascade child", &final_full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Active cascade grandchild",
+                        &final_full,
+                    );
+                    let final_text = frame.text_in_region(&final_full);
+                    assert_eq!(final_text.matches("Canceled").count(), 3);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

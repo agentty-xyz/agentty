@@ -5,13 +5,14 @@
 //! reducer behavior.
 
 mod draw;
-mod events;
+mod event;
 mod new;
 mod state;
 
-pub(crate) use events::{AppEvent, AppRuntimeEvent};
+pub(crate) use event::{AppEvent, AppRuntimeEvent};
 #[cfg(test)]
-pub(crate) use state::AppClients;
+#[path = "core_test_support_test.rs"]
+pub(crate) mod test_support;
 pub(crate) use state::SyncReviewRequestTaskResult;
 pub use state::{AGENTTY_WT_DIR, App, UpdateStatus};
 

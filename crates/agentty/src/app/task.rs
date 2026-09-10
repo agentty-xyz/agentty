@@ -32,30 +32,32 @@ use crate::infra::{file_index, version};
 
 /// Delay applied before a fresh `@`-mention filesystem walk starts.
 const AT_MENTION_LOAD_DEBOUNCE: Duration = Duration::from_millis(75);
+
 /// Delay before a failed focused-review persistence write is retried through
 /// the foreground event reducer.
 const FOCUSED_REVIEW_PERSISTENCE_RETRY_BASE_DELAY: Duration = Duration::from_millis(250);
+
 /// Interval between background checks for a newer Agentty release.
 const VERSION_CHECK_INTERVAL: Duration = Duration::from_hours(1);
+
 /// Test-only environment override for the version-check interval in
 /// milliseconds.
 const VERSION_CHECK_INTERVAL_MS_ENV_VAR: &str = "AGENTTY_TEST_VERSION_CHECK_INTERVAL_MS";
+
 /// Monotonic counter used to distinguish stale and current at-mention loads.
 static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
 /// Monotonic counter used to distinguish stale review-comment loads.
 static NEXT_REVIEW_COMMENT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
 /// Monotonic counter used to distinguish stale session-diff loads.
 static NEXT_SESSION_DIFF_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
-
-/// Stateless helpers for app-scoped one-shot background tasks and app-server
-/// session execution.
-pub(crate) struct TaskService;
 
 /// External version lookup and package-install boundary used by the periodic
 /// update task.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-trait VersionTaskRunner: Send + Sync {
+pub(crate) trait VersionTaskRunner: Send + Sync {
     /// Returns the latest published Agentty version tag.
     async fn latest_version_tag(&self) -> Option<String>;
 
@@ -64,44 +66,15 @@ trait VersionTaskRunner: Send + Sync {
 }
 
 /// Production version task runner backed by npm/curl infrastructure.
-struct RealVersionTaskRunner {
-    external_commands_enabled: bool,
-}
-
-impl RealVersionTaskRunner {
-    /// Creates the production runner while keeping ordinary unit tests
-    /// deterministic and offline.
-    fn new() -> Self {
-        Self {
-            external_commands_enabled: !cfg!(test),
-        }
-    }
-
-    #[cfg(test)]
-    /// Creates a runner that exercises real command boundaries in an isolated
-    /// child process with a controlled `PATH`.
-    fn with_external_commands() -> Self {
-        Self {
-            external_commands_enabled: true,
-        }
-    }
-}
+pub(crate) struct RealVersionTaskRunner;
 
 #[async_trait]
 impl VersionTaskRunner for RealVersionTaskRunner {
     async fn latest_version_tag(&self) -> Option<String> {
-        if !self.external_commands_enabled {
-            return None;
-        }
-
         version::latest_npm_version_tag().await
     }
 
     async fn run_update(&self) -> bool {
-        if !self.external_commands_enabled {
-            return false;
-        }
-
         version::run_npm_update().await.is_ok()
     }
 }
@@ -168,6 +141,10 @@ struct ReviewAssistPromptTemplate<'a> {
     /// Transcript context wrapped in a Markdown fence sized for its content.
     session_chat_history: &'a str,
 }
+
+/// Stateless helpers for app-scoped one-shot background tasks and app-server
+/// session execution.
+pub(crate) struct TaskService;
 
 impl TaskService {
     /// Spawns one session-diff load and returns its stale-safe request
@@ -392,17 +369,18 @@ impl TaskService {
     /// `InProgress`, then `Complete` or `Failed` depending on the npm
     /// install outcome.
     ///
-    /// In tests, each check emits `None` instead of touching the network so
-    /// test runs stay deterministic and offline.
+    /// The injected runner controls external lookups and updates; unit tests
+    /// supply an offline runner.
     pub(super) fn spawn_version_check_task(
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         auto_update: bool,
+        version_task_runner: Arc<dyn VersionTaskRunner>,
     ) {
         std::mem::drop(Self::spawn_version_check_task_with_interval(
             app_event_tx,
             auto_update,
             Self::version_check_interval(),
-            Arc::new(RealVersionTaskRunner::new()),
+            version_task_runner,
         ));
     }
 
@@ -769,4 +747,4 @@ fn review_comment_anchor_side_order(anchor_side: ReviewCommentAnchorSide) -> u8 
 
 #[cfg(test)]
 #[path = "task_test.rs"]
-mod tests;
+pub(crate) mod tests;

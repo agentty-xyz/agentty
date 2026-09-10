@@ -7,6 +7,8 @@
 //! `claude` stub that emits a canned reply over the stream-json protocol, and
 //! drives VHS with a hand-crafted tape.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,9 +42,9 @@ const GIF_NAME: &str = "demo";
 ///
 /// Gated behind `#[ignore]` because it requires VHS, the real `agentty`
 /// binary, and ~2 minutes of wall clock time.
-#[test]
+#[tokio::test]
 #[ignore = "requires VHS and regenerates a marketing asset"]
-fn generate_marketing_demo_gif() -> DemoResult {
+async fn generate_marketing_demo_gif() -> DemoResult {
     // Arrange
     if Command::new("vhs").arg("--version").output().is_err() {
         return Ok(());
@@ -62,7 +64,7 @@ fn generate_marketing_demo_gif() -> DemoResult {
     // Agentty reads `current_dir()` which is canonicalized; seed using the
     // same canonical form the app will upsert itself.
     let canonical_cwd = env.workdir.canonicalize()?;
-    seed_database(&env, &fake_project_paths, &canonical_cwd)?;
+    seed_database(&env, &fake_project_paths, &canonical_cwd).await?;
 
     let output_dir = repo_demo_dir();
     std::fs::create_dir_all(&output_dir)?;
@@ -222,7 +224,6 @@ printf '%s\n' '{result_event}'
     std::fs::write(&claude_path, &script)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
     }
 
@@ -268,7 +269,6 @@ done
     std::fs::write(&codex_path, script)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o750))?;
     }
 
@@ -291,7 +291,6 @@ fn install_agent_availability_stubs(env: &BuilderEnv) -> std::io::Result<()> {
     )?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o750))?;
     }
 
@@ -323,16 +322,12 @@ fn symlink_agentty_into_stub_bin(env: &BuilderEnv) -> std::io::Result<()> {
 /// second selects Codex `gpt-5.6-sol`. The pre-seeded rows never run, so their
 /// models are only ever read by the list renderer to decide the per-row agent
 /// badge.
-fn seed_database(
+async fn seed_database(
     env: &BuilderEnv,
     fake_project_paths: &[PathBuf],
     canonical_cwd: &Path,
 ) -> DemoResult {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-
-    runtime.block_on(async {
+    (async {
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
 
@@ -399,7 +394,8 @@ ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
         connection.close().await?;
 
         Result::<(), Box<dyn std::error::Error>>::Ok(())
-    })?;
+    })
+    .await?;
 
     Ok(())
 }

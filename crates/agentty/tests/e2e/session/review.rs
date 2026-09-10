@@ -23,10 +23,10 @@ const GEMINI_FOCUSED_REVIEW_TEXT: &str = "Gemini focused review completed withou
 /// Seeds a Codex focused review whose first direct review has an unknown field,
 /// then returns a valid direct review for the schema-repair turn. Both turns
 /// include a blank duplicate final item in `turn/completed`.
-fn seed_codex_review_with_blank_completed_fallback(
+async fn seed_codex_review_with_blank_completed_fallback(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+    seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
 
     let codex_path = env.stub_bin.join("codex");
@@ -84,13 +84,14 @@ done
             ("DefaultReviewModel", "gpt-5.6-sol"),
         ],
     )
+    .await
 }
 
 /// Seeds a Gemini focused review whose ACP stub rejects plan-mode startup.
-fn seed_gemini_focused_review_without_plan_mode(
+async fn seed_gemini_focused_review_without_plan_mode(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+    seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
 
     let gemini_path = env.stub_bin.join("gemini");
@@ -137,23 +138,26 @@ done
             ("DefaultReviewModel", "gemini-3.1-pro-preview"),
         ],
     )
+    .await
 }
 
 /// Seeds a real review worktree and deterministic providers for automatic
 /// remediation lifecycle coverage.
-fn seed_auto_address_review_lifecycle(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_auto_address_review_mode(env)?;
+async fn seed_auto_address_review_lifecycle(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_auto_address_review_mode(env).await?;
     seed_linked_review_worktree_with_diff(env)?;
-    install_auto_address_review_lifecycle_stub(env)?;
+    install_auto_address_review_lifecycle_stub(env).await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
             .update_session_model("review-shortcut-0001", "claude-haiku-4-5-20251001")
             .await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
@@ -161,7 +165,7 @@ fn seed_auto_address_review_lifecycle(env: &BuilderEnv) -> Result<(), Box<dyn st
 /// Installs one prompt-aware Claude stub that exposes both automatic-review
 /// stop conditions through stable transcript text. Coding turns change the
 /// tracked fixture so each completed turn remains eligible for review.
-fn install_auto_address_review_lifecycle_stub(
+async fn install_auto_address_review_lifecycle_stub(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
@@ -233,17 +237,15 @@ printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result
             ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
         ],
     )
+    .await
 }
 
 /// Seeds one session that is already generating focused review output so
 /// shortcut rendering can cover the transient `AgentReview` state.
-fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+async fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_workdir = env.workdir.canonicalize()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
 
-    runtime.block_on(async {
+    (async {
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         let project_id = database
@@ -276,7 +278,8 @@ fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
             .sessions()
             .update_session_diff_stats(8, 2, true, "agent-review-sync-0001", "S")
             .await
-    })?;
+    })
+    .await?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("agent-re"))?;
 
@@ -285,14 +288,12 @@ fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
 
 /// Seeds one review-ready session with a focused review already persisted as
 /// if Agentty had been restarted after review generation completed.
-fn seed_review_ready_session_with_persisted_focused_review(
+async fn seed_review_ready_session_with_persisted_focused_review(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+    seed_review_ready_session(env).await?;
 
-    let runtime = common::seed_runtime()?;
-
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -308,21 +309,24 @@ fn seed_review_ready_session_with_persisted_focused_review(
             )
             .await?;
         Ok::<(), ag_store::DbError>(())
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Seeds one persisted focused review plus a second project so the review can
 /// be restored after switching away from its owning project and back.
-fn seed_cross_project_focused_review(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session_with_persisted_focused_review(env)?;
-    common::seed_mru_first_second_project(env)
+async fn seed_cross_project_focused_review(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_persisted_focused_review(env).await?;
+    common::seed_mru_first_second_project(env).await
 }
 
 /// Seeds two review-ready sessions with distinct persisted focused reviews so
 /// switching away and back can verify cache-backed output restoration.
-fn seed_sessions_with_persisted_focused_reviews(
+async fn seed_sessions_with_persisted_focused_reviews(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // The session list orders by `updated_at DESC, created_at DESC, id`, and
@@ -335,10 +339,10 @@ fn seed_sessions_with_persisted_focused_reviews(
         env,
         SessionSeed::regular("second-review-0001", "gpt-5.6-sol", "main", "Review")
             .with_title("Second persisted review"),
-    )?;
+    )
+    .await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -353,24 +357,29 @@ fn seed_sessions_with_persisted_focused_reviews(
                 ),
             )
             .await
-    })?;
+    })
+    .await?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("second-r"))?;
 
-    seed_review_ready_session_with_persisted_focused_review(env)?;
+    seed_review_ready_session_with_persisted_focused_review(env).await?;
 
     Ok(())
 }
 
 /// Verify that persisted focused review text is restored into the session
 /// output panel after Agentty starts again.
-#[test]
-fn persisted_focused_review_survives_reload() -> E2eResult {
+#[tokio::test]
+async fn persisted_focused_review_survives_reload() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("persisted_focused_review")
         .with_terminal_size(100, 40)
         .with_git()
-        .setup(seed_review_ready_session_with_persisted_focused_review)
+        .setup(|env| {
+            Box::pin(
+                async move { seed_review_ready_session_with_persisted_focused_review(env).await },
+            )
+        })
         .run(
             |scenario| {
                 scenario
@@ -385,47 +394,56 @@ fn persisted_focused_review_survives_reload() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Persisted focused review finding.", &full);
-                let impact_header = frame
-                    .find_text("Project Impact")
-                    .into_iter()
-                    .next()
-                    .expect("project impact header should render");
-                let impact_finding = frame
-                    .find_text("Persisted focused review finding.")
-                    .into_iter()
-                    .next()
-                    .expect("project impact finding should render");
-                let suggestions_header = frame
-                    .find_text("Suggestions")
-                    .into_iter()
-                    .next()
-                    .expect("suggestions header should render");
-                let empty_suggestion = frame
-                    .find_text("- None.")
-                    .into_iter()
-                    .next()
-                    .expect("empty suggestion should render");
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Persisted focused review finding.",
+                        &full,
+                    );
+                    let impact_header = frame
+                        .find_text("Project Impact")
+                        .into_iter()
+                        .next()
+                        .expect("project impact header should render");
+                    let impact_finding = frame
+                        .find_text("Persisted focused review finding.")
+                        .into_iter()
+                        .next()
+                        .expect("project impact finding should render");
+                    let suggestions_header = frame
+                        .find_text("Suggestions")
+                        .into_iter()
+                        .next()
+                        .expect("suggestions header should render");
+                    let empty_suggestion = frame
+                        .find_text("- None.")
+                        .into_iter()
+                        .next()
+                        .expect("empty suggestion should render");
 
-                assert_eq!(impact_finding.rect.row, impact_header.rect.row + 1);
-                assert_eq!(empty_suggestion.rect.row, suggestions_header.rect.row + 1);
-                assertion::assert_not_visible(frame, "Change Summary");
-                assertion::assert_not_visible(frame, "type \"/apply\" to verify and apply");
+                    assert_eq!(impact_finding.rect.row, impact_header.rect.row + 1);
+                    assert_eq!(empty_suggestion.rect.row, suggestions_header.rect.row + 1);
+                    assertion::assert_not_visible(frame, "Change Summary");
+                    assertion::assert_not_visible(frame, "type \"/apply\" to verify and apply");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify each session restores its own persisted focused review after users
 /// switch between session views.
-#[test]
-fn focused_reviews_survive_session_switching() -> E2eResult {
+#[tokio::test]
+async fn focused_reviews_survive_session_switching() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("focused_reviews_survive_session_switching")
         .with_git()
-        .setup(seed_sessions_with_persisted_focused_reviews)
+        .setup(|env| {
+            Box::pin(async move { seed_sessions_with_persisted_focused_reviews(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -446,50 +464,53 @@ fn focused_reviews_survive_session_switching() -> E2eResult {
                     .capture_labeled("restored_first_review", "Restored first focused review")
             },
             |frame, report| {
-                assert_eq!(report.captures.len(), 3);
-                let first_frame = common::frame_from_capture(&report.captures[0]);
-                let second_frame = common::frame_from_capture(&report.captures[1]);
-                let restored_first_frame = common::frame_from_capture(&report.captures[2]);
-                let first_full = Region::full(first_frame.cols(), first_frame.rows());
-                let second_full = Region::full(second_frame.cols(), second_frame.rows());
-                let restored_first_full =
-                    Region::full(restored_first_frame.cols(), restored_first_frame.rows());
-                let final_full = Region::full(frame.cols(), frame.rows());
+                Box::pin(async move {
+                    assert_eq!(report.captures.len(), 3);
+                    let first_frame = common::frame_from_capture(&report.captures[0]);
+                    let second_frame = common::frame_from_capture(&report.captures[1]);
+                    let restored_first_frame = common::frame_from_capture(&report.captures[2]);
+                    let first_full = Region::full(first_frame.cols(), first_frame.rows());
+                    let second_full = Region::full(second_frame.cols(), second_frame.rows());
+                    let restored_first_full =
+                        Region::full(restored_first_frame.cols(), restored_first_frame.rows());
+                    let final_full = Region::full(frame.cols(), frame.rows());
 
-                assertion::assert_text_in_region(
-                    &first_frame,
-                    "Persisted focused review finding.",
-                    &first_full,
-                );
-                assertion::assert_text_in_region(
-                    &second_frame,
-                    "Second persisted review finding.",
-                    &second_full,
-                );
-                assertion::assert_text_in_region(
-                    &restored_first_frame,
-                    "Persisted focused review finding.",
-                    &restored_first_full,
-                );
-                assertion::assert_text_in_region(
-                    frame,
-                    "Persisted focused review finding.",
-                    &final_full,
-                );
+                    assertion::assert_text_in_region(
+                        &first_frame,
+                        "Persisted focused review finding.",
+                        &first_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &second_frame,
+                        "Second persisted review finding.",
+                        &second_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &restored_first_frame,
+                        "Persisted focused review finding.",
+                        &restored_first_full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Persisted focused review finding.",
+                        &final_full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify a persisted focused review remains available after users switch
 /// away from its owning project and back.
-#[test]
-fn focused_review_survives_project_switching() -> E2eResult {
+#[tokio::test]
+async fn focused_review_survives_project_switching() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("focused_review_survives_project_switching")
         .with_git()
-        .setup(seed_cross_project_focused_review)
+        .setup(|env| Box::pin(async move { seed_cross_project_focused_review(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -514,24 +535,31 @@ fn focused_review_survives_project_switching() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Persisted focused review finding.", &full);
-                assertion::assert_text_in_region(frame, "Suggestions", &full);
-                assertion::assert_not_visible(frame, "Reviewing changes with");
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Persisted focused review finding.",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "Suggestions", &full);
+                    assertion::assert_not_visible(frame, "Reviewing changes with");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify focused review treats explanations and accepted tradeoffs from the
 /// saved session chat as constraints instead of repeating resolved advice.
-#[test]
-fn focused_review_honors_resolved_session_decisions() -> E2eResult {
+#[tokio::test]
+async fn focused_review_honors_resolved_session_decisions() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("focused_review_resolved_decision")
         .with_git()
-        .setup(seed_review_with_resolved_decision)
+        .setup(|env| Box::pin(async move { seed_review_with_resolved_decision(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -548,26 +576,31 @@ fn focused_review_honors_resolved_session_decisions() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, RESOLVED_DECISION_REVIEW_TEXT, &full);
-                assertion::assert_text_in_region(frame, "Suggestions", &full);
-                assertion::assert_text_in_region(frame, "- None", &full);
-                assertion::assert_not_visible(frame, MISSING_DECISION_CONTEXT_POLICY_TEXT);
-                assertion::assert_not_visible(frame, MISSING_RESOLVED_DECISION_HISTORY_TEXT);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, RESOLVED_DECISION_REVIEW_TEXT, &full);
+                    assertion::assert_text_in_region(frame, "Suggestions", &full);
+                    assertion::assert_text_in_region(frame, "- None", &full);
+                    assertion::assert_not_visible(frame, MISSING_DECISION_CONTEXT_POLICY_TEXT);
+                    assertion::assert_not_visible(frame, MISSING_RESOLVED_DECISION_HISTORY_TEXT);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify Codex focused review uses its direct transport schema, repairs
 /// unknown fields, and ignores a blank completion fallback.
-#[test]
-fn focused_review_ignores_blank_completed_fallback() -> E2eResult {
+#[tokio::test]
+async fn focused_review_ignores_blank_completed_fallback() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("focused_review_ignores_blank_completed_fallback")
         .with_git()
-        .setup(seed_codex_review_with_blank_completed_fallback)
+        .setup(|env| {
+            Box::pin(async move { seed_codex_review_with_blank_completed_fallback(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -583,29 +616,34 @@ fn focused_review_ignores_blank_completed_fallback() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Final focused review result.", &full);
-                assertion::assert_text_in_region(frame, "Suggestions", &full);
-                assertion::assert_not_visible(frame, "I will inspect the current code.");
-                assertion::assert_not_visible(frame, "Reviewing changes with");
-                assertion::assert_not_visible(
-                    frame,
-                    "Codex did not receive the focused-review output schema.",
-                );
-                assertion::assert_not_visible(frame, "Review assist unavailable");
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Final focused review result.", &full);
+                    assertion::assert_text_in_region(frame, "Suggestions", &full);
+                    assertion::assert_not_visible(frame, "I will inspect the current code.");
+                    assertion::assert_not_visible(frame, "Reviewing changes with");
+                    assertion::assert_not_visible(
+                        frame,
+                        "Codex did not receive the focused-review output schema.",
+                    );
+                    assertion::assert_not_visible(frame, "Review assist unavailable");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify Gemini focused review avoids the plan-mode bootstrap.
-#[test]
-fn gemini_focused_review_avoids_plan_mode_bootstrap() -> E2eResult {
+#[tokio::test]
+async fn gemini_focused_review_avoids_plan_mode_bootstrap() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("gemini_focused_review_avoids_plan_mode_bootstrap")
         .with_git()
-        .setup(seed_gemini_focused_review_without_plan_mode)
+        .setup(|env| {
+            Box::pin(async move { seed_gemini_focused_review_without_plan_mode(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -621,24 +659,27 @@ fn gemini_focused_review_avoids_plan_mode_bootstrap() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, GEMINI_FOCUSED_REVIEW_TEXT, &full);
-                assertion::assert_text_in_region(frame, "Suggestions", &full);
-                assertion::assert_not_visible(frame, "Reviewing changes with");
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, GEMINI_FOCUSED_REVIEW_TEXT, &full);
+                    assertion::assert_text_in_region(frame, "Suggestions", &full);
+                    assertion::assert_not_visible(frame, "Reviewing changes with");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify the `AgentReview` session footer keeps the sync shortcut visible so
 /// users can start a rebase without waiting for focused review generation.
-#[test]
-fn agent_review_session_shows_sync_shortcut() -> E2eResult {
+#[tokio::test]
+async fn agent_review_session_shows_sync_shortcut() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("agent_review_sync_shortcut")
         .with_git()
-        .setup(seed_agent_review_session)
+        .setup(|env| Box::pin(async move { seed_agent_review_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -653,23 +694,26 @@ fn agent_review_session_shows_sync_shortcut() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Agent review sync shortcut", &full);
-                assertion::assert_text_in_region(frame, "r: sync", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Agent review sync shortcut", &full);
+                    assertion::assert_text_in_region(frame, "r: sync", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that typing `/apply` in a review-ready session keeps the command
 /// text visible when no actionable focused-review cache is available.
-#[test]
-fn apply_slash_command_unavailable_without_review_cache() -> E2eResult {
+#[tokio::test]
+async fn apply_slash_command_unavailable_without_review_cache() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("apply_slash_command_no_review")
         .with_git()
-        .setup(seed_review_ready_session)
+        .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
         .zola(
             "Apply slash command",
             "Type unavailable `/apply` in a review-ready session and keep the prompt intact.",
@@ -700,33 +744,36 @@ fn apply_slash_command_unavailable_without_review_cache() -> E2eResult {
                     )
             },
             |frame, report| {
-                let suggestion_frame = common::frame_from_capture(&report.captures[0]);
-                let suggestion_full =
-                    Region::full(suggestion_frame.cols(), suggestion_frame.rows());
-                assertion::assert_text_in_region(&suggestion_frame, "/model", &suggestion_full);
+                Box::pin(async move {
+                    let suggestion_frame = common::frame_from_capture(&report.captures[0]);
+                    let suggestion_full =
+                        Region::full(suggestion_frame.cols(), suggestion_frame.rows());
+                    assertion::assert_text_in_region(&suggestion_frame, "/model", &suggestion_full);
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "/apply", &full);
-                let full_text = frame.text_in_region(&full);
-                assert!(
-                    !full_text.contains("Run a focused review first"),
-                    "session without actionable review cache should not show apply guidance"
-                );
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "/apply", &full);
+                    let full_text = frame.text_in_region(&full);
+                    assert!(
+                        !full_text.contains("Run a focused review first"),
+                        "session without actionable review cache should not show apply guidance"
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify `Shift+Tab` reaches automatic review addressing without changing the
 /// draft.
-#[test]
-fn shift_tab_auto_address_mode() -> E2eResult {
+#[tokio::test]
+async fn shift_tab_auto_address_mode() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("shift_tab_auto_address_mode")
         .with_git()
         .with_terminal_size(180, 24)
-        .setup(seed_review_ready_session_on_sessions_tab)
+        .setup(|env| Box::pin(async move { seed_review_ready_session_on_sessions_tab(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -739,27 +786,30 @@ fn shift_tab_auto_address_mode() -> E2eResult {
                     .wait_for_text("Auto Edit + Auto Address Comments", 5000)
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "] · Normal · Auto Edit + Auto Address Comments",
-                    &full,
-                );
-                assertion::assert_text_in_region(frame, "Keep this draft", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "] · Normal · Auto Edit + Auto Address Comments",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "Keep this draft", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify `/mode` exposes and selects bounded focused-review automation.
-#[test]
-fn auto_address_review_mode() -> E2eResult {
+#[tokio::test]
+async fn auto_address_review_mode() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("auto_address_review_mode")
         .with_git()
         .with_terminal_size(180, 24)
-        .setup(seed_auto_address_review_mode)
+        .setup(|env| Box::pin(async move { seed_auto_address_review_mode(env).await }))
         .zola(
             "Automatically address review suggestions",
             "Enable auto-edit and apply focused-review suggestions for up to three iterations.",
@@ -792,40 +842,43 @@ fn auto_address_review_mode() -> E2eResult {
                     )
             },
             |frame, report| {
-                let picker_frame = common::frame_from_capture(&report.captures[0]);
-                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
-                assertion::assert_text_in_region(
-                    &picker_frame,
-                    "Auto Edit + Auto Address Comments",
-                    &picker_full,
-                );
-                assertion::assert_text_in_region(
-                    &picker_frame,
-                    "address focused-review suggestions up to 3 times",
-                    &picker_full,
-                );
+                Box::pin(async move {
+                    let picker_frame = common::frame_from_capture(&report.captures[0]);
+                    let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+                    assertion::assert_text_in_region(
+                        &picker_frame,
+                        "Auto Edit + Auto Address Comments",
+                        &picker_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &picker_frame,
+                        "address focused-review suggestions up to 3 times",
+                        &picker_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "] · Normal · Auto Edit + Auto Address Comments",
-                    &full,
-                );
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "] · Normal · Auto Edit + Auto Address Comments",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify automatic focused-review remediation stops without suggestions and
 /// after three iterations through the real session runtime.
-#[test]
-fn auto_address_review_lifecycle() -> E2eResult {
+#[tokio::test]
+async fn auto_address_review_lifecycle() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("auto_address_review_lifecycle")
         .with_git()
         .with_terminal_size(180, 24)
-        .setup(seed_auto_address_review_lifecycle)
+        .setup(|env| Box::pin(async move { seed_auto_address_review_lifecycle(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -859,37 +912,40 @@ fn auto_address_review_lifecycle() -> E2eResult {
                     )
             },
             |frame, report| {
-                let no_suggestions_frame = common::frame_from_capture(&report.captures[0]);
-                let no_suggestions_full =
-                    Region::full(no_suggestions_frame.cols(), no_suggestions_frame.rows());
-                assertion::assert_text_in_region(
-                    &no_suggestions_frame,
-                    "No suggestions remain after one automatic remediation.",
-                    &no_suggestions_full,
-                );
-                assertion::assert_text_in_region(
-                    &no_suggestions_frame,
-                    "- None",
-                    &no_suggestions_full,
-                );
+                Box::pin(async move {
+                    let no_suggestions_frame = common::frame_from_capture(&report.captures[0]);
+                    let no_suggestions_full =
+                        Region::full(no_suggestions_frame.cols(), no_suggestions_frame.rows());
+                    assertion::assert_text_in_region(
+                        &no_suggestions_frame,
+                        "No suggestions remain after one automatic remediation.",
+                        &no_suggestions_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &no_suggestions_frame,
+                        "- None",
+                        &no_suggestions_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "Three automatic remediation iterations completed.",
-                    &full,
-                );
-                assertion::assert_text_in_region(
-                    frame,
-                    "Fourth suggestion remains unapplied at the iteration limit.",
-                    &full,
-                );
-                assertion::assert_not_visible(
-                    frame,
-                    "Automatic remediation exceeded the iteration limit.",
-                );
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Three automatic remediation iterations completed.",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Fourth suggestion remains unapplied at the iteration limit.",
+                        &full,
+                    );
+                    assertion::assert_not_visible(
+                        frame,
+                        "Automatic remediation exceeded the iteration limit.",
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

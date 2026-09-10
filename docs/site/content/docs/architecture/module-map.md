@@ -121,9 +121,9 @@ For file-level detail, read the module docstrings directly.
   `FrameTime` value per render pass without importing Ratatui or `ui/` formatting.
   `presentation/review_comment.rs` owns review comment group ordering and headings while
   preserving forge-thread selection and batch actions across grouped snapshot refreshes.
-  `presentation/settings.rs` owns settings row selection, selectors,
-  launch-configuration editing through the shared `InputState`, and render-ready
-  settings snapshots; it returns typed persistence operations to `app/setting.rs`.
+  `presentation/setting.rs` owns settings row selection, selectors, launch-configuration
+  editing through the shared `InputState`, and render-ready settings snapshots; it
+  returns typed persistence operations to `app/setting.rs`.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
   reusable widgets under `ui/component/`, application-to-frame projection in
   `ui/app_render.rs`, Agentty theme adapters for `ag-tui-text`, plus diff, layout,

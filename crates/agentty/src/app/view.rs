@@ -13,7 +13,7 @@ use crate::domain::theme::ColorTheme;
 use crate::infra::clock;
 use crate::presentation::app_mode::{AppMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
-use crate::presentation::settings::SettingsScreenSnapshot;
+use crate::presentation::setting::SettingsScreenSnapshot;
 
 /// Focused-review display state for the visible session.
 pub(crate) struct SessionReviewView<'a> {
@@ -41,10 +41,10 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) project_sync_status: Option<&'a ProjectSyncStatus>,
     pub(crate) projects: &'a [ProjectListItem],
     pub(crate) session_branch_names: &'a HashMap<SessionId, String>,
+    pub(crate) session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
     pub(crate) session_progress_messages: &'a HashMap<SessionId, String>,
-    pub(crate) session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     /// Latest tracked process-tree totals.
     pub(crate) session_resources: &'a HashMap<SessionId, SessionResources>,
     pub(crate) session_review: Option<SessionReviewView<'a>>,

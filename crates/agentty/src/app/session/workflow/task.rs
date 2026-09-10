@@ -34,11 +34,15 @@ const AUTO_COMMIT_ASSIST_POLICY: AssistPolicy = AssistPolicy {
     max_attempts: 10,
     max_identical_failure_streak: 3,
 };
+
 const SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER: &str =
     "Co-Authored-By: [Agentty](https://github.com/agentty-xyz/agentty)";
+
 const AUTO_COMMIT_ERROR_TRUNCATION_LIMIT: usize = 20_000;
+
 const AUTO_COMMIT_ERROR_TRUNCATED_SECTION_MARKER: &str =
     "[Commit error was truncated to fit context window]";
+
 /// Askama view model for rendering auto-commit recovery prompts.
 #[derive(Template)]
 #[template(path = "auto_commit_assist_prompt.md", escape = "none")]
@@ -76,9 +80,6 @@ struct ReviewRequestMetadataEvaluation {
     is_title_change_significant: bool,
     title: String,
 }
-
-/// Stateless helpers for session process execution and output handling.
-pub(crate) struct SessionTaskService;
 
 /// Bound context for applying status transitions to one live session.
 pub(crate) struct StatusTransition {
@@ -216,6 +217,9 @@ pub(crate) struct SessionTranscriptMessageAppend<'a> {
     /// Raw user or assistant content persisted without TUI formatting.
     pub(crate) raw_content: &'a str,
 }
+
+/// Stateless helpers for session process execution and output handling.
+pub(crate) struct SessionTaskService;
 
 impl SessionTaskService {
     /// Increments and returns the latest observable-state version for one
@@ -687,12 +691,6 @@ impl SessionTaskService {
                     return Err(commit_error);
                 }
                 Err(commit_error) => {
-                    // Keep test execution deterministic and offline by skipping
-                    // model-assisted commit retries.
-                    if cfg!(test) {
-                        return Err(commit_error);
-                    }
-
                     let commit_error_str = commit_error.to_string();
                     if failure_tracker.observe(&commit_error_str) {
                         return Err(SessionError::Workflow(format!(

@@ -384,7 +384,7 @@ async fn spawn_version_check_task_emits_none_update_in_tests() {
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
 
     // Act
-    TaskService::spawn_version_check_task(&app_event_tx, true);
+    TaskService::spawn_version_check_task(&app_event_tx, true, mock_version_task_runner());
     let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
         .await
         .expect("timed out waiting for version-check event")
@@ -603,10 +603,18 @@ async fn version_check_task_retries_failed_update() {
 }
 
 #[tokio::test]
-/// Ensures the real task runner remains offline in ordinary unit tests.
-async fn real_version_task_runner_disables_external_commands_in_tests() {
+/// Ensures an injected runner controls lookup and update results.
+async fn version_task_runner_uses_injected_results() {
     // Arrange
-    let version_task_runner = RealVersionTaskRunner::new();
+    let mut version_task_runner = MockVersionTaskRunner::new();
+    version_task_runner
+        .expect_latest_version_tag()
+        .once()
+        .returning(|| None);
+    version_task_runner
+        .expect_run_update()
+        .once()
+        .returning(|| false);
 
     // Act
     let latest_version_tag = version_task_runner.latest_version_tag().await;
@@ -623,7 +631,7 @@ async fn real_version_task_runner_disables_external_commands_in_tests() {
 async fn real_version_task_runner_uses_external_commands_when_enabled() {
     if std::env::var_os(REAL_VERSION_TASK_CHILD_ENV).is_some() {
         // Arrange
-        let version_task_runner = RealVersionTaskRunner::with_external_commands();
+        let version_task_runner = RealVersionTaskRunner;
 
         // Act
         let latest_version_tag = version_task_runner.latest_version_tag().await;
@@ -1236,4 +1244,12 @@ fn update_status_changed_event_roundtrips_all_variants() {
     assert_ne!(in_progress, complete);
     assert_ne!(complete, failed);
     assert_ne!(in_progress, failed);
+}
+
+/// Supplies an offline version boundary for deterministic app fixtures.
+pub(crate) fn mock_version_task_runner() -> Arc<dyn super::VersionTaskRunner> {
+    let mut runner = super::MockVersionTaskRunner::new();
+    runner.expect_latest_version_tag().returning(|| None);
+
+    Arc::new(runner)
 }

@@ -13,7 +13,7 @@ use crate::common::{BuilderEnv, FeatureTest};
 
 /// Seeds a completed Gemini turn and host samples that keep reusing its PID.
 /// A fixture marker switches the turn to a transport failure on every retry.
-fn seed_gemini_resource_runtime(env: &BuilderEnv) -> E2eResult {
+async fn seed_gemini_resource_runtime(env: &BuilderEnv) -> E2eResult {
     seed_project_settings(
         env,
         &[
@@ -22,7 +22,8 @@ fn seed_gemini_resource_runtime(env: &BuilderEnv) -> E2eResult {
             ("DefaultFastAgent", "codex"),
             ("DefaultFastModel", "gpt-5.6-sol"),
         ],
-    )?;
+    )
+    .await?;
     let scripts = [
         (
             "gemini",
@@ -82,13 +83,13 @@ touch "$HOME/resource-sampled"
 
 /// Shows unavailable accounting before launch and deterministic process-tree
 /// totals while an isolated CLI turn is running.
-#[test]
-fn test_session_resources() -> E2eResult {
+#[tokio::test]
+async fn test_session_resources() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_resources")
         .with_git()
-        .setup(|env| {
-            seed_sessions_tab(env)?;
+        .setup(|env| Box::pin(async move {
+            seed_sessions_tab(env).await?;
             seed_project_settings(
                 env,
                 &[
@@ -97,7 +98,7 @@ fn test_session_resources() -> E2eResult {
                     ("DefaultFastAgent", "codex"),
                     ("DefaultFastModel", "gpt-5.6-sol"),
                 ],
-            )?;
+            ).await?;
             let scripts = [
                 (
                     "claude",
@@ -126,7 +127,7 @@ printf '%s 1 12.5 2048 S\n2147483640 %s 2.5 1024 S\n2147483639 1 90.0 8192 S\n' 
             }
 
             Ok(())
-        })
+        }))
         .zola(
             "Session resources",
             "Inspect agent process count, CPU usage, and resident memory in session chat.",
@@ -154,15 +155,15 @@ printf '%s 1 12.5 2048 S\n2147483640 %s 2.5 1024 S\n2147483639 1 90.0 8192 S\n' 
                     ))
                     .capture_labeled("resources", "Tracked agent and child process usage")
             },
-            |frame, _report| {
+            |frame, _report| Box::pin(async move {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(
                     frame,
                     "Processes: 2  CPU: 15.0%  Memory: 3.0 MiB",
                     &full,
                 );
-            },
-        )?;
+            }),
+        ).await?;
 
     Ok(())
 }
@@ -170,7 +171,7 @@ printf '%s 1 12.5 2048 S\n2147483640 %s 2.5 1024 S\n2147483639 1 90.0 8192 S\n' 
 /// Seeds a retained Codex runtime and deterministic accounting. A marker
 /// switches idle exit into a failing commit hook repaired by a one-shot
 /// runtime.
-fn seed_retained_resource_runtime(env: &BuilderEnv) -> E2eResult {
+async fn seed_retained_resource_runtime(env: &BuilderEnv) -> E2eResult {
     seed_project_settings(
         env,
         &[
@@ -179,7 +180,8 @@ fn seed_retained_resource_runtime(env: &BuilderEnv) -> E2eResult {
             ("DefaultFastAgent", "claude"),
             ("DefaultFastModel", "claude-haiku-4-5-20251001"),
         ],
-    )?;
+    )
+    .await?;
     let scripts = [
         (
             "claude",
@@ -265,12 +267,12 @@ fi
 
 /// An idle retained runtime becomes unavailable after exit, even when later
 /// host snapshots reuse its numeric PID for another process.
-#[test]
-fn session_resources_after_retained_runtime_exit() -> E2eResult {
+#[tokio::test]
+async fn session_resources_after_retained_runtime_exit() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_resources_after_retained_runtime_exit")
         .with_git()
-        .setup(seed_retained_resource_runtime)
+        .setup(|env| Box::pin(async move { seed_retained_resource_runtime(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -288,44 +290,49 @@ fn session_resources_after_retained_runtime_exit() -> E2eResult {
                     .capture_labeled("exited", "Idle exit and PID reuse remain unavailable")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Retained turn completed.", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Processes: --  CPU: --  Memory: --",
-                    &full,
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Retained turn completed.", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Processes: --  CPU: --  Memory: --",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// A separate auto-commit assist runtime must not clear the live chat
 /// runtime's resource root, including after its one-shot cleanup finishes.
-#[test]
-fn session_resources_after_auto_commit_assistance() -> E2eResult {
+#[tokio::test]
+async fn session_resources_after_auto_commit_assistance() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_resources_after_auto_commit_assistance")
         .with_git()
         .setup(|env| {
-            seed_retained_resource_runtime(env)?;
-            std::fs::write(env.home_dir.join("resource-commit-assist"), "assist")?;
-            let hook = env.workdir.join(".git/hooks/pre-commit");
-            std::fs::write(
-                &hook,
-                r#"#!/bin/sh
+            Box::pin(async move {
+                seed_retained_resource_runtime(env).await?;
+                std::fs::write(env.home_dir.join("resource-commit-assist"), "assist")?;
+                let hook = env.workdir.join(".git/hooks/pre-commit");
+                std::fs::write(
+                    &hook,
+                    r#"#!/bin/sh
 if [ -f "$HOME/resource-hook-ready" ] && [ ! -f "$HOME/resource-hook-repaired" ]; then
     printf 'Resource commit hook blocked.\n' >&2
     exit 1
 fi
 exit 0
 "#,
-            )?;
-            #[cfg(unix)]
-            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o750))?;
+                )?;
+                #[cfg(unix)]
+                std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o750))?;
 
-            Ok(())
+                Ok(())
+            })
         })
         .run(
             |scenario| {
@@ -346,27 +353,30 @@ exit 0
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Commit assistance completed.", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Processes: 1  CPU: 12.5%  Memory: 2.0 MiB",
-                    &full,
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Commit assistance completed.", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Processes: 1  CPU: 12.5%  Memory: 2.0 MiB",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Completed Gemini turns must stop accounting for their terminated runtime,
 /// even when a later host snapshot contains the same PID.
-#[test]
-fn session_resources_after_gemini_completion() -> E2eResult {
+#[tokio::test]
+async fn session_resources_after_gemini_completion() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_resources_after_gemini_completion")
         .with_git()
-        .setup(seed_gemini_resource_runtime)
+        .setup(|env| Box::pin(async move { seed_gemini_resource_runtime(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -382,31 +392,36 @@ fn session_resources_after_gemini_completion() -> E2eResult {
                     .capture_labeled("completed", "Terminated runtime has no tracked resources")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Resource turn completed.", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Processes: --  CPU: --  Memory: --",
-                    &full,
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Resource turn completed.", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Processes: --  CPU: --  Memory: --",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Failed and retried Gemini runtimes must stop contributing resources even
 /// when the host keeps reporting their last PID as a live unrelated process.
-#[test]
-fn session_resources_after_gemini_failure() -> E2eResult {
+#[tokio::test]
+async fn session_resources_after_gemini_failure() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_resources_after_gemini_failure")
         .with_git()
         .setup(|env| {
-            seed_gemini_resource_runtime(env)?;
-            std::fs::write(env.home_dir.join("resource-fail-turn"), "fail")?;
+            Box::pin(async move {
+                seed_gemini_resource_runtime(env).await?;
+                std::fs::write(env.home_dir.join("resource-fail-turn"), "fail")?;
 
-            Ok(())
+                Ok(())
+            })
         })
         .run(
             |scenario| {
@@ -423,31 +438,36 @@ fn session_resources_after_gemini_failure() -> E2eResult {
                     .capture_labeled("failed", "Failed runtime has no tracked resources")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Resource runtime failed.", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Processes: --  CPU: --  Memory: --",
-                    &full,
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Resource runtime failed.", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Processes: --  CPU: --  Memory: --",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Accounting ignores a recycled PID throughout delayed retry startup and
 /// resumes only when the replacement runtime announces its own PID.
-#[test]
-fn session_resources_during_delayed_retry() -> E2eResult {
+#[tokio::test]
+async fn session_resources_during_delayed_retry() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_resources_during_delayed_retry")
         .with_git()
         .setup(|env| {
-            seed_gemini_resource_runtime(env)?;
-            std::fs::write(env.home_dir.join("resource-delay-retry"), "delay")?;
+            Box::pin(async move {
+                seed_gemini_resource_runtime(env).await?;
+                std::fs::write(env.home_dir.join("resource-delay-retry"), "delay")?;
 
-            Ok(())
+                Ok(())
+            })
         })
         .run(
             |scenario| {
@@ -470,19 +490,22 @@ fn session_resources_during_delayed_retry() -> E2eResult {
                     .capture_labeled("replacement", "Replacement runtime resources")
             },
             |frame, report| {
-                let restarting = common::frame_from_capture(&report.captures[0]);
-                assertion::assert_text_in_region(
-                    &restarting,
-                    "Processes: --  CPU: --  Memory: --",
-                    &Region::full(restarting.cols(), restarting.rows()),
-                );
-                assertion::assert_text_in_region(
-                    frame,
-                    "Processes: 1  CPU: 90.0%  Memory: 8.0 MiB",
-                    &Region::full(frame.cols(), frame.rows()),
-                );
+                Box::pin(async move {
+                    let restarting = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_text_in_region(
+                        &restarting,
+                        "Processes: --  CPU: --  Memory: --",
+                        &Region::full(restarting.cols(), restarting.rows()),
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Processes: 1  CPU: 90.0%  Memory: 8.0 MiB",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

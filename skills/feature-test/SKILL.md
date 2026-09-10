@@ -72,8 +72,8 @@ use testty::scenario::Scenario;
 use crate::common;
 use crate::common::FeatureTest;
 
-#[test]
-fn test_{name}() {
+#[tokio::test]
+async fn test_{name}() -> Result<(), Box<dyn std::error::Error>> {
     // Arrange, Act, Assert
     FeatureTest::new("{name}")
         .with_git()   // Required for features that create sessions/worktrees.
@@ -96,10 +96,15 @@ fn test_{name}() {
                     .capture_labeled("label", "Description of captured state")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "expected text", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "expected text", &full);
+                })
             },
-        );
+        )
+        .await?;
+
+    Ok(())
 }
 ```
 
@@ -110,8 +115,10 @@ fn test_{name}() {
   session/worktree features).
 - **`.zola(title, description, weight)`** — enable Zola page auto-generation with the
   given frontmatter fields. The page is written only if it does not already exist.
-- **`.run(build_scenario, assert)`** — execute the scenario, run assertions, and
-  generate the GIF.
+- **`.setup(setup)`** — supply an async fixture closure returning
+  `Box::pin(async move { ... })`.
+- **`.run(build_scenario, assert).await`** — execute the scenario, await the boxed async
+  assertion closure, and generate the GIF.
 
 #### Common `Journey` helpers
 

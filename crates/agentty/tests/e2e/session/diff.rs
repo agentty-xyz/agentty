@@ -3,7 +3,6 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use agentty::test_support;
 use testty::assertion;
 use testty::frame::TerminalFrame;
 use testty::proof::report::ProofReport;
@@ -16,33 +15,34 @@ use super::fixture::{
     seed_review_ready_session_with_review_request, seed_review_worktree_with_diff,
     seed_sessions_startup_tab,
 };
-use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::{common, test_support};
 
 /// Stable id for the seeded binary-only diff session.
 const BINARY_DIFF_SESSION_ID: &str = "binary-diff-0001";
 
 /// Seeds one review-ready session whose latest diff refresh found no changes.
-fn seed_clean_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+async fn seed_clean_review_ready_session(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env).await?;
     seed_clean_review_worktree(env)?;
 
-    let runtime = common::seed_runtime()?;
-
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
             .update_session_diff_stats(0, 0, false, "review-shortcut-0001", "XS")
             .await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Seeds a linked review worktree whose diff replaces one existing source
 /// line, yielding adjacent old- and new-side rows.
-fn seed_linked_review_worktree_with_replacement_diff(
+async fn seed_linked_review_worktree_with_replacement_diff(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(env.workdir.join("src"))?;
@@ -52,7 +52,7 @@ fn seed_linked_review_worktree_with_replacement_diff(
     )?;
     run_git(&env.workdir, &["add", "."])?;
     run_git(&env.workdir, &["commit", "-m", "add initial main"])?;
-    seed_review_ready_session(env)?;
+    seed_review_ready_session(env).await?;
 
     let session_worktree = env.agentty_root.join("wt").join("review-s");
     std::fs::remove_dir(&session_worktree)?;
@@ -115,7 +115,7 @@ done
 
 /// Installs a deterministic review provider so the automatic post-turn review
 /// reaches a visible terminal state before the final feature capture.
-fn seed_line_comment_review_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+async fn seed_line_comment_review_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
@@ -135,6 +135,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"project_impact\
             ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
         ],
     )
+    .await
 }
 
 /// Installs a tmux stub that edits the clean review worktree when opened.
@@ -164,10 +165,10 @@ fi
 
 /// Adds a changed file below a single-child folder chain for compact-tree
 /// rendering coverage.
-fn seed_review_session_with_compact_diff_tree(
+async fn seed_review_session_with_compact_diff_tree(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session_with_review_request(env)?;
+    seed_review_ready_session_with_review_request(env).await?;
 
     let session_worktree = env.agentty_root.join("wt").join("review-s");
     let nested_directory = session_worktree.join("src/app/session");
@@ -185,15 +186,15 @@ fn seed_review_session_with_compact_diff_tree(
 }
 
 /// Seeds a clean review session whose worktree-open action creates an edit.
-fn seed_clean_review_session_with_worktree_edit(env: &BuilderEnv) -> E2eResult {
-    seed_clean_review_ready_session(env)?;
+async fn seed_clean_review_session_with_worktree_edit(env: &BuilderEnv) -> E2eResult {
+    seed_clean_review_ready_session(env).await?;
     install_worktree_edit_tmux_stub(env)
 }
 
 /// Seeds a failing review diff whose external driver stays busy long enough
 /// to prove that the TUI accepts cancellation before Git completes.
-fn seed_slow_review_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+async fn seed_slow_review_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
 
     let session_worktree = env.agentty_root.join("wt").join("review-s");
@@ -212,8 +213,8 @@ fn seed_slow_review_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Err
 
 /// Seeds enough changed lines to demonstrate right-pane cursor navigation and
 /// viewport scrolling without a live agent backend.
-fn seed_scrollable_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+async fn seed_scrollable_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
 
     let session_worktree = env.agentty_root.join("wt").join("review-s");
@@ -230,8 +231,8 @@ fn seed_scrollable_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::err
 }
 
 /// Seeds a review-ready worktree whose only change is previewable markdown.
-fn seed_markdown_diff_preview(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+async fn seed_markdown_diff_preview(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env).await?;
 
     let session_worktree = env.agentty_root.join("wt").join("review-s");
     run_git(&session_worktree, &["init", "-b", "main"])?;
@@ -258,12 +259,13 @@ fn seed_markdown_diff_preview(env: &BuilderEnv) -> Result<(), Box<dyn std::error
 
 /// Seeds a review-ready session whose only worktree change is binary and
 /// whose persisted diff presence remains conservatively unknown.
-fn seed_binary_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+async fn seed_binary_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
         SessionSeed::regular(BINARY_DIFF_SESSION_ID, "gpt-5.6-sol", "main", "Review")
             .with_title("Binary diff session"),
-    )?;
+    )
+    .await?;
 
     let session_worktree =
         test_support::session_folder(&env.agentty_root.join("wt"), BINARY_DIFF_SESSION_ID);
@@ -279,26 +281,28 @@ fn seed_binary_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::
     run_git(&session_worktree, &["commit", "-m", "init"])?;
     std::fs::write(session_worktree.join("asset.bin"), [0_u8, 4, 5, 6, 7])?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
             .mark_session_diff_unknown(BINARY_DIFF_SESSION_ID)
             .await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Verify that opening the diff page from a review-ready session shows the
 /// selected file's local changes and change totals.
-#[test]
-fn diff_preview_opens_from_session() -> E2eResult {
+#[tokio::test]
+async fn diff_preview_opens_from_session() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("diff_preview")
         .with_git()
-        .setup(seed_review_ready_session_with_review_request)
+        .setup(|env| {
+            Box::pin(async move { seed_review_ready_session_with_review_request(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -312,25 +316,28 @@ fn diff_preview_opens_from_session() -> E2eResult {
                     .capture_labeled("diff_preview", "Diff preview after pressing d")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
 
-                assert_diff_file_tree_change_totals(frame);
-                assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
-                assertion::assert_text_in_region(frame, "j/k: select file", &full);
+                    assert_diff_file_tree_change_totals(frame);
+                    assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
+                    assertion::assert_text_in_region(frame, "j/k: select file", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that Diff mode collapses uninterrupted folder chains so the Files
 /// sidebar shows more changed paths at once.
-#[test]
-fn test_compact_diff_tree() -> E2eResult {
+#[tokio::test]
+async fn test_compact_diff_tree() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("compact_diff_tree")
         .with_git()
-        .setup(seed_review_session_with_compact_diff_tree)
+        .setup(|env| Box::pin(async move { seed_review_session_with_compact_diff_tree(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -346,38 +353,41 @@ fn test_compact_diff_tree() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                let file_tree = Region::new(0, 0, frame.cols() / 5, frame.rows());
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    let file_tree = Region::new(0, 0, frame.cols() / 5, frame.rows());
 
-                assertion::assert_text_in_region(frame, "app/session/", &full);
-                assertion::assert_text_in_region(frame, "handler.rs", &full);
-                assertion::assert_text_in_region(frame, "src/a", &file_tree);
-                assertion::assert_text_in_region(frame, "han", &file_tree);
-                let root_match = frame
-                    .find_text_in_region("src/a", &file_tree)
-                    .into_iter()
-                    .next()
-                    .expect("compact tree should render its root path");
-                let nested_match = frame
-                    .find_text_in_region("han", &file_tree)
-                    .into_iter()
-                    .next()
-                    .expect("compact tree should render its nested path");
-                assert_eq!(root_match.rect.col, 2);
-                assert_eq!(nested_match.rect.col, 4);
+                    assertion::assert_text_in_region(frame, "app/session/", &full);
+                    assertion::assert_text_in_region(frame, "handler.rs", &full);
+                    assertion::assert_text_in_region(frame, "src/a", &file_tree);
+                    assertion::assert_text_in_region(frame, "han", &file_tree);
+                    let root_match = frame
+                        .find_text_in_region("src/a", &file_tree)
+                        .into_iter()
+                        .next()
+                        .expect("compact tree should render its root path");
+                    let nested_match = frame
+                        .find_text_in_region("han", &file_tree)
+                        .into_iter()
+                        .next()
+                        .expect("compact tree should render its nested path");
+                    assert_eq!(root_match.rect.col, 2);
+                    assert_eq!(nested_match.rect.col, 4);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that a known-clean session neither advertises nor opens Diff mode.
-#[test]
-fn test_clean_session_hides_diff_action() -> E2eResult {
+#[tokio::test]
+async fn test_clean_session_hides_diff_action() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("clean_session_hides_diff_action")
         .with_git()
-        .setup(seed_clean_review_ready_session)
+        .setup(|env| Box::pin(async move { seed_clean_review_ready_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -393,26 +403,35 @@ fn test_clean_session_hides_diff_action() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
 
-                assertion::assert_text_in_region(frame, "Review-ready session shortcuts", &full);
-                assertion::assert_text_in_region(frame, "Enter: reply", &full);
-                assertion::assert_not_visible(frame, "d: diff");
-                assertion::assert_not_visible(frame, "Loading diff...");
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Review-ready session shortcuts",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, "d: diff");
+                    assertion::assert_not_visible(frame, "Loading diff...");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify opening a clean writable worktree makes subsequent edits inspectable.
-#[test]
-fn test_worktree_open_reenables_diff_action() -> E2eResult {
+#[tokio::test]
+async fn test_worktree_open_reenables_diff_action() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("worktree_open_reenables_diff_action")
         .env("TMUX", "/tmp/tmux-agentty-test/default,1,0")
         .with_git()
-        .setup(seed_clean_review_session_with_worktree_edit)
+        .setup(|env| {
+            Box::pin(async move { seed_clean_review_session_with_worktree_edit(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -431,25 +450,28 @@ fn test_worktree_open_reenables_diff_action() -> E2eResult {
                     )
             },
             |frame, report| {
-                let clean_frame = common::frame_from_capture(&report.captures[0]);
-                assertion::assert_not_visible(&clean_frame, "d: diff");
+                Box::pin(async move {
+                    let clean_frame = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_not_visible(&clean_frame, "d: diff");
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "external worktree edit", &full);
-                assertion::assert_text_in_region(frame, "q/Esc: back", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "external worktree edit", &full);
+                    assertion::assert_text_in_region(frame, "q/Esc: back", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that a slow full diff leaves redraw and input handling responsive.
-#[test]
-fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
+#[tokio::test]
+async fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("slow_diff_loading_remains_cancelable")
         .with_git()
-        .setup(seed_slow_review_diff)
+        .setup(|env| Box::pin(async move { seed_slow_review_diff(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -476,30 +498,41 @@ fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
                     )
             },
             |frame, report| {
-                let loading_frame = common::frame_from_capture(&report.captures[0]);
-                let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());
-                assertion::assert_text_in_region(&loading_frame, "Loading diff...", &loading_full);
-                assertion::assert_not_visible(&loading_frame, "No files");
+                Box::pin(async move {
+                    let loading_frame = common::frame_from_capture(&report.captures[0]);
+                    let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());
+                    assertion::assert_text_in_region(
+                        &loading_frame,
+                        "Loading diff...",
+                        &loading_full,
+                    );
+                    assertion::assert_not_visible(&loading_frame, "No files");
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Review-ready session shortcuts", &full);
-                assertion::assert_text_in_region(frame, "Unable to load diff:", &full);
-                assertion::assert_not_visible(frame, "Loading diff...");
-                assertion::assert_not_visible(frame, "No files");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Review-ready session shortcuts",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "Unable to load diff:", &full);
+                    assertion::assert_not_visible(frame, "Loading diff...");
+                    assertion::assert_not_visible(frame, "No files");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that the right-hand patch scrolls while Files remains focused, then
 /// `l` moves focus into changed-line navigation without resetting the viewport.
-#[test]
-fn test_diff_changed_line_navigation() -> E2eResult {
+#[tokio::test]
+async fn test_diff_changed_line_navigation() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("diff_changed_line_navigation")
         .with_git()
-        .setup(seed_scrollable_diff_session)
+        .setup(|env| Box::pin(async move { seed_scrollable_diff_session(env).await }))
         .run(
             |scenario| {
                 let scenario = scenario
@@ -529,48 +562,51 @@ fn test_diff_changed_line_navigation() -> E2eResult {
                     )
             },
             |frame, report| {
-                let file_focus_frame = common::frame_from_capture(&report.captures[0]);
-                let file_focus_full =
-                    Region::full(file_focus_frame.cols(), file_focus_frame.rows());
-                let full = Region::full(frame.cols(), frame.rows());
+                Box::pin(async move {
+                    let file_focus_frame = common::frame_from_capture(&report.captures[0]);
+                    let file_focus_full =
+                        Region::full(file_focus_frame.cols(), file_focus_frame.rows());
+                    let full = Region::full(frame.cols(), frame.rows());
 
-                assertion::assert_text_in_region(
-                    &file_focus_frame,
-                    "changed line 70",
-                    &file_focus_full,
-                );
-                assertion::assert_text_in_region(
-                    &file_focus_frame,
-                    "j/k: select file",
-                    &file_focus_full,
-                );
-                assertion::assert_text_in_region(frame, "changed line 70", &full);
-                assertion::assert_text_in_region(frame, "Esc/Left: files", &full);
-                assertion::assert_text_in_region(frame, "j/k: select row", &full);
-                let file_row = frame
-                    .find_text("src/")
-                    .first()
-                    .expect("selected file's parent folder should remain visible")
-                    .rect
-                    .row
-                    .saturating_add(1);
-                let aligned_changed_line_row = frame
-                    .find_text("changed line 65")
-                    .first()
-                    .expect("aligned changed line should remain visible")
-                    .rect
-                    .row;
-                assert_eq!(aligned_changed_line_row, file_row);
+                    assertion::assert_text_in_region(
+                        &file_focus_frame,
+                        "changed line 70",
+                        &file_focus_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &file_focus_frame,
+                        "j/k: select file",
+                        &file_focus_full,
+                    );
+                    assertion::assert_text_in_region(frame, "changed line 70", &full);
+                    assertion::assert_text_in_region(frame, "Esc/Left: files", &full);
+                    assertion::assert_text_in_region(frame, "j/k: select row", &full);
+                    let file_row = frame
+                        .find_text("src/")
+                        .first()
+                        .expect("selected file's parent folder should remain visible")
+                        .rect
+                        .row
+                        .saturating_add(1);
+                    let aligned_changed_line_row = frame
+                        .find_text("changed line 65")
+                        .first()
+                        .expect("aligned changed line should remain visible")
+                        .rect
+                        .row;
+                    assert_eq!(aligned_changed_line_row, file_row);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that file and changed-line comments survive navigation until one
 /// batch is submitted as the next session turn.
-#[test]
-fn test_diff_comment_file_lookup() -> E2eResult {
+#[tokio::test]
+async fn test_diff_comment_file_lookup() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("diff_comment_file_lookup")
         .with_git()
@@ -580,11 +616,13 @@ fn test_diff_comment_file_lookup() -> E2eResult {
             48,
         )
         .setup(|env| {
-            seed_review_ready_session(env)?;
-            seed_linked_review_worktree_with_diff(env)?;
-            seed_line_comment_codex_stub(env)?;
-            seed_line_comment_review_stub(env)?;
-            seed_sessions_startup_tab(env)
+            Box::pin(async move {
+                seed_review_ready_session(env).await?;
+                seed_linked_review_worktree_with_diff(env)?;
+                seed_line_comment_codex_stub(env)?;
+                seed_line_comment_review_stub(env).await?;
+                seed_sessions_startup_tab(env).await
+            })
         })
         .run(
             |scenario| {
@@ -612,21 +650,24 @@ fn test_diff_comment_file_lookup() -> E2eResult {
                     )
             },
             |frame, report| {
-                let lookup = common::frame_from_capture(&report.captures[0]);
-                let content =
-                    Region::new(lookup.cols() / 5, 0, lookup.cols() * 4 / 5, lookup.rows());
-                assertion::assert_text_in_region(&lookup, "src/main.rs", &content);
-                assertion::assert_text_in_region(&lookup, "Files (", &content);
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "See @src/main.rs for context", &full);
+                Box::pin(async move {
+                    let lookup = common::frame_from_capture(&report.captures[0]);
+                    let content =
+                        Region::new(lookup.cols() / 5, 0, lookup.cols() * 4 / 5, lookup.rows());
+                    assertion::assert_text_in_region(&lookup, "src/main.rs", &content);
+                    assertion::assert_text_in_region(&lookup, "Files (", &content);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "See @src/main.rs for context", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
-#[test]
-fn test_diff_line_comments() -> E2eResult {
+#[tokio::test]
+async fn test_diff_line_comments() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("diff_line_comments")
         .with_git()
@@ -636,13 +677,18 @@ fn test_diff_line_comments() -> E2eResult {
             47,
         )
         .setup(|env| {
-            seed_review_ready_session(env)?;
-            seed_linked_review_worktree_with_diff(env)?;
-            seed_line_comment_codex_stub(env)?;
-            seed_line_comment_review_stub(env)?;
-            seed_sessions_startup_tab(env)
+            Box::pin(async move {
+                seed_review_ready_session(env).await?;
+                seed_linked_review_worktree_with_diff(env)?;
+                seed_line_comment_codex_stub(env)?;
+                seed_line_comment_review_stub(env).await?;
+                seed_sessions_startup_tab(env).await
+            })
         })
-        .run(diff_line_comments_scenario, assert_diff_line_comments)?;
+        .run(diff_line_comments_scenario, |frame, report| {
+            Box::pin(async move { assert_diff_line_comments(frame, report) })
+        })
+        .await?;
 
     Ok(())
 }
@@ -816,8 +862,8 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
 }
 
 /// Verify that `Shift+V` selects a changed-row range for one inline comment.
-#[test]
-fn test_diff_row_selection_comments() -> E2eResult {
+#[tokio::test]
+async fn test_diff_row_selection_comments() -> E2eResult {
     // Arrange — Ctrl+M emits Enter's carriage return consistently in PTY and
     // VHS.
     const ENTER_KEY: &str = "Ctrl+m";
@@ -826,8 +872,10 @@ fn test_diff_row_selection_comments() -> E2eResult {
     FeatureTest::new("diff_row_selection_comments")
         .with_git()
         .setup(|env| {
-            seed_linked_review_worktree_with_replacement_diff(env)?;
-            seed_sessions_startup_tab(env)
+            Box::pin(async move {
+                seed_linked_review_worktree_with_replacement_diff(env).await?;
+                seed_sessions_startup_tab(env).await
+            })
         })
         .run(
             |scenario| {
@@ -877,52 +925,21 @@ fn test_diff_row_selection_comments() -> E2eResult {
                     )
             },
             |frame, report| {
-                let selection_frame = common::frame_from_capture(&report.captures[0]);
-                let selection_full = Region::full(selection_frame.cols(), selection_frame.rows());
-                assertion::assert_text_in_region(&selection_frame, "Esc: cancel", &selection_full);
-                assertion::assert_text_in_region(&selection_frame, "Shift+C", &selection_full);
-
-                let file_comment_frame = common::frame_from_capture(&report.captures[1]);
-                let file_comment_full =
-                    Region::full(file_comment_frame.cols(), file_comment_frame.rows());
-                assertion::assert_text_in_region(
-                    &file_comment_frame,
-                    "File comment",
-                    &file_comment_full,
-                );
-                assertion::assert_text_in_region(
-                    &file_comment_frame,
-                    "Review the selected file.",
-                    &file_comment_full,
-                );
-                assertion::assert_not_visible(&file_comment_frame, "Esc: cancel");
-
-                let editor_frame = common::frame_from_capture(&report.captures[2]);
-                let editor_full = Region::full(editor_frame.cols(), editor_frame.rows());
-                assertion::assert_text_in_region(
-                    &editor_frame,
-                    "Old line 2 · New line 2",
-                    &editor_full,
-                );
-                assertion::assert_text_in_region(
-                    &editor_frame,
-                    "Explain these lines.|",
-                    &editor_full,
-                );
-
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Old line 2 · New line 2", &full);
-                assertion::assert_text_in_region(frame, "Explain these lines.", &full);
+                Box::pin(async move {
+                    // Assert
+                    assert_diff_row_selection_comments(frame, report);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that `p` toggles a changed markdown file between raw diff and a
 /// rendered markdown/mermaid preview.
-#[test]
-fn test_markdown_diff_preview() -> E2eResult {
+#[tokio::test]
+async fn test_markdown_diff_preview() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("markdown_diff_preview")
         .with_git()
@@ -931,7 +948,7 @@ fn test_markdown_diff_preview() -> E2eResult {
             "Preview changed markdown and Mermaid diagrams directly from the diff view.",
             46,
         )
-        .setup(seed_markdown_diff_preview)
+        .setup(|env| Box::pin(async move { seed_markdown_diff_preview(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -956,30 +973,33 @@ fn test_markdown_diff_preview() -> E2eResult {
                     .capture_labeled("raw_diff", "Raw diff restored after toggling preview off")
             },
             |frame, report| {
-                let preview_frame = common::frame_from_capture(&report.captures[0]);
-                let preview_full = Region::full(preview_frame.cols(), preview_frame.rows());
-                assertion::assert_text_in_region(
-                    &preview_frame,
-                    "Preview — docs/日本.md",
-                    &preview_full,
-                );
-                assertion::assert_text_in_region(
-                    &preview_frame,
-                    "Rendered Markdown Preview",
-                    &preview_full,
-                );
-                assertion::assert_text_in_region(&preview_frame, "Source", &preview_full);
-                assertion::assert_text_in_region(&preview_frame, "Preview", &preview_full);
-                let preview_text = preview_frame.text_in_region(&preview_full);
-                assert!(preview_text.contains('┌'));
-                assert!(preview_text.contains('▼'));
-                assertion::assert_not_visible(&preview_frame, "graph TD");
+                Box::pin(async move {
+                    let preview_frame = common::frame_from_capture(&report.captures[0]);
+                    let preview_full = Region::full(preview_frame.cols(), preview_frame.rows());
+                    assertion::assert_text_in_region(
+                        &preview_frame,
+                        "Preview — docs/日本.md",
+                        &preview_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &preview_frame,
+                        "Rendered Markdown Preview",
+                        &preview_full,
+                    );
+                    assertion::assert_text_in_region(&preview_frame, "Source", &preview_full);
+                    assertion::assert_text_in_region(&preview_frame, "Preview", &preview_full);
+                    let preview_text = preview_frame.text_in_region(&preview_full);
+                    assert!(preview_text.contains('┌'));
+                    assert!(preview_text.contains('▼'));
+                    assertion::assert_not_visible(&preview_frame, "graph TD");
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "# Rendered Markdown Preview", &full);
-                assertion::assert_text_in_region(frame, "p: preview", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "# Rendered Markdown Preview", &full);
+                    assertion::assert_text_in_region(frame, "p: preview", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
@@ -987,12 +1007,14 @@ fn test_markdown_diff_preview() -> E2eResult {
 /// Verify that pressing `d` while the chat transcript is focused in the reply
 /// composer opens the diff preview, and that leaving it restores the composer
 /// with the typed draft intact.
-#[test]
-fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
+#[tokio::test]
+async fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("diff_preview_from_prompt")
         .with_git()
-        .setup(seed_review_ready_session_with_review_request)
+        .setup(|env| {
+            Box::pin(async move { seed_review_ready_session_with_review_request(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -1022,21 +1044,29 @@ fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
                     .viewing_pause_ms(1000)
             },
             |frame, report| {
-                let focused_frame = common::frame_from_capture(&report.captures[0]);
-                let focused_full = Region::full(focused_frame.cols(), focused_frame.rows());
-                assertion::assert_text_in_region(&focused_frame, "d: diff", &focused_full);
+                Box::pin(async move {
+                    let focused_frame = common::frame_from_capture(&report.captures[0]);
+                    let focused_full = Region::full(focused_frame.cols(), focused_frame.rows());
+                    assertion::assert_text_in_region(&focused_frame, "d: diff", &focused_full);
 
-                let diff_frame = common::frame_from_capture(&report.captures[1]);
-                let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
-                assert_diff_file_tree_change_totals(&diff_frame);
-                assertion::assert_text_in_region(&diff_frame, "println!(\"review\")", &diff_full);
-                assertion::assert_text_in_region(&diff_frame, "j/k: select file", &diff_full);
+                    let diff_frame = common::frame_from_capture(&report.captures[1]);
+                    let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
+                    assert_diff_file_tree_change_totals(&diff_frame);
+                    assertion::assert_text_in_region(
+                        &diff_frame,
+                        "println!(\"review\")",
+                        &diff_full,
+                    );
+                    assertion::assert_text_in_region(&diff_frame, "j/k: select file", &diff_full);
 
-                // Leaving the diff restores the composer with the draft intact.
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "follow up draft", &full);
+                    // Leaving the diff restores the composer with the draft
+                    // intact.
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "follow up draft", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
@@ -1065,12 +1095,12 @@ fn assert_diff_file_tree_change_totals(frame: &TerminalFrame) {
 
 /// Verify binary-only changes retain the chat-focus diff hint and open in the
 /// diff preview even though their added/deleted line totals are zero.
-#[test]
-fn binary_diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
+#[tokio::test]
+async fn binary_diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("binary_diff_preview_from_prompt")
         .with_git()
-        .setup(seed_binary_diff_session)
+        .setup(|env| Box::pin(async move { seed_binary_diff_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -1090,15 +1120,48 @@ fn binary_diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
                     .wait_for_text("Binary files", 5000)
             },
             |frame, report| {
-                let focused_frame = common::frame_from_capture(&report.captures[0]);
-                let focused_full = Region::full(focused_frame.cols(), focused_frame.rows());
-                assertion::assert_text_in_region(&focused_frame, "d: diff", &focused_full);
+                Box::pin(async move {
+                    let focused_frame = common::frame_from_capture(&report.captures[0]);
+                    let focused_full = Region::full(focused_frame.cols(), focused_frame.rows());
+                    assertion::assert_text_in_region(&focused_frame, "d: diff", &focused_full);
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "asset.bin", &full);
-                assertion::assert_text_in_region(frame, "Binary files", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "asset.bin", &full);
+                    assertion::assert_text_in_region(frame, "Binary files", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
+}
+
+/// Checks the captured states for this feature journey.
+fn assert_diff_row_selection_comments(
+    frame: &testty::frame::TerminalFrame,
+    report: &testty::proof::report::ProofReport,
+) {
+    let selection_frame = common::frame_from_capture(&report.captures[0]);
+    let selection_full = Region::full(selection_frame.cols(), selection_frame.rows());
+    assertion::assert_text_in_region(&selection_frame, "Esc: cancel", &selection_full);
+    assertion::assert_text_in_region(&selection_frame, "Shift+C", &selection_full);
+
+    let file_comment_frame = common::frame_from_capture(&report.captures[1]);
+    let file_comment_full = Region::full(file_comment_frame.cols(), file_comment_frame.rows());
+    assertion::assert_text_in_region(&file_comment_frame, "File comment", &file_comment_full);
+    assertion::assert_text_in_region(
+        &file_comment_frame,
+        "Review the selected file.",
+        &file_comment_full,
+    );
+    assertion::assert_not_visible(&file_comment_frame, "Esc: cancel");
+
+    let editor_frame = common::frame_from_capture(&report.captures[2]);
+    let editor_full = Region::full(editor_frame.cols(), editor_frame.rows());
+    assertion::assert_text_in_region(&editor_frame, "Old line 2 · New line 2", &editor_full);
+    assertion::assert_text_in_region(&editor_frame, "Explain these lines.|", &editor_full);
+
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(frame, "Old line 2 · New line 2", &full);
+    assertion::assert_text_in_region(frame, "Explain these lines.", &full);
 }

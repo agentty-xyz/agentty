@@ -36,6 +36,7 @@ use crate::domain::transient_message::{
 
 /// Low-frequency fallback interval for metadata-based session refresh.
 pub(crate) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Cache duration for `@`-mention filesystem index snapshots.
 pub(crate) const AT_MENTION_INDEX_TTL: Duration = Duration::from_secs(30);
 
@@ -109,13 +110,15 @@ impl SessionCreationKind {
 pub(crate) struct SessionRenderParts<'a> {
     /// Exact prompt transcript blocks keyed by session id for active turns.
     pub(crate) active_prompt_outputs: &'a HashMap<SessionId, String>,
+    /// Selected session row index.
+    pub(crate) selected_index: Option<usize>,
     /// Detected session worktree branch names keyed by session id.
     pub(crate) session_branch_names: &'a HashMap<SessionId, String>,
+    pub(crate) session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     /// Latest session-branch ahead/behind snapshots keyed by session id.
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     /// Cached session list positions keyed by stable session id.
     pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
-    pub(crate) session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     /// Latest resource totals for tracked agent process trees.
     pub(crate) session_resources: &'a HashMap<SessionId, SessionResources>,
     /// Whether each rendered session currently has a materialized worktree on
@@ -125,8 +128,6 @@ pub(crate) struct SessionRenderParts<'a> {
     pub(crate) sessions: &'a [Session],
     /// Daily session activity series used by dashboard activity summaries.
     pub(crate) stats_activity: &'a [DailyActivity],
-    /// Selected session row index.
-    pub(crate) selected_index: Option<usize>,
 }
 
 /// Reducer-facing snapshot derived from one persisted turn result.
@@ -165,22 +166,6 @@ impl TurnAppliedState {
     }
 }
 
-pub(crate) use crate::infra::clock::Clock;
-
-/// Session domain state and worker orchestration state.
-pub struct SessionManager {
-    pub(super) active_prompt_outputs: HashMap<SessionId, String>,
-    at_mention_indexes: HashMap<PathBuf, AtMentionIndex>,
-    pub(super) default_session_model: AgentModel,
-    pub(super) git_client: Arc<dyn git::GitClient>,
-    pub(super) merge_service: SessionMergeService,
-    pub(super) resources: super::resource::ResourceMonitor,
-    pub(super) state: SessionState,
-    pub(super) stats_activity: Vec<DailyActivity>,
-    pub(super) workflow_state: SessionWorkflowState,
-    pub(super) worker_service: SessionWorkerService,
-}
-
 /// Live bookkeeping shared by session lifecycle workflows.
 pub(super) struct SessionWorkflowState {
     pub(super) pending_history_replay: HashSet<SessionId>,
@@ -200,6 +185,20 @@ pub(crate) struct TitleGenerationTask {
 struct AtMentionIndex {
     created_at: Instant,
     entries: Vec<FileEntry>,
+}
+
+/// Session domain state and worker orchestration state.
+pub struct SessionManager {
+    pub(super) active_prompt_outputs: HashMap<SessionId, String>,
+    pub(super) default_session_model: AgentModel,
+    pub(super) git_client: Arc<dyn git::GitClient>,
+    pub(super) merge_service: SessionMergeService,
+    pub(super) resources: super::resource::ResourceMonitor,
+    pub(super) state: SessionState,
+    pub(super) stats_activity: Vec<DailyActivity>,
+    pub(super) worker_service: SessionWorkerService,
+    pub(super) workflow_state: SessionWorkflowState,
+    at_mention_indexes: HashMap<PathBuf, AtMentionIndex>,
 }
 
 impl SessionManager {
@@ -393,12 +392,6 @@ impl SessionManager {
         &mut self.state.sessions
     }
 
-    /// Appends one loaded session snapshot and updates stable id lookups.
-    #[cfg(test)]
-    pub(crate) fn push_session(&mut self, session: Session) {
-        self.state.push_session(session);
-    }
-
     /// Removes one loaded session snapshot by list index.
     pub(crate) fn remove_session_at(&mut self, session_index: usize) -> Option<Session> {
         self.state.remove_session_at(session_index)
@@ -424,12 +417,6 @@ impl SessionManager {
         self.state.session_for_id(session_id)
     }
 
-    /// Synchronizes all loaded session snapshots from live runtime handles.
-    #[cfg(test)]
-    pub(crate) fn sync_from_handles(&mut self) {
-        self.state.sync_from_handles();
-    }
-
     /// Synchronizes one loaded session snapshot from its live runtime handle.
     pub(crate) fn sync_session_from_handle(&mut self, session_id: &str) {
         self.state.sync_session_from_handle(session_id);
@@ -450,14 +437,6 @@ impl SessionManager {
         &self,
     ) -> &HashMap<SessionId, crate::domain::session::SessionHandles> {
         self.state.handles()
-    }
-
-    /// Returns mutable runtime handles keyed by stable session id.
-    #[cfg(test)]
-    pub(crate) fn session_handles_mut(
-        &mut self,
-    ) -> &mut HashMap<SessionId, crate::domain::session::SessionHandles> {
-        self.state.handles_mut()
     }
 
     /// Returns the active prompt transcript block cached for sessions that are
@@ -1244,3 +1223,5 @@ pub(crate) fn unix_timestamp_from_system_time(system_time: SystemTime) -> i64 {
 #[cfg(test)]
 #[path = "core_test.rs"]
 mod tests;
+
+pub(crate) use crate::infra::clock::Clock;

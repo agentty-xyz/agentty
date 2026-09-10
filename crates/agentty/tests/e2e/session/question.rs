@@ -6,15 +6,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use agentty::db::{DB_DIR, DB_FILE, Database};
-use agentty::test_support;
 use testty::assertion;
 use testty::frame::TerminalFrame;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
 
 use super::fixture::{E2eResult, seed_project_settings};
-use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::{common, test_support};
 
 /// Stable id for the unrelated row selected before the refresh regression
 /// creates its question session.
@@ -40,7 +39,7 @@ const RECONCILE_QUESTION_TEXT: &str = "Should I add a regression test?";
 
 /// Seeds an unrelated selected row and a prompt-aware agent stub for the
 /// question-refresh regression.
-fn seed_question_refresh_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+async fn seed_question_refresh_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
         SessionSeed::regular(
@@ -50,7 +49,8 @@ fn seed_question_refresh_project(env: &BuilderEnv) -> Result<(), Box<dyn std::er
             "Done",
         )
         .with_title("Other session"),
-    )?;
+    )
+    .await?;
 
     let claude_path = env.stub_bin.join("claude");
     let script = format!(
@@ -86,14 +86,15 @@ printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$resul
             ("DefaultFastAgent", "claude"),
             ("DefaultFastModel", "claude-haiku-4-5-20251001"),
         ],
-    )?;
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Installs a Claude stub that emits one structured clarification question
 /// after a delay, giving the scenario time to cover the active view with help.
-fn install_delayed_question_claude_stub(
+async fn install_delayed_question_claude_stub(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
@@ -115,24 +116,25 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ne
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
 }
 
 /// Seeds clarification questions and a file lookup target without a live agent.
-fn seed_question_at_lookup_session(env: &BuilderEnv) -> E2eResult {
+async fn seed_question_at_lookup_session(env: &BuilderEnv) -> E2eResult {
     let session_id = "question-lookup-session";
     common::seed_session(
         env,
         SessionSeed::regular(session_id, "claude-haiku-4-5-20251001", "main", "Question")
             .with_title("File answer"),
-    )?;
+    )
+    .await?;
     let session_folder = test_support::session_folder(&env.agentty_root.join("wt"), session_id);
     std::fs::create_dir_all(&session_folder)?;
     std::fs::write(
         session_folder.join("answer_lookup_target.rs"),
         "// lookup target\n",
     )?;
-    common::seed_runtime()?.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -141,18 +143,19 @@ fn seed_question_at_lookup_session(env: &BuilderEnv) -> E2eResult {
                 r#"[{"text":"Which file?","options":[]},{"text":"Anything else?","options":[]}]"#,
             )
             .await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Verify file lookup inserts into a clarification answer before submission.
-#[test]
-fn test_question_answer_at_lookup() -> E2eResult {
+#[tokio::test]
+async fn test_question_answer_at_lookup() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("question_answer_at_lookup")
         .with_git()
-        .setup(seed_question_at_lookup_session)
+        .setup(|env| Box::pin(async move { seed_question_at_lookup_session(env).await }))
         .zola(
             "File lookup in answers",
             "Reference repository files while answering an agent's clarification question.",
@@ -194,36 +197,47 @@ fn test_question_answer_at_lookup() -> E2eResult {
                     .wait_for_text("Question 2/2", 5000)
             },
             |frame, report| {
-                let empty_frame = common::frame_from_capture(&report.captures[0]);
-                assertion::assert_not_visible(&empty_frame, "Tab/Enter: select");
-                assertion::assert_not_visible(&empty_frame, "Up/Down: navigate");
-                let newline_frame = common::frame_from_capture(&report.captures[1]);
-                let newline_area = Region::full(newline_frame.cols(), newline_frame.rows());
-                assertion::assert_text_in_region(&newline_frame, "@answer_lookup", &newline_area);
-                assertion::assert_not_visible(&newline_frame, "answer_lookup_target.rs");
-                let inserted_frame = common::frame_from_capture(&report.captures[3]);
-                let inserted_area = Region::full(inserted_frame.cols(), inserted_frame.rows());
-                assertion::assert_text_in_region(&inserted_frame, "Question 1/2", &inserted_area);
-                assertion::assert_text_in_region(
-                    &inserted_frame,
-                    "@answer_lookup_target.rs please",
-                    &inserted_area,
-                );
-                assertion::assert_not_visible(&inserted_frame, "Tab/Enter: select");
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Question 2/2", &full);
+                Box::pin(async move {
+                    let empty_frame = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_not_visible(&empty_frame, "Tab/Enter: select");
+                    assertion::assert_not_visible(&empty_frame, "Up/Down: navigate");
+                    let newline_frame = common::frame_from_capture(&report.captures[1]);
+                    let newline_area = Region::full(newline_frame.cols(), newline_frame.rows());
+                    assertion::assert_text_in_region(
+                        &newline_frame,
+                        "@answer_lookup",
+                        &newline_area,
+                    );
+                    assertion::assert_not_visible(&newline_frame, "answer_lookup_target.rs");
+                    let inserted_frame = common::frame_from_capture(&report.captures[3]);
+                    let inserted_area = Region::full(inserted_frame.cols(), inserted_frame.rows());
+                    assertion::assert_text_in_region(
+                        &inserted_frame,
+                        "Question 1/2",
+                        &inserted_area,
+                    );
+                    assertion::assert_text_in_region(
+                        &inserted_frame,
+                        "@answer_lookup_target.rs please",
+                        &inserted_area,
+                    );
+                    assertion::assert_not_visible(&inserted_frame, "Tab/Enter: select");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Question 2/2", &full);
+                })
             },
         )
+        .await
 }
 
 /// Verify a short terminal hides lookup controls when no result row fits.
-#[test]
-fn test_question_answer_at_lookup_clipped() -> E2eResult {
+#[tokio::test]
+async fn test_question_answer_at_lookup_clipped() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("question_answer_at_lookup_clipped")
         .with_git()
         .with_terminal_size(100, 10)
-        .setup(seed_question_at_lookup_session)
+        .setup(|env| Box::pin(async move { seed_question_at_lookup_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -239,23 +253,26 @@ fn test_question_answer_at_lookup_clipped() -> E2eResult {
                     .wait_for_text("Enter: send", 5000)
             },
             |frame, report| {
-                let clipped = common::frame_from_capture(&report.captures[0]);
-                assertion::assert_not_visible(&clipped, "answer_lookup_target.rs");
-                assertion::assert_not_visible(&clipped, "Tab/Enter: select");
-                assertion::assert_not_visible(&clipped, "Up/Down: navigate");
-                assertion::assert_not_visible(&clipped, "Tab/Enter: close @");
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "@answer_lookup", &full);
-                assertion::assert_text_in_region(frame, "Enter: send", &full);
+                Box::pin(async move {
+                    let clipped = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_not_visible(&clipped, "answer_lookup_target.rs");
+                    assertion::assert_not_visible(&clipped, "Tab/Enter: select");
+                    assertion::assert_not_visible(&clipped, "Up/Down: navigate");
+                    assertion::assert_not_visible(&clipped, "Tab/Enter: close @");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "@answer_lookup", &full);
+                    assertion::assert_text_in_region(frame, "Enter: send", &full);
+                })
             },
         )
+        .await
 }
 
 /// Verify that `Esc` leaves a clarification question active, then answering
 /// one question, leaving with `q`, and reopening resumes at the next
 /// unanswered question instead of restarting from the first.
-#[test]
-fn session_question_resume_after_leaving_to_list() -> E2eResult {
+#[tokio::test]
+async fn session_question_resume_after_leaving_to_list() -> E2eResult {
     // Arrange
     let agentty_root = Arc::new(Mutex::new(None::<PathBuf>));
     let setup_agentty_root = Arc::clone(&agentty_root);
@@ -263,12 +280,14 @@ fn session_question_resume_after_leaving_to_list() -> E2eResult {
     FeatureTest::new("session_question_resume")
         .with_git()
         .setup(move |env| {
-            setup_agentty_root
-                .lock()
-                .expect("agentty root capture should remain available")
-                .replace(env.agentty_root.clone());
+            Box::pin(async move {
+                setup_agentty_root
+                    .lock()
+                    .expect("agentty root capture should remain available")
+                    .replace(env.agentty_root.clone());
 
-            seed_question_refresh_project(env)
+                seed_question_refresh_project(env).await
+            })
         })
         .run(
             |scenario| {
@@ -322,21 +341,25 @@ fn session_question_resume_after_leaving_to_list() -> E2eResult {
                     )
             },
             move |frame, report| {
-                // Assert
-                assert_question_refresh_result(frame, report);
-                let agentty_root = agentty_root
-                    .lock()
-                    .expect("agentty root capture should remain available")
-                    .clone()
-                    .expect("feature setup should capture the agentty root");
-                let (persisted_title, persisted_prompt) =
-                    load_question_refresh_metadata(&agentty_root)
-                        .expect("question metadata should remain persisted");
+                Box::pin(async move {
+                    // Assert
+                    assert_question_refresh_result(frame, report);
+                    let agentty_root = agentty_root
+                        .lock()
+                        .expect("agentty root capture should remain available")
+                        .clone()
+                        .expect("feature setup should capture the agentty root");
+                    let (persisted_title, persisted_prompt) =
+                        load_question_refresh_metadata(&agentty_root)
+                            .await
+                            .expect("question metadata should remain persisted");
 
-                assert_eq!(persisted_title.as_deref(), Some(QUESTION_REFRESH_TITLE));
-                assert_eq!(persisted_prompt, QUESTION_REFRESH_INITIAL_PROMPT);
+                    assert_eq!(persisted_title.as_deref(), Some(QUESTION_REFRESH_TITLE));
+                    assert_eq!(persisted_prompt, QUESTION_REFRESH_INITIAL_PROMPT);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
@@ -383,12 +406,10 @@ fn assert_question_refresh_result(frame: &TerminalFrame, report: &ProofReport) {
 
 /// Loads the newly created question session's title and prompt from the
 /// feature-test database.
-fn load_question_refresh_metadata(
+async fn load_question_refresh_metadata(
     agentty_root: &Path,
 ) -> Result<(Option<String>, String), Box<dyn std::error::Error>> {
-    let runtime = common::seed_runtime()?;
-
-    runtime.block_on(async {
+    (async {
         let database = Database::open(&agentty_root.join(DB_DIR).join(DB_FILE))
             .await
             .map_err(|error| std::io::Error::other(format!("feature database: {error}")))?;
@@ -422,17 +443,18 @@ fn load_question_refresh_metadata(
             question_session.prompt,
         ))
     })
+    .await
 }
 
 /// Verify that an already-open session view enters question mode after a
 /// structured question arrives while the help overlay hides the live
 /// transition.
-#[test]
-fn session_question_reconcile_after_help_overlay() -> E2eResult {
+#[tokio::test]
+async fn session_question_reconcile_after_help_overlay() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_question_reconcile")
         .with_git()
-        .setup(install_delayed_question_claude_stub)
+        .setup(|env| Box::pin(async move { install_delayed_question_claude_stub(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -460,18 +482,21 @@ fn session_question_reconcile_after_help_overlay() -> E2eResult {
                     )
             },
             |frame, report| {
-                let help_frame = common::frame_from_capture(&report.captures[0]);
-                let help_full = Region::full(help_frame.cols(), help_frame.rows());
-                assertion::assert_text_in_region(&help_frame, "Keybindings", &help_full);
+                Box::pin(async move {
+                    let help_frame = common::frame_from_capture(&report.captures[0]);
+                    let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                    assertion::assert_text_in_region(&help_frame, "Keybindings", &help_full);
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Question 1/1", &full);
-                assertion::assert_text_in_region(frame, RECONCILE_QUESTION_TEXT, &full);
-                assertion::assert_text_in_region(frame, "Yes", &full);
-                assertion::assert_text_in_region(frame, "No", &full);
-                assertion::assert_not_visible(frame, "Keybindings");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Question 1/1", &full);
+                    assertion::assert_text_in_region(frame, RECONCILE_QUESTION_TEXT, &full);
+                    assertion::assert_text_in_region(frame, "Yes", &full);
+                    assertion::assert_text_in_region(frame, "No", &full);
+                    assertion::assert_not_visible(frame, "Keybindings");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

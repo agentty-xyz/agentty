@@ -27,10 +27,10 @@ const REVIEW_REQUEST_TIMELINE_NOTICE_TEXT: &str =
 /// Seeds a review-ready worktree whose delayed successful publish keeps the
 /// manual task active beyond the upstream-ref refresh observed by the feature
 /// scenario.
-fn seed_slow_successful_review_request_publish(
+async fn seed_slow_successful_review_request_publish(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+    seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
 
     seed_successful_review_request_publish(env, 3, 15, "wt/review-s", false)
@@ -38,10 +38,10 @@ fn seed_slow_successful_review_request_publish(
 
 /// Seeds a review-ready session whose chosen review branch was deleted from
 /// the remote before its first publish.
-fn seed_review_request_publish_with_deleted_remote_branch(
+async fn seed_review_request_publish_with_deleted_remote_branch(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+    seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
 
     seed_successful_review_request_publish(env, 0, 0, "review/deleted", true)
@@ -49,8 +49,8 @@ fn seed_review_request_publish_with_deleted_remote_branch(
 
 /// Seeds a live focused review that completes before a delayed review-request
 /// publish, reproducing the cross-source transcript ordering boundary.
-fn seed_review_request_timeline(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_with_resolved_decision(env)?;
+async fn seed_review_request_timeline(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_with_resolved_decision(env).await?;
 
     seed_successful_review_request_publish(env, 0, 0, "wt/review-s", false)
 }
@@ -155,7 +155,7 @@ esac
 
 /// Seeds one published review-ready session whose latest auto-push completion
 /// is persisted as transcript output.
-fn seed_session_with_published_branch_push_notice(
+async fn seed_session_with_published_branch_push_notice(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session_id = "published-push-0001";
@@ -164,11 +164,10 @@ fn seed_session_with_published_branch_push_notice(
         env,
         SessionSeed::regular(session_id, "gpt-5.6-sol", "main", "Review")
             .with_title("Published push notice"),
-    )?;
+    )
+    .await?;
 
-    let runtime = common::seed_runtime()?;
-
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -185,7 +184,8 @@ fn seed_session_with_published_branch_push_notice(
                 "\n[Branch Push] Auto-pushed published branch after completed turn.\n",
             )
             .await
-    })?;
+    })
+    .await?;
 
     // Match `session_folder()` so startup loads the seeded review session.
     let worktree_name = &session_id[..8];
@@ -196,10 +196,10 @@ fn seed_session_with_published_branch_push_notice(
 
 /// Seeds a merged GitHub review response and delays runtime worktree removal
 /// so the feature scenario can prove terminal rendering stays responsive.
-fn seed_slow_merged_review_request_status(
+async fn seed_slow_merged_review_request_status(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session_with_review_request(env)?;
+    seed_review_ready_session_with_review_request(env).await?;
 
     let sync_origin = env.agentty_root.join("sync-origin.git");
     std::fs::create_dir_all(&sync_origin)?;
@@ -237,12 +237,15 @@ esac
 
 /// Seeds a merged parent and merged stacked child whose review target still
 /// names the parent branch, plus a remote for the manual main sync.
-fn seed_merged_stacked_review_requests(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+async fn seed_merged_stacked_review_requests(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
         SessionSeed::regular("stack-parent-0001", "gpt-5.6-sol", "main", "Merged")
             .with_title("Merged stack parent"),
-    )?;
+    )
+    .await?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
@@ -253,10 +256,10 @@ fn seed_merged_stacked_review_requests(env: &BuilderEnv) -> Result<(), Box<dyn s
             "stack-parent-0001",
         )
         .with_title("Merged stack child"),
-    )?;
+    )
+    .await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         let parent_review_request = ReviewRequest {
             last_refreshed_at: 55,
@@ -293,7 +296,8 @@ fn seed_merged_stacked_review_requests(env: &BuilderEnv) -> Result<(), Box<dyn s
             .reviews()
             .update_session_review_request("stack-child-0001", Some(child_review_request))
             .await
-    })?;
+    })
+    .await?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("stack-pa"))?;
     std::fs::create_dir_all(env.agentty_root.join("wt").join("stack-ch"))?;
@@ -341,12 +345,14 @@ exec '{real_git}' "$@"
 
 /// Verify that completed published-branch auto-push feedback is rendered as a
 /// transcript message rather than as a transient status line.
-#[test]
-fn published_branch_push_notice_renders_as_transcript_message() -> E2eResult {
+#[tokio::test]
+async fn published_branch_push_notice_renders_as_transcript_message() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("published_branch_push_notice")
         .with_git()
-        .setup(seed_session_with_published_branch_push_notice)
+        .setup(|env| {
+            Box::pin(async move { seed_session_with_published_branch_push_notice(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -361,30 +367,33 @@ fn published_branch_push_notice_renders_as_transcript_message() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                let view_text = frame.text_in_region(&full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    let view_text = frame.text_in_region(&full);
 
-                assertion::assert_text_in_region(frame, "[Branch Push]", &full);
-                assert_eq!(
-                    view_text
-                        .matches("Auto-pushed published branch after completed turn.")
-                        .count(),
-                    1
-                );
+                    assertion::assert_text_in_region(frame, "[Branch Push]", &full);
+                    assert_eq!(
+                        view_text
+                            .matches("Auto-pushed published branch after completed turn.")
+                            .count(),
+                        1
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that pressing `p` in a review-ready session opens the review-request
 /// publish popup.
-#[test]
-fn review_request_publish_shortcut_opens_publish_popup() -> E2eResult {
+#[tokio::test]
+async fn review_request_publish_shortcut_opens_publish_popup() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_publish_shortcut")
         .with_git()
-        .setup(seed_review_ready_session)
+        .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
         .zola(
             "Review request publish shortcut",
             "Open the review-request publish popup directly from session view with `p`.",
@@ -405,28 +414,35 @@ fn review_request_publish_shortcut_opens_publish_popup() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Publish Review Request", &full);
-                assertion::assert_text_in_region(frame, "Enter: publish review request", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Leave blank to push as `wt/review-s`",
-                    &full,
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Publish Review Request", &full);
+                    assertion::assert_text_in_region(frame, "Enter: publish review request", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Leave blank to push as `wt/review-s`",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that a first review-request publish can recreate a custom branch
 /// that was deleted remotely despite a stale local remote-tracking ref.
-#[test]
-fn review_request_publish_recreates_deleted_remote_branch() -> E2eResult {
+#[tokio::test]
+async fn review_request_publish_recreates_deleted_remote_branch() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_deleted_remote_branch")
         .with_git()
-        .setup(seed_review_request_publish_with_deleted_remote_branch)
+        .setup(|env| {
+            Box::pin(
+                async move { seed_review_request_publish_with_deleted_remote_branch(env).await },
+            )
+        })
         .run(
             |scenario| {
                 scenario
@@ -444,23 +460,26 @@ fn review_request_publish_recreates_deleted_remote_branch() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
                     frame,
                     "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42",
                     &full,
                 );
-                assertion::assert_not_visible(frame, "already exists");
+                    assertion::assert_not_visible(frame, "already exists");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that confirming review-request publish returns to an interactive
 /// session chat while the push runs in the background.
-#[test]
-fn review_request_publish_runs_in_background() -> E2eResult {
+#[tokio::test]
+async fn review_request_publish_runs_in_background() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_background_publish")
         .with_git()
@@ -469,7 +488,9 @@ fn review_request_publish_runs_in_background() -> E2eResult {
             "Publish a review request in the background and receive its link in session chat.",
             41,
         )
-        .setup(seed_slow_successful_review_request_publish)
+        .setup(|env| {
+            Box::pin(async move { seed_slow_successful_review_request_publish(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -503,49 +524,52 @@ fn review_request_publish_runs_in_background() -> E2eResult {
                     )
             },
             |frame, report| {
-                let loading_frame = common::frame_from_capture(&report.captures[0]);
-                let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());
-                assertion::assert_text_in_region(
-                    &loading_frame,
-                    "Publishing review request...",
-                    &loading_full,
-                );
-                assertion::assert_text_in_region(&loading_frame, "q: back", &loading_full);
+                Box::pin(async move {
+                    let loading_frame = common::frame_from_capture(&report.captures[0]);
+                    let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());
+                    assertion::assert_text_in_region(
+                        &loading_frame,
+                        "Publishing review request...",
+                        &loading_full,
+                    );
+                    assertion::assert_text_in_region(&loading_frame, "q: back", &loading_full);
 
-                let help_frame = common::frame_from_capture(&report.captures[1]);
-                let help_full = Region::full(help_frame.cols(), help_frame.rows());
-                assertion::assert_text_in_region(&help_frame, "Keybindings", &help_full);
+                    let help_frame = common::frame_from_capture(&report.captures[1]);
+                    let help_full = Region::full(help_frame.cols(), help_frame.rows());
+                    assertion::assert_text_in_region(&help_frame, "Keybindings", &help_full);
 
-                let waiting_frame = common::frame_from_capture(&report.captures[2]);
-                let waiting_full = Region::full(waiting_frame.cols(), waiting_frame.rows());
-                assertion::assert_text_in_region(
-                    &waiting_frame,
-                    "Publishing review request...",
-                    &waiting_full,
-                );
+                    let waiting_frame = common::frame_from_capture(&report.captures[2]);
+                    let waiting_full = Region::full(waiting_frame.cols(), waiting_frame.rows());
+                    assertion::assert_text_in_region(
+                        &waiting_frame,
+                        "Publishing review request...",
+                        &waiting_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
                     frame,
                     "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42",
                     &full,
                 );
-                assertion::assert_text_in_region(frame, "q: back", &full);
+                    assertion::assert_text_in_region(frame, "q: back", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify a review-request notice created after focused review completion is
 /// rendered below that review instead of being regrouped above it.
-#[test]
-fn review_request_notice_follows_completed_review() -> E2eResult {
+#[tokio::test]
+async fn review_request_notice_follows_completed_review() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_timeline_order")
         .with_git()
         .with_terminal_size(120, 40)
-        .setup(seed_review_request_timeline)
+        .setup(|env| Box::pin(async move { seed_review_request_timeline(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -565,35 +589,40 @@ fn review_request_notice_follows_completed_review() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let review_finding = frame
-                    .find_text(RESOLVED_DECISION_REVIEW_TEXT)
-                    .into_iter()
-                    .next()
-                    .expect("completed focused review should render");
-                let review_request_notice = frame
-                    .find_text(REVIEW_REQUEST_TIMELINE_NOTICE_TEXT)
-                    .into_iter()
-                    .next()
-                    .expect("review-request notice should render");
+                Box::pin(async move {
+                    let review_finding = frame
+                        .find_text(RESOLVED_DECISION_REVIEW_TEXT)
+                        .into_iter()
+                        .next()
+                        .expect("completed focused review should render");
+                    let review_request_notice = frame
+                        .find_text(REVIEW_REQUEST_TIMELINE_NOTICE_TEXT)
+                        .into_iter()
+                        .next()
+                        .expect("review-request notice should render");
 
-                assert!(
-                    review_finding.rect.row < review_request_notice.rect.row,
-                    "review-request notice should follow the earlier focused review"
-                );
+                    assert!(
+                        review_finding.rect.row < review_request_notice.rect.row,
+                        "review-request notice should follow the earlier focused review"
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that linked review requests refresh in the background without a
 /// manual review-request sync shortcut and disable local merge queueing.
-#[test]
-fn review_request_sync_runs_in_background() -> E2eResult {
+#[tokio::test]
+async fn review_request_sync_runs_in_background() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_background_sync")
         .with_git()
-        .setup(seed_review_ready_session_with_review_request)
+        .setup(|env| {
+            Box::pin(async move { seed_review_ready_session_with_review_request(env).await })
+        })
         .zola(
             "Background review-request sync",
             "Review sessions track linked pull requests in the background instead of exposing a \
@@ -615,29 +644,32 @@ fn review_request_sync_runs_in_background() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                let view_text = frame.text_in_region(&full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    let view_text = frame.text_in_region(&full);
 
-                assertion::assert_text_in_region(frame, "p: Create or refresh", &full);
-                assert!(
-                    !view_text.contains("s: Sync"),
-                    "manual sync help action should be absent"
-                );
-                assertion::assert_not_visible(frame, "m: add to merge queue");
+                    assertion::assert_text_in_region(frame, "p: Create or refresh", &full);
+                    assert!(
+                        !view_text.contains("s: Sync"),
+                        "manual sync help action should be absent"
+                    );
+                    assertion::assert_not_visible(frame, "m: add to merge queue");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that a remote merge stays read-only `Merged` until the user syncs
 /// main, then moves to `Done` without waiting for slow worktree cleanup.
-#[test]
-fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
+#[tokio::test]
+async fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("merged_review_request_manual_sync")
         .with_git()
-        .setup(seed_slow_merged_review_request_status)
+        .setup(|env| Box::pin(async move { seed_slow_merged_review_request_status(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -679,47 +711,56 @@ fn test_merged_review_request_waits_for_manual_sync() -> E2eResult {
                     )
             },
             |frame, report| {
-                assert_eq!(report.captures.len(), 4);
-                let merged_frame = common::frame_from_capture(&report.captures[0]);
-                let merged_full = Region::full(merged_frame.cols(), merged_frame.rows());
-                assertion::assert_text_in_region(&merged_frame, "ACTIVE —— 1", &merged_full);
-                assertion::assert_text_in_region(&merged_frame, "Merged", &merged_full);
+                Box::pin(async move {
+                    assert_eq!(report.captures.len(), 4);
+                    let merged_frame = common::frame_from_capture(&report.captures[0]);
+                    let merged_full = Region::full(merged_frame.cols(), merged_frame.rows());
+                    assertion::assert_text_in_region(&merged_frame, "ACTIVE —— 1", &merged_full);
+                    assertion::assert_text_in_region(&merged_frame, "Merged", &merged_full);
 
-                let read_only_frame = common::frame_from_capture(&report.captures[1]);
-                let read_only_full = Region::full(read_only_frame.cols(), read_only_frame.rows());
-                assertion::assert_text_in_region(&read_only_frame, "Show diff", &read_only_full);
-                let read_only_text = read_only_frame.text_in_region(&read_only_full);
-                for mutating_action in ["Reply", "Open commands menu", "Add to merge queue", "Sync"]
-                {
-                    assert!(
-                        !read_only_text.contains(mutating_action),
-                        "Merged help must hide `{mutating_action}`"
+                    let read_only_frame = common::frame_from_capture(&report.captures[1]);
+                    let read_only_full =
+                        Region::full(read_only_frame.cols(), read_only_frame.rows());
+                    assertion::assert_text_in_region(
+                        &read_only_frame,
+                        "Show diff",
+                        &read_only_full,
                     );
-                }
+                    let read_only_text = read_only_frame.text_in_region(&read_only_full);
+                    for mutating_action in
+                        ["Reply", "Open commands menu", "Add to merge queue", "Sync"]
+                    {
+                        assert!(
+                            !read_only_text.contains(mutating_action),
+                            "Merged help must hide `{mutating_action}`"
+                        );
+                    }
 
-                let diff_frame = common::frame_from_capture(&report.captures[2]);
-                let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
-                let diff_text = diff_frame.text_in_region(&diff_full);
-                assertion::assert_text_in_region(&diff_frame, "Esc/Left: files", &diff_full);
-                assert!(!diff_text.contains("Enter: comment"));
-                assert!(!diff_text.contains("s: submit comments"));
+                    let diff_frame = common::frame_from_capture(&report.captures[2]);
+                    let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
+                    let diff_text = diff_frame.text_in_region(&diff_full);
+                    assertion::assert_text_in_region(&diff_frame, "Esc/Left: files", &diff_full);
+                    assert!(!diff_text.contains("Enter: comment"));
+                    assert!(!diff_text.contains("s: submit comments"));
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Done", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Done", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify one successful manual main sync archives both reviews in a fully
 /// merged stack, including the child that still targets the parent branch.
-#[test]
-fn merged_stacked_reviews_complete_together_after_manual_sync() -> E2eResult {
+#[tokio::test]
+async fn merged_stacked_reviews_complete_together_after_manual_sync() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("merged_stacked_reviews_complete_together_after_manual_sync")
         .with_git()
-        .setup(seed_merged_stacked_review_requests)
+        .setup(|env| Box::pin(async move { seed_merged_stacked_review_requests(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -735,31 +776,34 @@ fn merged_stacked_reviews_complete_together_after_manual_sync() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                let session_list_text = frame.text_in_region(&full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    let session_list_text = frame.text_in_region(&full);
 
-                assertion::assert_text_in_region(frame, "Merged stack parent", &full);
-                assertion::assert_text_in_region(frame, "Merged stack child", &full);
-                assert!(
-                    session_list_text.matches("Done").count() >= 2,
-                    "expected both merged stack rows to be Done:\n{session_list_text}"
-                );
+                    assertion::assert_text_in_region(frame, "Merged stack parent", &full);
+                    assertion::assert_text_in_region(frame, "Merged stack child", &full);
+                    assert!(
+                        session_list_text.matches("Done").count() >= 2,
+                        "expected both merged stack rows to be Done:\n{session_list_text}"
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that confirming quit does not wait indefinitely for externally
 /// merged worktree cleanup.
-#[test]
-fn merged_review_request_cleanup_does_not_block_quit() -> E2eResult {
+#[tokio::test]
+async fn merged_review_request_cleanup_does_not_block_quit() -> E2eResult {
     // Arrange
-    let _test_guard = common::acquire_e2e_test_lock();
+    let _test_guard = common::acquire_e2e_test_lock().await;
     let temp = tempfile::TempDir::new()?;
     let env = BuilderEnv::new(temp.path())?;
     env.init_git()?;
-    seed_slow_merged_review_request_status(&env)?;
+    seed_slow_merged_review_request_status(&env).await?;
     install_delayed_worktree_remove_stub(&env, 30)?;
     let mut session = env.builder().spawn()?;
     let scenario = Scenario::new("merged_cleanup_quit")
@@ -787,12 +831,14 @@ fn merged_review_request_cleanup_does_not_block_quit() -> E2eResult {
 
 /// Verify that linked review requests expose their browser URL in the session
 /// header.
-#[test]
-fn review_request_url_appears_in_session_header() -> E2eResult {
+#[tokio::test]
+async fn review_request_url_appears_in_session_header() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_url_header")
         .with_git()
-        .setup(seed_review_ready_session_with_review_request)
+        .setup(|env| {
+            Box::pin(async move { seed_review_ready_session_with_review_request(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -808,14 +854,17 @@ fn review_request_url_appears_in_session_header() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "https://github.com/agentty-xyz/agentty/pull/42",
-                    &full,
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "https://github.com/agentty-xyz/agentty/pull/42",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

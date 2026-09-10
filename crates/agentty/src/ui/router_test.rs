@@ -21,7 +21,7 @@ use crate::presentation::app_mode::{
 };
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
-use crate::presentation::settings::{
+use crate::presentation::setting::{
     LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
     SettingsScreenSnapshot, SettingsSelectorDropdown, SettingsSelectorDropdownOption,
 };

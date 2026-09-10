@@ -5,66 +5,35 @@
 //! widening app APIs.
 
 use std::path::{Path, PathBuf};
-#[cfg(test)]
 use std::process::Command;
-#[cfg(test)]
 use std::sync::Arc;
-#[cfg(test)]
 use std::time::{Instant, SystemTime};
 
-#[cfg(test)]
 use ag_agent::{AppServerClient, MockAppServerClient, StaticAgentAvailabilityProbe};
-#[cfg(test)]
 use ag_git as git;
 use ratatui::buffer::{Buffer, Cell};
-#[cfg(test)]
 use tracing::field::{Field, Visit};
-#[cfg(test)]
 use tracing::subscriber::{Interest, Subscriber};
-#[cfg(test)]
 use tracing::{Event, Level, Metadata, span};
 
 use crate::app;
-#[cfg(test)]
 use crate::app::{App, SessionManager, SessionState};
-use crate::db::{Database, DbError};
-use crate::domain::agent::ReasoningLevel;
-#[cfg(test)]
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
-#[cfg(test)]
+use crate::db::Database;
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::question::QuestionItem;
-#[cfg(test)]
 use crate::domain::selection::SelectionState;
-#[cfg(test)]
 use crate::domain::session::{
     ReviewRequest, Session, SessionHandles, SessionId, SessionRole, SessionSize, SessionStats,
     Status,
 };
-#[cfg(test)]
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
-use crate::domain::setting::SettingName;
-#[cfg(test)]
 use crate::domain::transient_message::TransientMessageStore;
-#[cfg(test)]
 use crate::infra::project_discovery::MockProjectDiscoveryClient;
-#[cfg(test)]
 /// Subscriber that enables tracing fields while unit tests exercise warning
 /// paths under source coverage.
-#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct TestSubscriber;
 
-#[cfg(test)]
-struct TestVisitor;
-
-#[cfg(test)]
-impl Visit for TestVisitor {
-    fn record_debug(&mut self, _field: &Field, value: &dyn std::fmt::Debug) {
-        let _rendered = format!("{value:?}");
-    }
-}
-
-#[cfg(test)]
 impl Subscriber for TestSubscriber {
     fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
         true
@@ -99,93 +68,21 @@ impl Subscriber for TestSubscriber {
     }
 }
 
-/// Returns the canonical session folder path for integration-test fixtures.
-pub fn session_folder(base: &Path, session_id: &str) -> PathBuf {
-    app::session::session_folder(base, session_id)
-}
+struct TestVisitor;
 
-/// Persists the active project id for integration-test database setup.
-pub async fn persist_active_project_id_for_test(
-    database: &Database,
-    project_id: i64,
-) -> Result<(), DbError> {
-    sqlx::query!(
-        r"
-INSERT INTO setting (name, value)
-VALUES (?, ?)
-ON CONFLICT(name) DO UPDATE
-SET value = excluded.value
-",
-        SettingName::ActiveProjectId.as_str(),
-        project_id.to_string()
-    )
-    .execute(database.pool())
-    .await?;
-
-    Ok(())
-}
-
-/// Persists the active list tab for integration-test database setup.
-pub async fn persist_active_tab_for_test(
-    database: &Database,
-    tab: app::Tab,
-) -> Result<(), DbError> {
-    sqlx::query!(
-        r"
-INSERT INTO setting (name, value)
-VALUES (?, ?)
-ON CONFLICT(name) DO UPDATE
-SET value = excluded.value
-",
-        SettingName::ActiveTab.as_str(),
-        tab.as_str()
-    )
-    .execute(database.pool())
-    .await?;
-
-    Ok(())
-}
-
-/// Persists the three project role reasoning defaults for integration-test
-/// database setup using canonical `SettingName` keys.
-pub async fn persist_project_reasoning_levels_for_test(
-    database: &Database,
-    project_id: i64,
-    smart_reasoning_level: ReasoningLevel,
-    fast_reasoning_level: ReasoningLevel,
-    review_reasoning_level: ReasoningLevel,
-) -> Result<(), DbError> {
-    database
-        .settings()
-        .upsert_project_settings(
-            project_id,
-            vec![
-                (
-                    SettingName::DefaultSmartReasoningLevel,
-                    smart_reasoning_level.as_str().to_string(),
-                ),
-                (
-                    SettingName::DefaultFastReasoningLevel,
-                    fast_reasoning_level.as_str().to_string(),
-                ),
-                (
-                    SettingName::DefaultReviewReasoningLevel,
-                    review_reasoning_level.as_str().to_string(),
-                ),
-            ],
-        )
-        .await
+impl Visit for TestVisitor {
+    fn record_debug(&mut self, _field: &Field, value: &dyn std::fmt::Debug) {
+        let _rendered = format!("{value:?}");
+    }
 }
 
 /// Deterministic [`crate::infra::clock::Clock`] implementation for unit-test
 /// fixtures.
-#[cfg(test)]
 pub(crate) struct FixedClock {
     instant: Instant,
     system_time: SystemTime,
 }
 
-#[cfg(test)]
 impl FixedClock {
     /// Creates a fixed clock pinned to the given monotonic and system times.
     pub(crate) fn new(instant: Instant, system_time: SystemTime) -> Self {
@@ -202,7 +99,6 @@ impl FixedClock {
     }
 }
 
-#[cfg(test)]
 impl crate::infra::clock::Clock for FixedClock {
     fn now_instant(&self) -> Instant {
         self.instant
@@ -215,22 +111,10 @@ impl crate::infra::clock::Clock for FixedClock {
 
 /// Chainable builder that produces deterministic [`Session`] values for unit
 /// tests.
-#[cfg(test)]
 pub(crate) struct SessionFixtureBuilder {
     session: Session,
 }
 
-/// Builds a typed transcript containing one assistant answer.
-#[cfg(test)]
-pub(crate) fn assistant_transcript(content: impl AsRef<str>) -> SessionTranscript {
-    SessionTranscript::new(vec![SessionMessage::conversation(
-        0,
-        SessionMessageKind::AssistantAnswer,
-        content.as_ref(),
-    )])
-}
-
-#[cfg(test)]
 impl SessionFixtureBuilder {
     /// Creates a builder seeded with minimal deterministic defaults that match
     /// the common session snapshot used across app, runtime, and UI tests.
@@ -387,8 +271,16 @@ impl SessionFixtureBuilder {
     }
 }
 
+/// Builds a typed transcript containing one assistant answer.
+pub(crate) fn assistant_transcript(content: impl AsRef<str>) -> SessionTranscript {
+    SessionTranscript::new(vec![SessionMessage::conversation(
+        0,
+        SessionMessageKind::AssistantAnswer,
+        content.as_ref(),
+    )])
+}
+
 /// Builds a minimal session fixture with the given identifier and status.
-#[cfg(test)]
 pub(crate) fn session_fixture(session_id: &str, status: Status) -> Session {
     SessionFixtureBuilder::new()
         .id(session_id)
@@ -398,7 +290,6 @@ pub(crate) fn session_fixture(session_id: &str, status: Status) -> Session {
 }
 
 /// Builds a session fixture whose title matches its identifier.
-#[cfg(test)]
 pub(crate) fn titled_session_fixture(session_id: &str, status: Status) -> Session {
     SessionFixtureBuilder::new()
         .id(session_id)
@@ -408,7 +299,6 @@ pub(crate) fn titled_session_fixture(session_id: &str, status: Status) -> Sessio
 }
 
 /// Builds a review-state session fixture rooted at the given folder.
-#[cfg(test)]
 pub(crate) fn session_fixture_with_folder(session_folder: PathBuf) -> Session {
     SessionFixtureBuilder::new()
         .id("session-1")
@@ -419,24 +309,23 @@ pub(crate) fn session_fixture_with_folder(session_folder: PathBuf) -> Session {
 }
 
 /// Returns a mock app-server client wrapped in `Arc` for test injection.
-#[cfg(test)]
 pub(crate) fn mock_app_server() -> Arc<dyn AppServerClient> {
     Arc::new(MockAppServerClient::new())
 }
 
 /// Builds one client bundle with a caller-provided agent availability
 /// snapshot.
-#[cfg(test)]
 pub(crate) fn test_app_clients_with_available_agent_kinds(
     available_agent_kinds: Vec<AgentKind>,
-) -> app::AppClients {
+) -> app::test_support::AppClients {
     let mut project_discovery_client = MockProjectDiscoveryClient::new();
     project_discovery_client
         .expect_discover_home_project_paths()
         .times(0..)
         .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
 
-    app::AppClients::new()
+    app::test_support::AppClients::new()
+        .with_background_tasks_disabled()
         .with_agent_availability_probe(Arc::new(StaticAgentAvailabilityProbe {
             available_agent_kinds,
         }))
@@ -445,23 +334,20 @@ pub(crate) fn test_app_clients_with_available_agent_kinds(
 
 /// Builds one client bundle with deterministic agent availability for test
 /// app startup.
-#[cfg(test)]
-pub(crate) fn test_app_clients() -> app::AppClients {
+pub(crate) fn test_app_clients() -> app::test_support::AppClients {
     test_app_clients_with_available_agent_kinds(AgentKind::ALL.to_vec())
 }
 
 /// Builds one client bundle with deterministic agent availability and a mock
 /// app-server override.
-#[cfg(test)]
-pub(crate) fn test_app_clients_with_mock_app_server() -> app::AppClients {
+pub(crate) fn test_app_clients_with_mock_app_server() -> app::test_support::AppClients {
     test_app_clients().with_app_server_client_override(mock_app_server())
 }
 
 /// Builds one app rooted at a retained temporary directory using the given
 /// clients.
-#[cfg(test)]
 pub(crate) async fn new_test_app_with_clients(
-    clients: app::AppClients,
+    clients: app::test_support::AppClients,
 ) -> (App, tempfile::TempDir) {
     let base_dir = tempfile::tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
@@ -476,21 +362,18 @@ pub(crate) async fn new_test_app_with_clients(
 }
 
 /// Builds one app rooted at a retained temporary directory.
-#[cfg(test)]
 pub(crate) async fn new_test_app() -> (App, tempfile::TempDir) {
     new_test_app_with_clients(test_app_clients()).await
 }
 
 /// Builds one app rooted at a retained temporary directory with a mocked tmux
 /// boundary and app-server override.
-#[cfg(test)]
 pub(crate) async fn new_test_app_with_mock_tmux_client() -> (App, tempfile::TempDir) {
     new_test_app_with_tmux_client(Arc::new(crate::infra::tmux::MockTmuxClient::new())).await
 }
 
 /// Builds one app rooted at a retained temporary directory with an injected
 /// tmux boundary and app-server override.
-#[cfg(test)]
 pub(crate) async fn new_test_app_with_tmux_client(
     tmux_client: Arc<dyn crate::infra::tmux::TmuxClient>,
 ) -> (App, tempfile::TempDir) {
@@ -501,7 +384,6 @@ pub(crate) async fn new_test_app_with_tmux_client(
 
 /// Builds one app with an injected tmux boundary, then intentionally drops
 /// the temporary directory guard before returning.
-#[cfg(test)]
 pub(crate) async fn new_test_app_with_tmux_client_without_retained_base_dir(
     tmux_client: Arc<dyn crate::infra::tmux::TmuxClient>,
 ) -> App {
@@ -512,7 +394,6 @@ pub(crate) async fn new_test_app_with_tmux_client_without_retained_base_dir(
 
 /// Builds one app and intentionally drops the temporary directory guard before
 /// returning, matching tests that only need in-memory state.
-#[cfg(test)]
 pub(crate) async fn new_test_app_without_retained_base_dir() -> App {
     let (app, _base_dir) = new_test_app().await;
 
@@ -526,7 +407,6 @@ pub(crate) async fn new_test_app_without_retained_base_dir() -> App {
 /// such as `commit.gpgsign`, `core.hooksPath`, or `init.templateDir` can break
 /// the initial commit, and an unchecked failure only resurfaces much later as
 /// an opaque session-creation panic inside an unrelated test.
-#[cfg(test)]
 pub(crate) fn setup_test_git_repo(path: &Path) {
     run_fixture_git_command(path, &["init"]);
     run_fixture_git_command(path, &["config", "user.name", "Test"]);
@@ -544,7 +424,6 @@ pub(crate) fn setup_test_git_repo(path: &Path) {
 ///
 /// Both panic messages are formatted before they are needed so the success
 /// path executes every line in this helper.
-#[cfg(test)]
 fn run_fixture_git_command(path: &Path, args: &[&str]) {
     let command_label = format!("git {}", args.join(" "));
     let spawn_failure = format!("failed to run `{command_label}`");
@@ -564,9 +443,8 @@ fn run_fixture_git_command(path: &Path, args: &[&str]) {
 
 /// Builds one git-backed app rooted at a retained temporary directory using
 /// the given clients.
-#[cfg(test)]
 pub(crate) async fn new_git_test_app_with_clients(
-    clients: app::AppClients,
+    clients: app::test_support::AppClients,
 ) -> (App, tempfile::TempDir) {
     let (app, base_dir, _pool) = new_git_test_app_with_clients_and_pool(clients).await;
 
@@ -575,16 +453,14 @@ pub(crate) async fn new_git_test_app_with_clients(
 
 /// Builds one git-backed app and exposes its shared database pool for tests
 /// that need to inject a persistence failure after app construction.
-#[cfg(test)]
 pub(crate) async fn new_git_test_app_with_pool() -> (App, tempfile::TempDir, sqlx::SqlitePool) {
     new_git_test_app_with_clients_and_pool(test_app_clients()).await
 }
 
 /// Builds one git-backed app plus its shared database pool using the given
 /// clients.
-#[cfg(test)]
 async fn new_git_test_app_with_clients_and_pool(
-    clients: app::AppClients,
+    clients: app::test_support::AppClients,
 ) -> (App, tempfile::TempDir, sqlx::SqlitePool) {
     let base_dir = tempfile::tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
@@ -607,7 +483,6 @@ async fn new_git_test_app_with_clients_and_pool(
 }
 
 /// Drives foreground reducers until all tracked workspace setup has completed.
-#[cfg(test)]
 pub(crate) async fn finish_session_creation_tasks(app: &mut App) {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while !app.pending_session_creations.is_empty() {
@@ -623,21 +498,18 @@ pub(crate) async fn finish_session_creation_tasks(app: &mut App) {
 }
 
 /// Builds one git-backed app rooted at a retained temporary directory.
-#[cfg(test)]
 pub(crate) async fn new_git_test_app() -> (App, tempfile::TempDir) {
     new_git_test_app_with_clients(test_app_clients()).await
 }
 
 /// Builds one git-backed app rooted at a retained temporary directory with a
 /// mocked tmux boundary and app-server override.
-#[cfg(test)]
 pub(crate) async fn new_git_test_app_with_mock_tmux_client() -> (App, tempfile::TempDir) {
     new_git_test_app_with_tmux_client(Arc::new(crate::infra::tmux::MockTmuxClient::new())).await
 }
 
 /// Builds one git-backed app rooted at a retained temporary directory with an
 /// injected tmux boundary and app-server override.
-#[cfg(test)]
 pub(crate) async fn new_git_test_app_with_tmux_client(
     tmux_client: Arc<dyn crate::infra::tmux::TmuxClient>,
 ) -> (App, tempfile::TempDir) {
@@ -647,7 +519,6 @@ pub(crate) async fn new_git_test_app_with_tmux_client(
 }
 
 /// Builds a session manager fixture with the provided sessions and handles.
-#[cfg(test)]
 pub(crate) fn session_manager_with_handles(
     sessions: Vec<Session>,
     handles: std::collections::HashMap<SessionId, SessionHandles>,
@@ -671,14 +542,12 @@ pub(crate) fn session_manager_with_handles(
 
 /// Builds a session manager fixture with the provided sessions and no runtime
 /// handles.
-#[cfg(test)]
 pub(crate) fn session_manager_with_sessions(sessions: Vec<Session>) -> SessionManager {
     session_manager_with_handles(sessions, std::collections::HashMap::new())
 }
 
 /// Sets a session status in both the session snapshot and its live handles,
 /// when either exists.
-#[cfg(test)]
 pub(crate) fn set_session_status_for_test(app: &mut App, session_id: &str, status: Status) {
     if let Some(session) = app
         .sessions
@@ -698,13 +567,13 @@ pub(crate) fn set_session_status_for_test(app: &mut App, session_id: &str, statu
 
 /// Returns the first rendered cell for a contiguous text match in a test
 /// buffer.
-pub fn rendered_text_start_cell<'a>(buffer: &'a Buffer, needle: &str) -> Option<&'a Cell> {
+pub(crate) fn rendered_text_start_cell<'a>(buffer: &'a Buffer, needle: &str) -> Option<&'a Cell> {
     rendered_text_start_cells(buffer, needle).into_iter().next()
 }
 
 /// Returns rendered start cells for every contiguous text match in a test
 /// buffer.
-pub fn rendered_text_start_cells<'a>(buffer: &'a Buffer, needle: &str) -> Vec<&'a Cell> {
+pub(crate) fn rendered_text_start_cells<'a>(buffer: &'a Buffer, needle: &str) -> Vec<&'a Cell> {
     let width = usize::from(buffer.area.width.max(1));
     let needle_symbols = needle.chars().map(|character| character.to_string());
     let needle_symbols = needle_symbols.collect::<Vec<_>>();
@@ -731,152 +600,5 @@ pub fn rendered_text_start_cells<'a>(buffer: &'a Buffer, needle: &str) -> Vec<&'
 }
 
 #[cfg(test)]
-mod tests {
-    use ratatui::style::{Color, Style};
-
-    use super::*;
-
-    #[test]
-    fn test_subscriber_records_span_and_event_fields() {
-        // Arrange
-        let subscriber = TestSubscriber;
-
-        // Act
-        let span_registered = tracing::subscriber::with_default(subscriber, || {
-            let span = tracing::info_span!(
-                "test_subscriber_span",
-                recorded_value = tracing::field::Empty
-            );
-            span.record("recorded_value", "recorded");
-            if let Some(span_id) = span.id() {
-                span.follows_from(span_id);
-            }
-            {
-                let _guard = span.enter();
-                tracing::warn!(path = %Path::new("/workspace").display(), "test warning");
-            }
-
-            span.id().is_some()
-        });
-
-        // Assert
-        assert!(span_registered);
-    }
-
-    #[tokio::test]
-    async fn persist_settings_for_test_upserts_values() {
-        // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory database");
-
-        // Act
-        persist_active_project_id_for_test(&database, 41)
-            .await
-            .expect("failed to persist initial active project");
-        persist_active_project_id_for_test(&database, 42)
-            .await
-            .expect("failed to update active project");
-        persist_active_tab_for_test(&database, app::Tab::Projects)
-            .await
-            .expect("failed to persist initial active tab");
-        persist_active_tab_for_test(&database, app::Tab::Sessions)
-            .await
-            .expect("failed to update active tab");
-        let project_id = database
-            .projects()
-            .upsert_project("/tmp/reasoning-defaults", Some("main".to_string()))
-            .await
-            .expect("failed to create project");
-        persist_project_reasoning_levels_for_test(
-            &database,
-            project_id,
-            ReasoningLevel::Medium,
-            ReasoningLevel::Low,
-            ReasoningLevel::XHigh,
-        )
-        .await
-        .expect("failed to persist role reasoning levels");
-
-        // Assert
-        assert_eq!(
-            database
-                .settings()
-                .load_active_project_id()
-                .await
-                .expect("failed to load active project"),
-            Some(42)
-        );
-        assert_eq!(
-            database
-                .settings()
-                .get_setting(SettingName::ActiveTab)
-                .await
-                .expect("failed to load active tab")
-                .as_deref(),
-            Some("Sessions")
-        );
-        for (setting_name, expected_level) in [
-            (
-                SettingName::DefaultSmartReasoningLevel,
-                ReasoningLevel::Medium,
-            ),
-            (SettingName::DefaultFastReasoningLevel, ReasoningLevel::Low),
-            (
-                SettingName::DefaultReviewReasoningLevel,
-                ReasoningLevel::XHigh,
-            ),
-        ] {
-            assert_eq!(
-                database
-                    .settings()
-                    .load_project_reasoning_level(project_id, setting_name)
-                    .await
-                    .expect("failed to load role reasoning level"),
-                expected_level
-            );
-        }
-    }
-
-    #[test]
-    fn rendered_text_start_cell_returns_first_match() {
-        // Arrange
-        let mut buffer = Buffer::empty(ratatui::layout::Rect::new(0, 0, 12, 2));
-        buffer.set_string(1, 0, "one", Style::default().fg(Color::Green));
-        buffer.set_string(1, 1, "one", Style::default().fg(Color::Yellow));
-
-        // Act
-        let cell = rendered_text_start_cell(&buffer, "one").expect("text should render");
-
-        // Assert
-        assert_eq!(cell.fg, Color::Green);
-    }
-
-    #[test]
-    fn rendered_text_start_cells_returns_all_matches() {
-        // Arrange
-        let mut buffer = Buffer::empty(ratatui::layout::Rect::new(0, 0, 12, 2));
-        buffer.set_string(1, 0, "same", Style::default().fg(Color::Green));
-        buffer.set_string(1, 1, "same", Style::default().fg(Color::Yellow));
-
-        // Act
-        let cells = rendered_text_start_cells(&buffer, "same");
-        let colors = cells.iter().map(|cell| cell.fg).collect::<Vec<_>>();
-
-        // Assert
-        assert_eq!(colors, vec![Color::Green, Color::Yellow]);
-    }
-
-    #[test]
-    fn rendered_text_start_cell_returns_none_for_missing_text() {
-        // Arrange
-        let mut buffer = Buffer::empty(ratatui::layout::Rect::new(0, 0, 12, 1));
-        buffer.set_string(1, 0, "present", Style::default());
-
-        // Act
-        let cell = rendered_text_start_cell(&buffer, "missing");
-
-        // Assert
-        assert!(cell.is_none());
-    }
-}
+#[path = "test_support_assertion_test.rs"]
+mod tests;

@@ -14,9 +14,9 @@ pub mod ui;
 
 pub mod runtime;
 
-/// Hidden support APIs used by Agentty's integration tests.
-#[doc(hidden)]
-pub mod test_support;
+#[cfg(test)]
+#[path = "test_support_test.rs"]
+pub(crate) mod test_support;
 
 // Public convenience re-exports.
 pub use infra::db;

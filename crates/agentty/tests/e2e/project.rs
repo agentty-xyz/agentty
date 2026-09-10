@@ -14,8 +14,8 @@ use crate::common::{BuilderEnv, FeatureTest};
 
 /// Configures two local upstreams and delays `git pull` long enough to prove
 /// navigation and cross-project sync queueing remain non-modal.
-fn seed_delayed_project_sync(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    common::seed_second_project(env)?;
+async fn seed_delayed_project_sync(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_second_project(env).await?;
 
     let origin = env.agentty_root.join("project-sync-origin.git");
     configure_local_upstream(&env.workdir, &origin)?;
@@ -108,8 +108,8 @@ fn verify_session_creation_blocked(report: &ProofReport) -> Result<(), &'static 
 /// Agentty auto-registers the current git working directory as a project on
 /// startup. The test creates a `test-project` repository and asserts that
 /// the project name appears in the project list.
-#[test]
-fn projects_page_shows_cwd() {
+#[tokio::test]
+async fn projects_page_shows_cwd() {
     // Arrange, Act, Assert
     FeatureTest::new("projects_cwd")
         .with_git()
@@ -129,25 +129,28 @@ fn projects_page_shows_cwd() {
                     .capture_labeled("projects", "Projects page with registered project")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Activity", &full);
-                assertion::assert_text_in_region(frame, "Branch", &full);
-                assertion::assert_text_in_region(frame, "Sessions", &full);
-                assertion::assert_text_in_region(frame, "Work Pace", &full);
-                assertion::assert_text_in_region(frame, "Agent CLIs", &full);
-                assertion::assert_text_in_region(frame, "claude", &full);
-                assertion::assert_text_in_region(frame, "0.0.1-updated", &full);
-                assertion::assert_text_in_region(frame, "gemini 0.0.1-updated", &full);
-                assertion::assert_text_in_region(frame, "Tokens In", &full);
-                assertion::assert_text_in_region(frame, "Out", &full);
-                assertion::assert_not_visible(frame, "Version");
-                assertion::assert_not_visible(frame, "Agentty is an ADE");
-                assertion::assert_not_visible(frame, "Last Opened");
-                assertion::assert_text_in_region(frame, "Active", &full);
-                assertion::assert_text_in_region(frame, "test-project", &full);
-                assertion::assert_text_in_region(frame, "main", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Activity", &full);
+                    assertion::assert_text_in_region(frame, "Branch", &full);
+                    assertion::assert_text_in_region(frame, "Sessions", &full);
+                    assertion::assert_text_in_region(frame, "Work Pace", &full);
+                    assertion::assert_text_in_region(frame, "Agent CLIs", &full);
+                    assertion::assert_text_in_region(frame, "claude", &full);
+                    assertion::assert_text_in_region(frame, "0.0.1-updated", &full);
+                    assertion::assert_text_in_region(frame, "gemini 0.0.1-updated", &full);
+                    assertion::assert_text_in_region(frame, "Tokens In", &full);
+                    assertion::assert_text_in_region(frame, "Out", &full);
+                    assertion::assert_not_visible(frame, "Version");
+                    assertion::assert_not_visible(frame, "Agentty is an ADE");
+                    assertion::assert_not_visible(frame, "Last Opened");
+                    assertion::assert_text_in_region(frame, "Active", &full);
+                    assertion::assert_text_in_region(frame, "test-project", &full);
+                    assertion::assert_text_in_region(frame, "main", &full);
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }
 
@@ -161,12 +164,12 @@ fn projects_page_shows_cwd() {
 /// pinned last-opened timestamp. The scenario starts on a pre-persisted
 /// Sessions tab and toggles the active project there and back, so the follow-up
 /// VHS recording replays against the same MRU order as the assertion run.
-#[test]
-fn test_project_switcher() {
+#[tokio::test]
+async fn test_project_switcher() {
     // Arrange, Act, Assert
     FeatureTest::new("project_switcher")
         .with_git()
-        .setup(common::seed_second_project)
+        .setup(|env| Box::pin(async move { common::seed_second_project(env).await }))
         .zola(
             "Project switcher",
             "Switch the active project from the Sessions view with a quick MRU popup.",
@@ -204,47 +207,51 @@ fn test_project_switcher() {
                     )
             },
             |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "p: projects", &full);
-                assertion::assert_text_in_region(frame, "Project: test-project", &full);
-                assertion::assert_not_visible(frame, "Switch project");
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "p: projects", &full);
+                    assertion::assert_text_in_region(frame, "Project: test-project", &full);
+                    assertion::assert_not_visible(frame, "Switch project");
 
-                let popup_capture = report
-                    .captures
-                    .iter()
-                    .find(|capture| capture.label == "switcher")
-                    .expect("missing switcher capture");
-                let popup_frame = common::frame_from_capture(popup_capture);
-                let popup_region = Region::full(popup_frame.cols(), popup_frame.rows());
-                assertion::assert_text_in_region(&popup_frame, "Switch project", &popup_region);
-                assertion::assert_text_in_region(&popup_frame, "* test-project", &popup_region);
-                assertion::assert_text_in_region(&popup_frame, "zeta-project", &popup_region);
+                    let popup_capture = report
+                        .captures
+                        .iter()
+                        .find(|capture| capture.label == "switcher")
+                        .expect("missing switcher capture");
+                    let popup_frame = common::frame_from_capture(popup_capture);
+                    let popup_region = Region::full(popup_frame.cols(), popup_frame.rows());
+                    assertion::assert_text_in_region(&popup_frame, "Switch project", &popup_region);
+                    assertion::assert_text_in_region(&popup_frame, "* test-project", &popup_region);
+                    assertion::assert_text_in_region(&popup_frame, "zeta-project", &popup_region);
 
-                let switched_capture = report
-                    .captures
-                    .iter()
-                    .find(|capture| capture.label == "switched")
-                    .expect("missing switched capture");
-                let switched_frame = common::frame_from_capture(switched_capture);
-                let switched_region = Region::full(switched_frame.cols(), switched_frame.rows());
-                assertion::assert_text_in_region(
-                    &switched_frame,
-                    "Project: zeta-project",
-                    &switched_region,
-                );
+                    let switched_capture = report
+                        .captures
+                        .iter()
+                        .find(|capture| capture.label == "switched")
+                        .expect("missing switched capture");
+                    let switched_frame = common::frame_from_capture(switched_capture);
+                    let switched_region =
+                        Region::full(switched_frame.cols(), switched_frame.rows());
+                    assertion::assert_text_in_region(
+                        &switched_frame,
+                        "Project: zeta-project",
+                        &switched_region,
+                    );
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }
 
 /// Verify explicit project sync reports progress in the status bar while tab
 /// navigation remains available, then runs a queued sync for another project.
-#[test]
-fn test_project_sync_non_modal() {
+#[tokio::test]
+async fn test_project_sync_non_modal() {
     // Arrange, Act, Assert
     FeatureTest::new("project_sync_non_modal")
         .with_git()
-        .setup(seed_delayed_project_sync)
+        .setup(|env| Box::pin(async move { seed_delayed_project_sync(env).await }))
         .zola(
             "Non-modal project sync",
             "Keep navigating while Agentty safely synchronizes the project branch.",
@@ -294,67 +301,25 @@ fn test_project_sync_non_modal() {
                     )
             },
             |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_not_visible(frame, "Synced zeta-project/main");
-                assertion::assert_text_in_region(frame, "FYI:", &full);
-                assertion::assert_not_visible(frame, "Sync complete");
-
-                let complete_capture = report
-                    .captures
-                    .iter()
-                    .find(|capture| capture.label == "sync_complete")
-                    .expect("missing completed sync capture");
-                let complete_frame = common::frame_from_capture(complete_capture);
-                let complete_full = Region::full(complete_frame.cols(), complete_frame.rows());
-                assertion::assert_text_in_region(
-                    &complete_frame,
-                    "Synced zeta-project/main",
-                    &complete_full,
-                );
-
-                let syncing_capture = report
-                    .captures
-                    .iter()
-                    .find(|capture| capture.label == "syncing_while_navigating")
-                    .expect("missing in-progress sync capture");
-                let syncing_frame = common::frame_from_capture(syncing_capture);
-                let syncing_full = Region::full(syncing_frame.cols(), syncing_frame.rows());
-                assertion::assert_text_in_region(
-                    &syncing_frame,
-                    "Syncing test-project/main...",
-                    &syncing_full,
-                );
-                assertion::assert_text_in_region(&syncing_frame, "Sessions", &syncing_full);
-                assertion::assert_not_visible(&syncing_frame, "Sync in progress");
-
-                verify_session_creation_blocked(report)
-                    .expect("missing blocked session creation capture");
-
-                let queued_capture = report
-                    .captures
-                    .iter()
-                    .find(|capture| capture.label == "queued_project_sync")
-                    .expect("missing queued project sync capture");
-                let queued_frame = common::frame_from_capture(queued_capture);
-                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-                assertion::assert_text_in_region(
-                    &queued_frame,
-                    "Syncing zeta-project/main...",
-                    &queued_full,
-                );
+                Box::pin(async move {
+                    // Assert
+                    assert_project_sync_non_modal(frame, report)
+                        .expect("feature captures should exist");
+                })
             },
         )
+        .await
         .expect("feature test failed");
 }
 
 /// Verify a staged draft cannot materialize its worktree while project sync
 /// owns the base checkout.
-#[test]
-fn project_sync_blocks_staged_draft_start() {
+#[tokio::test]
+async fn project_sync_blocks_staged_draft_start() {
     // Arrange, Act, Assert
     FeatureTest::new("project_sync_blocks_staged_draft_start")
         .with_git()
-        .setup(seed_delayed_project_sync)
+        .setup(|env| Box::pin(async move { seed_delayed_project_sync(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -377,11 +342,62 @@ fn project_sync_blocks_staged_draft_start() {
                     .wait_for_text("[Start Error]", 5000)
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "[Start Error]", &full);
-                assertion::assert_text_in_region(frame, "is synchronizing", &full);
-                assertion::assert_text_in_region(frame, "s: start", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "[Start Error]", &full);
+                    assertion::assert_text_in_region(frame, "is synchronizing", &full);
+                    assertion::assert_text_in_region(frame, "s: start", &full);
+                })
             },
         )
+        .await
         .expect("feature test failed");
+}
+
+/// Checks the captured states for this feature journey.
+fn assert_project_sync_non_modal(
+    frame: &testty::frame::TerminalFrame,
+    report: &testty::proof::report::ProofReport,
+) -> Result<(), &'static str> {
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_not_visible(frame, "Synced zeta-project/main");
+    assertion::assert_text_in_region(frame, "FYI:", &full);
+    assertion::assert_not_visible(frame, "Sync complete");
+
+    let complete_capture = report
+        .captures
+        .iter()
+        .find(|capture| capture.label == "sync_complete")
+        .ok_or("missing completed sync capture")?;
+    let complete_frame = common::frame_from_capture(complete_capture);
+    let complete_full = Region::full(complete_frame.cols(), complete_frame.rows());
+    assertion::assert_text_in_region(&complete_frame, "Synced zeta-project/main", &complete_full);
+
+    let syncing_capture = report
+        .captures
+        .iter()
+        .find(|capture| capture.label == "syncing_while_navigating")
+        .ok_or("missing in-progress sync capture")?;
+    let syncing_frame = common::frame_from_capture(syncing_capture);
+    let syncing_full = Region::full(syncing_frame.cols(), syncing_frame.rows());
+    assertion::assert_text_in_region(
+        &syncing_frame,
+        "Syncing test-project/main...",
+        &syncing_full,
+    );
+    assertion::assert_text_in_region(&syncing_frame, "Sessions", &syncing_full);
+    assertion::assert_not_visible(&syncing_frame, "Sync in progress");
+
+    verify_session_creation_blocked(report)?;
+
+    let queued_capture = report
+        .captures
+        .iter()
+        .find(|capture| capture.label == "queued_project_sync")
+        .ok_or("missing queued project sync capture")?;
+    let queued_frame = common::frame_from_capture(queued_capture);
+    let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+    assertion::assert_text_in_region(&queued_frame, "Syncing zeta-project/main...", &queued_full);
+
+    Ok(())
 }

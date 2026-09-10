@@ -39,10 +39,10 @@ pub trait Component {
 
 /// Immutable data required to draw a single UI frame.
 pub struct RenderContext<'a> {
-    /// Exact prompt transcript blocks keyed by session id for active turns.
-    pub active_prompt_outputs: &'a HashMap<SessionId, String>,
     /// Identifier of the currently active project.
     pub active_project_id: i64,
+    /// Exact prompt transcript blocks keyed by session id for active turns.
+    pub active_prompt_outputs: &'a HashMap<SessionId, String>,
     /// Locally available agent CLI executables and detected versions.
     pub available_agent_clis: &'a [AgentCliInfo],
     /// Active top-level tab selection.
@@ -51,14 +51,12 @@ pub struct RenderContext<'a> {
     pub current_version_display_text: &'a str,
     /// Active project-scoped reasoning level used by session pages.
     pub default_reasoning_level: ReasoningLevel,
-    /// One coherent wall-clock snapshot used by this render pass.
-    pub(crate) frame_time: FrameTime,
     /// Current local branch name for the active project.
     pub git_branch: Option<&'a str>,
-    /// Current upstream reference tracked by the active project branch.
-    pub git_upstream_ref: Option<&'a str>,
     /// Latest ahead/behind counts for the active project branch.
     pub git_status: Option<(u32, u32)>,
+    /// Current upstream reference tracked by the active project branch.
+    pub git_upstream_ref: Option<&'a str>,
     /// Whether tmux-only worktree actions can be rendered.
     pub is_tmux_session: bool,
     /// Newer stable version when one is available.
@@ -68,17 +66,12 @@ pub struct RenderContext<'a> {
     /// Cached most-recently-opened ordering over `projects`, reused by the
     /// project switcher popup instead of re-sorting each frame.
     pub mru_project_order: &'a [usize],
-    /// UI-owned cache resources shared by every page in this frame.
-    pub render_cache_store: &'a RenderCacheStore,
     /// Table selection state for the projects list.
     pub project_table_state: &'a mut TableState,
     /// Project rows available for rendering.
     pub projects: &'a [ProjectListItem],
-    /// Latest explicit project-sync lifecycle state.
-    pub(crate) project_sync_status: Option<&'a ProjectSyncStatus>,
-    /// Focused-review state for the visible session, projected from the app
-    /// cache for this render pass.
-    pub session_review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
+    /// UI-owned cache resources shared by every page in this frame.
+    pub render_cache_store: &'a RenderCacheStore,
     /// Detected session worktree branch names keyed by session id.
     pub session_branch_names: &'a HashMap<SessionId, String>,
     /// Latest session-branch ahead/behind snapshots keyed by session id,
@@ -88,29 +81,36 @@ pub struct RenderContext<'a> {
     pub session_index_by_id: &'a HashMap<SessionId, usize>,
     /// Background thinking messages keyed by session id.
     pub session_progress_messages: &'a HashMap<SessionId, String>,
-    /// Internal host-temperature sidecar for the tracked process roots.
-    pub(crate) session_cpu_temperatures: &'a HashMap<SessionId, f32>,
     /// Latest tracked process-tree totals.
     pub session_resources: &'a HashMap<SessionId, SessionResources>,
+    /// Focused-review state for the visible session, projected from the app
+    /// cache for this render pass.
+    pub session_review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     /// Latest observable update versions keyed by session id.
     pub session_update_versions: &'a HashMap<SessionId, u64>,
     /// Whether each rendered session currently has a materialized worktree on
     /// disk, keyed by session id.
     pub session_worktree_availability: &'a HashMap<SessionId, bool>,
-    /// Settings-screen projection when the active tab can render it.
-    pub(crate) settings_screen: Option<&'a crate::presentation::settings::SettingsScreenSnapshot>,
-    /// Daily session activity series used by dashboard activity summaries.
-    pub stats_activity: &'a [DailyActivity],
     /// Session rows available for rendering.
     pub sessions: &'a [Session],
+    /// Daily session activity series used by dashboard activity summaries.
+    pub stats_activity: &'a [DailyActivity],
+    /// Absolute one-minute rotation slot used for page-scoped status-bar FYIs.
+    pub status_bar_fyi_rotation_index: u64,
     /// Table selection state for the session list.
     pub table_state: &'a mut TableState,
     /// Background auto-update progress state for the status bar.
     pub update_status: Option<&'a UpdateStatus>,
-    /// Absolute one-minute rotation slot used for page-scoped status-bar FYIs.
-    pub status_bar_fyi_rotation_index: u64,
     /// Working directory for the active project.
     pub working_dir: &'a Path,
+    /// One coherent wall-clock snapshot used by this render pass.
+    pub(crate) frame_time: FrameTime,
+    /// Latest explicit project-sync lifecycle state.
+    pub(crate) project_sync_status: Option<&'a ProjectSyncStatus>,
+    /// Internal host-temperature sidecar for the tracked process roots.
+    pub(crate) session_cpu_temperatures: &'a HashMap<SessionId, f32>,
+    /// Settings-screen projection when the active tab can render it.
+    pub(crate) settings_screen: Option<&'a crate::presentation::setting::SettingsScreenSnapshot>,
 }
 
 /// Project-scoped footer inputs used when no session-specific footer override

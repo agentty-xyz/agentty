@@ -3,7 +3,6 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use agentty::test_support;
 use testty::assertion;
 use testty::region::Region;
 
@@ -11,15 +10,17 @@ use super::fixture::{
     E2eResult, seed_auto_address_review_mode, seed_project_settings, seed_review_ready_session,
     seed_review_ready_session_on_sessions_tab,
 };
-use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
+use crate::{common, test_support};
 
 /// Visible confirmation emitted only when Codex receives unrestricted Auto
 /// Edit policies at both app-server request boundaries.
 const CODEX_AUTO_EDIT_POLICY_CONFIRMED_TEXT: &str = "Codex Auto Edit unrestricted policy applied.";
 
 /// Installs a Codex app-server stub that verifies Auto Edit policy payloads.
-fn seed_codex_auto_edit_policy_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+async fn seed_codex_auto_edit_policy_project(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
     let codex_path = env.stub_bin.join("codex");
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
@@ -81,17 +82,17 @@ done
             ("DefaultSmartModel", "gpt-5.6-sol"),
         ],
     )
+    .await
 }
 
 /// Seeds a review-ready session with Detailed response style selected so the
 /// semantic run and GIF replay remain idempotent.
-fn seed_detailed_response_style_session(
+async fn seed_detailed_response_style_session(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session_on_sessions_tab(env)?;
+    seed_review_ready_session_on_sessions_tab(env).await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -100,14 +101,15 @@ fn seed_detailed_response_style_session(
                 agentty::domain::agent::ResponseStyle::Detailed,
             )
             .await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Seeds one review-ready session with a worktree-local personality.
-fn seed_session_personality(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+async fn seed_session_personality(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env).await?;
 
     let session_folder =
         test_support::session_folder(&env.agentty_root.join("wt"), "review-shortcut-0001");
@@ -127,8 +129,8 @@ fn seed_session_personality(env: &BuilderEnv) -> Result<(), Box<dyn std::error::
 
 /// Verify that slash-command filtering can match text contained inside a
 /// command name, not only command prefixes.
-#[test]
-fn model_slash_command_contains_match_is_visible() -> E2eResult {
+#[tokio::test]
+async fn model_slash_command_contains_match_is_visible() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("model_slash_command_contains_match")
         .with_git()
@@ -151,27 +153,30 @@ fn model_slash_command_contains_match_is_visible() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "/model", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "Choose an agent and model for this session.",
-                    &full,
-                );
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "/model", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Choose an agent and model for this session.",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify `/mode` selects a session permission mode from the composer.
-#[test]
-fn session_permission_mode_selection() -> E2eResult {
+#[tokio::test]
+async fn session_permission_mode_selection() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_permission_mode_selection")
         .with_git()
         .with_terminal_size(180, 24)
-        .setup(seed_auto_address_review_mode)
+        .setup(|env| Box::pin(async move { seed_auto_address_review_mode(env).await }))
         .zola(
             "Switch session mode",
             "Choose auto-edit, auto-address, or read-only from the composer.",
@@ -203,38 +208,41 @@ fn session_permission_mode_selection() -> E2eResult {
                     )
             },
             |frame, report| {
-                let initial_frame = common::frame_from_capture(&report.captures[0]);
-                let initial_full = Region::full(initial_frame.cols(), initial_frame.rows());
-                assertion::assert_text_in_region(
-                    &initial_frame,
-                    "] · Normal · Auto Edit + Auto Address Comments",
-                    &initial_full,
-                );
-                assertion::assert_text_in_region(
-                    &initial_frame,
-                    "Shift+Tab: switch mode",
-                    &initial_full,
-                );
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "] · Normal · Auto Edit + Auto Address Comments",
-                    &full,
-                );
+                Box::pin(async move {
+                    let initial_frame = common::frame_from_capture(&report.captures[0]);
+                    let initial_full = Region::full(initial_frame.cols(), initial_frame.rows());
+                    assertion::assert_text_in_region(
+                        &initial_frame,
+                        "] · Normal · Auto Edit + Auto Address Comments",
+                        &initial_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &initial_frame,
+                        "Shift+Tab: switch mode",
+                        &initial_full,
+                    );
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "] · Normal · Auto Edit + Auto Address Comments",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify a submitted Codex Auto Edit turn receives unrestricted app-server
 /// policies and completes visibly through the real session runtime boundary.
-#[test]
-fn codex_auto_edit_uses_unrestricted_app_server_policy() -> E2eResult {
+#[tokio::test]
+async fn codex_auto_edit_uses_unrestricted_app_server_policy() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("codex_auto_edit_unrestricted_policy")
         .with_git()
-        .setup(seed_codex_auto_edit_policy_project)
+        .setup(|env| Box::pin(async move { seed_codex_auto_edit_policy_project(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -253,27 +261,30 @@ fn codex_auto_edit_uses_unrestricted_app_server_policy() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    CODEX_AUTO_EDIT_POLICY_CONFIRMED_TEXT,
-                    &full,
-                );
-                assertion::assert_not_visible(frame, "Codex Auto Edit policy mismatch.");
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        CODEX_AUTO_EDIT_POLICY_CONFIRMED_TEXT,
+                        &full,
+                    );
+                    assertion::assert_not_visible(frame, "Codex Auto Edit policy mismatch.");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that moving up from the first slash-command option wraps selection
 /// to the final visible option.
-#[test]
-fn slash_command_selection_wraps_from_first_to_last() -> E2eResult {
+#[tokio::test]
+async fn slash_command_selection_wraps_from_first_to_last() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("slash_command_selection_wraps")
         .with_git()
-        .setup(seed_review_ready_session)
+        .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -292,30 +303,33 @@ fn slash_command_selection_wraps_from_first_to_last() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let slash_menu_title = frame
-                    .find_text("Slash Command")
-                    .into_iter()
-                    .next()
-                    .expect("slash-command menu title should render");
-                let slash_menu_left_col = (0..=slash_menu_title.rect.col)
-                    .rev()
-                    .find(|column| frame.cell_text(slash_menu_title.rect.row, *column) == "╭")
-                    .expect("slash-command menu should have a left border");
-                let option_rows = (slash_menu_title.rect.row + 1..frame.rows())
-                    .take_while(|row| frame.cell_text(*row, slash_menu_left_col) == "│")
-                    .collect::<Vec<_>>();
-                let last_option_row = option_rows
-                    .last()
-                    .copied()
-                    .expect("slash-command menu should render at least one option");
+                Box::pin(async move {
+                    let slash_menu_title = frame
+                        .find_text("Slash Command")
+                        .into_iter()
+                        .next()
+                        .expect("slash-command menu title should render");
+                    let slash_menu_left_col = (0..=slash_menu_title.rect.col)
+                        .rev()
+                        .find(|column| frame.cell_text(slash_menu_title.rect.row, *column) == "╭")
+                        .expect("slash-command menu should have a left border");
+                    let option_rows = (slash_menu_title.rect.row + 1..frame.rows())
+                        .take_while(|row| frame.cell_text(*row, slash_menu_left_col) == "│")
+                        .collect::<Vec<_>>();
+                    let last_option_row = option_rows
+                        .last()
+                        .copied()
+                        .expect("slash-command menu should render at least one option");
 
-                assert_eq!(
-                    frame.cell_text(last_option_row, slash_menu_left_col + 1),
-                    ">",
-                    "expected the final visible slash command to be selected after wrapping up"
-                );
+                    assert_eq!(
+                        frame.cell_text(last_option_row, slash_menu_left_col + 1),
+                        ">",
+                        "expected the final visible slash command to be selected after wrapping up"
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
@@ -323,13 +337,13 @@ fn slash_command_selection_wraps_from_first_to_last() -> E2eResult {
 /// Verify `/speed` exposes normal and fast modes, reflects the selection, and
 /// drops both fast mode and its speed display when `/model` switches to a
 /// provider without a speed control.
-#[test]
-fn session_speed_mode_selection() -> E2eResult {
+#[tokio::test]
+async fn session_speed_mode_selection() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_speed_mode_selection")
         .with_git()
         .with_terminal_size(180, 24)
-        .setup(seed_review_ready_session)
+        .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -371,44 +385,48 @@ fn session_speed_mode_selection() -> E2eResult {
                     )
             },
             |frame, report| {
-                let picker_frame = common::frame_from_capture(&report.captures[0]);
-                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
-                assertion::assert_text_in_region(&picker_frame, "Normal", &picker_full);
-                assertion::assert_text_in_region(&picker_frame, "Fast", &picker_full);
+                Box::pin(async move {
+                    let picker_frame = common::frame_from_capture(&report.captures[0]);
+                    let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+                    assertion::assert_text_in_region(&picker_frame, "Normal", &picker_full);
+                    assertion::assert_text_in_region(&picker_frame, "Fast", &picker_full);
 
-                let fast_frame = common::frame_from_capture(&report.captures[1]);
-                let fast_full = Region::full(fast_frame.cols(), fast_frame.rows());
-                assertion::assert_text_in_region(&fast_frame, "· Fast", &fast_full);
-                assertion::assert_text_in_region(
-                    &fast_frame,
-                    "Reasoning: high  Speed: Fast",
-                    &fast_full,
-                );
+                    let fast_frame = common::frame_from_capture(&report.captures[1]);
+                    let fast_full = Region::full(fast_frame.cols(), fast_frame.rows());
+                    assertion::assert_text_in_region(&fast_frame, "· Fast", &fast_full);
+                    assertion::assert_text_in_region(
+                        &fast_frame,
+                        "Reasoning: high  Speed: Fast",
+                        &fast_full,
+                    );
 
-                // Gemini has no speed control, so the header runs straight from
-                // reasoning to tokens and the composer drops its speed status.
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
-                    frame,
-                    "Model: gemini-3.1-pro-preview  Reasoning: high  Tokens:",
-                    &full,
-                );
-                assertion::assert_not_visible(frame, "· Fast");
+                    // Gemini has no speed control, so the header runs straight
+                    // from reasoning to tokens and the
+                    // composer drops its speed status.
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Model: gemini-3.1-pro-preview  Reasoning: high  Tokens:",
+                        &full,
+                    );
+                    assertion::assert_not_visible(frame, "· Fast");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify `/style` exposes response-detail choices and persists the selected
 /// style visibly in the current session.
-#[test]
-fn test_session_response_style() -> E2eResult {
+#[tokio::test]
+async fn test_session_response_style() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_response_style")
         .with_git()
         .with_terminal_size(180, 24)
-        .setup(seed_detailed_response_style_session)
+        .setup(|env| Box::pin(async move { seed_detailed_response_style_session(env).await }))
         .zola(
             "Session response style",
             "Choose concise, balanced, or detailed responses for each session.",
@@ -442,34 +460,41 @@ fn test_session_response_style() -> E2eResult {
                     )
             },
             |frame, report| {
-                let picker_frame = common::frame_from_capture(&report.captures[0]);
-                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
-                assertion::assert_text_in_region(&picker_frame, "Concise", &picker_full);
-                assertion::assert_text_in_region(&picker_frame, "Balanced", &picker_full);
-                assertion::assert_text_in_region(&picker_frame, "Detailed", &picker_full);
-                assertion::assert_text_in_region(
-                    &picker_frame,
-                    "Thorough decisions, trade-offs, effects, and verification.",
-                    &picker_full,
-                );
+                Box::pin(async move {
+                    let picker_frame = common::frame_from_capture(&report.captures[0]);
+                    let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+                    assertion::assert_text_in_region(&picker_frame, "Concise", &picker_full);
+                    assertion::assert_text_in_region(&picker_frame, "Balanced", &picker_full);
+                    assertion::assert_text_in_region(&picker_frame, "Detailed", &picker_full);
+                    assertion::assert_text_in_region(
+                        &picker_frame,
+                        "Thorough decisions, trade-offs, effects, and verification.",
+                        &picker_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "· Detailed · Normal · Auto Edit", &full);
-                assertion::assert_text_in_region(frame, "Style: Detailed", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "· Detailed · Normal · Auto Edit",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "Style: Detailed", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify `/personality` lists worktree-local agent definitions and persists
 /// the selected profile with visible transcript feedback.
-#[test]
-fn test_session_personality() -> E2eResult {
+#[tokio::test]
+async fn test_session_personality() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_personality")
         .with_git()
-        .setup(seed_session_personality)
+        .setup(|env| Box::pin(async move { seed_session_personality(env).await }))
         .zola(
             "Session personality",
             "Choose a worktree-local agent personality for a session.",
@@ -509,28 +534,35 @@ fn test_session_personality() -> E2eResult {
                     )
             },
             |frame, report| {
-                let command_frame = common::frame_from_capture(&report.captures[0]);
-                let command_full = Region::full(command_frame.cols(), command_frame.rows());
-                assertion::assert_text_in_region(
-                    &command_frame,
-                    "List: .agents/agents/.",
-                    &command_full,
-                );
+                Box::pin(async move {
+                    let command_frame = common::frame_from_capture(&report.captures[0]);
+                    let command_full = Region::full(command_frame.cols(), command_frame.rows());
+                    assertion::assert_text_in_region(
+                        &command_frame,
+                        "List: .agents/agents/.",
+                        &command_full,
+                    );
 
-                let picker_frame = common::frame_from_capture(&report.captures[1]);
-                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
-                assertion::assert_text_in_region(&picker_frame, "None (default)", &picker_full);
-                assertion::assert_text_in_region(&picker_frame, "Code Reviewer", &picker_full);
-                assertion::assert_text_in_region(
-                    &picker_frame,
-                    "Reviews code carefully",
-                    &picker_full,
-                );
+                    let picker_frame = common::frame_from_capture(&report.captures[1]);
+                    let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+                    assertion::assert_text_in_region(&picker_frame, "None (default)", &picker_full);
+                    assertion::assert_text_in_region(&picker_frame, "Code Reviewer", &picker_full);
+                    assertion::assert_text_in_region(
+                        &picker_frame,
+                        "Reviews code carefully",
+                        &picker_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Personality set to Code Reviewer.", &full);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Personality set to Code Reviewer.",
+                        &full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

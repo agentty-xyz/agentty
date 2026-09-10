@@ -91,12 +91,12 @@ async fn second_instance_preserves_live_operations() -> E2eResult {
 ///
 /// Launches agentty in a clean environment and asserts that the expected
 /// tabs and labels appear in the correct regions with appropriate styling.
-#[test]
-fn startup_shows_sessions_tab_for_active_project() -> E2eResult {
+#[tokio::test]
+async fn startup_shows_sessions_tab_for_active_project() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("startup")
         .with_git()
-        .setup(common::seed_active_project_setting)
+        .setup(|env| Box::pin(async move { common::seed_active_project_setting(env).await }))
         .zola(
             "Startup",
             "Launch agentty and land on the session list in seconds.",
@@ -110,12 +110,15 @@ fn startup_shows_sessions_tab_for_active_project() -> E2eResult {
                     .capture_labeled("startup", "Initial render with Sessions tab")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Agentty", &full);
-                assertion::assert_text_in_region(frame, "test-project", &full);
-                assertion::assert_text_in_region(frame, "No sessions", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Agentty", &full);
+                    assertion::assert_text_in_region(frame, "test-project", &full);
+                    assertion::assert_text_in_region(frame, "No sessions", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
@@ -124,8 +127,8 @@ fn startup_shows_sessions_tab_for_active_project() -> E2eResult {
 ///
 /// Starts on Projects tab, presses Tab, and verifies the next tab
 /// becomes selected while Projects becomes unselected.
-#[test]
-fn tab_key_switches_tabs() -> E2eResult {
+#[tokio::test]
+async fn tab_key_switches_tabs() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("tab_switch")
         .with_git()
@@ -145,10 +148,13 @@ fn tab_key_switches_tabs() -> E2eResult {
                     .capture_labeled("after", "Sessions tab selected")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "No sessions", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "No sessions", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
@@ -157,8 +163,8 @@ fn tab_key_switches_tabs() -> E2eResult {
 ///
 /// Starts on Projects and asserts each successive tab becomes selected:
 /// Sessions and Settings.
-#[test]
-fn tab_cycles_through_all_tabs() -> E2eResult {
+#[tokio::test]
+async fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("tab_full_cycle")
         .with_git()
@@ -180,28 +186,35 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                     .capture_labeled("settings", "Settings tab selected")
             },
             |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Default Smart Model", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Default Smart Model", &full);
 
-                assert_eq!(
-                    report.captures.len(),
-                    2,
-                    "Expected 2 captures (sessions, settings)"
-                );
+                    assert_eq!(
+                        report.captures.len(),
+                        2,
+                        "Expected 2 captures (sessions, settings)"
+                    );
 
-                let sessions_frame = common::frame_from_capture(&report.captures[0]);
-                let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
-                assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
+                    let sessions_frame = common::frame_from_capture(&report.captures[0]);
+                    let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
+                    assertion::assert_text_in_region(
+                        &sessions_frame,
+                        "No sessions",
+                        &sessions_full,
+                    );
 
-                let settings_frame = common::frame_from_capture(&report.captures[1]);
-                let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
-                assertion::assert_text_in_region(
-                    &settings_frame,
-                    "Default Smart Model",
-                    &settings_full,
-                );
+                    let settings_frame = common::frame_from_capture(&report.captures[1]);
+                    let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
+                    assertion::assert_text_in_region(
+                        &settings_frame,
+                        "Default Smart Model",
+                        &settings_full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
@@ -210,8 +223,8 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
 ///
 /// The dialog should display the title "Confirm Quit" and the message
 /// "Quit agentty?" with selectable options.
-#[test]
-fn quit_shows_confirmation_dialog() -> E2eResult {
+#[tokio::test]
+async fn quit_shows_confirmation_dialog() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("quit_confirmation")
         .with_git()
@@ -231,18 +244,21 @@ fn quit_shows_confirmation_dialog() -> E2eResult {
                     .capture_labeled("dialog", "Quit confirmation dialog")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Confirm Quit", &full);
-                assertion::assert_text_in_region(frame, "Quit agentty?", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Confirm Quit", &full);
+                    assertion::assert_text_in_region(frame, "Quit agentty?", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that the footer shows keybinding hints on startup.
-#[test]
-fn startup_shows_footer_hints() -> E2eResult {
+#[tokio::test]
+async fn startup_shows_footer_hints() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("footer_hints")
         .with_git()
@@ -259,11 +275,14 @@ fn startup_shows_footer_hints() -> E2eResult {
                     .capture_labeled("startup", "Footer with keybinding hints")
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "q: quit", &full);
-                assertion::assert_text_in_region(frame, "?: help", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "q: quit", &full);
+                    assertion::assert_text_in_region(frame, "?: help", &full);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
@@ -272,8 +291,8 @@ fn startup_shows_footer_hints() -> E2eResult {
 ///
 /// Starts on Projects (first tab), then presses `BackTab` to cycle back
 /// through Settings, Sessions, and Projects.
-#[test]
-fn backtab_cycles_tabs_reverse() -> E2eResult {
+#[tokio::test]
+async fn backtab_cycles_tabs_reverse() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("backtab_reverse")
         .with_git()
@@ -297,34 +316,45 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     .capture_labeled("back_to_projects", "Projects tab after third BackTab")
             },
             |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "test-project", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "test-project", &full);
 
-                let settings_frame = common::frame_from_capture(&report.captures[0]);
-                let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
-                assertion::assert_text_in_region(
-                    &settings_frame,
-                    "Default Smart Model",
-                    &settings_full,
-                );
+                    let settings_frame = common::frame_from_capture(&report.captures[0]);
+                    let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
+                    assertion::assert_text_in_region(
+                        &settings_frame,
+                        "Default Smart Model",
+                        &settings_full,
+                    );
 
-                let sessions_frame = common::frame_from_capture(&report.captures[1]);
-                let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
-                assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
+                    let sessions_frame = common::frame_from_capture(&report.captures[1]);
+                    let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
+                    assertion::assert_text_in_region(
+                        &sessions_frame,
+                        "No sessions",
+                        &sessions_full,
+                    );
 
-                let projects_frame = common::frame_from_capture(&report.captures[2]);
-                let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
-                assertion::assert_text_in_region(&projects_frame, "test-project", &projects_full);
+                    let projects_frame = common::frame_from_capture(&report.captures[2]);
+                    let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
+                    assertion::assert_text_in_region(
+                        &projects_frame,
+                        "test-project",
+                        &projects_full,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify that `?` opens the help overlay with keybinding content, and
 /// `Esc` closes it and restores the previous view.
-#[test]
-fn help_overlay_toggle() -> E2eResult {
+#[tokio::test]
+async fn help_overlay_toggle() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("help_overlay")
         .with_git()
@@ -348,20 +378,23 @@ fn help_overlay_toggle() -> E2eResult {
                     .capture_labeled("help_closed", "Help overlay dismissed")
             },
             |frame, report| {
-                let help_frame = common::frame_from_capture(&report.captures[1]);
-                let full = Region::full(help_frame.cols(), help_frame.rows());
-                assertion::assert_text_in_region(&help_frame, "Keybindings", &full);
+                Box::pin(async move {
+                    let help_frame = common::frame_from_capture(&report.captures[1]);
+                    let full = Region::full(help_frame.cols(), help_frame.rows());
+                    assertion::assert_text_in_region(&help_frame, "Keybindings", &full);
 
-                let restored_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "test-project", &restored_full);
+                    let restored_full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "test-project", &restored_full);
 
-                let closed_text = frame.text_in_region(&restored_full);
-                assert!(
-                    !closed_text.contains("Keybindings"),
-                    "Help overlay should be dismissed after Esc"
-                );
+                    let closed_text = frame.text_in_region(&restored_full);
+                    assert!(
+                        !closed_text.contains("Keybindings"),
+                        "Help overlay should be dismissed after Esc"
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

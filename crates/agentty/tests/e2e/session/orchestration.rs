@@ -15,7 +15,9 @@ use crate::common::{BuilderEnv, FeatureTest};
 
 /// Installs a prompt-aware Claude stub for the full orchestration feature
 /// journey: plan, approval, concurrent child completion, and roll-up.
-fn install_orchestration_claude_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+async fn install_orchestration_claude_stub(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
@@ -65,64 +67,71 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
 }
 
 /// Verify the orchestrator proposes a durable plan for approval, fans out
 /// children, reports live status, and submits a final roll-up.
-#[test]
-fn session_orchestration_runs_approved_parallel_wave() -> E2eResult {
+#[tokio::test]
+async fn session_orchestration_runs_approved_parallel_wave() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_orchestration")
         .with_git()
-        .setup(install_orchestration_claude_stub)
+        .setup(|env| Box::pin(async move { install_orchestration_claude_stub(env).await }))
         .zola(
             "Parallel orchestration",
             "Approve an independent plan, watch workers run, and review the roll-up.",
             35,
         )
         .run(build_orchestration_scenario, |frame, report| {
-            // Assert
-            let picker_frame = common::frame_from_capture(&report.captures[0]);
-            let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
-            assertion::assert_text_in_region(&picker_frame, "Orchestrator", &picker_full);
-            assertion::assert_text_in_region(&picker_frame, "[Preview] Plan workers", &picker_full);
+            Box::pin(async move {
+                // Assert
+                let picker_frame = common::frame_from_capture(&report.captures[0]);
+                let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
+                assertion::assert_text_in_region(&picker_frame, "Orchestrator", &picker_full);
+                assertion::assert_text_in_region(
+                    &picker_frame,
+                    "[Preview] Plan workers",
+                    &picker_full,
+                );
 
-            let approval_frame = common::frame_from_capture(&report.captures[1]);
-            let approval_full = Region::full(approval_frame.cols(), approval_frame.rows());
-            assertion::assert_text_in_region(
-                &approval_frame,
-                "Phase: AwaitingApproval",
-                &approval_full,
-            );
-            assertion::assert_text_in_region(
-                &approval_frame,
-                "a approve  Enter discuss/revise",
-                &approval_full,
-            );
+                let approval_frame = common::frame_from_capture(&report.captures[1]);
+                let approval_full = Region::full(approval_frame.cols(), approval_frame.rows());
+                assertion::assert_text_in_region(
+                    &approval_frame,
+                    "Phase: AwaitingApproval",
+                    &approval_full,
+                );
+                assertion::assert_text_in_region(
+                    &approval_frame,
+                    "a approve  Enter discuss/revise",
+                    &approval_full,
+                );
 
-            let status_frame = common::frame_from_capture(&report.captures[2]);
-            let status_full = Region::full(status_frame.cols(), status_frame.rows());
-            assertion::assert_text_in_region(&status_frame, "Phase: Running", &status_full);
-            assertion::assert_text_in_region(
-                &status_frame,
-                "Protocol worker [protocol]: running",
-                &status_full,
-            );
-            assertion::assert_text_in_region(
-                &status_frame,
-                "UI worker [ui]: running",
-                &status_full,
-            );
-            assertion::assert_match_count(&status_frame, "Phase: Running", 1);
-            let protocol_status = status_frame.find_text("Protocol worker [protocol]: running");
-            let ui_status = status_frame.find_text("UI worker [ui]: running");
-            assert_ne!(protocol_status[0].rect.row, ui_status[0].rect.row);
+                let status_frame = common::frame_from_capture(&report.captures[2]);
+                let status_full = Region::full(status_frame.cols(), status_frame.rows());
+                assertion::assert_text_in_region(&status_frame, "Phase: Running", &status_full);
+                assertion::assert_text_in_region(
+                    &status_frame,
+                    "Protocol worker [protocol]: running",
+                    &status_full,
+                );
+                assertion::assert_text_in_region(
+                    &status_frame,
+                    "UI worker [ui]: running",
+                    &status_full,
+                );
+                assertion::assert_match_count(&status_frame, "Phase: Running", 1);
+                let protocol_status = status_frame.find_text("Protocol worker [protocol]: running");
+                let ui_status = status_frame.find_text("UI worker [ui]: running");
+                assert_ne!(protocol_status[0].rect.row, ui_status[0].rect.row);
 
-            let list_frame = common::frame_from_capture(&report.captures[3]);
-            assert_running_orchestration_session_list(&list_frame);
-            assert_orchestration_rollup_and_references(frame, report);
-        })?;
+                let list_frame = common::frame_from_capture(&report.captures[3]);
+                assert_running_orchestration_session_list(&list_frame);
+                assert_orchestration_rollup_and_references(frame, report);
+            })
+        })
+        .await?;
 
     Ok(())
 }

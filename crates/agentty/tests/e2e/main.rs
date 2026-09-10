@@ -18,3 +18,6 @@ mod project;
 mod session;
 mod setting;
 mod update;
+
+#[path = "../support/database.rs"]
+mod test_support;

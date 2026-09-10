@@ -47,19 +47,19 @@ exit 1
 
 /// Starts on the deterministic Sessions tab and installs the periodic npm
 /// fixture before the application launches.
-fn setup_periodic_agentty_update(env: &BuilderEnv) -> E2eResult {
-    common::seed_active_project_setting(env)?;
+async fn setup_periodic_agentty_update(env: &BuilderEnv) -> E2eResult {
+    common::seed_active_project_setting(env).await?;
     install_periodic_agentty_update_stub(env)
 }
 
 /// Verify that a newer version discovered on a periodic tick visibly updates
 /// Agentty after the startup lookup reported no upgrade.
-#[test]
-fn test_periodic_auto_update() -> E2eResult {
+#[tokio::test]
+async fn test_periodic_auto_update() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("periodic_auto_update")
         .with_git()
-        .setup(setup_periodic_agentty_update)
+        .setup(|env| Box::pin(async move { setup_periodic_agentty_update(env).await }))
         .env(VERSION_CHECK_INTERVAL_MS_ENV_VAR, "6000")
         .zola(
             "Periodic automatic updates",
@@ -82,24 +82,28 @@ fn test_periodic_auto_update() -> E2eResult {
                     .capture_labeled("updated", "Periodic update complete with restart guidance")
             },
             |frame, report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Updated to v999.0.0", &full);
-                assertion::assert_text_in_region(frame, "restart to use new version", &full);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Updated to v999.0.0", &full);
+                    assertion::assert_text_in_region(frame, "restart to use new version", &full);
 
-                let updating_capture = report
-                    .captures
-                    .iter()
-                    .find(|capture| capture.label == "updating")
-                    .expect("missing periodic update capture");
-                let updating_frame = common::frame_from_capture(updating_capture);
-                let updating_region = Region::full(updating_frame.cols(), updating_frame.rows());
-                assertion::assert_text_in_region(
-                    &updating_frame,
-                    "Updating to v999.0.0...",
-                    &updating_region,
-                );
+                    let updating_capture = report
+                        .captures
+                        .iter()
+                        .find(|capture| capture.label == "updating")
+                        .expect("missing periodic update capture");
+                    let updating_frame = common::frame_from_capture(updating_capture);
+                    let updating_region =
+                        Region::full(updating_frame.cols(), updating_frame.rows());
+                    assertion::assert_text_in_region(
+                        &updating_frame,
+                        "Updating to v999.0.0...",
+                        &updating_region,
+                    );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

@@ -25,18 +25,18 @@ const QUEUED_SYNC_QUESTION_TEXT: &str = "Should I continue before syncing?";
 
 /// Seeds one rebasing session so message queueing can be exercised without a
 /// live git operation or agent backend.
-fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+async fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
         SessionSeed::regular(REBASING_QUEUE_SESSION_ID, "gpt-5.6-sol", "main", "Rebasing")
             .with_title("Rebasing message queue"),
-    )?;
+    )
+    .await?;
 
     let worktree_name = &REBASING_QUEUE_SESSION_ID[..8];
     std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -54,7 +54,8 @@ fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::erro
                 "\n[Sync Assist] Resolving existing conflicts.\n",
             )
             .await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
@@ -93,7 +94,7 @@ const MISSING_DEFERRED_PROJECT_HISTORY_TEXT: &str =
 
 /// Installs a delayed session turn plus a distinct focused-review response so
 /// project-switching scenarios can prove the automatic review ran.
-fn install_deferred_project_review_claude_stub(
+async fn install_deferred_project_review_claude_stub(
     env: &BuilderEnv,
     review_started_marker: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -148,11 +149,12 @@ printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$resul
             ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
         ],
     )
+    .await
 }
 
 /// Installs a delayed Claude turn so the scenario can queue sync while the
 /// worker is still active, optionally forcing its later validation to fail.
-fn install_delayed_sync_claude_stub(
+async fn install_delayed_sync_claude_stub(
     env: &BuilderEnv,
     fail_sync_validation: bool,
     delay_seconds: u64,
@@ -184,12 +186,12 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
         install_sync_validation_failure_git_stub(env, &validation_failure_marker)?;
     }
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
 }
 
 /// Installs a delayed Claude turn that ends with a clarification question so
 /// the scenario can cancel it while sync remains queued on the worker.
-fn install_queued_sync_question_claude_stub(
+async fn install_queued_sync_question_claude_stub(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
@@ -208,7 +210,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Ne
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
 }
 
 /// Installs a Git wrapper that fails only the marked queued-sync validation.
@@ -241,7 +243,9 @@ exec '{}' "$@"
 
 /// Installs delayed agent, Git, and GitHub stubs so review-request creation
 /// can be queued during a live turn and observed after that turn completes.
-fn install_queued_review_request_stubs(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+async fn install_queued_review_request_stubs(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
     run_git(
         &env.workdir,
         &[
@@ -321,15 +325,15 @@ esac
     #[cfg(unix)]
     std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
 }
 
 /// Extends the queued-review stubs with enough turn latency for a deliberate
 /// cancellation after the publish action has been queued.
-fn install_cancelled_queued_review_request_stubs(
+async fn install_cancelled_queued_review_request_stubs(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    install_queued_review_request_stubs(env)?;
+    install_queued_review_request_stubs(env).await?;
 
     let claude_path = env.stub_bin.join("claude");
     let claude_script = std::fs::read_to_string(&claude_path)?;
@@ -350,10 +354,10 @@ fn install_cancelled_queued_review_request_stubs(
 /// generation first of all) concurrently with the opening turn, so an
 /// order-based stub can hand the delayed first-turn response to a helper
 /// command and answer the real turn immediately.
-fn install_fifo_queued_review_request_stubs(
+async fn install_fifo_queued_review_request_stubs(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    install_queued_review_request_stubs(env)?;
+    install_queued_review_request_stubs(env).await?;
 
     let claude_path = env.stub_bin.join("claude");
     let claude_script = format!(
@@ -400,12 +404,12 @@ esac
 /// rendered); a follow-up `Ctrl+c` pops the remaining queued entry; and a
 /// final `Ctrl+c` with an empty queue cancels the running turn and returns
 /// the session to review-ready controls.
-#[test]
-fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
+#[tokio::test]
+async fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queue_chat_messages")
         .with_git()
-        .setup(seed_running_stop_session)
+        .setup(|env| Box::pin(async move { seed_running_stop_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -455,62 +459,65 @@ fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
                     )
             },
             |frame, report| {
-                let queued_frame = common::frame_from_capture(&report.captures[0]);
-                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-                assertion::assert_text_in_region(&queued_frame, "≡ queued ›", &queued_full);
-                assertion::assert_text_in_region(&queued_frame, "first queued", &queued_full);
-                assertion::assert_text_in_region(&queued_frame, "second queued", &queued_full);
+                Box::pin(async move {
+                    let queued_frame = common::frame_from_capture(&report.captures[0]);
+                    let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                    assertion::assert_text_in_region(&queued_frame, "≡ queued ›", &queued_full);
+                    assertion::assert_text_in_region(&queued_frame, "first queued", &queued_full);
+                    assertion::assert_text_in_region(&queued_frame, "second queued", &queued_full);
 
-                let after_first_frame = common::frame_from_capture(&report.captures[1]);
-                let after_first_full =
-                    Region::full(after_first_frame.cols(), after_first_frame.rows());
-                assertion::assert_text_in_region(
-                    &after_first_frame,
-                    "Ctrl+c: stop",
-                    &after_first_full,
-                );
-                assertion::assert_text_in_region(
-                    &after_first_frame,
-                    "≡ queued ›",
-                    &after_first_full,
-                );
-                assertion::assert_text_in_region(
-                    &after_first_frame,
-                    "first queued",
-                    &after_first_full,
-                );
-                assertion::assert_not_visible(&after_first_frame, "second queued");
+                    let after_first_frame = common::frame_from_capture(&report.captures[1]);
+                    let after_first_full =
+                        Region::full(after_first_frame.cols(), after_first_frame.rows());
+                    assertion::assert_text_in_region(
+                        &after_first_frame,
+                        "Ctrl+c: stop",
+                        &after_first_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &after_first_frame,
+                        "≡ queued ›",
+                        &after_first_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &after_first_frame,
+                        "first queued",
+                        &after_first_full,
+                    );
+                    assertion::assert_not_visible(&after_first_frame, "second queued");
 
-                let after_second_frame = common::frame_from_capture(&report.captures[2]);
-                let after_second_full =
-                    Region::full(after_second_frame.cols(), after_second_frame.rows());
-                assertion::assert_text_in_region(
-                    &after_second_frame,
-                    "Ctrl+c: stop",
-                    &after_second_full,
-                );
-                assertion::assert_not_visible(&after_second_frame, "queued ›");
-                assertion::assert_not_visible(&after_second_frame, "first queued");
-                assertion::assert_not_visible(&after_second_frame, "second queued");
+                    let after_second_frame = common::frame_from_capture(&report.captures[2]);
+                    let after_second_full =
+                        Region::full(after_second_frame.cols(), after_second_frame.rows());
+                    assertion::assert_text_in_region(
+                        &after_second_frame,
+                        "Ctrl+c: stop",
+                        &after_second_full,
+                    );
+                    assertion::assert_not_visible(&after_second_frame, "queued ›");
+                    assertion::assert_not_visible(&after_second_frame, "first queued");
+                    assertion::assert_not_visible(&after_second_frame, "second queued");
 
-                let cleared_full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Enter: reply", &cleared_full);
-                assertion::assert_not_visible(frame, "Ctrl+c: stop");
-                assertion::assert_not_visible(frame, "queued ›");
+                    let cleared_full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Enter: reply", &cleared_full);
+                    assertion::assert_not_visible(frame, "Ctrl+c: stop");
+                    assertion::assert_not_visible(frame, "queued ›");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify a `Rebasing` session exposes review-request publishing and still
 /// queues submitted follow-up messages behind the active sync.
-#[test]
-fn session_queue_chat_message_during_rebase() -> E2eResult {
+#[tokio::test]
+async fn session_queue_chat_message_during_rebase() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queue_chat_message_during_rebase")
         .with_git()
-        .setup(seed_rebasing_queue_session)
+        .setup(|env| Box::pin(async move { seed_rebasing_queue_session(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -533,54 +540,63 @@ fn session_queue_chat_message_during_rebase() -> E2eResult {
                     )
             },
             |frame, _report| {
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Rebasing...", &full);
-                assertion::assert_text_in_region(frame, "p: PR", &full);
-                assertion::assert_text_in_region(frame, "[Commit] No changes to commit.", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "[Sync Assist] Resolving existing conflicts.",
-                    &full,
-                );
-                assertion::assert_text_in_region(frame, "≡ queued ›", &full);
-                assertion::assert_text_in_region(frame, "follow up after sync", &full);
-                let commit_row = frame
-                    .find_text("[Commit] No changes to commit.")
-                    .first()
-                    .expect("missing commit notice")
-                    .rect
-                    .row;
-                let sync_assist_row = frame
-                    .find_text("[Sync Assist] Resolving existing conflicts.")
-                    .first()
-                    .expect("missing sync-assist notice")
-                    .rect
-                    .row;
-                let queued_message_row = frame
-                    .find_text("queued › follow up after sync")
-                    .first()
-                    .expect("missing queued follow-up")
-                    .rect
-                    .row;
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Rebasing...", &full);
+                    assertion::assert_text_in_region(frame, "p: PR", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "[Commit] No changes to commit.",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "[Sync Assist] Resolving existing conflicts.",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "≡ queued ›", &full);
+                    assertion::assert_text_in_region(frame, "follow up after sync", &full);
+                    let commit_row = frame
+                        .find_text("[Commit] No changes to commit.")
+                        .first()
+                        .expect("missing commit notice")
+                        .rect
+                        .row;
+                    let sync_assist_row = frame
+                        .find_text("[Sync Assist] Resolving existing conflicts.")
+                        .first()
+                        .expect("missing sync-assist notice")
+                        .rect
+                        .row;
+                    let queued_message_row = frame
+                        .find_text("queued › follow up after sync")
+                        .first()
+                        .expect("missing queued follow-up")
+                        .rect
+                        .row;
 
-                assert_eq!(sync_assist_row, commit_row + 2);
-                assert_eq!(queued_message_row, sync_assist_row + 2);
+                    assert_eq!(sync_assist_row, commit_row + 2);
+                    assert_eq!(queued_message_row, sync_assist_row + 2);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify review-request creation submitted during a live rebase stays queued
 /// until sync completes, then publishes on the same session worker.
-#[test]
-fn review_request_creation_queues_during_rebase() -> E2eResult {
+#[tokio::test]
+async fn review_request_creation_queues_during_rebase() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_queued_during_rebase")
         .with_git()
         .setup(|env| {
-            seed_rebase_transcript_session_with_delay(env, 10)?;
-            install_queued_review_request_stubs(env)
+            Box::pin(async move {
+                seed_rebase_transcript_session_with_delay(env, 10).await?;
+                install_queued_review_request_stubs(env).await
+            })
         })
         .run(
             |scenario| {
@@ -610,49 +626,54 @@ fn review_request_creation_queues_during_rebase() -> E2eResult {
                     .wait_for_text("[Review Request] Created PR", 15000)
             },
             |frame, report| {
-                let queued_frame = common::frame_from_capture(&report.captures[0]);
-                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-                assertion::assert_text_in_region(&queued_frame, "Rebasing...", &queued_full);
-                assertion::assert_text_in_region(
-                    &queued_frame,
-                    "≡ review request — publish after this turn",
-                    &queued_full,
-                );
-                assertion::assert_not_visible(&queued_frame, "Publishing review request...");
+                Box::pin(async move {
+                    let queued_frame = common::frame_from_capture(&report.captures[0]);
+                    let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                    assertion::assert_text_in_region(&queued_frame, "Rebasing...", &queued_full);
+                    assertion::assert_text_in_region(
+                        &queued_frame,
+                        "≡ review request — publish after this turn",
+                        &queued_full,
+                    );
+                    assertion::assert_not_visible(&queued_frame, "Publishing review request...");
 
-                let started_frame = common::frame_from_capture(&report.captures[1]);
-                let started_full = Region::full(started_frame.cols(), started_frame.rows());
-                assertion::assert_text_in_region(
-                    &started_frame,
-                    "[Sync] Successfully synced",
-                    &started_full,
-                );
-                assertion::assert_text_in_region(
-                    &started_frame,
-                    "Publishing review request...",
-                    &started_full,
-                );
-                assertion::assert_not_visible(&started_frame, "Rebasing...");
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(
+                    let started_frame = common::frame_from_capture(&report.captures[1]);
+                    let started_full = Region::full(started_frame.cols(), started_frame.rows());
+                    assertion::assert_text_in_region(
+                        &started_frame,
+                        "[Sync] Successfully synced",
+                        &started_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &started_frame,
+                        "Publishing review request...",
+                        &started_full,
+                    );
+                    assertion::assert_not_visible(&started_frame, "Rebasing...");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
                     frame,
                     "[Review Request] Created PR https://github.com/agentty-xyz/agentty/pull/42",
                     &full,
                 );
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify running sessions queue `r` sync without interrupting the active
 /// turn, then rebase before returning to review.
-#[test]
-fn session_running_turn_shows_sync_shortcut() -> E2eResult {
+#[tokio::test]
+async fn session_running_turn_shows_sync_shortcut() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_running_sync_shortcut")
         .with_git()
-        .setup(|env| install_delayed_sync_claude_stub(env, false, 10))
+        .setup(|env| {
+            Box::pin(async move { install_delayed_sync_claude_stub(env, false, 10).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -682,62 +703,65 @@ fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     )
             },
             |frame, report| {
-                let queued_frame = common::frame_from_capture(&report.captures[0]);
-                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-                assertion::assert_text_in_region(
-                    &queued_frame,
-                    "≡ sync — rebase onto the base branch after this turn",
-                    &queued_full,
-                );
-                assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
-                let active_turn_row = queued_frame
-                    .find_text("Keep the active turn running")
-                    .first()
-                    .expect("missing active turn prompt")
-                    .rect
-                    .row;
-                let queued_sync_row = queued_frame
-                    .find_text("rebase onto the base branch after this turn")
-                    .first()
-                    .expect("missing queued sync notice")
-                    .rect
-                    .row;
-                assert!(active_turn_row < queued_sync_row);
+                Box::pin(async move {
+                    let queued_frame = common::frame_from_capture(&report.captures[0]);
+                    let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                    assertion::assert_text_in_region(
+                        &queued_frame,
+                        "≡ sync — rebase onto the base branch after this turn",
+                        &queued_full,
+                    );
+                    assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
+                    let active_turn_row = queued_frame
+                        .find_text("Keep the active turn running")
+                        .first()
+                        .expect("missing active turn prompt")
+                        .rect
+                        .row;
+                    let queued_sync_row = queued_frame
+                        .find_text("rebase onto the base branch after this turn")
+                        .first()
+                        .expect("missing queued sync notice")
+                        .rect
+                        .row;
+                    assert!(active_turn_row < queued_sync_row);
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);
-                assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
-                assertion::assert_text_in_region(frame, "Enter: reply", &full);
-                assertion::assert_not_visible(frame, "[Stopped]");
-                assertion::assert_not_visible(frame, "≡ sync —");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);
+                    assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
+                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, "[Stopped]");
+                    assertion::assert_not_visible(frame, "≡ sync —");
 
-                let answer_row = frame
-                    .find_text(QUEUED_SYNC_TURN_ANSWER)
-                    .first()
-                    .expect("missing completed turn answer")
-                    .rect
-                    .row;
-                let sync_row = frame
-                    .find_text("[Sync] Successfully synced")
-                    .first()
-                    .expect("missing queued sync result")
-                    .rect
-                    .row;
-                assert!(answer_row < sync_row);
+                    let answer_row = frame
+                        .find_text(QUEUED_SYNC_TURN_ANSWER)
+                        .first()
+                        .expect("missing completed turn answer")
+                        .rect
+                        .row;
+                    let sync_row = frame
+                        .find_text("[Sync] Successfully synced")
+                        .first()
+                        .expect("missing queued sync result")
+                        .rect
+                        .row;
+                    assert!(answer_row < sync_row);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify canceling a clarification question wakes the session worker and
 /// resumes sync that was queued during the preceding active turn.
-#[test]
-fn session_queued_sync_resumes_after_question_cancel() -> E2eResult {
+#[tokio::test]
+async fn session_queued_sync_resumes_after_question_cancel() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queued_sync_resumes_after_question_cancel")
         .with_git()
-        .setup(install_queued_sync_question_claude_stub)
+        .setup(|env| Box::pin(async move { install_queued_sync_question_claude_stub(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -763,40 +787,45 @@ fn session_queued_sync_resumes_after_question_cancel() -> E2eResult {
                     .wait_for_text("Enter: reply", 5000)
             },
             |frame, report| {
-                let question_frame = common::frame_from_capture(&report.captures[0]);
-                let question_full = Region::full(question_frame.cols(), question_frame.rows());
-                assertion::assert_text_in_region(
-                    &question_frame,
-                    QUEUED_SYNC_QUESTION_TEXT,
-                    &question_full,
-                );
-                assertion::assert_text_in_region(
-                    &question_frame,
-                    "≡ sync — rebase onto the base branch after this turn",
-                    &question_full,
-                );
+                Box::pin(async move {
+                    let question_frame = common::frame_from_capture(&report.captures[0]);
+                    let question_full = Region::full(question_frame.cols(), question_frame.rows());
+                    assertion::assert_text_in_region(
+                        &question_frame,
+                        QUEUED_SYNC_QUESTION_TEXT,
+                        &question_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &question_frame,
+                        "≡ sync — rebase onto the base branch after this turn",
+                        &question_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
-                assertion::assert_text_in_region(frame, "Enter: reply", &full);
-                assertion::assert_not_visible(frame, QUEUED_SYNC_QUESTION_TEXT);
-                assertion::assert_not_visible(frame, "≡ sync —");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
+                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, QUEUED_SYNC_QUESTION_TEXT);
+                    assertion::assert_not_visible(frame, "≡ sync —");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify a running session remains controllable and completes work queued
 /// after switching away from its owning project and back.
-#[test]
-fn session_queued_action_survives_project_switching() -> E2eResult {
+#[tokio::test]
+async fn session_queued_action_survives_project_switching() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queued_action_survives_project_switching")
         .with_git()
         .setup(|env| {
-            install_delayed_sync_claude_stub(env, false, 10)?;
-            common::seed_second_project(env)
+            Box::pin(async move {
+                install_delayed_sync_claude_stub(env, false, 10).await?;
+                common::seed_second_project(env).await
+            })
         })
         .run(
             |scenario| {
@@ -835,35 +864,38 @@ fn session_queued_action_survives_project_switching() -> E2eResult {
                     .wait_for_text("Enter: reply", 5000)
             },
             |frame, report| {
-                let queued_frame = common::frame_from_capture(&report.captures[0]);
-                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-                assertion::assert_text_in_region(
-                    &queued_frame,
-                    "≡ sync — rebase onto the base branch after this turn",
-                    &queued_full,
-                );
-                assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
-                assertion::assert_text_in_region(
-                    &queued_frame,
-                    "Keep queued sync visible",
-                    &queued_full,
-                );
+                Box::pin(async move {
+                    let queued_frame = common::frame_from_capture(&report.captures[0]);
+                    let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                    assertion::assert_text_in_region(
+                        &queued_frame,
+                        "≡ sync — rebase onto the base branch after this turn",
+                        &queued_full,
+                    );
+                    assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
+                    assertion::assert_text_in_region(
+                        &queued_frame,
+                        "Keep queued sync visible",
+                        &queued_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);
-                assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
-                assertion::assert_text_in_region(frame, "Enter: reply", &full);
-                assertion::assert_not_visible(frame, "≡ sync —");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);
+                    assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
+                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, "≡ sync —");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify a turn that finishes while another project is active starts focused
 /// review immediately and displays it after its owning project is restored.
-#[test]
-fn completed_session_review_survives_project_switching() -> E2eResult {
+#[tokio::test]
+async fn completed_session_review_survives_project_switching() -> E2eResult {
     // Arrange
     let review_started_marker = Arc::new(Mutex::new(None::<PathBuf>));
     let setup_review_started_marker = Arc::clone(&review_started_marker);
@@ -871,13 +903,15 @@ fn completed_session_review_survives_project_switching() -> E2eResult {
     FeatureTest::new("completed_session_review_survives_project_switching")
         .with_git()
         .setup(move |env| {
-            let marker_path = env.stub_bin.join("deferred-project-review-started");
-            setup_review_started_marker
-                .lock()
-                .expect("review marker capture should remain available")
-                .replace(marker_path.clone());
-            install_deferred_project_review_claude_stub(env, &marker_path)?;
-            common::seed_second_project(env)
+            Box::pin(async move {
+                let marker_path = env.stub_bin.join("deferred-project-review-started");
+                setup_review_started_marker
+                    .lock()
+                    .expect("review marker capture should remain available")
+                    .replace(marker_path.clone());
+                install_deferred_project_review_claude_stub(env, &marker_path).await?;
+                common::seed_second_project(env).await
+            })
         })
         .run(
             move |scenario| {
@@ -931,35 +965,40 @@ fn completed_session_review_survives_project_switching() -> E2eResult {
                     )
             },
             |frame, report| {
-                // Assert
-                let inactive_project_frame = common::frame_from_capture(&report.captures[0]);
-                let inactive_project_full =
-                    Region::full(inactive_project_frame.cols(), inactive_project_frame.rows());
-                assertion::assert_text_in_region(
-                    &inactive_project_frame,
-                    "Project: zeta-project",
-                    &inactive_project_full,
-                );
+                Box::pin(async move {
+                    // Assert
+                    let inactive_project_frame = common::frame_from_capture(&report.captures[0]);
+                    let inactive_project_full =
+                        Region::full(inactive_project_frame.cols(), inactive_project_frame.rows());
+                    assertion::assert_text_in_region(
+                        &inactive_project_frame,
+                        "Project: zeta-project",
+                        &inactive_project_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, DEFERRED_PROJECT_REVIEW_TEXT, &full);
-                assertion::assert_text_in_region(frame, "Suggestions", &full);
-                assertion::assert_not_visible(frame, "Reviewing changes with");
-                assertion::assert_not_visible(frame, MISSING_DEFERRED_PROJECT_HISTORY_TEXT);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, DEFERRED_PROJECT_REVIEW_TEXT, &full);
+                    assertion::assert_text_in_region(frame, "Suggestions", &full);
+                    assertion::assert_not_visible(frame, "Reviewing changes with");
+                    assertion::assert_not_visible(frame, MISSING_DEFERRED_PROJECT_HISTORY_TEXT);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify stopping an active turn also removes its canceled queued-sync row
 /// without promoting the skipped command to active rebase work.
-#[test]
-fn session_queued_sync_clears_when_turn_is_cancelled() -> E2eResult {
+#[tokio::test]
+async fn session_queued_sync_clears_when_turn_is_cancelled() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queued_sync_cancelled_with_turn")
         .with_git()
-        .setup(|env| install_delayed_sync_claude_stub(env, false, 10))
+        .setup(|env| {
+            Box::pin(async move { install_delayed_sync_claude_stub(env, false, 10).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -995,34 +1034,37 @@ fn session_queued_sync_clears_when_turn_is_cancelled() -> E2eResult {
                     )
             },
             |frame, report| {
-                let queued_frame = common::frame_from_capture(&report.captures[0]);
-                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-                assertion::assert_text_in_region(
-                    &queued_frame,
-                    "≡ sync — rebase onto the base branch after this turn",
-                    &queued_full,
-                );
+                Box::pin(async move {
+                    let queued_frame = common::frame_from_capture(&report.captures[0]);
+                    let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                    assertion::assert_text_in_region(
+                        &queued_frame,
+                        "≡ sync — rebase onto the base branch after this turn",
+                        &queued_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Enter: reply", &full);
-                assertion::assert_not_visible(frame, "≡ sync —");
-                assertion::assert_not_visible(frame, "Rebasing...");
-                assertion::assert_not_visible(frame, "[Sync] Successfully synced");
-                assertion::assert_not_visible(frame, QUEUED_SYNC_TURN_ANSWER);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, "≡ sync —");
+                    assertion::assert_not_visible(frame, "Rebasing...");
+                    assertion::assert_not_visible(frame, "[Sync] Successfully synced");
+                    assertion::assert_not_visible(frame, QUEUED_SYNC_TURN_ANSWER);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify queued sync validation failures replace waiting state with a
 /// durable error without briefly presenting the sync as active work.
-#[test]
-fn session_queued_sync_validation_failure_is_visible() -> E2eResult {
+#[tokio::test]
+async fn session_queued_sync_validation_failure_is_visible() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queued_sync_validation_failure")
         .with_git()
-        .setup(|env| install_delayed_sync_claude_stub(env, true, 10))
+        .setup(|env| Box::pin(async move { install_delayed_sync_claude_stub(env, true, 10).await }))
         .run(
             |scenario| {
                 scenario
@@ -1051,51 +1093,54 @@ fn session_queued_sync_validation_failure_is_visible() -> E2eResult {
                     )
             },
             |frame, report| {
-                let queued_frame = common::frame_from_capture(&report.captures[0]);
-                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-                assertion::assert_text_in_region(
-                    &queued_frame,
-                    "≡ sync — rebase onto the base branch after this turn",
-                    &queued_full,
-                );
+                Box::pin(async move {
+                    let queued_frame = common::frame_from_capture(&report.captures[0]);
+                    let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                    assertion::assert_text_in_region(
+                        &queued_frame,
+                        "≡ sync — rebase onto the base branch after this turn",
+                        &queued_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "[Sync Error] Session isolation violation",
-                    &full,
-                );
-                assertion::assert_text_in_region(frame, "Enter: reply", &full);
-                assertion::assert_not_visible(frame, "≡ sync —");
-                assertion::assert_not_visible(frame, "Rebasing...");
-                let answer_row = frame
-                    .find_text(QUEUED_SYNC_TURN_ANSWER)
-                    .first()
-                    .expect("missing completed turn answer")
-                    .rect
-                    .row;
-                let error_row = frame
-                    .find_text("[Sync Error] Session isolation violation")
-                    .first()
-                    .expect("missing queued sync validation error")
-                    .rect
-                    .row;
-                assert!(answer_row < error_row);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, QUEUED_SYNC_TURN_ANSWER, &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "[Sync Error] Session isolation violation",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                    assertion::assert_not_visible(frame, "≡ sync —");
+                    assertion::assert_not_visible(frame, "Rebasing...");
+                    let answer_row = frame
+                        .find_text(QUEUED_SYNC_TURN_ANSWER)
+                        .first()
+                        .expect("missing completed turn answer")
+                        .rect
+                        .row;
+                    let error_row = frame
+                        .find_text("[Sync Error] Session isolation violation")
+                        .first()
+                        .expect("missing queued sync validation error")
+                        .rect
+                        .row;
+                    assert!(answer_row < error_row);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify review-request creation queues behind a running turn, begins only
 /// after the answer is complete, and records the created forge link.
-#[test]
-fn review_request_creation_queues_during_running_turn() -> E2eResult {
+#[tokio::test]
+async fn review_request_creation_queues_during_running_turn() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_queued_creation")
         .with_git()
-        .setup(install_queued_review_request_stubs)
+        .setup(|env| Box::pin(async move { install_queued_review_request_stubs(env).await }))
         .zola(
             "Queued review-request creation",
             "Queue review-request creation behind a running session turn and publish it next.",
@@ -1136,56 +1181,61 @@ fn review_request_creation_queues_during_running_turn() -> E2eResult {
                     )
             },
             |frame, report| {
-                let queued_frame = common::frame_from_capture(&report.captures[0]);
-                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-                assertion::assert_text_in_region(
-                    &queued_frame,
-                    "≡ review request — publish after this turn",
-                    &queued_full,
-                );
-                assertion::assert_text_in_region(
-                    &queued_frame,
-                    "Queue the review request",
-                    &queued_full,
-                );
-                assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
+                Box::pin(async move {
+                    let queued_frame = common::frame_from_capture(&report.captures[0]);
+                    let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                    assertion::assert_text_in_region(
+                        &queued_frame,
+                        "≡ review request — publish after this turn",
+                        &queued_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &queued_frame,
+                        "Queue the review request",
+                        &queued_full,
+                    );
+                    assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
 
-                let started_frame = common::frame_from_capture(&report.captures[1]);
-                let started_full = Region::full(started_frame.cols(), started_frame.rows());
-                assertion::assert_text_in_region(
-                    &started_frame,
-                    QUEUED_REVIEW_REQUEST_TURN_ANSWER,
-                    &started_full,
-                );
-                assertion::assert_text_in_region(
-                    &started_frame,
-                    "Publishing review request...",
-                    &started_full,
-                );
-                assertion::assert_not_visible(&started_frame, "≡ review request —");
+                    let started_frame = common::frame_from_capture(&report.captures[1]);
+                    let started_full = Region::full(started_frame.cols(), started_frame.rows());
+                    assertion::assert_text_in_region(
+                        &started_frame,
+                        QUEUED_REVIEW_REQUEST_TURN_ANSWER,
+                        &started_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &started_frame,
+                        "Publishing review request...",
+                        &started_full,
+                    );
+                    assertion::assert_not_visible(&started_frame, "≡ review request —");
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "[Review Request] Created PR", &full);
-                assertion::assert_text_in_region(
-                    frame,
-                    "https://github.com/agentty-xyz/agentty/pull/42",
-                    &full,
-                );
-                assertion::assert_not_visible(frame, "≡ review request —");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "[Review Request] Created PR", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "https://github.com/agentty-xyz/agentty/pull/42",
+                        &full,
+                    );
+                    assertion::assert_not_visible(frame, "≡ review request —");
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify stopping an active turn also removes its canceled queued
 /// review-request row without promoting the skipped command to publish work.
-#[test]
-fn review_request_queued_creation_clears_when_turn_is_cancelled() -> E2eResult {
+#[tokio::test]
+async fn review_request_queued_creation_clears_when_turn_is_cancelled() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_queued_creation_cancelled_with_turn")
         .with_git()
-        .setup(install_cancelled_queued_review_request_stubs)
+        .setup(|env| {
+            Box::pin(async move { install_cancelled_queued_review_request_stubs(env).await })
+        })
         .run(
             |scenario| {
                 scenario
@@ -1226,37 +1276,40 @@ fn review_request_queued_creation_clears_when_turn_is_cancelled() -> E2eResult {
                     )
             },
             |frame, report| {
-                let queued_frame = common::frame_from_capture(&report.captures[0]);
-                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-                assertion::assert_text_in_region(
-                    &queued_frame,
-                    "≡ review request — publish after this turn",
-                    &queued_full,
-                );
+                Box::pin(async move {
+                    let queued_frame = common::frame_from_capture(&report.captures[0]);
+                    let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                    assertion::assert_text_in_region(
+                        &queued_frame,
+                        "≡ review request — publish after this turn",
+                        &queued_full,
+                    );
 
-                let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Publish Review Request", &full);
-                assertion::assert_not_visible(frame, "≡ review request —");
-                assertion::assert_not_visible(frame, "Publishing review request...");
-                assertion::assert_not_visible(frame, "[Review Request] Created PR");
-                assertion::assert_not_visible(frame, QUEUED_REVIEW_REQUEST_TURN_ANSWER);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Publish Review Request", &full);
+                    assertion::assert_not_visible(frame, "≡ review request —");
+                    assertion::assert_not_visible(frame, "Publishing review request...");
+                    assertion::assert_not_visible(frame, "[Review Request] Created PR");
+                    assertion::assert_not_visible(frame, QUEUED_REVIEW_REQUEST_TURN_ANSWER);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Verify mixed chat and workflow work renders and executes from top to
 /// bottom in the order each item was submitted.
-#[test]
-fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResult {
+#[tokio::test]
+async fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queued_work_fifo")
         .with_git()
         // Tall enough to hold both completed turns plus the review-request
         // notice, so execution order never depends on transcript scrolling.
         .with_terminal_size(80, 44)
-        .setup(install_fifo_queued_review_request_stubs)
+        .setup(|env| Box::pin(async move { install_fifo_queued_review_request_stubs(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -1297,51 +1350,54 @@ fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResult {
                     )
             },
             |frame, report| {
-                let queued_frame = common::frame_from_capture(&report.captures[0]);
-                let queued_chat_row = queued_frame
-                    .find_text("queued › Review once more")
-                    .first()
-                    .expect("missing queued chat message")
-                    .rect
-                    .row;
-                let queued_publish_row = queued_frame
-                    .find_text("review request — publish after this turn")
-                    .first()
-                    .expect("missing queued review-request action")
-                    .rect
-                    .row;
-                assert!(queued_chat_row < queued_publish_row);
+                Box::pin(async move {
+                    let queued_frame = common::frame_from_capture(&report.captures[0]);
+                    let queued_chat_row = queued_frame
+                        .find_text("queued › Review once more")
+                        .first()
+                        .expect("missing queued chat message")
+                        .rect
+                        .row;
+                    let queued_publish_row = queued_frame
+                        .find_text("review request — publish after this turn")
+                        .first()
+                        .expect("missing queued review-request action")
+                        .rect
+                        .row;
+                    assert!(queued_chat_row < queued_publish_row);
 
-                let chat_execution_frame = common::frame_from_capture(&report.captures[1]);
-                let active_answer_row = chat_execution_frame
-                    .find_text(QUEUED_REVIEW_REQUEST_TURN_ANSWER)
-                    .first()
-                    .expect("missing active turn answer")
-                    .rect
-                    .row;
-                let queued_answer_row = chat_execution_frame
-                    .find_text(QUEUED_REVIEW_FOLLOW_UP_ANSWER)
-                    .first()
-                    .expect("missing queued chat answer")
-                    .rect
-                    .row;
-                assert!(active_answer_row < queued_answer_row);
+                    let chat_execution_frame = common::frame_from_capture(&report.captures[1]);
+                    let active_answer_row = chat_execution_frame
+                        .find_text(QUEUED_REVIEW_REQUEST_TURN_ANSWER)
+                        .first()
+                        .expect("missing active turn answer")
+                        .rect
+                        .row;
+                    let queued_answer_row = chat_execution_frame
+                        .find_text(QUEUED_REVIEW_FOLLOW_UP_ANSWER)
+                        .first()
+                        .expect("missing queued chat answer")
+                        .rect
+                        .row;
+                    assert!(active_answer_row < queued_answer_row);
 
-                let queued_answer_row = frame
-                    .find_text(QUEUED_REVIEW_FOLLOW_UP_ANSWER)
-                    .first()
-                    .expect("missing queued chat answer")
-                    .rect
-                    .row;
-                let review_request_row = frame
-                    .find_text("[Review Request] Created PR")
-                    .first()
-                    .expect("missing created review request")
-                    .rect
-                    .row;
-                assert!(queued_answer_row < review_request_row);
+                    let queued_answer_row = frame
+                        .find_text(QUEUED_REVIEW_FOLLOW_UP_ANSWER)
+                        .first()
+                        .expect("missing queued chat answer")
+                        .rect
+                        .row;
+                    let review_request_row = frame
+                        .find_text("[Review Request] Created PR")
+                        .first()
+                        .expect("missing created review request")
+                        .rect
+                        .row;
+                    assert!(queued_answer_row < review_request_row);
+                })
             },
-        )?;
+        )
+        .await?;
 
     Ok(())
 }

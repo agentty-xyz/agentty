@@ -14,12 +14,11 @@ use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
 use agentty::domain::session_message::SessionMessageKind;
-use agentty::test_support;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Executor};
 
-use crate::common;
 use crate::common::{BuilderEnv, SessionSeed};
+use crate::{common, test_support};
 
 pub(super) type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -57,7 +56,7 @@ const GIT_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Installs a deterministic Claude stub for stable-context title generation
 /// and resumed review turns.
-pub(super) fn seed_session_title_candidate_project(
+pub(super) async fn seed_session_title_candidate_project(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
@@ -104,21 +103,21 @@ printf '{"type":"result","subtype":"success","result":"{\\"answer\\":\\"%s\\",\\
             ("DefaultFastAgent", "claude"),
             ("DefaultFastModel", "claude-haiku-4-5-20251001"),
         ],
-    )?;
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Seeds one review-ready session plus its default source branch and
 /// propagates setup errors to the caller.
-pub(super) fn seed_review_with_resolved_decision(
+pub(super) async fn seed_review_with_resolved_decision(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+    seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -136,7 +135,8 @@ pub(super) fn seed_review_with_resolved_decision(
                 RESOLVED_DECISION_HISTORY_TEXT,
             )
             .await
-    })?;
+    })
+    .await?;
 
     let claude_path = env.stub_bin.join("claude");
     let script = format!(
@@ -174,28 +174,29 @@ printf '{{"type":"result","subtype":"success","result":"{{\\"project_impact\\":[
             ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
         ],
     )
+    .await
 }
 
 /// Seeds one review-ready session plus its default source branch and
 /// propagates setup errors to the caller.
-pub(super) fn seed_review_ready_session(
+pub(super) async fn seed_review_ready_session(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
         SessionSeed::regular("review-shortcut-0001", "gpt-5.6-sol", "main", "Review")
             .with_title("Review-ready session shortcuts"),
-    )?;
+    )
+    .await?;
 
-    let runtime = common::seed_runtime()?;
-
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
             .update_session_diff_stats(12, 3, true, "review-shortcut-0001", "M")
             .await
-    })?;
+    })
+    .await?;
 
     run_git(&env.workdir, &["branch", "wt/review-s"])?;
     std::fs::create_dir_all(env.agentty_root.join("wt").join("review-s"))?;
@@ -204,29 +205,28 @@ pub(super) fn seed_review_ready_session(
 }
 
 /// Seeds a review-ready session and opens the Sessions tab on startup.
-pub(super) fn seed_review_ready_session_on_sessions_tab(
+pub(super) async fn seed_review_ready_session_on_sessions_tab(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+    seed_review_ready_session(env).await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         test_support::persist_active_tab_for_test(&database, agentty::app::Tab::Sessions).await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Seeds the review-ready feature session with automatic addressing already
 /// selected so semantic execution and GIF replay remain idempotent.
-pub(super) fn seed_auto_address_review_mode(
+pub(super) async fn seed_auto_address_review_mode(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session_on_sessions_tab(env)?;
+    seed_review_ready_session_on_sessions_tab(env).await?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -235,24 +235,24 @@ pub(super) fn seed_auto_address_review_mode(
                 agentty::domain::permission::PermissionMode::AutoEditAddressComments,
             )
             .await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Seeds the rebase transcript fixture with a configurable pre-rebase delay.
-pub(super) fn seed_rebase_transcript_session_with_delay(
+pub(super) async fn seed_rebase_transcript_session_with_delay(
     env: &BuilderEnv,
     delay_seconds: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+    seed_review_ready_session(env).await?;
     seed_linked_review_worktree_with_diff(env)?;
     std::fs::write(env.workdir.join("base-update.txt"), "new base commit\n")?;
     run_git(&env.workdir, &["add", "base-update.txt"])?;
     run_git(&env.workdir, &["commit", "-m", "advance base branch"])?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
@@ -270,7 +270,8 @@ pub(super) fn seed_rebase_transcript_session_with_delay(
                 "Completed answer before rebase.",
             )
             .await
-    })?;
+    })
+    .await?;
 
     let pre_rebase_hook = env.workdir.join(".git").join("hooks").join("pre-rebase");
     std::fs::write(
@@ -285,12 +286,12 @@ pub(super) fn seed_rebase_transcript_session_with_delay(
 
 /// Starts a feature recording on the Sessions tab without replay-time tab
 /// persistence changing the scenario's first action.
-pub(super) fn seed_sessions_tab(env: &BuilderEnv) -> E2eResult {
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+pub(super) async fn seed_sessions_tab(env: &BuilderEnv) -> E2eResult {
+    (async {
         let database = common::open_database(env).await?;
         test_support::persist_active_tab_for_test(&database, agentty::app::Tab::Sessions).await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
@@ -300,7 +301,7 @@ pub(super) const CLAUDE_STRUCTURED_RESPONSE_TEXT: &str = "Claude structured resp
 
 /// Installs a Claude stub that returns its final protocol reply through
 /// `structured_output`, matching current Claude Code schema-validated turns.
-pub(super) fn seed_claude_structured_output_project(
+pub(super) async fn seed_claude_structured_output_project(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
@@ -319,47 +320,47 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"","structured_out
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
 
-    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")])?;
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await?;
 
     Ok(())
 }
 
 /// Seeds one running session so `Ctrl+c` can exercise the turn-stop path
 /// without needing a live agent backend.
-pub(super) fn seed_running_stop_session(
+pub(super) async fn seed_running_stop_session(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
         SessionSeed::regular(RUNNING_STOP_SESSION_ID, "gpt-5.6-sol", "main", "InProgress")
             .with_title("Running session stop"),
-    )?;
+    )
+    .await?;
 
     // Match `session_folder()` so the seeded row has the worktree path the
     // runtime expects for this session id.
     let worktree_name = &RUNNING_STOP_SESSION_ID[..8];
     std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
 
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         database
             .sessions()
             .update_session_reasoning_level(RUNNING_STOP_SESSION_ID, ReasoningLevel::High)
             .await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Persists project-scoped settings so feature tests route model selections
 /// to deterministic backends even when additional real CLIs exist on `PATH`.
-pub(super) fn seed_project_settings(
+pub(super) async fn seed_project_settings(
     env: &BuilderEnv,
     settings: &[(&str, &str)],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = common::seed_runtime()?;
-    runtime.block_on(async {
+    (async {
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         let canonical_workdir = env.workdir.canonicalize()?;
@@ -396,22 +397,21 @@ ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
         connection.close().await?;
 
         Result::<(), Box<dyn std::error::Error>>::Ok(())
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
 
 /// Seeds one review-ready session with a linked review request.
-pub(super) fn seed_review_ready_session_with_review_request(
+pub(super) async fn seed_review_ready_session_with_review_request(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env)?;
+    seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
     seed_github_review_request_stub(env)?;
 
-    let runtime = common::seed_runtime()?;
-
-    runtime.block_on(async {
+    (async {
         let database = common::open_database(env).await?;
         let review_request = ReviewRequest {
             last_refreshed_at: 55,
@@ -431,7 +431,8 @@ pub(super) fn seed_review_ready_session_with_review_request(
             .reviews()
             .update_session_review_request("review-shortcut-0001", Some(review_request.clone()))
             .await
-    })?;
+    })
+    .await?;
 
     Ok(())
 }
@@ -636,12 +637,10 @@ esac
 /// a `Tab` press on tab navigation: the seeded startup tab keeps every `Tab` in
 /// the scenario meaningful, and keeps the PTY proof and the VHS replay (which
 /// share this database) starting from the same tab.
-pub(super) fn seed_sessions_startup_tab(
+pub(super) async fn seed_sessions_startup_tab(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = common::seed_runtime()?;
-
-    runtime.block_on(async {
+    (async {
         // Opening the database applies the migrations that create `setting`.
         common::open_database(env).await?;
 
@@ -660,7 +659,8 @@ ON CONFLICT(name) DO UPDATE SET value = excluded.value
         connection.close().await?;
 
         Result::<(), Box<dyn std::error::Error>>::Ok(())
-    })?;
+    })
+    .await?;
 
     Ok(())
 }

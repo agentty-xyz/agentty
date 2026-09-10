@@ -1,4 +1,5 @@
 //! Infrastructure adapters for database, filesystem, and system boundaries.
+
 /// Clipboard image capture and persistence boundary for prompt attachments.
 pub(crate) mod clipboard_image;
 /// Wall-clock boundary used by app, runtime, and session orchestration.
