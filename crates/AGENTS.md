@@ -25,7 +25,6 @@ before dependents in the publish plan.
   callees ordered by first use.
 - Keep imports at file scope. Prefer module-oriented internal imports, use direct item
   imports only when clearer, and do not mix imported-module and fully qualified styles.
-  In tests, prefer `use super::*;`.
 - Add `new()` or `Default` only for meaningful initialization. Prefer associated
   constructors over free construction helpers.
 - Put an inherent `impl` directly below its struct and trait implementations after it.
@@ -41,6 +40,13 @@ before dependents in the publish plan.
 
 ### Tests and Boundaries
 
+- In `*_test.rs` files, explicitly import the modules, items, traits, and fixtures each
+  file uses at file scope. Use `crate::` paths to the owning production module, or named
+  `super::` imports for private items in the parent module. Import sibling fixtures
+  through their support module. Never use glob imports, including `use super::*;` or
+  fixture globs. Test-module routers declare child modules; each child imports its own
+  dependencies instead of relying on imports forwarded through the router. Preserve
+  production visibility when importing private internals.
 - Give every touched test explicit `// Arrange`, `// Act`, and `// Assert` sections;
   combine labels only when that improves a very small test.
 - Keep production and test code in separate files. Load sibling `*_test.rs` unit suites

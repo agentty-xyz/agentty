@@ -226,11 +226,80 @@ impl ForgeRemote {
     ) -> Result<String, ReviewRequestError> {
         match self.forge_kind {
             ForgeKind::GitHub => {
-                github_review_request_creation_url(self, source_branch, target_branch)
+                Self::github_review_request_creation_url(self, source_branch, target_branch)
             }
             ForgeKind::GitLab => {
-                gitlab_review_request_creation_url(self, source_branch, target_branch)
+                Self::gitlab_review_request_creation_url(self, source_branch, target_branch)
             }
+        }
+    }
+
+    /// Builds one GitHub compare URL that opens the new pull-request flow.
+    fn github_review_request_creation_url(
+        remote: &ForgeRemote,
+        source_branch: &str,
+        target_branch: &str,
+    ) -> Result<String, ReviewRequestError> {
+        let mut url = Self::parsed_remote_web_url(remote)?;
+        let compare_target = if target_branch.trim().is_empty() {
+            source_branch.to_string()
+        } else {
+            format!("{target_branch}...{source_branch}")
+        };
+
+        {
+            let mut path_segments = url
+                .path_segments_mut()
+                .map_err(|()| Self::invalid_web_url_error(remote))?;
+            path_segments.pop_if_empty();
+            path_segments.push("compare");
+            path_segments.push(&compare_target);
+        }
+
+        url.query_pairs_mut().append_pair("expand", "1");
+
+        Ok(url.into())
+    }
+
+    /// Builds one GitLab URL that opens the new merge-request flow.
+    fn gitlab_review_request_creation_url(
+        remote: &ForgeRemote,
+        source_branch: &str,
+        target_branch: &str,
+    ) -> Result<String, ReviewRequestError> {
+        let mut url = Self::parsed_remote_web_url(remote)?;
+
+        {
+            let mut path_segments = url
+                .path_segments_mut()
+                .map_err(|()| Self::invalid_web_url_error(remote))?;
+            path_segments.pop_if_empty();
+            path_segments.push("-");
+            path_segments.push("merge_requests");
+            path_segments.push("new");
+        }
+
+        url.query_pairs_mut()
+            .append_pair("merge_request[source_branch]", source_branch)
+            .append_pair("merge_request[target_branch]", target_branch);
+
+        Ok(url.into())
+    }
+
+    /// Parses the stored repository web URL for one forge remote.
+    fn parsed_remote_web_url(remote: &ForgeRemote) -> Result<Url, ReviewRequestError> {
+        Url::parse(&remote.web_url).map_err(|_| Self::invalid_web_url_error(remote))
+    }
+
+    /// Returns one normalized invalid-remote-url error for review-request
+    /// links.
+    fn invalid_web_url_error(remote: &ForgeRemote) -> ReviewRequestError {
+        ReviewRequestError::OperationFailed {
+            forge_kind: remote.forge_kind,
+            message: format!(
+                "repository remote is missing a valid web URL: `{}`",
+                remote.web_url
+            ),
         }
     }
 }
@@ -261,7 +330,22 @@ impl ReviewComment {
             return false;
         };
 
-        reply.ends_with("\n\n") && is_uuid_like(reply_token)
+        reply.ends_with("\n\n") && Self::is_uuid_like(reply_token)
+    }
+
+    /// Returns whether `value` has the canonical hyphenated UUID shape used for
+    /// review-reply tokens.
+    fn is_uuid_like(value: &str) -> bool {
+        const GROUP_LENGTHS: [usize; 5] = [8, 4, 4, 4, 12];
+
+        value
+            .split('-')
+            .map(str::as_bytes)
+            .zip(GROUP_LENGTHS)
+            .all(|(group, expected_length)| {
+                group.len() == expected_length && group.iter().all(u8::is_ascii_hexdigit)
+            })
+            && value.matches('-').count() == GROUP_LENGTHS.len() - 1
     }
 }
 
@@ -323,21 +407,6 @@ impl ReviewCommentThread {
                 .last()
                 .is_some_and(ReviewComment::is_agentty_reply)
     }
-}
-
-/// Returns whether `value` has the canonical hyphenated UUID shape used for
-/// review-reply tokens.
-fn is_uuid_like(value: &str) -> bool {
-    const GROUP_LENGTHS: [usize; 5] = [8, 4, 4, 4, 12];
-
-    value
-        .split('-')
-        .map(str::as_bytes)
-        .zip(GROUP_LENGTHS)
-        .all(|(group, expected_length)| {
-            group.len() == expected_length && group.iter().all(u8::is_ascii_hexdigit)
-        })
-        && value.matches('-').count() == GROUP_LENGTHS.len() - 1
 }
 
 /// Full review-comments payload captured for one review request.
@@ -449,7 +518,7 @@ impl ReviewRequestError {
                 forge_kind,
                 host,
                 detail,
-            } => authentication_required_message(*forge_kind, host, detail.as_deref()),
+            } => Self::authentication_required_message(*forge_kind, host, detail.as_deref()),
             Self::HostResolutionFailed { forge_kind, host } => format!(
                 "{} review requests could not reach `{host}`.\nCheck the repository remote host \
                  and your network or DNS setup, then retry.",
@@ -468,329 +537,48 @@ impl ReviewRequestError {
             ),
         }
     }
-}
 
-/// Builds one GitHub compare URL that opens the new pull-request flow.
-fn github_review_request_creation_url(
-    remote: &ForgeRemote,
-    source_branch: &str,
-    target_branch: &str,
-) -> Result<String, ReviewRequestError> {
-    let mut url = parsed_remote_web_url(remote)?;
-    let compare_target = if target_branch.trim().is_empty() {
-        source_branch.to_string()
-    } else {
-        format!("{target_branch}...{source_branch}")
-    };
-
-    {
-        let mut path_segments = url
-            .path_segments_mut()
-            .map_err(|()| invalid_web_url_error(remote))?;
-        path_segments.pop_if_empty();
-        path_segments.push("compare");
-        path_segments.push(&compare_target);
-    }
-
-    url.query_pairs_mut().append_pair("expand", "1");
-
-    Ok(url.into())
-}
-
-/// Builds one GitLab URL that opens the new merge-request flow.
-fn gitlab_review_request_creation_url(
-    remote: &ForgeRemote,
-    source_branch: &str,
-    target_branch: &str,
-) -> Result<String, ReviewRequestError> {
-    let mut url = parsed_remote_web_url(remote)?;
-
-    {
-        let mut path_segments = url
-            .path_segments_mut()
-            .map_err(|()| invalid_web_url_error(remote))?;
-        path_segments.pop_if_empty();
-        path_segments.push("-");
-        path_segments.push("merge_requests");
-        path_segments.push("new");
-    }
-
-    url.query_pairs_mut()
-        .append_pair("merge_request[source_branch]", source_branch)
-        .append_pair("merge_request[target_branch]", target_branch);
-
-    Ok(url.into())
-}
-
-/// Parses the stored repository web URL for one forge remote.
-fn parsed_remote_web_url(remote: &ForgeRemote) -> Result<Url, ReviewRequestError> {
-    Url::parse(&remote.web_url).map_err(|_| invalid_web_url_error(remote))
-}
-
-/// Returns one normalized invalid-remote-url error for review-request links.
-fn invalid_web_url_error(remote: &ForgeRemote) -> ReviewRequestError {
-    ReviewRequestError::OperationFailed {
-        forge_kind: remote.forge_kind,
-        message: format!(
-            "repository remote is missing a valid web URL: `{}`",
-            remote.web_url
-        ),
-    }
-}
-
-/// Returns actionable copy for one CLI authentication failure and preserves
-/// the original CLI output when it is available.
-fn authentication_required_message(
-    forge_kind: ForgeKind,
-    host: &str,
-    detail: Option<&str>,
-) -> String {
-    let mut message = format!(
-        "{} review requests require local CLI authentication for `{host}`.\nRun `{}` and retry.",
-        forge_kind.display_name(),
-        forge_kind.auth_login_command(),
-    );
-
-    if let Some(detail) = non_empty_detail(detail) {
-        // Infallible: writing to a String cannot fail.
-        let _ = write!(
-            message,
-            "\n\nOriginal `{}` error:\n```text\n{detail}",
-            forge_kind.cli_name(),
+    /// Returns actionable copy for one CLI authentication failure and preserves
+    /// the original CLI output when it is available.
+    fn authentication_required_message(
+        forge_kind: ForgeKind,
+        host: &str,
+        detail: Option<&str>,
+    ) -> String {
+        let mut message = format!(
+            "{} review requests require local CLI authentication for `{host}`.\nRun `{}` and \
+             retry.",
+            forge_kind.display_name(),
+            forge_kind.auth_login_command(),
         );
-        if !detail.ends_with('\n') {
-            message.push('\n');
+
+        if let Some(detail) = Self::non_empty_detail(detail) {
+            // Infallible: writing to a String cannot fail.
+            let _ = write!(
+                message,
+                "\n\nOriginal `{}` error:\n```text\n{detail}",
+                forge_kind.cli_name(),
+            );
+            if !detail.ends_with('\n') {
+                message.push('\n');
+            }
+            message.push_str("```");
         }
-        message.push_str("```");
+
+        message
     }
 
-    message
-}
+    /// Returns one trimmed CLI error detail when the captured output is not
+    /// empty.
+    fn non_empty_detail(detail: Option<&str>) -> Option<&str> {
+        detail.and_then(|detail| {
+            let trimmed_detail = detail.trim();
 
-/// Returns one trimmed CLI error detail when the captured output is not empty.
-fn non_empty_detail(detail: Option<&str>) -> Option<&str> {
-    detail.and_then(|detail| {
-        let trimmed_detail = detail.trim();
-        (!trimmed_detail.is_empty()).then_some(trimmed_detail)
-    })
+            (!trimmed_detail.is_empty()).then_some(trimmed_detail)
+        })
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn review_comment_thread() -> ReviewCommentThread {
-        ReviewCommentThread {
-            anchor_side: ReviewCommentAnchorSide::New,
-            comments: Vec::new(),
-            id: "thread-1".to_string(),
-            is_outdated: Some(false),
-            is_resolved: false,
-            line: Some(1),
-            path: "src/lib.rs".to_string(),
-            start_line: None,
-        }
-    }
-
-    #[test]
-    fn review_comment_thread_is_actionable_until_agentty_addresses_latest_feedback() {
-        // Arrange
-        let actionable = review_comment_thread();
-        let mut resolved = review_comment_thread();
-        resolved.is_resolved = true;
-        let mut outdated = review_comment_thread();
-        outdated.is_outdated = Some(true);
-        let mut addressed = review_comment_thread();
-        addressed.comments.push(ReviewComment {
-            author: "agentty".to_string(),
-            authored_by_current_user: true,
-            body: [
-                "No change needed.\n\n",
-                AGENTTY_REVIEW_REPLY_MARKER_PREFIX,
-                "123e4567-e89b-12d3-a456-426614174000 -->",
-            ]
-            .concat(),
-        });
-        let mut followed_up = addressed.clone();
-        followed_up.comments.push(ReviewComment {
-            author: "reviewer".to_string(),
-            authored_by_current_user: false,
-            body: "Please reconsider.".to_string(),
-        });
-        let mut reviewer_marker = review_comment_thread();
-        reviewer_marker.comments.push(ReviewComment {
-            author: "reviewer".to_string(),
-            authored_by_current_user: false,
-            body: [
-                "Please reconsider.\n\n",
-                AGENTTY_REVIEW_REPLY_MARKER_PREFIX,
-                "123e4567-e89b-12d3-a456-426614174000 -->",
-            ]
-            .concat(),
-        });
-
-        // Act, Assert
-        assert!(actionable.is_actionable());
-        assert!(!resolved.is_actionable());
-        assert!(outdated.is_actionable());
-        assert!(addressed.is_addressed_by_agentty());
-        assert!(!addressed.is_actionable());
-        assert!(!followed_up.is_addressed_by_agentty());
-        assert!(followed_up.is_actionable());
-        assert!(!reviewer_marker.is_addressed_by_agentty());
-        assert!(reviewer_marker.is_actionable());
-    }
-
-    #[test]
-    fn review_comment_rejects_malformed_agentty_reply_markers() {
-        // Arrange
-        let malformed_comments = [
-            "Ordinary comment",
-            "No separator<!-- agentty review resolution:123e4567-e89b-12d3-a456-426614174000 -->",
-            "No terminator\n\n<!-- agentty review resolution:123e4567-e89b-12d3-a456-426614174000",
-            "Bad token\n\n<!-- agentty review resolution:not-a-uuid -->",
-        ];
-
-        // Act
-        let results = malformed_comments.map(|body| ReviewComment {
-            author: "agentty".to_string(),
-            authored_by_current_user: true,
-            body: body.to_string(),
-        });
-
-        // Assert
-        assert!(results.iter().all(|comment| !comment.is_agentty_reply()));
-    }
-
-    #[test]
-    fn forge_kind_from_str_gitlab() {
-        // Arrange
-        let raw_forge_kind = "GitLab";
-
-        // Act
-        let forge_kind = raw_forge_kind
-            .parse::<ForgeKind>()
-            .expect("gitlab forge kind should parse");
-
-        // Assert
-        assert_eq!(forge_kind, ForgeKind::GitLab);
-        assert_eq!(forge_kind.cli_name(), "glab");
-        assert_eq!(forge_kind.review_request_name(), "merge request");
-        assert_eq!(forge_kind.review_request_short_name(), "MR");
-    }
-
-    #[test]
-    fn authentication_required_message_includes_original_cli_error_detail() {
-        // Arrange
-        let error = ReviewRequestError::AuthenticationRequired {
-            detail: Some("HTTP 401 Unauthorized. Run `gh auth login`.".to_string()),
-            forge_kind: ForgeKind::GitHub,
-            host: "github.com".to_string(),
-        };
-
-        // Act
-        let message = error.detail_message();
-
-        // Assert
-        assert!(message.contains("GitHub review requests require local CLI authentication"));
-        assert!(message.contains("Run `gh auth login` and retry."));
-        assert!(message.contains("Original `gh` error:"));
-        assert!(message.contains("HTTP 401 Unauthorized. Run `gh auth login`."));
-        assert!(message.contains("```text"));
-    }
-
-    #[test]
-    fn authentication_required_message_omits_empty_original_cli_error_detail() {
-        // Arrange
-        let error = ReviewRequestError::AuthenticationRequired {
-            detail: Some("   \n".to_string()),
-            forge_kind: ForgeKind::GitHub,
-            host: "github.com".to_string(),
-        };
-
-        // Act
-        let message = error.detail_message();
-
-        // Assert
-        assert!(message.contains("Run `gh auth login` and retry."));
-        assert!(!message.contains("Original `gh` error:"));
-    }
-
-    #[test]
-    fn review_request_creation_url_returns_github_compare_link() {
-        // Arrange
-        let remote = ForgeRemote {
-            command_working_directory: None,
-            forge_kind: ForgeKind::GitHub,
-            host: "github.com".to_string(),
-            namespace: "agentty-xyz".to_string(),
-            project: "agentty".to_string(),
-            repo_url: "git@github.com:agentty-xyz/agentty.git".to_string(),
-            web_url: "https://github.com/agentty-xyz/agentty".to_string(),
-        };
-
-        // Act
-        let url = remote
-            .review_request_creation_url("review/custom-branch", "main")
-            .expect("github compare URL should be created");
-
-        // Assert
-        assert_eq!(
-            url,
-            "https://github.com/agentty-xyz/agentty/compare/main...review%2Fcustom-branch?expand=1"
-        );
-    }
-
-    #[test]
-    fn review_request_creation_url_rejects_invalid_web_url() {
-        // Arrange
-        let remote = ForgeRemote {
-            command_working_directory: None,
-            forge_kind: ForgeKind::GitHub,
-            host: "github.com".to_string(),
-            namespace: "agentty-xyz".to_string(),
-            project: "agentty".to_string(),
-            repo_url: "git@github.com:agentty-xyz/agentty.git".to_string(),
-            web_url: "not a url".to_string(),
-        };
-
-        // Act
-        let error = remote
-            .review_request_creation_url("review/custom-branch", "main")
-            .expect_err("invalid web URL should be rejected");
-
-        // Assert
-        assert_eq!(
-            error,
-            ReviewRequestError::OperationFailed {
-                forge_kind: ForgeKind::GitHub,
-                message: "repository remote is missing a valid web URL: `not a url`".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn review_request_creation_url_returns_gitlab_merge_request_link() {
-        // Arrange
-        let remote = ForgeRemote {
-            command_working_directory: None,
-            forge_kind: ForgeKind::GitLab,
-            host: "gitlab.com".to_string(),
-            namespace: "agentty-xyz".to_string(),
-            project: "agentty".to_string(),
-            repo_url: "git@gitlab.com:agentty-xyz/agentty.git".to_string(),
-            web_url: "https://gitlab.com/agentty-xyz/agentty".to_string(),
-        };
-
-        // Act
-        let url = remote
-            .review_request_creation_url("review/custom-branch", "main")
-            .expect("gitlab merge-request URL should be created");
-
-        // Assert
-        assert_eq!(
-            url,
-            "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/new?merge_request%5Bsource_branch%5D=review%2Fcustom-branch&merge_request%5Btarget_branch%5D=main"
-        );
-    }
-}
+#[path = "model_test.rs"]
+mod tests;
