@@ -66,27 +66,27 @@ pub struct AppServerTurnRequest {
     pub model: String,
     /// Filesystem and command permission policy for this turn.
     pub permission_mode: PermissionMode,
+    /// Persisted provider-native conversation id that already received the
+    /// full instruction bootstrap, when available.
+    pub persisted_instruction_conversation_id: Option<String>,
     /// Personality prompt state resolved for this turn.
     pub personality: PersonalityPrompt,
     /// Structured prompt payload for this turn.
     pub prompt: TurnPrompt,
     /// Optional shared limit, charged for every underlying attempt and retry.
     pub provider_call_budget: Option<crate::ProviderCallBudget>,
-    /// Canonical request kind that drives transport behavior and protocol
-    /// semantics for this turn.
-    pub request_kind: AgentRequestKind,
-    /// Replayable transcript text captured when the turn was queued.
-    pub replay_transcript: Option<String>,
     /// Provider-native thread/session id used to resume context in a newly
     /// started runtime.
     pub provider_conversation_id: Option<String>,
-    /// Persisted provider-native conversation id that already received the
-    /// full instruction bootstrap, when available.
-    pub persisted_instruction_conversation_id: Option<String>,
     /// Reasoning effort preference for this turn.
     ///
     /// Ignored by providers/models that do not support reasoning effort.
     pub reasoning_level: ReasoningLevel,
+    /// Replayable transcript text captured when the turn was queued.
+    pub replay_transcript: Option<String>,
+    /// Canonical request kind that drives transport behavior and protocol
+    /// semantics for this turn.
+    pub request_kind: AgentRequestKind,
     /// Stable agentty session id.
     pub session_id: String,
     /// Response-speed preference for this turn.

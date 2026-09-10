@@ -24,10 +24,10 @@ pub(crate) struct RuntimeInspector<Runtime> {
     pub(crate) pid: fn(&Runtime) -> Option<u32>,
     /// Returns the provider-native conversation id, when available.
     pub(crate) provider_conversation_id: fn(&Runtime) -> Option<String>,
-    /// Whether successful runtimes remain resident between session turns.
-    pub(crate) retain_runtime_after_turn: bool,
     /// Returns `true` when the runtime bootstrapped by restoring prior context.
     pub(crate) restored_context: fn(&Runtime) -> bool,
+    /// Whether successful runtimes remain resident between session turns.
+    pub(crate) retain_runtime_after_turn: bool,
 }
 
 /// Runs one app-server turn with restart-and-retry semantics.

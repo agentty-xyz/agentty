@@ -32,52 +32,13 @@ pub fn create_agent_channel(
     }
 }
 
-/// Creates a CLI channel backed by an injected backend for tests.
 #[cfg(any(test, feature = "test-utils"))]
-pub fn create_cli_agent_channel_with_backend(
-    backend: Arc<dyn agent::AgentBackend>,
-    kind: AgentKind,
-) -> Arc<dyn AgentChannel> {
-    Arc::new(CliAgentChannel::with_backend(backend, kind))
-}
+#[path = "factory_support_test.rs"]
+mod support;
+
+#[cfg(any(test, feature = "test-utils"))]
+pub use support::create_cli_agent_channel_with_backend;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn create_agent_channel_returns_cli_channel_for_claude() {
-        // Arrange / Act
-        let channel = create_agent_channel(AgentKind::Claude, None);
-
-        // Assert
-        assert_eq!(Arc::strong_count(&channel), 1);
-    }
-
-    #[test]
-    fn create_agent_channel_returns_managed_channel_for_antigravity() {
-        // Arrange / Act
-        let channel = create_agent_channel(AgentKind::Antigravity, None);
-
-        // Assert
-        assert_eq!(Arc::strong_count(&channel), 1);
-    }
-
-    #[test]
-    fn create_agent_channel_returns_app_server_channel_for_codex() {
-        // Arrange / Act
-        let channel = create_agent_channel(AgentKind::Codex, None);
-
-        // Assert
-        assert_eq!(Arc::strong_count(&channel), 1);
-    }
-
-    #[test]
-    fn create_agent_channel_returns_app_server_channel_for_gemini() {
-        // Arrange / Act
-        let channel = create_agent_channel(AgentKind::Gemini, None);
-
-        // Assert
-        assert_eq!(Arc::strong_count(&channel), 1);
-    }
-}
+#[path = "factory_test.rs"]
+mod tests;

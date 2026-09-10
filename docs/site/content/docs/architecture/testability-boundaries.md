@@ -11,6 +11,11 @@ trait boundaries so orchestration logic can be tested deterministically.
 
 ## Testability and Boundaries
 
+Unit suites live in sibling `*_test.rs` files loaded as child modules, keeping private
+implementation details accessible without expanding production APIs. Large suites use
+test-module routers grouped by behavior, with shared fixtures in test-only support
+modules. Coverage excludes these test files while retaining production sources.
+
 <a id="architecture-testability-boundaries"></a> External-boundary traits are mocked
 with `mockall`, usually via `#[cfg_attr(test, mockall::automock)]`; shared workspace
 crates such as `ag-agent`, `ag-forge`, and `ag-git` expose test mocks through crate-root
