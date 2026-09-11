@@ -145,7 +145,7 @@ async fn returns_request_error_for_http_failure() {
         std::error::Error::source(&error).expect("HTTP failure should retain its provider error");
     let source = provider_error
         .source()
-        .and_then(|source| source.downcast_ref::<reqwest::Error>())
+        .and_then(<dyn std::error::Error>::downcast_ref::<reqwest::Error>)
         .expect("HTTP failure should retain its reqwest source");
     assert_eq!(source.status(), Some(reqwest::StatusCode::UNAUTHORIZED));
     assert_eq!(error.error_type(), model::ModelErrorType::Provider);

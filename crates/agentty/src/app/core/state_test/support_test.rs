@@ -121,8 +121,11 @@ pub(super) async fn seed_materialized_session(
         )
         .await
         .expect("failed to insert materialized session");
-    fs::create_dir_all(session::session_folder(base_path, session_id).join(SESSION_DATA_DIR))
-        .expect("failed to create materialized session data dir");
+    tokio::fs::create_dir_all(
+        session::session_folder(base_path, session_id).join(SESSION_DATA_DIR),
+    )
+    .await
+    .expect("failed to create materialized session data dir");
 }
 
 /// Seeds one review-ready session and its persisted focused review.
@@ -191,7 +194,9 @@ pub(super) async fn new_test_app_with_selected_session(
         crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(tmux_client)
             .await;
     if !session_folder.as_os_str().is_empty() {
-        std::fs::create_dir_all(&session_folder).expect("failed to create session folder");
+        tokio::fs::create_dir_all(&session_folder)
+            .await
+            .expect("failed to create session folder");
     }
 
     // Act
@@ -321,16 +326,11 @@ pub(super) async fn assert_synchronous_fork_is_ready_with_history(app: &mut App,
 /// so failed creation cannot leave resources that are invisible in the
 /// database.
 pub(super) async fn session_creation_resources(root: &Path) -> Vec<String> {
-    let mut snapshot: Vec<String> = fs::read_dir(root)
-        .expect("repository entries")
-        .map(|entry| {
-            entry
-                .expect("entry")
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect();
+    let mut entries = tokio::fs::read_dir(root).await.expect("repository entries");
+    let mut snapshot = Vec::new();
+    while let Some(entry) = entries.next_entry().await.expect("entry") {
+        snapshot.push(entry.file_name().to_string_lossy().into_owned());
+    }
     snapshot.sort();
     for arguments in [
         ["branch", "--list", "wt/*"],
@@ -548,12 +548,13 @@ pub(in crate::app::core) async fn insert_review_session_with_data_dir(app: &App,
         .await
         .expect("failed to insert session");
     let session_folder_name = session_id.chars().take(8).collect::<String>();
-    fs::create_dir_all(
+    tokio::fs::create_dir_all(
         app.services
             .base_path()
             .join(session_folder_name)
             .join(SESSION_DATA_DIR),
     )
+    .await
     .expect("failed to create session data dir");
 }
 

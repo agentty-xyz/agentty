@@ -1,7 +1,6 @@
 //! Process-level coverage for the `ag-harness` command-line interface.
 
 use std::fs;
-use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -9,6 +8,7 @@ use ag_harness::{ModelProvider, ToolDefinition};
 use assert_cmd::cargo::cargo_bin;
 use serde_json::json;
 use testty::session::PtySessionBuilder;
+use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use wiremock::matchers::{bearer_token, body_json, body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -555,7 +555,7 @@ async fn stdin_prompts_share_conversation_history() {
         .mount(&server)
         .await;
     let storage = tempfile::tempdir().expect("temporary storage should exist");
-    let mut child = Command::new(cargo_bin!("ag-harness"))
+    let mut child = tokio::process::Command::new(cargo_bin!("ag-harness"))
         .arg("--git-executable")
         .arg(test_git_executable())
         .args([
@@ -579,8 +579,12 @@ async fn stdin_prompts_share_conversation_history() {
         .take()
         .expect("stdin should be piped")
         .write_all(b"second question\n")
+        .await
         .expect("second prompt should be written");
-    let output = child.wait_with_output().expect("CLI chat should finish");
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("CLI chat should finish");
 
     // Assert
     assert!(
@@ -623,7 +627,7 @@ async fn resume_restores_history_from_the_default_database() {
         .mount(&server)
         .await;
     let storage = tempfile::tempdir().expect("temporary storage should exist");
-    let mut first = Command::new(cargo_bin!("ag-harness"));
+    let mut first = tokio::process::Command::new(cargo_bin!("ag-harness"));
     first
         .arg("--git-executable")
         .arg(test_git_executable())
@@ -640,8 +644,8 @@ async fn resume_restores_history_from_the_default_database() {
         .env("AG_HARNESS_ROOT", storage.path());
 
     // Act
-    let first_output = first.output().expect("first CLI request should run");
-    let mut second = Command::new(cargo_bin!("ag-harness"));
+    let first_output = first.output().await.expect("first CLI request should run");
+    let mut second = tokio::process::Command::new(cargo_bin!("ag-harness"));
     let second_output = second
         .arg("--git-executable")
         .arg(test_git_executable())
@@ -655,6 +659,7 @@ async fn resume_restores_history_from_the_default_database() {
         .env("MODEL_API_KEY", "test-key")
         .env("AG_HARNESS_ROOT", storage.path())
         .output()
+        .await
         .expect("resumed CLI request should run");
 
     // Assert
@@ -705,7 +710,7 @@ async fn stdin_chat_emits_failure_before_retry_and_exits_unsuccessfully() {
         .mount(&server)
         .await;
     let storage = tempfile::tempdir().expect("temporary storage should exist");
-    let mut child = Command::new(cargo_bin!("ag-harness"))
+    let mut child = tokio::process::Command::new(cargo_bin!("ag-harness"))
         .arg("--git-executable")
         .arg(test_git_executable())
         .args(["run", "muse-test", "--base-url", &server.uri()])
@@ -723,31 +728,37 @@ async fn stdin_chat_emits_failure_before_retry_and_exits_unsuccessfully() {
     let mut stdout = BufReader::new(stdout);
     stdin
         .write_all(b"first question\n")
+        .await
         .expect("first prompt should be written");
-    stdin.flush().expect("first prompt should be flushed");
+    stdin.flush().await.expect("first prompt should be flushed");
     let mut announcement = String::new();
     stdout
         .read_line(&mut announcement)
+        .await
         .expect("session identifier should be emitted");
     let mut failure = String::new();
     stdout
         .read_line(&mut failure)
+        .await
         .expect("failed turn should be emitted while stdin remains open");
     stdin
         .write_all(b"retry question\n")
+        .await
         .expect("retry prompt should be written");
     drop(stdin);
     let mut recovered = String::new();
     stdout
         .read_to_string(&mut recovered)
+        .await
         .expect("retry output should be readable");
-    let status = child.wait().expect("CLI chat should finish");
+    let status = child.wait().await.expect("CLI chat should finish");
     let mut stderr = String::new();
     child
         .stderr
         .take()
         .expect("stderr should be piped")
         .read_to_string(&mut stderr)
+        .await
         .expect("stderr should be readable");
 
     // Assert

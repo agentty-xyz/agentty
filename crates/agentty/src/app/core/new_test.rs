@@ -1,11 +1,11 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 use ag_git::GitClient;
 use tempfile::tempdir;
+use tokio::process::Command;
 
 use super::super::state::{App, AppClients};
 use super::{E2E_DISPLAY_VERSION, current_version_display_text};
@@ -152,6 +152,7 @@ async fn test_new_uses_production_client_bundle() {
     }
     let child_status = child
         .status()
+        .await
         .expect("failed to run isolated constructor test");
 
     // Assert

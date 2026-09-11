@@ -54,10 +54,11 @@ fn test_apply_non_interactive_environment_sets_git_prompt_controls() {
 async fn test_async_git_command_timeout_cancels_process() {
     // Arrange
     let temp_dir = tempdir().expect("failed to create temporary repository");
-    let init_output = Command::new("git")
+    let init_output = tokio::process::Command::new("git")
         .args(["init", "--quiet"])
         .current_dir(temp_dir.path())
         .output()
+        .await
         .expect("failed to initialize temporary repository");
     assert!(init_output.status.success());
     let timeout = Duration::from_millis(25);

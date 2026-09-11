@@ -3,13 +3,13 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
 
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
+use tokio::process::Command;
 
 use super::fixture::{
     CLAUDE_STRUCTURED_RESPONSE_TEXT, E2eResult, run_git, seed_claude_structured_output_project,
@@ -646,6 +646,7 @@ async fn test_session_commit_index_lock_recovers() -> E2eResult {
                         .args(["show", "HEAD:generated.txt"])
                         .current_dir(worktree)
                         .output()
+                        .await
                         .expect("committed file should be readable");
                     assert!(committed.status.success());
                     assert_eq!(committed.stdout, b"pending change\n");
@@ -889,6 +890,7 @@ async fn test_session_commit_input_limit_fallback() -> E2eResult {
                         .args(["log", "-1", "--format=%s"])
                         .current_dir(worktree.trim())
                         .output()
+                        .await
                         .expect("commit title should load");
                     assert!(output.status.success());
                     assert_eq!(
@@ -899,6 +901,7 @@ async fn test_session_commit_input_limit_fallback() -> E2eResult {
                         .args(["status", "--porcelain"])
                         .current_dir(worktree.trim())
                         .output()
+                        .await
                         .expect("status should load");
                     assert!(output.status.success());
                     assert_eq!(output.stdout, Vec::<u8>::new());
