@@ -176,6 +176,7 @@ name = "ag-xtask"
 version = "0.15.15"
 dependencies = [
  "clap",
+ "mockall",
  "tempfile",
  "tracing",
  "tracing-subscriber",

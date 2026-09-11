@@ -6,48 +6,53 @@
 //!
 //! Run with: `cargo run --example frame_diffing -p testty`
 
-#![allow(clippy::print_stdout)]
+use std::io::{self, Write};
 
 use testty::diff::{CellChange, FrameDiff};
 use testty::frame::TerminalFrame;
 
-fn main() {
-    println!("=== Testty Frame Diffing Showcase ===\n");
+fn main() -> io::Result<()> {
+    run(&mut io::stdout().lock())
+}
+
+fn run(output: &mut impl Write) -> io::Result<()> {
+    writeln!(output, "=== Testty Frame Diffing Showcase ===\n")?;
 
     // --- Example 1: Identical frames ---
-    println!("--- Example 1: Identical Frames ---");
+    writeln!(output, "--- Example 1: Identical Frames ---")?;
     let frame_a = TerminalFrame::new(40, 5, b"Hello, World!\nStatus: OK");
     let frame_b = TerminalFrame::new(40, 5, b"Hello, World!\nStatus: OK");
     let diff = FrameDiff::compute(&frame_a, &frame_b);
 
-    println!("  Identical: {}", diff.is_identical());
-    println!("  Summary: {:?}", diff.summary());
-    println!();
+    writeln!(output, "  Identical: {}", diff.is_identical())?;
+    writeln!(output, "  Summary: {:?}", diff.summary())?;
+    writeln!(output)?;
 
     // --- Example 2: Text content change ---
-    println!("--- Example 2: Text Content Change ---");
+    writeln!(output, "--- Example 2: Text Content Change ---")?;
     let before = TerminalFrame::new(40, 5, b"Counter: 0\nStatus: idle");
     let after = TerminalFrame::new(40, 5, b"Counter: 42\nStatus: running");
     let diff = FrameDiff::compute(&before, &after);
 
-    println!("  Identical: {}", diff.is_identical());
-    println!("  Summary: {:?}", diff.summary());
+    writeln!(output, "  Identical: {}", diff.is_identical())?;
+    writeln!(output, "  Summary: {:?}", diff.summary())?;
 
     let regions = diff.changed_regions();
-    println!("  Changed regions: {}", regions.len());
+    writeln!(output, "  Changed regions: {}", regions.len())?;
     for region in &regions {
-        println!(
+        writeln!(
+            output,
             "    Row {}, cols {}..{}: {:?}",
             region.region.row,
             region.region.col,
             region.region.col + region.region.width,
             region.change_type,
-        );
+        )?;
     }
-    println!();
+    writeln!(output)?;
 
     // --- Example 3: Multi-line update simulating a dashboard refresh ---
-    println!("--- Example 3: Dashboard Refresh ---");
+    writeln!(output, "--- Example 3: Dashboard Refresh ---")?;
     let dashboard_before = TerminalFrame::new(
         50,
         6,
@@ -60,28 +65,29 @@ fn main() {
     );
     let diff = FrameDiff::compute(&dashboard_before, &dashboard_after);
 
-    println!("  Summary: {:?}", diff.summary());
+    writeln!(output, "  Summary: {:?}", diff.summary())?;
 
     let regions = diff.changed_regions();
-    println!("  Changed regions: {}", regions.len());
+    writeln!(output, "  Changed regions: {}", regions.len())?;
     for region in &regions {
-        println!(
+        writeln!(
+            output,
             "    Row {}, cols {}..{}: {:?}",
             region.region.row,
             region.region.col,
             region.region.col + region.region.width,
             region.change_type,
-        );
+        )?;
     }
-    println!();
+    writeln!(output)?;
 
     // --- Example 4: Per-cell inspection ---
-    println!("--- Example 4: Per-Cell Inspection ---");
+    writeln!(output, "--- Example 4: Per-Cell Inspection ---")?;
     let line_before = TerminalFrame::new(10, 1, b"ABCDE");
     let line_after = TerminalFrame::new(10, 1, b"AbCdE");
     let diff = FrameDiff::compute(&line_before, &line_after);
 
-    print!("  Cell changes: ");
+    write!(output, "  Cell changes: ")?;
     for col in 0..5 {
         let change = diff.cell_change(0, col);
         let marker = match change {
@@ -90,9 +96,15 @@ fn main() {
             Some(CellChange::StyleChanged) => 'S',
             Some(CellChange::BothChanged) => 'B',
         };
-        print!("{marker}");
+        write!(output, "{marker}")?;
     }
-    println!("  (. = unchanged, T = text changed)");
+    writeln!(output, "  (. = unchanged, T = text changed)")?;
 
-    println!("\n=== Frame diffing showcase complete! ===");
+    writeln!(output, "\n=== Frame diffing showcase complete! ===")?;
+
+    Ok(())
 }
+
+#[cfg(test)]
+#[path = "frame_diffing_test.rs"]
+mod tests;

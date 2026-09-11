@@ -9,85 +9,6 @@ use super::question::QuestionItem;
 use super::subtask::SubtaskItem;
 use super::verification::VerificationVerdictItem;
 
-/// Hard cap on the number of clarification questions extracted from one agent
-/// response. Prevents runaway output from flooding the question UI even when
-/// the agent ignores the prompt-level limit.
-///
-/// This constant is also injected into the protocol instruction prompt
-/// templates so the prompt-level guidance and the server-side cap stay in
-/// sync automatically.
-pub(crate) const MAX_QUESTIONS: usize = 5;
-/// Hard cap on the number of subtasks accepted from one orchestrator planning
-/// turn. Bounds how many child sessions, worktrees, and agent CLI processes a
-/// single approved plan can create even when the agent ignores the
-/// prompt-level limit.
-pub(crate) const MAX_SUBTASKS: usize = 8;
-const QUESTIONS_FIELD_DESCRIPTION_TEMPLATE: &str =
-    include_str!("template/questions_field_description.md");
-const SUBTASKS_FIELD_DESCRIPTION_TEMPLATE: &str =
-    include_str!("template/subtasks_field_description.md");
-
-/// Returns the canonical JSON Schema description for the `questions` field.
-///
-/// This is the single source of truth for the runtime-injected schema
-/// description and the matching test expectation. The static `schemars`
-/// metadata on `AgentResponse::questions` is overwritten by
-/// `inject_dynamic_schema_guidance` before any consumer observes the schema,
-/// so all schema-facing call sites must route through this helper to stay in
-/// sync.
-pub(crate) fn questions_field_description() -> String {
-    render_field_description_template(
-        QUESTIONS_FIELD_DESCRIPTION_TEMPLATE,
-        "{{ max_questions }}",
-        MAX_QUESTIONS,
-    )
-}
-
-/// Returns the canonical JSON Schema description for the `subtasks` field.
-///
-/// This mirrors [`questions_field_description`]: the static `schemars`
-/// metadata on `AgentResponse::subtasks` carries only the field title, and
-/// `inject_dynamic_schema_guidance` overwrites the description with this
-/// helper's output before any consumer observes the schema.
-pub(crate) fn subtasks_field_description() -> String {
-    render_field_description_template(
-        SUBTASKS_FIELD_DESCRIPTION_TEMPLATE,
-        "{{ max_subtasks }}",
-        MAX_SUBTASKS,
-    )
-}
-
-/// Substitutes one `{{ name }}` placeholder with a runtime cap value.
-///
-/// The placeholder is matched after collapsing whitespace runs inside every
-/// `{{ ... }}` span, because `mdformat` reflows these templates at a fixed
-/// column width and will break a line in the middle of a placeholder. Matching
-/// the literal text alone silently left the raw `{{ ... }}` in the description
-/// shown to models, so normalization keeps the templates safe to reformat.
-fn render_field_description_template(template: &str, placeholder: &str, value: usize) -> String {
-    let mut rendered = String::with_capacity(template.len());
-    let mut remaining = template.trim_end();
-
-    while let Some(open_index) = remaining.find("{{") {
-        let after_open = &remaining[open_index..];
-        let Some(close_end) = after_open.find("}}").map(|index| index + "}}".len()) else {
-            break;
-        };
-
-        rendered.push_str(&remaining[..open_index]);
-        rendered.push_str(&collapse_whitespace(&after_open[..close_end]));
-        remaining = &after_open[close_end..];
-    }
-    rendered.push_str(remaining);
-
-    rendered.replace(placeholder, &value.to_string())
-}
-
-/// Collapses every whitespace run in `text` to one space.
-fn collapse_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 /// Protocol-owned request family preserved across prompt submission and repair
 /// retries.
 ///
@@ -312,6 +233,54 @@ impl fmt::Display for AgentResponseParseError {
 
 impl std::error::Error for AgentResponseParseError {}
 
+/// Hard cap on the number of clarification questions extracted from one agent
+/// response. Prevents runaway output from flooding the question UI even when
+/// the agent ignores the prompt-level limit.
+///
+/// This constant is also injected into the protocol instruction prompt
+/// templates so the prompt-level guidance and the server-side cap stay in
+/// sync automatically.
+pub(crate) const MAX_QUESTIONS: usize = 5;
+/// Hard cap on the number of subtasks accepted from one orchestrator planning
+/// turn. Bounds how many child sessions, worktrees, and agent CLI processes a
+/// single approved plan can create even when the agent ignores the
+/// prompt-level limit.
+pub(crate) const MAX_SUBTASKS: usize = 8;
+/// Returns the canonical JSON Schema description for the `questions` field.
+///
+/// This is the single source of truth for the runtime-injected schema
+/// description and the matching test expectation. The static `schemars`
+/// metadata on `AgentResponse::questions` is overwritten by
+/// `inject_dynamic_schema_guidance` before any consumer observes the schema,
+/// so all schema-facing call sites must route through this helper to stay in
+/// sync.
+pub(crate) fn questions_field_description() -> String {
+    render_field_description_template(
+        QUESTIONS_FIELD_DESCRIPTION_TEMPLATE,
+        "{{ max_questions }}",
+        MAX_QUESTIONS,
+    )
+}
+
+/// Returns the canonical JSON Schema description for the `subtasks` field.
+///
+/// This mirrors [`questions_field_description`]: the static `schemars`
+/// metadata on `AgentResponse::subtasks` carries only the field title, and
+/// `inject_dynamic_schema_guidance` overwrites the description with this
+/// helper's output before any consumer observes the schema.
+pub(crate) fn subtasks_field_description() -> String {
+    render_field_description_template(
+        SUBTASKS_FIELD_DESCRIPTION_TEMPLATE,
+        "{{ max_subtasks }}",
+        MAX_SUBTASKS,
+    )
+}
+
+const QUESTIONS_FIELD_DESCRIPTION_TEMPLATE: &str =
+    include_str!("template/questions_field_description.md");
+const SUBTASKS_FIELD_DESCRIPTION_TEMPLATE: &str =
+    include_str!("template/subtasks_field_description.md");
+
 /// Appends one non-empty display message.
 fn push_display_message(display_messages: &mut Vec<String>, text: &str) {
     if text.trim().is_empty() {
@@ -326,6 +295,37 @@ fn push_question_display_messages(display_messages: &mut Vec<String>, questions:
     for question in questions {
         push_display_message(display_messages, &question.text);
     }
+}
+
+/// Substitutes one `{{ name }}` placeholder with a runtime cap value.
+///
+/// The placeholder is matched after collapsing whitespace runs inside every
+/// `{{ ... }}` span, because `mdformat` reflows these templates at a fixed
+/// column width and will break a line in the middle of a placeholder. Matching
+/// the literal text alone silently left the raw `{{ ... }}` in the description
+/// shown to models, so normalization keeps the templates safe to reformat.
+fn render_field_description_template(template: &str, placeholder: &str, value: usize) -> String {
+    let mut rendered = String::with_capacity(template.len());
+    let mut remaining = template.trim_end();
+
+    while let Some(open_index) = remaining.find("{{") {
+        let after_open = &remaining[open_index..];
+        let Some(close_end) = after_open.find("}}").map(|index| index + "}}".len()) else {
+            break;
+        };
+
+        rendered.push_str(&remaining[..open_index]);
+        rendered.push_str(&collapse_whitespace(&after_open[..close_end]));
+        remaining = &after_open[close_end..];
+    }
+    rendered.push_str(remaining);
+
+    rendered.replace(placeholder, &value.to_string())
+}
+
+/// Collapses every whitespace run in `text` to one space.
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]

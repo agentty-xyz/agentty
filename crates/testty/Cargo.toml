@@ -1,10 +1,11 @@
 [package]
 name = "testty"
+autoexamples = false
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Rust-native TUI end-to-end testing framework using PTY-driven semantic assertions, native frame rendering, and VHS-driven GIF capture."
+description.workspace = true
 repository.workspace = true
 keywords = ["tui", "testing", "e2e", "pty", "ratatui"]
 categories = ["development-tools::testing", "command-line-interface"]
@@ -23,6 +24,18 @@ npm-scope = "@agentty-xyz"
 
 [lints]
 workspace = true
+
+[[example]]
+name = "frame_diffing"
+test = true
+
+[[example]]
+name = "journey_composition"
+test = true
+
+[[example]]
+name = "proof_pipeline"
+test = true
 
 [dependencies]
 base64.workspace = true

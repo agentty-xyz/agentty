@@ -23,38 +23,6 @@ use crate::infra::clock::Clock;
 use crate::infra::fs::FsClient;
 use crate::infra::personality::{PersonalityCatalogClient, RealPersonalityCatalogClient};
 
-/// Shared per-app session redraw version counters keyed by session id.
-pub(crate) type SessionUpdateVersionMap = Arc<Mutex<HashMap<SessionId, u64>>>;
-
-/// Maximum graceful-shutdown wait shared by all background cleanup tasks.
-const CLEANUP_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// External clients and cached machine-scoped availability injected into
-/// [`AppServices`].
-pub(crate) struct AppServiceDeps {
-    /// Shared provider-owned app-server client override used by tests and
-    /// injected environments.
-    pub(crate) app_server_client_override: Option<Arc<dyn AppServerClient>>,
-    /// Cached locally runnable backends used to scope model selection.
-    pub(crate) available_agent_kinds: Vec<AgentKind>,
-    /// Optional clipboard image client override used by tests and injected
-    /// environments.
-    pub(crate) clipboard_image_client_override: Option<Arc<dyn ClipboardImageClient>>,
-    /// Shared filesystem client for async filesystem operations.
-    pub(crate) fs_client: Arc<dyn FsClient>,
-    /// Shared git client for async git operations.
-    pub(crate) git_client: Arc<dyn GitClient>,
-    /// Optional isolated-prompt client override used by tests and injected
-    /// environments.
-    pub(crate) one_shot_client_override: Option<Arc<dyn OneShotClient>>,
-    /// Optional workspace personality catalog override used by tests.
-    pub(crate) personality_catalog_client_override: Option<Arc<dyn PersonalityCatalogClient>>,
-    /// Shared repository bundle used by app workflows.
-    pub(crate) repositories: AppRepositories,
-    /// Shared forge review-request client.
-    pub(crate) review_request_client: Arc<dyn ReviewRequestClient>,
-}
-
 /// Shared app dependencies used by managers and background workflows.
 #[derive(Clone)]
 pub struct AppServices {
@@ -185,7 +153,7 @@ impl AppServices {
     /// Enqueues an app event onto the internal event bus with debug
     /// instrumentation for producer-side event volume.
     pub(crate) fn emit_app_event(&self, event: AppEvent) {
-        let event_label = app_event_label(&event);
+        let event_label = Self::app_event_label(&event);
         debug!(
             event = event_label,
             "enqueueing app event through app services"
@@ -265,8 +233,9 @@ impl AppServices {
             }
         }
 
-        wait_for_cleanup_task_handles(
+        Self::wait_for_cleanup_task_handles(
             self.cleanup_task_handles.as_ref(),
+            self.clock.as_ref(),
             CLEANUP_TASK_SHUTDOWN_TIMEOUT,
         )
         .await;
@@ -302,6 +271,112 @@ impl AppServices {
     pub(crate) fn app_server_client_override(&self) -> Option<Arc<dyn AppServerClient>> {
         self.app_server_client_override.as_ref().map(Arc::clone)
     }
+
+    /// Returns a stable instrumentation label for one app event variant.
+    fn app_event_label(event: &AppEvent) -> &'static str {
+        match event {
+            AppEvent::SessionCreationCompleted { .. } => "SessionCreationCompleted",
+            AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",
+            AppEvent::DiffPreviewLoaded { .. } => "DiffPreviewLoaded",
+            AppEvent::SessionDiffLoaded { .. } => "SessionDiffLoaded",
+            AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",
+            AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",
+            AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
+            AppEvent::UpdateStatusChanged { .. } => "UpdateStatusChanged",
+            AppEvent::SessionModelUpdated { .. } => "SessionModelUpdated",
+            AppEvent::SessionPersonalityUpdated { .. } => "SessionPersonalityUpdated",
+            AppEvent::SessionPermissionModeUpdated { .. } => "SessionPermissionModeUpdated",
+            AppEvent::SessionReasoningLevelUpdated { .. } => "SessionReasoningLevelUpdated",
+            AppEvent::SessionResponseStyleUpdated { .. } => "SessionResponseStyleUpdated",
+            AppEvent::SessionSpeedModeUpdated { .. } => "SessionSpeedModeUpdated",
+            AppEvent::RefreshSessions => "RefreshSessions",
+            AppEvent::RefreshProjects => "RefreshProjects",
+            AppEvent::RefreshGitStatus => "RefreshGitStatus",
+            AppEvent::SessionReviewCommentSnapshotLoaded { .. } => {
+                "SessionReviewCommentSnapshotLoaded"
+            }
+            AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
+            AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",
+            AppEvent::SyncMainConflictResolutionStarted { .. } => {
+                "SyncMainConflictResolutionStarted"
+            }
+            AppEvent::SessionDiffStatsUpdated { .. } => "SessionDiffStatsUpdated",
+            AppEvent::SessionTitleGenerationFinished { .. } => "SessionTitleGenerationFinished",
+            AppEvent::BranchPublishActionCompleted { .. } => "BranchPublishActionCompleted",
+            AppEvent::BranchPublishActionResolved { .. } => "BranchPublishActionResolved",
+            AppEvent::BranchPublishActionStarted { .. } => "BranchPublishActionStarted",
+            AppEvent::SessionQueuedSyncResolved { .. } => "SessionQueuedSyncResolved",
+            AppEvent::SessionTurnStarted { .. } => "SessionTurnStarted",
+            AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
+            AppEvent::ReviewPreparationFailed { .. } => "ReviewPreparationFailed",
+            AppEvent::DeferredAutoReviewPersistenceRetry { .. } => {
+                "DeferredAutoReviewPersistenceRetry"
+            }
+            AppEvent::FocusedReviewPersistenceRetry { .. } => "FocusedReviewPersistenceRetry",
+            AppEvent::SessionUpdated { .. } => "SessionUpdated",
+            AppEvent::AgentResponseReceived { .. } => "AgentResponseReceived",
+            AppEvent::StackedParentTurnCompleted { .. } => "StackedParentTurnCompleted",
+            AppEvent::StackedParentSyncCompleted { .. } => "StackedParentSyncCompleted",
+            AppEvent::StackedParentMergeCompleted { .. } => "StackedParentMergeCompleted",
+            AppEvent::SessionWorkflowNoticeUpdated { .. } => "SessionWorkflowNoticeUpdated",
+            AppEvent::SessionOrchestrationProgressUpdated { .. } => {
+                "SessionOrchestrationProgressUpdated"
+            }
+            AppEvent::PublishedBranchSyncUpdated { .. } => "PublishedBranchSyncUpdated",
+            AppEvent::ReviewRequestStatusUpdated { .. } => "ReviewRequestStatusUpdated",
+        }
+    }
+
+    /// Waits for tracked cleanup tasks until one shared deadline, then cancels
+    /// every unfinished task so terminal shutdown can continue.
+    async fn wait_for_cleanup_task_handles(
+        cleanup_task_handles: &Mutex<Vec<JoinHandle<()>>>,
+        clock: &dyn Clock,
+        timeout: Duration,
+    ) {
+        let deadline = Instant::from_std(clock.now_instant()) + timeout;
+
+        loop {
+            let task_handles = cleanup_task_handles
+                .lock()
+                .map(|mut task_handles| task_handles.drain(..).collect::<Vec<_>>())
+                .unwrap_or_default();
+
+            if task_handles.is_empty() {
+                break;
+            }
+
+            for mut task_handle in task_handles {
+                match time::timeout_at(deadline, &mut task_handle).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        warn!(
+                            error = %error,
+                            "background cleanup task failed during shutdown"
+                        );
+                    }
+                    Err(_) => {
+                        task_handle.abort();
+                        let timeout_seconds = timeout.as_secs();
+                        warn!(
+                            timeout_seconds,
+                            "background cleanup task exceeded the shutdown deadline and was \
+                             canceled"
+                        );
+
+                        if let Err(error) = task_handle.await
+                            && !error.is_cancelled()
+                        {
+                            warn!(
+                                error = %error,
+                                "background cleanup task failed while being canceled"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl OrchestrationEventSink for AppServices {
@@ -320,102 +395,37 @@ impl OrchestrationEventSink for AppServices {
     }
 }
 
-/// Waits for tracked cleanup tasks until one shared deadline, then cancels
-/// every unfinished task so terminal shutdown can continue.
-async fn wait_for_cleanup_task_handles(
-    cleanup_task_handles: &Mutex<Vec<JoinHandle<()>>>,
-    timeout: Duration,
-) {
-    let deadline = Instant::now() + timeout;
+/// Shared per-app session redraw version counters keyed by session id.
+pub(crate) type SessionUpdateVersionMap = Arc<Mutex<HashMap<SessionId, u64>>>;
 
-    loop {
-        let task_handles = cleanup_task_handles
-            .lock()
-            .map(|mut task_handles| task_handles.drain(..).collect::<Vec<_>>())
-            .unwrap_or_default();
-
-        if task_handles.is_empty() {
-            break;
-        }
-
-        for mut task_handle in task_handles {
-            match time::timeout_at(deadline, &mut task_handle).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    warn!(
-                        error = %error,
-                        "background cleanup task failed during shutdown"
-                    );
-                }
-                Err(_) => {
-                    task_handle.abort();
-                    warn!(
-                        timeout_seconds = timeout.as_secs(),
-                        "background cleanup task exceeded the shutdown deadline and was canceled"
-                    );
-
-                    if let Err(error) = task_handle.await
-                        && !error.is_cancelled()
-                    {
-                        warn!(
-                            error = %error,
-                            "background cleanup task failed while being canceled"
-                        );
-                    }
-                }
-            }
-        }
-    }
+/// External clients and cached machine-scoped availability injected into
+/// [`AppServices`].
+pub(crate) struct AppServiceDeps {
+    /// Shared provider-owned app-server client override used by tests and
+    /// injected environments.
+    pub(crate) app_server_client_override: Option<Arc<dyn AppServerClient>>,
+    /// Cached locally runnable backends used to scope model selection.
+    pub(crate) available_agent_kinds: Vec<AgentKind>,
+    /// Optional clipboard image client override used by tests and injected
+    /// environments.
+    pub(crate) clipboard_image_client_override: Option<Arc<dyn ClipboardImageClient>>,
+    /// Shared filesystem client for async filesystem operations.
+    pub(crate) fs_client: Arc<dyn FsClient>,
+    /// Shared git client for async git operations.
+    pub(crate) git_client: Arc<dyn GitClient>,
+    /// Optional isolated-prompt client override used by tests and injected
+    /// environments.
+    pub(crate) one_shot_client_override: Option<Arc<dyn OneShotClient>>,
+    /// Optional workspace personality catalog override used by tests.
+    pub(crate) personality_catalog_client_override: Option<Arc<dyn PersonalityCatalogClient>>,
+    /// Shared repository bundle used by app workflows.
+    pub(crate) repositories: AppRepositories,
+    /// Shared forge review-request client.
+    pub(crate) review_request_client: Arc<dyn ReviewRequestClient>,
 }
 
-/// Returns a stable instrumentation label for one app event variant.
-fn app_event_label(event: &AppEvent) -> &'static str {
-    match event {
-        AppEvent::SessionCreationCompleted { .. } => "SessionCreationCompleted",
-        AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",
-        AppEvent::DiffPreviewLoaded { .. } => "DiffPreviewLoaded",
-        AppEvent::SessionDiffLoaded { .. } => "SessionDiffLoaded",
-        AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",
-        AppEvent::VersionAvailabilityUpdated { .. } => "VersionAvailabilityUpdated",
-        AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
-        AppEvent::UpdateStatusChanged { .. } => "UpdateStatusChanged",
-        AppEvent::SessionModelUpdated { .. } => "SessionModelUpdated",
-        AppEvent::SessionPersonalityUpdated { .. } => "SessionPersonalityUpdated",
-        AppEvent::SessionPermissionModeUpdated { .. } => "SessionPermissionModeUpdated",
-        AppEvent::SessionReasoningLevelUpdated { .. } => "SessionReasoningLevelUpdated",
-        AppEvent::SessionResponseStyleUpdated { .. } => "SessionResponseStyleUpdated",
-        AppEvent::SessionSpeedModeUpdated { .. } => "SessionSpeedModeUpdated",
-        AppEvent::RefreshSessions => "RefreshSessions",
-        AppEvent::RefreshProjects => "RefreshProjects",
-        AppEvent::RefreshGitStatus => "RefreshGitStatus",
-        AppEvent::SessionReviewCommentSnapshotLoaded { .. } => "SessionReviewCommentSnapshotLoaded",
-        AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
-        AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",
-        AppEvent::SyncMainConflictResolutionStarted { .. } => "SyncMainConflictResolutionStarted",
-        AppEvent::SessionDiffStatsUpdated { .. } => "SessionDiffStatsUpdated",
-        AppEvent::SessionTitleGenerationFinished { .. } => "SessionTitleGenerationFinished",
-        AppEvent::BranchPublishActionCompleted { .. } => "BranchPublishActionCompleted",
-        AppEvent::BranchPublishActionResolved { .. } => "BranchPublishActionResolved",
-        AppEvent::BranchPublishActionStarted { .. } => "BranchPublishActionStarted",
-        AppEvent::SessionQueuedSyncResolved { .. } => "SessionQueuedSyncResolved",
-        AppEvent::SessionTurnStarted { .. } => "SessionTurnStarted",
-        AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
-        AppEvent::ReviewPreparationFailed { .. } => "ReviewPreparationFailed",
-        AppEvent::DeferredAutoReviewPersistenceRetry { .. } => "DeferredAutoReviewPersistenceRetry",
-        AppEvent::FocusedReviewPersistenceRetry { .. } => "FocusedReviewPersistenceRetry",
-        AppEvent::SessionUpdated { .. } => "SessionUpdated",
-        AppEvent::AgentResponseReceived { .. } => "AgentResponseReceived",
-        AppEvent::StackedParentTurnCompleted { .. } => "StackedParentTurnCompleted",
-        AppEvent::StackedParentSyncCompleted { .. } => "StackedParentSyncCompleted",
-        AppEvent::StackedParentMergeCompleted { .. } => "StackedParentMergeCompleted",
-        AppEvent::SessionWorkflowNoticeUpdated { .. } => "SessionWorkflowNoticeUpdated",
-        AppEvent::SessionOrchestrationProgressUpdated { .. } => {
-            "SessionOrchestrationProgressUpdated"
-        }
-        AppEvent::PublishedBranchSyncUpdated { .. } => "PublishedBranchSyncUpdated",
-        AppEvent::ReviewRequestStatusUpdated { .. } => "ReviewRequestStatusUpdated",
-    }
-}
+/// Maximum graceful-shutdown wait shared by all background cleanup tasks.
+const CLEANUP_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(test)]
 #[path = "service_test.rs"]
