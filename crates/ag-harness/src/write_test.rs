@@ -393,7 +393,7 @@ async fn write_tool_applies_patch_through_file_system_boundary() {
 
     // Act
     let output = tool
-        .execute(&arguments)
+        .execute(&arguments, "write-call")
         .await
         .expect("write should succeed");
 
@@ -430,7 +430,7 @@ async fn write_tool_creates_missing_file() {
 
     // Act
     let output = tool
-        .execute(&arguments)
+        .execute(&arguments, "write-call")
         .await
         .expect("missing file should be created");
 
@@ -455,7 +455,7 @@ async fn write_tool_rejects_patch_that_makes_no_change() {
 
     // Act
     let error = tool
-        .execute(&arguments)
+        .execute(&arguments, "write-call")
         .await
         .expect_err("no-op patch should fail");
 
@@ -484,7 +484,7 @@ async fn write_tool_returns_typed_replace_failure() {
 
     // Act
     let error = tool
-        .execute(&arguments)
+        .execute(&arguments, "write-call")
         .await
         .expect_err("replace failure should be typed");
 
@@ -521,15 +521,15 @@ async fn write_tool_returns_typed_boundary_failures() {
 
     // Act
     let root_error = root_tool
-        .execute(&arguments)
+        .execute(&arguments, "write-call")
         .await
         .expect_err("missing root should fail");
     let read_error = read_tool
-        .execute(&arguments)
+        .execute(&arguments, "write-call")
         .await
         .expect_err("read boundary failure should fail");
     let content_error = content_tool
-        .execute(&arguments)
+        .execute(&arguments, "write-call")
         .await
         .expect_err("content read failure should fail");
 
@@ -558,7 +558,7 @@ async fn write_tool_bounds_target_and_returns_correctable_rejection() {
 
     // Act
     let error = tool
-        .execute(&arguments)
+        .execute(&arguments, "write-call")
         .await
         .expect_err("oversized target should fail");
     let result = error
@@ -593,7 +593,7 @@ async fn write_tool_bounds_resulting_file() {
 
     // Act
     let error = tool
-        .execute(&arguments)
+        .execute(&arguments, "write-call")
         .await
         .expect_err("oversized result should fail");
 

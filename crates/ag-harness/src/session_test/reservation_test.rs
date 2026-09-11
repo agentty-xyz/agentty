@@ -529,7 +529,7 @@ async fn failing_or_completing_a_turn_that_is_not_running_reports_invalid_data()
 
     // Act
     let error = database
-        .complete_turn("session-a", turn_position, &[], None)
+        .complete_turn("session-a", turn_position, &[], None, &[], None)
         .await
         .expect_err("non-running turn should fail");
     let repeated_failure = database
@@ -716,6 +716,8 @@ async fn delayed_or_unowned_cleanup_preserves_provider_continuation() {
             acquired.turn_position,
             &[],
             Some("replacement-session"),
+            &[],
+            None,
         )
         .await
         .expect("turn should complete");

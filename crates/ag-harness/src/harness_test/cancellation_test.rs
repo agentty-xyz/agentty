@@ -443,3 +443,118 @@ async fn different_sessions_run_concurrently() {
     assert!(first_result.is_ok());
     assert!(second_result.is_ok());
 }
+
+#[tokio::test]
+async fn expired_turn_recovery_clears_continuation_without_blocking_acquisition() {
+    // Arrange
+    for recover_before_acquisition in [false, true] {
+        let mut model = model();
+        model.expect_complete().returning(|request| {
+            if request.prompt() == "retry" {
+                assert!(request.provider_session_id().is_none());
+            }
+
+            Ok(
+                response_without_metadata(ModelResponse::Output(json!({"summary": "done"})))
+                    .with_provider_session_id("new-session"),
+            )
+        });
+        let directory = tempdir().expect("directory");
+        let harness = Harness::new(model).database(directory.path().join("harness.db"));
+        let mut session = harness
+            .session("session-a", object_schema())
+            .create()
+            .await
+            .expect("session");
+        session.send("first").await.expect("establish continuation");
+        let mut old = session
+            .database
+            .begin_turn("session-a", "abandoned")
+            .await
+            .expect("abandoned turn");
+        sqlx::query("UPDATE session_turn SET lease_expires_at = 0 WHERE status = 'running'")
+            .execute(session.database.pool())
+            .await
+            .expect("expire lease");
+
+        // Act
+        if recover_before_acquisition {
+            session.writes().await.expect("explicit recovery");
+        }
+        tokio::time::timeout(Duration::from_secs(5), session.send("retry"))
+            .await
+            .expect("acquisition must converge")
+            .expect("recovery turn");
+        // Simulate delayed cleanup after a replacement turn has committed.
+        old.guard.mark_interrupted();
+        drop(old);
+        let replacement = session
+            .database
+            .begin_turn("session-a", "next")
+            .await
+            .expect("next turn");
+        let continuation = replacement.provider_session_id;
+
+        // Assert
+        assert_eq!(continuation.as_deref(), Some("new-session"));
+        let states: Vec<String> =
+            sqlx::query_scalar("SELECT status FROM session_turn ORDER BY turn_position")
+                .fetch_all(session.database.pool())
+                .await
+                .expect("states");
+        assert_eq!(states, ["completed", "interrupted", "completed", "running"]);
+    }
+}
+
+#[tokio::test]
+async fn interruption_rolls_back_when_continuation_cannot_be_cleared() {
+    // Arrange
+    let database = Database::open_in_memory().await.expect("database");
+    database
+        .create_session(&NewSession::new("session-a", object_schema()), None, 4096)
+        .await
+        .expect("session");
+    let mut old = database
+        .begin_turn("session-a", "abandoned")
+        .await
+        .expect("turn");
+    sqlx::query("UPDATE session SET provider_session_id = 'native-session'")
+        .execute(database.pool())
+        .await
+        .expect("continuation");
+    sqlx::query("UPDATE session_turn SET lease_expires_at = 0")
+        .execute(database.pool())
+        .await
+        .expect("expire lease");
+    sqlx::query(
+        "CREATE TRIGGER reject_clear BEFORE UPDATE OF provider_session_id ON session BEGIN SELECT \
+         RAISE(FAIL, 'continuation unavailable'); END",
+    )
+    .execute(database.pool())
+    .await
+    .expect("trigger");
+
+    // Act
+    let result = database.recover_stale_turns("session-a").await;
+    let state: (String, Option<String>) = sqlx::query_as(
+        "SELECT t.status, s.provider_session_id FROM session_turn t JOIN session s ON s.id = \
+         t.session_id",
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("state");
+    old.guard.disarm();
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(SessionError::QueryContext {
+            operation: "recover stale persistent session turns",
+            ..
+        })
+    ));
+    assert_eq!(
+        state,
+        ("running".to_string(), Some("native-session".to_string()))
+    );
+}

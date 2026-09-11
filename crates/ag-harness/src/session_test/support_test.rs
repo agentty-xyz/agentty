@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;
+use sqlx::SqlSafeStr as _;
 use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::sqlite::SqlitePoolOptions;
-use sqlx::{SqlSafeStr as _, SqlitePool};
 
 use crate::model::{MockModel, ModelMessage, ModelMetadata};
 use crate::schema_contract::OutputSchema;
@@ -95,6 +95,8 @@ pub(super) async fn complete_native_turn(database: &Database, provider_session_i
             acquired.turn_position,
             &turn("first", "first")[1..],
             Some(provider_session_id),
+            &[],
+            None,
         )
         .await
         .expect("turn should complete");
@@ -271,10 +273,6 @@ impl Database {
             reservation_observer: Arc::new(()),
             timestamp_source,
         })
-    }
-
-    pub(crate) fn pool(&self) -> &SqlitePool {
-        &self.pool
     }
 
     pub(crate) async fn append_turn(

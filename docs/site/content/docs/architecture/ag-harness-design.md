@@ -66,17 +66,56 @@ excluded from replay when the configured byte budget is exceeded.
 Starting a turn loads bounded completed history in a read-only snapshot, then opens a
 short writer transaction. The writer revalidates the snapshot and commits the turn as
 `running` with a fresh lease. If the snapshot changed, acquisition retries before
-persisting the prompt. This keeps cancellation before the commit side-effect free and
-keeps history canonical when multiple session handles were opened before the latest turn
-completed. Each active turn also has an opaque owner token. If cancellation races with a
-successful SQLite commit acknowledgment, cleanup scoped to the canonical database
-identity and owner token interrupts only that abandoned turn before another turn is
-reserved. The owner guard renews the lease while provider or tool work remains active;
-dropping the send future stops renewal and records the turn as interrupted by
-cancellation. A failed renewal or lost owner token cancels the in-flight request before
-it can continue model or tool work. If a turn fails and recording that failure also
-fails, `SessionError` retains both errors instead of replacing the original turn
-failure.
+persisting the prompt. Recovery of an abandoned turn can commit before that retry;
+cancellation before the reservation commit does not persist a new prompt. History stays
+canonical when multiple session handles were opened before the latest turn completed.
+Each active turn also has an opaque owner token. If cancellation races with a successful
+SQLite commit acknowledgment, cleanup scoped to the canonical database identity and
+owner token interrupts only that abandoned turn before another turn is reserved. The
+owner guard renews the lease while provider or tool work remains active; dropping the
+send future stops renewal and records the turn as interrupted by cancellation.
+Interruption atomically clears native provider continuation only when it actually
+transitions an owned or expired active turn; delayed cleanup cannot clear a newer
+completed turn's continuation. Cancellation returns promptly even when an
+already-started filesystem write may finish afterward. Writes without a recorded outcome
+remain `pending`; hash observations describe current content rather than proving whether
+the cancelled operation finished. A failed renewal or lost owner token cancels the
+in-flight request before it can continue model or tool work. If a turn fails and
+recording that failure also fails, `SessionError` retains both errors instead of
+replacing the original turn failure.
+
+Validated writes commit an independent journal intent before filesystem replacement,
+then record its acknowledged outcome before returning to the model. SQLite uses `FULL`
+synchronous commits so the intent is synced before file mutation. Each record retains
+the turn and tool-call identity, original repository root as native bytes, relative
+path, and SHA-256 fingerprints of the expected and intended content; missing expected
+content denotes a create. Journal failures stop execution. These records survive failed
+turns and history eviction without treating partial conversation messages as completed
+history.
+
+`Session::writes()` exposes the journal after errors and reopening. For inactive turns
+whose write outcome is pending or failed, it compares the original repository's current
+file with both fingerprints, reporting a result match, expected match, conflict, or
+unavailable observation. Observations do not prove which process wrote the file and are
+recomputed: a cancelled filesystem operation may finish later. Recovery never reapplies
+writes. Subsequent sends include write diagnostics from incomplete turns and disable
+native continuation for that request so the provider receives this context. A dedicated
+provider-facing representation omits the repository root; `Session::writes()` retains
+the native `PathBuf` for host-side inspection, including non-UTF-8 Unix paths. Retries
+count incomplete records in SQL and fetch at most 64 newest candidates. They select the
+16 KiB diagnostic payload before reconciling files, reserving space for the longest
+recovery label; omitted records cause no filesystem reads. Diagnostics report the total
+number omitted. Oversized JSON-escaped paths are shortened and marked as prefixes; the
+host can inspect their full paths with `Session::writes()`. Completion acknowledges only
+the displayed record IDs in the same transaction as the completed turn, its bounded
+diagnostic snapshot, and its provider continuation identifier. The snapshot precedes the
+turn prompt in local history, preserving recovery context across reopening and provider
+fallback. It counts toward the existing whole-turn history budget and is evicted with
+its turn; it is historical context, not a fresh filesystem observation. Failed turns and
+failed commits leave diagnostics pending, and omitted records remain eligible for later
+sends. Once all diagnostics are acknowledged, subsequent sends retain native
+continuation. `Session::writes()` always exposes the complete journal, including
+acknowledged records.
 
 ## Resume and provider fallback
 
