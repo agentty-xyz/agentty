@@ -13,7 +13,7 @@ use std::time::Duration;
 use ag_agent::{self as agent, OneShotClient};
 use ag_forge::{ForgeRemote, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewRequestClient};
 use ag_git::GitClient;
-use ag_protocol::{AgentResponse, FocusedReview, focused_review_json_schema_json};
+use ag_protocol::focused_review_json_schema_json;
 use askama::Template;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -580,7 +580,7 @@ impl TaskService {
         session_chat_history: Option<&str>,
         one_shot_client: &dyn OneShotClient,
     ) -> Result<String, AppError> {
-        let (submission, summarized) = crate::app::diff_prompt::submit(
+        let review = crate::app::review_prompt::submit(
             one_shot_client,
             agent::OneShotRequest {
                 provider_call_budget: None,
@@ -602,14 +602,6 @@ impl TaskService {
             },
         )
         .await?;
-        let review = Self::review_output_text(&submission.response)?;
-        if summarized {
-            return Ok(format!(
-                "{review}\n\nReview coverage is limited: large diff or history was summarized; \
-                 this is not a complete review of every changed line."
-            ));
-        }
-
         Ok(review)
     }
 
@@ -635,24 +627,6 @@ impl TaskService {
                 session_id,
             },
         }
-    }
-
-    /// Parses one structured review from the agent response and formats it for
-    /// the session transcript.
-    fn review_output_text(agent_response: &AgentResponse) -> Result<String, AppError> {
-        let review_json = agent_response.answer.trim();
-        if review_json.is_empty() {
-            return Err(AppError::Workflow(
-                "Review assist returned empty output".to_string(),
-            ));
-        }
-        let review = serde_json::from_str::<FocusedReview>(review_json).map_err(|error| {
-            AppError::Workflow(format!(
-                "Review assist returned invalid structured output: {error}"
-            ))
-        })?;
-
-        Ok(review.to_markdown())
     }
 
     /// Renders the review assist prompt from the markdown template.

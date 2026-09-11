@@ -8,7 +8,10 @@ use ag_agent::{
 };
 use ag_protocol::AgentResponse;
 
-use super::{MAX_PROVIDER_CALLS, PROMPT_BUDGET, SUMMARY_CHUNK_BYTES, chunks, submit, summarize};
+use super::{
+    MAX_PROVIDER_CALLS, PROMPT_BUDGET, SUMMARY_CHUNK_BYTES, chunks, submit, summarize,
+    summary_with_repair,
+};
 
 fn request() -> OneShotRequest {
     OneShotRequest {
@@ -260,6 +263,211 @@ async fn summary_failure_and_invalid_summary_stop_generation() {
 
         // Assert
         assert!(result.is_err());
+    }
+}
+
+#[tokio::test]
+async fn invalid_summary_is_repaired_from_original_input_with_byte_feedback() {
+    // Arrange
+    for (invalid, diagnostic) in [
+        ("   ".to_string(), "summary was empty"),
+        ("🦀".repeat(200), "800 UTF-8 bytes"),
+    ] {
+        let mut attempts = 0;
+        let mut client = MockOneShotClient::new();
+        client.expect_submit().times(2).returning(move |request| {
+            request
+                .provider_call_budget
+                .as_ref()
+                .expect("budget")
+                .consume()?;
+            assert!(request.prompt.contains("ORIGINAL SOURCE"));
+            assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
+            attempts += 1;
+            if attempts == 1 {
+                return Ok(answer(&invalid));
+            }
+            assert!(request.prompt.contains(diagnostic));
+            assert!(request.prompt.contains("nonempty, shorter summary"));
+            assert!(!request.prompt.contains('🦀'));
+            Ok(answer("Repaired summary."))
+        });
+        let request = request();
+
+        // Act
+        let summary = summarize(
+            &client,
+            &request,
+            &"ORIGINAL SOURCE\n".repeat(200),
+            2000,
+            request.provider_call_budget.as_ref().expect("budget"),
+        )
+        .await
+        .expect("repair");
+
+        // Assert
+        assert!(summary.contains("Repaired summary."));
+    }
+}
+
+#[tokio::test]
+async fn failed_summary_repair_splits_original_input_without_losing_tail() {
+    // Arrange
+    let mut attempts = 0;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let prompts = Arc::clone(&seen);
+    let mut client = MockOneShotClient::new();
+    client.expect_submit().returning(move |request| {
+        request
+            .provider_call_budget
+            .as_ref()
+            .expect("budget")
+            .consume()?;
+        prompts.lock().expect("prompts").push(request.prompt);
+        attempts += 1;
+        Ok(answer(if attempts <= 2 { "" } else { "Recovered." }))
+    });
+    let request = request();
+
+    // Act
+    let summary = summarize(
+        &client,
+        &request,
+        &format!("{}TAIL", "x".repeat(5000)),
+        2000,
+        request.provider_call_budget.as_ref().expect("budget"),
+    )
+    .await
+    .expect("split recovery");
+
+    // Assert
+    let prompts = seen.lock().expect("prompts");
+    assert_eq!(prompts.len(), 4);
+    assert!(prompts[2].len() < prompts[0].len());
+    assert!(prompts[3].contains("TAIL"));
+    assert!(summary.contains("Recovered."));
+}
+
+#[tokio::test]
+async fn small_tail_is_retained_verbatim_without_a_tiny_summary_request() {
+    // Arrange
+    let mut client = MockOneShotClient::new();
+    client
+        .expect_submit()
+        .once()
+        .returning(|_| Ok(answer("Large fragment summarized.")));
+    let request = request();
+
+    // Act
+    let summary = summarize(
+        &client,
+        &request,
+        &format!("{}TAIL🦀", "x".repeat(SUMMARY_CHUNK_BYTES)),
+        8000,
+        request.provider_call_budget.as_ref().expect("budget"),
+    )
+    .await
+    .expect("summary");
+
+    // Assert
+    assert!(summary.ends_with("TAIL🦀"));
+}
+
+#[tokio::test]
+async fn provider_splitting_still_summarizes_fragments_below_the_output_limit() {
+    // Arrange
+    let mut client = MockOneShotClient::new();
+    client.expect_submit().returning(|request| {
+        request
+            .provider_call_budget
+            .as_ref()
+            .expect("budget")
+            .consume()?;
+        if request.prompt.len() > 4_000 {
+            return Err(OneShotError::new("contextWindowExceeded"));
+        }
+        Ok(answer("Small provider fragment summarized."))
+    });
+    let request = request();
+
+    // Act
+    let summary = summarize(
+        &client,
+        &request,
+        &"x".repeat(30_000),
+        10_000,
+        request.provider_call_budget.as_ref().expect("budget"),
+    )
+    .await
+    .expect("smaller provider still makes progress");
+
+    // Assert
+    assert!(summary.len() < 10_000);
+    assert!(summary.contains("Small provider fragment summarized."));
+}
+
+#[tokio::test]
+async fn summary_repair_respects_prompt_and_shared_call_budgets() {
+    // Arrange
+    for (prompt_size, budget_size, diagnostic) in [
+        (PROMPT_BUDGET, 2, "repair prompt budget"),
+        (100, 1, "provider call limit reached"),
+    ] {
+        let mut request = request();
+        request.prompt = "x".repeat(prompt_size);
+        let budget = ag_agent::ProviderCallBudget::new(budget_size);
+        request.provider_call_budget = Some(budget.clone());
+        let mut client = MockOneShotClient::new();
+        client.expect_submit().once().returning(|request| {
+            request
+                .provider_call_budget
+                .as_ref()
+                .expect("budget")
+                .consume()?;
+            Ok(answer(""))
+        });
+
+        // Act
+        let error = summary_with_repair(&client, &request, 100, &budget)
+            .await
+            .expect_err("bounded repair");
+
+        // Assert
+        assert!(error.to_string().contains(diagnostic));
+    }
+}
+
+#[tokio::test]
+async fn persistent_invalid_summary_reports_distinct_terminal_diagnostics() {
+    // Arrange
+    for (output, diagnostic) in [
+        (String::new(), "summary was empty"),
+        ("🦀".repeat(200), "800 UTF-8 bytes, exceeding 127"),
+    ] {
+        let mut client = MockOneShotClient::new();
+        client
+            .expect_submit()
+            .times(2)
+            .returning(move |_| Ok(answer(&output)));
+        let request = request();
+
+        // Act
+        let error = summarize(
+            &client,
+            &request,
+            &"x".repeat(512),
+            511,
+            request.provider_call_budget.as_ref().expect("budget"),
+        )
+        .await
+        .expect_err("terminal diagnostic");
+
+        // Assert
+        // The target's quarter is the hard byte limit, with no per-tail
+        // shrinkage.
+        assert!(error.to_string().contains(diagnostic));
+        assert!(error.to_string().contains("after repair"));
+        assert!(is_input_size_error(&error.to_string()));
     }
 }
 
@@ -585,7 +793,10 @@ async fn provider_size_rejections_consume_the_shared_call_budget() {
     .expect_err("repeated splitting should exhaust the budget");
 
     // Assert
-    assert!(error.to_string().contains("provider call limit reached"));
+    assert!(
+        error.to_string().contains("provider call limit reached"),
+        "{error}"
+    );
 }
 
 #[tokio::test]

@@ -20,6 +20,108 @@ use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 /// Focused-review output emitted after Gemini starts without plan-mode flags.
 const GEMINI_FOCUSED_REVIEW_TEXT: &str = "Gemini focused review completed without plan mode.";
 
+/// Seeds a large original diff and a provider that fails one batch, then
+/// succeeds when the user retries the partial review.
+async fn seed_large_review_with_partial_retry(env: &BuilderEnv) -> E2eResult {
+    seed_review_ready_session(env).await?;
+    seed_review_worktree_with_diff(env)?;
+    std::fs::write(
+        env.agentty_root.join("wt/review-s/src/main.rs"),
+        format!(
+            "fn main() {{}}\n{}",
+            "// original changed line\n".repeat(5_000)
+        ),
+    )?;
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+state_dir=${0%/*}
+count_file="$state_dir/batch-review-count"
+count=0
+if [ -f "$count_file" ]; then read count < "$count_file"; fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+prompt=$(cat)
+if [ "$count" -eq 2 ]; then printf 'batch temporarily unavailable\n' >&2; exit 1; fi
+case "$prompt" in
+  *"Cross-file review:"*) impact='Cross-file check completed.' ;;
+  *) impact='Original batch reviewed.' ;;
+esac
+result='{\"project_impact\":[\"'"$impact"'\"],\"suggestions\":[{\"details\":\"Preserved batch finding.\",\"severity\":\"high\"}]}'
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{\"input_tokens\":5,\"output_tokens\":9}}"
+"#;
+    let claude_path = env.stub_bin.join("claude");
+    std::fs::write(&claude_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+
+    seed_project_settings(
+        env,
+        &[
+            ("DefaultReviewAgent", "claude"),
+            ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+        ],
+    )
+    .await
+}
+
+/// Large reviews keep completed findings after a batch failure, and `f`
+/// retries the same unchanged diff through the complete cross-file pass.
+#[tokio::test]
+async fn test_large_review_partial_retry() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("large_review_partial_retry")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_large_review_with_partial_retry(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .press_key("f")
+                    .wait_for_text("Partial review:", 30000)
+                    .press_key("g")
+                    .wait_for_text("Preserved batch finding.", 5000)
+                    .capture_labeled(
+                        "partial_review",
+                        "Completed batch findings survive a later failure",
+                    )
+                    .press_key("f")
+                    .wait_for_text("Regenerate focused review?", 5000)
+                    .press_key("y")
+                    .wait_for_text("Cross-file check completed.", 30000)
+                    .capture_labeled("retried_review", "Retry completes the original diff review")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let partial = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_text_in_region(
+                        &partial,
+                        "Preserved batch finding.",
+                        &Region::full(partial.cols(), partial.rows()),
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Preserved batch finding.",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Cross-file check completed.",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                    assertion::assert_not_visible(frame, "Partial review:");
+                    assertion::assert_not_visible(frame, "Review assist unavailable");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Seeds a Codex focused review whose first direct review has an unknown field,
 /// then returns a valid direct review for the schema-repair turn. Both turns
 /// include a blank duplicate final item in `turn/completed`.

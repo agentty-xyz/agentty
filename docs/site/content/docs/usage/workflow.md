@@ -463,9 +463,16 @@ diff preparation exceeds the agent’s input or reduction limit, Agentty retries
 only the changed file list, your chat history, and the existing session commit message,
 without the diff. The existing message keeps earlier work represented. This preserves
 the complete worktree and the single evolving commit. If that fallback also exceeds its
-limit, auto-commit stops without invoking code-repair assistance. Focused review also
-bounds large diffs and history, and reports limited coverage when it uses summaries.
-Preparation stops if its provider-call limit is reached, leaving your changes intact.
+limit, auto-commit stops without invoking code-repair assistance. Empty or oversized
+summaries get a bounded repair attempt before their source fragments are split again.
+Small fragments are kept verbatim.
+
+Focused review checks large diffs in batches of original changes, then checks cross-file
+interactions. Session history may be summarized, with limited context coverage
+disclosed. If a later batch or the cross-file check fails, completed findings remain
+available under an explicit partial-review notice identifying the unfinished work. Press
+`f` and confirm regeneration to retry. Preparation stops at its provider-call limit,
+leaving your changes intact.
 
 Auto-commit waits up to five seconds in total for a busy Git index to become available.
 If an index lock still blocks auto-commit, Agentty stops and records a `[Commit Error]`

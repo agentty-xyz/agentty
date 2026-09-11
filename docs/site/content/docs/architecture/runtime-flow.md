@@ -888,21 +888,25 @@ their triggers:
   every mutation permission request, avoiding plan-mode sandbox initialization;
   persistent read-only research sessions continue to use sandboxed plan mode.
 
-  Commit-message and review preparation share a bounded prompt pipeline. It budgets the
-  rendered prompt, reduces oversized diff and context chunks through isolated read-only
-  utility calls, and combines their summaries before submission. Summary input chunks
-  use the prompt budget independently of the final summary size. All chunk summaries,
-  recursive reductions, and final attempts share a limit of 64 provider turns. The
-  shared budget is charged immediately before CLI execution or each app-server attempt,
-  including protocol repairs and transport restart retries. Size rejection reduces the
-  budget instead of restarting the same request or entering commit repair. Reviews
-  prepared from summaries explicitly disclose limited coverage. Commit generation
-  catches input-size and reduction-budget failures and starts one separately bounded
-  fallback using cumulative changed filenames, the user/assistant conversation, and the
-  existing session commit message to retain earlier work. The fallback excludes the diff
-  and workflow notices, forbids retrieving diffs or file contents, and preserves
-  read-only utility permissions and commit validation. Both post-turn and pre-sync
-  commits supply the session transcript; fallback failure propagates normally.
+  Review preparation budgets the rendered prompt and splits oversized original diffs
+  into read-only review batches, preserving all source fragments. It combines distinct
+  findings in severity order without letting a later pass discard earlier findings, then
+  checks cross-file interactions from the file headers and batch results. A later
+  failure preserves completed findings and adds a separate coverage section with retry
+  guidance. Incomplete reviews reuse the existing `f` regeneration flow.
+
+  Commit-message preparation and review history use the shared bounded summary reducer.
+  Small fragments stay verbatim; empty or oversized summaries receive one corrective
+  retry before splitting their original input. Review history, batch submissions, and
+  the cross-file pass share a limit of 64 provider turns; commit-message preparation has
+  its own limit. Budgets include protocol repairs and transport restart retries. History
+  summaries explicitly disclose limited context coverage. Commit generation catches
+  input-size and reduction-budget failures and starts one separately bounded fallback
+  using cumulative changed filenames, the user/assistant conversation, and the existing
+  session commit message to retain earlier work. The fallback excludes the diff and
+  workflow notices, forbids retrieving diffs or file contents, and preserves read-only
+  utility permissions and commit validation. Both post-turn and pre-sync commits supply
+  the session transcript; fallback failure propagates normally.
 
 - **Sync-main workflow** (list-mode `s`): captures an immutable project ID, operation
   ID, path, branch, and review-target snapshot before queueing pull/rebase/push through

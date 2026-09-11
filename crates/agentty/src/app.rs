@@ -14,6 +14,7 @@ mod project;
 pub(crate) mod prompt_intent;
 mod reducer;
 mod review;
+mod review_prompt;
 mod review_request;
 mod service;
 pub(crate) mod session;

@@ -11,13 +11,13 @@ use ag_agent::{
 /// Leaves room for provider instructions and output instead of approaching the
 /// Codex per-input character ceiling. Smaller provider limits trigger
 /// reduction.
-const PROMPT_BUDGET: usize = 60_000;
+pub(super) const PROMPT_BUDGET: usize = 60_000;
 // Size input fragments independently of the desired summary output size.
 // Check the rendered prompt too, since pathological fences can exceed this
 // margin.
 const SUMMARY_CHUNK_BYTES: usize = PROMPT_BUDGET - 2_048;
-const MAX_PROVIDER_CALLS: usize = 64;
-const MIN_CHUNK_BYTES: usize = 512;
+pub(super) const MAX_PROVIDER_CALLS: usize = 64;
+pub(super) const MIN_CHUNK_BYTES: usize = 512;
 const SUMMARY_LIMIT: usize = 2_000;
 
 /// Submits a diff prompt, summarizing oversized input in isolated utility
@@ -80,7 +80,7 @@ pub(super) async fn submit(
 
 /// Reduces all input chunks, then reduces their summaries again when necessary.
 /// Strict output bounds guarantee each reduction round makes progress.
-async fn summarize(
+pub(super) async fn summarize(
     client: &dyn OneShotClient,
     request: &OneShotRequest,
     input: &str,
@@ -105,8 +105,8 @@ async fn summarize(
     Ok(input)
 }
 
-/// Summarizes every fragment once, splitting rejected fragments within the
-/// shared provider budget and enforcing each response's output limit.
+/// Retains small fragments verbatim and summarizes larger ones, repairing
+/// invalid output before splitting rejected fragments within the shared budget.
 async fn summarize_round(
     client: &dyn OneShotClient,
     request: &OneShotRequest,
@@ -118,7 +118,10 @@ async fn summarize_round(
     let mut chunks = chunks(input, SUMMARY_CHUNK_BYTES);
     let mut summaries = Vec::new();
     while let Some(chunk) = chunks.pop_front() {
-        let summary_limit = summary_limit.min((chunk.len() / 4).max(64));
+        if chunk.len() <= summary_limit.min(MIN_CHUNK_BYTES) {
+            summaries.push(chunk);
+            continue;
+        }
         let mut request = request.clone();
         request.permission_mode = PermissionMode::ReadOnly;
         request.request_kind = AgentRequestKind::UtilityPrompt;
@@ -139,23 +142,14 @@ async fn summarize_round(
                 "Input exceeds the maximum length of the summary prompt budget",
             ))
         } else {
-            call_budget.ensure_available()?;
-            client.submit(request).await
+            summary_with_repair(client, &request, summary_limit, call_budget).await
         };
         match submission {
-            Ok(submission) => {
-                let summary = submission.response.answer.trim();
-                if summary.is_empty() || summary.len() > summary_limit {
-                    return Err(OneShotError::new(
-                        "Input exceeds the maximum length reduction budget: summary is empty or \
-                         too large; changes are preserved",
-                    ));
-                }
-                summaries.push(summary.to_string());
-            }
+            Ok(summary) => summaries.push(summary),
             Err(error)
                 if is_input_size_error(&error.to_string()) && chunk.len() > MIN_CHUNK_BYTES =>
             {
+                call_budget.ensure_available()?;
                 let smaller = self::chunks(&chunk, chunk.len() / 2);
                 for chunk in smaller.into_iter().rev() {
                     chunks.push_front(chunk);
@@ -168,9 +162,56 @@ async fn summarize_round(
     Ok(summaries)
 }
 
+/// Gives an invalid summary one corrective retry without replaying its
+/// potentially oversized response. Both attempts use the original source and
+/// the same provider-call budget; persistent invalid output can be split by
+/// the caller just like a provider input-size rejection.
+async fn summary_with_repair(
+    client: &dyn OneShotClient,
+    request: &OneShotRequest,
+    limit: usize,
+    call_budget: &ag_agent::ProviderCallBudget,
+) -> Result<String, OneShotError> {
+    let mut correction = String::new();
+    let mut problem = String::new();
+    for _ in 0..2 {
+        let mut request = request.clone();
+        request.prompt = format!("{correction}{}", request.prompt);
+        if request.prompt.len() > PROMPT_BUDGET {
+            return Err(OneShotError::new(
+                "Input exceeds the maximum length of the summary repair prompt budget",
+            ));
+        }
+        call_budget.ensure_available()?;
+        let submission = client.submit(request).await?;
+        let summary = submission.response.answer.trim();
+        if !summary.is_empty() && summary.len() <= limit {
+            return Ok(summary.to_string());
+        }
+        problem = if summary.is_empty() {
+            "summary was empty".to_string()
+        } else {
+            format!(
+                "summary was {} UTF-8 bytes, exceeding {limit}",
+                summary.len()
+            )
+        };
+        correction = format!(
+            "The previous {problem}. Return a nonempty, shorter summary in answer. Aim for at \
+             most {} UTF-8 bytes; the hard limit is {limit}.\n\n",
+            limit / 2
+        );
+    }
+
+    Err(OneShotError::new(format!(
+        "Input exceeds the maximum length reduction budget: {problem} after repair; changes are \
+         preserved"
+    )))
+}
+
 /// Splits without dropping bytes, preferring complete lines and carrying the
 /// current file header into continuation chunks for path attribution.
-fn chunks(input: &str, limit: usize) -> VecDeque<String> {
+pub(super) fn chunks(input: &str, limit: usize) -> VecDeque<String> {
     let mut remaining = input;
     let mut result = VecDeque::new();
     let mut file_header = "";
