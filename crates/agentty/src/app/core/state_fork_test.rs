@@ -35,7 +35,8 @@ async fn create_review_source_session_for_fork_test(app: &mut App) -> String {
         .expect("missing source session")
         .folder
         .clone();
-    std::fs::write(source_folder.join("README.md"), "dirty source worktree")
+    tokio::fs::write(source_folder.join("README.md"), "dirty source worktree")
+        .await
         .expect("failed to modify source worktree");
     crate::test_support::set_session_status_for_test(app, &source_session_id, Status::Review);
 

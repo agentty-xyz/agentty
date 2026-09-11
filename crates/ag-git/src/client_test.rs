@@ -557,11 +557,12 @@ async fn test_status_reads_preserve_index_with_stale_file_metadata() {
     );
     // Prove the fixture actually needs an index refresh when optional
     // writes are enabled, rather than merely reading an unchanged index.
-    let refresh = Command::new("git")
+    let refresh = tokio::process::Command::new("git")
         .args(["status", "--porcelain"])
         .env("GIT_OPTIONAL_LOCKS", "1")
         .current_dir(dir.path())
         .output()
+        .await
         .expect("failed to refresh index");
     assert!(refresh.status.success());
     assert_ne!(
@@ -735,10 +736,11 @@ async fn test_pull_rebase_targets_single_upstream_when_merge_targets_are_ambiguo
         &["config", "--add", "branch.main.merge", "refs/heads/feature"],
     );
 
-    let pull_without_explicit_target = Command::new("git")
+    let pull_without_explicit_target = tokio::process::Command::new("git")
         .args(["pull", "--rebase"])
         .current_dir(dir.path())
         .output()
+        .await
         .expect("failed to run pull --rebase");
 
     assert!(
@@ -788,10 +790,11 @@ async fn test_pull_rebase_targets_local_upstream_when_upstream_name_has_no_remot
         &["config", "--add", "branch.main.merge", "refs/heads/feature"],
     );
 
-    let pull_without_explicit_target = Command::new("git")
+    let pull_without_explicit_target = tokio::process::Command::new("git")
         .args(["pull", "--rebase"])
         .current_dir(dir.path())
         .output()
+        .await
         .expect("failed to run pull --rebase");
 
     assert!(

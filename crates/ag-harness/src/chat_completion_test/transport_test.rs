@@ -283,7 +283,7 @@ async fn retains_http_status_when_error_body_read_fails() {
     ));
     assert!(error.to_string().contains("error body read failed"));
     let source = std::error::Error::source(&error)
-        .and_then(|source| source.downcast_ref::<reqwest::Error>())
+        .and_then(<dyn std::error::Error>::downcast_ref::<reqwest::Error>)
         .expect("HTTP failure should retain its status-bearing source");
     assert_eq!(
         source.status(),

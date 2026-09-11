@@ -368,13 +368,16 @@ async fn archive_preserves_unicode_middle_and_cleans_up_on_drop() {
 async fn live_archive_is_excluded_from_git() {
     // Arrange
     let folder = tempfile::tempdir().expect("workspace");
-    let initialized = std::process::Command::new("git")
+    let initialized = tokio::process::Command::new("git")
         .args(["init", "--quiet", "--template="])
         .arg(folder.path())
         .output()
+        .await
         .expect("initialize fixture repository");
     assert!(initialized.status.success());
-    std::fs::write(folder.path().join("control.txt"), "visible").expect("control file");
+    tokio::fs::write(folder.path().join("control.txt"), "visible")
+        .await
+        .expect("control file");
 
     // Act
     let context = ReplayContext::prepare(
@@ -383,7 +386,7 @@ async fn live_archive_is_excluded_from_git() {
     )
     .await
     .expect("archive");
-    let status = std::process::Command::new("git")
+    let status = tokio::process::Command::new("git")
         .args([
             "-c",
             "core.excludesFile=/dev/null",
@@ -393,6 +396,7 @@ async fn live_archive_is_excluded_from_git() {
         ])
         .current_dir(folder.path())
         .output()
+        .await
         .expect("inspect fixture status");
 
     // Assert

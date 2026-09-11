@@ -10,13 +10,14 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use assert_cmd::cargo::cargo_bin;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Executor};
+use tokio::fs;
+use tokio::process::Command;
 
 use crate::common::{
     BuilderEnv, PINNED_CLOCK_ENV_VAR, PINNED_CLOCK_UNIX_SECONDS, PINNED_CLOCK_UTC_OFFSET_ENV_VAR,
@@ -46,36 +47,36 @@ const GIF_NAME: &str = "demo";
 #[ignore = "requires VHS and regenerates a marketing asset"]
 async fn generate_marketing_demo_gif() -> DemoResult {
     // Arrange
-    if Command::new("vhs").arg("--version").output().is_err() {
+    if Command::new("vhs").arg("--version").output().await.is_err() {
         return Ok(());
     }
 
     // Use a short, clean /tmp path so project rows and the footer path read
     // nicely in the final GIF (macOS tempdirs live under /var/folders/...).
-    let demo_root = make_fresh_demo_root()?;
-    let env = make_demo_env(&demo_root)?;
+    let demo_root = make_fresh_demo_root().await?;
+    let env = make_demo_env(&demo_root).await?;
 
-    install_scripted_claude_stub(&env)?;
-    install_scripted_codex_stub(&env)?;
-    install_agent_availability_stubs(&env)?;
-    symlink_agentty_into_stub_bin(&env)?;
+    install_scripted_claude_stub(&env).await?;
+    install_scripted_codex_stub(&env).await?;
+    install_agent_availability_stubs(&env).await?;
+    symlink_agentty_into_stub_bin(&env).await?;
 
-    let fake_project_paths = create_fake_project_dirs(&env)?;
+    let fake_project_paths = create_fake_project_dirs(&env).await?;
     // Agentty reads `current_dir()` which is canonicalized; seed using the
     // same canonical form the app will upsert itself.
-    let canonical_cwd = env.workdir.canonicalize()?;
+    let canonical_cwd = fs::canonicalize(&env.workdir).await?;
     seed_database(&env, &fake_project_paths, &canonical_cwd).await?;
 
     let output_dir = repo_demo_dir();
-    std::fs::create_dir_all(&output_dir)?;
+    fs::create_dir_all(&output_dir).await?;
     let gif_path = output_dir.join(format!("{GIF_NAME}.gif"));
 
     let tape = build_demo_tape(&env, &gif_path);
     let tape_path = demo_root.join("demo.tape");
-    std::fs::write(&tape_path, &tape)?;
+    fs::write(&tape_path, &tape).await?;
 
     // Act
-    let output = Command::new("vhs").arg(&tape_path).output()?;
+    let output = Command::new("vhs").arg(&tape_path).output().await?;
 
     // Assert
     if !output.status.success() {
@@ -86,27 +87,27 @@ async fn generate_marketing_demo_gif() -> DemoResult {
         )
         .into());
     }
-    if !gif_path.exists() {
+    if !fs::try_exists(&gif_path).await? {
         return Err(format!("demo gif not produced at {}", gif_path.display()).into());
     }
 
     // Best-effort cleanup of the scratch directory.
-    let _ = std::fs::remove_dir_all(&demo_root);
+    let _ = fs::remove_dir_all(&demo_root).await;
 
     Ok(())
 }
 
 /// Returns a fresh `/tmp/agentty-demo-<nanos>/` directory so paths shown in
 /// the GIF are short and do not leak the operator's personal temp path.
-fn make_fresh_demo_root() -> std::io::Result<PathBuf> {
+async fn make_fresh_demo_root() -> std::io::Result<PathBuf> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     let root = PathBuf::from(format!("/tmp/agentty-demo-{nanos}"));
-    if root.exists() {
-        std::fs::remove_dir_all(&root)?;
+    if fs::try_exists(&root).await? {
+        fs::remove_dir_all(&root).await?;
     }
-    std::fs::create_dir_all(&root)?;
+    fs::create_dir_all(&root).await?;
 
     Ok(root)
 }
@@ -114,16 +115,16 @@ fn make_fresh_demo_root() -> std::io::Result<PathBuf> {
 /// Builds a `BuilderEnv` whose workdir is named `opencloudtool` so the project
 /// row and path shown in the demo read cleanly while discovery uses a
 /// deterministic isolated home directory.
-fn make_demo_env(demo_root: &Path) -> std::io::Result<BuilderEnv> {
+async fn make_demo_env(demo_root: &Path) -> std::io::Result<BuilderEnv> {
     let agentty_root = demo_root.join("agentty_root");
     let home_dir = demo_root.join("home");
     let workdir = demo_root.join("opencloudtool");
     let stub_bin = demo_root.join("stub-bin");
 
-    std::fs::create_dir_all(&agentty_root)?;
-    std::fs::create_dir_all(&home_dir)?;
-    std::fs::create_dir_all(&workdir)?;
-    std::fs::create_dir_all(&stub_bin)?;
+    fs::create_dir_all(&agentty_root).await?;
+    fs::create_dir_all(&home_dir).await?;
+    fs::create_dir_all(&workdir).await?;
+    fs::create_dir_all(&stub_bin).await?;
 
     let env = BuilderEnv {
         agentty_root,
@@ -131,14 +132,20 @@ fn make_demo_env(demo_root: &Path) -> std::io::Result<BuilderEnv> {
         stub_bin,
         workdir,
     };
-    env.init_git()?;
+    // The shared fixture initializer is synchronous; keep its Git commands off
+    // the async worker without duplicating the initialization sequence here.
+    tokio::task::spawn_blocking(move || {
+        env.init_git()?;
 
-    Ok(env)
+        Ok(env)
+    })
+    .await
+    .map_err(std::io::Error::other)?
 }
 
 /// Creates the `agentty` git repository shown below the current project in
 /// the opening Projects list.
-fn create_fake_project_dirs(env: &BuilderEnv) -> std::io::Result<Vec<PathBuf>> {
+async fn create_fake_project_dirs(env: &BuilderEnv) -> std::io::Result<Vec<PathBuf>> {
     let demo_root = env
         .workdir
         .parent()
@@ -148,7 +155,8 @@ fn create_fake_project_dirs(env: &BuilderEnv) -> std::io::Result<Vec<PathBuf>> {
         .args(["clone", "-q"])
         .arg(&env.workdir)
         .arg(&path)
-        .status()?;
+        .status()
+        .await?;
     if !git_clone.success() {
         return Err(std::io::Error::other(
             "failed to clone demo agentty project",
@@ -161,7 +169,7 @@ fn create_fake_project_dirs(env: &BuilderEnv) -> std::io::Result<Vec<PathBuf>> {
 /// Overwrites the `claude` stub in `stub_bin` with a script that ignores its
 /// CLI args and stdin, pauses briefly, then emits Claude's `stream-json`
 /// protocol output with a canned reply.
-fn install_scripted_claude_stub(env: &BuilderEnv) -> std::io::Result<()> {
+async fn install_scripted_claude_stub(env: &BuilderEnv) -> std::io::Result<()> {
     let claude_path = env.stub_bin.join("claude");
     // Reply text is hard-coded to match session 1's stacked-commits prompt.
     // Session 2 in the tape never finishes, so the same canned output never
@@ -221,10 +229,10 @@ sleep 1
 printf '%s\n' '{result_event}'
 "#
     );
-    std::fs::write(&claude_path, &script)?;
+    fs::write(&claude_path, &script).await?;
     #[cfg(unix)]
     {
-        std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+        fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750)).await?;
     }
 
     Ok(())
@@ -232,7 +240,7 @@ printf '%s\n' '{result_event}'
 
 /// Installs a scripted Codex app-server stub that completes bootstrap and
 /// leaves the demo's second turn running until VHS exits.
-fn install_scripted_codex_stub(env: &BuilderEnv) -> std::io::Result<()> {
+async fn install_scripted_codex_stub(env: &BuilderEnv) -> std::io::Result<()> {
     let codex_path = env.stub_bin.join("codex");
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then
@@ -266,10 +274,10 @@ while IFS= read -r request; do
     esac
 done
 "#;
-    std::fs::write(&codex_path, script)?;
+    fs::write(&codex_path, script).await?;
     #[cfg(unix)]
     {
-        std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o750))?;
+        fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o750)).await?;
     }
 
     Ok(())
@@ -283,15 +291,16 @@ done
 /// stubs makes every agent kind — Antigravity, Claude, and Codex — appear in
 /// the `/model` agent picker. The stub handles startup's update and version
 /// probes but is never used for a session.
-fn install_agent_availability_stubs(env: &BuilderEnv) -> std::io::Result<()> {
+async fn install_agent_availability_stubs(env: &BuilderEnv) -> std::io::Result<()> {
     let stub_path = env.stub_bin.join("agy");
-    std::fs::write(
+    fs::write(
         &stub_path,
         "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'agy 0.42.0'; fi\nexit 0\n",
-    )?;
+    )
+    .await?;
     #[cfg(unix)]
     {
-        std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o750))?;
+        fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o750)).await?;
     }
 
     Ok(())
@@ -300,15 +309,15 @@ fn install_agent_availability_stubs(env: &BuilderEnv) -> std::io::Result<()> {
 /// Symlinks the compiled `agentty` binary into `stub_bin` so that typing
 /// `agentty` at the shell (inside the VHS recording) resolves to the real
 /// binary through `PATH`.
-fn symlink_agentty_into_stub_bin(env: &BuilderEnv) -> std::io::Result<()> {
+async fn symlink_agentty_into_stub_bin(env: &BuilderEnv) -> std::io::Result<()> {
     let real_binary = cargo_bin("agentty");
     let link_path = env.stub_bin.join("agentty");
-    if link_path.exists() {
-        std::fs::remove_file(&link_path)?;
+    if fs::try_exists(&link_path).await? {
+        fs::remove_file(&link_path).await?;
     }
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(&real_binary, &link_path)?;
+        fs::symlink(&real_binary, &link_path).await?;
     }
 
     Ok(())
@@ -461,7 +470,7 @@ async fn seed_pre_existing_sessions(
         let created = now_seconds - age;
         if !matches!(*status, "Done" | "Canceled") {
             let stub_worktree = wt_base.join(&id[..8]);
-            std::fs::create_dir_all(&stub_worktree)?;
+            fs::create_dir_all(&stub_worktree).await?;
         }
         let query = sqlx::query!(
             r"

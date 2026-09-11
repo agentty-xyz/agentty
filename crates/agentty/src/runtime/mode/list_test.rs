@@ -197,15 +197,17 @@ async fn test_handle_add_key_opens_session_creation_overlay() {
 async fn test_handle_add_key_warns_before_options_when_pre_commit_hook_is_missing() {
     // Arrange
     let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
-    std::fs::write(
+    tokio::fs::write(
         base_dir.path().join(".pre-commit-config.yaml"),
         "repos: []\n",
     )
+    .await
     .expect("failed to write pre-commit configuration");
-    let git_config_output = std::process::Command::new("git")
+    let git_config_output = tokio::process::Command::new("git")
         .args(["config", "core.hooksPath", ".missing-hooks"])
         .current_dir(base_dir.path())
         .output()
+        .await
         .expect("failed to configure missing hooks path");
     assert!(git_config_output.status.success());
     app.tabs.set(Tab::Sessions);
