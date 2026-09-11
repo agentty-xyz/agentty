@@ -23,7 +23,7 @@ use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection, 
 use crate::domain::file_entry::FileEntry;
 
 #[tokio::test]
-async fn oversized_review_discloses_summary_coverage_and_preserves_schema() {
+async fn oversized_review_batches_original_diff_and_discloses_summarized_history() {
     // Arrange
     let mut client = agent::MockOneShotClient::new();
     client.expect_submit().returning(|request| {
@@ -959,7 +959,8 @@ fn review_output_text_formats_structured_agent_response() {
     );
 
     // Act
-    let review_text = TaskService::review_output_text(&agent_response)
+    let review_text = crate::app::review_prompt::parse_response(&agent_response)
+        .map(|review| review.to_markdown())
         .expect("structured output should be accepted");
 
     // Assert
@@ -972,21 +973,18 @@ fn review_output_text_formats_structured_agent_response() {
 
 #[test]
 /// Verifies whitespace-only review output is rejected as
-/// [`AppError::Workflow`] so users see a clear error instead of a blank
+/// a diagnostic so users see a clear error instead of a blank
 /// review pane.
 fn review_output_text_rejects_blank_agent_response_text() {
     // Arrange
     let agent_response = AgentResponse::plain(" \n\t ");
 
     // Act
-    let result = TaskService::review_output_text(&agent_response);
+    let result = crate::app::review_prompt::parse_response(&agent_response)
+        .map(|review| review.to_markdown());
 
     // Assert
     let error = result.expect_err("blank output should be rejected");
-    assert!(
-        matches!(error, AppError::Workflow(_)),
-        "expected AppError::Workflow, got: {error:?}"
-    );
     assert_eq!(error.to_string(), "Review assist returned empty output");
 }
 
@@ -996,11 +994,11 @@ fn review_output_text_rejects_unstructured_agent_response() {
     let agent_response = AgentResponse::plain("Review looks good.");
 
     // Act
-    let result = TaskService::review_output_text(&agent_response);
+    let result = crate::app::review_prompt::parse_response(&agent_response)
+        .map(|review| review.to_markdown());
 
     // Assert
     let error = result.expect_err("unstructured output should be rejected");
-    assert!(matches!(error, AppError::Workflow(_)));
     assert!(
         error
             .to_string()
@@ -1209,7 +1207,8 @@ fn test_structured_agent_response_preserves_focused_review_answer() {
     // Act
     let agent_response =
         parse_agent_response_strict(structured_json).expect("structured response should parse");
-    let review_text = TaskService::review_output_text(&agent_response)
+    let review_text = crate::app::review_prompt::parse_response(&agent_response)
+        .map(|review| review.to_markdown())
         .expect("focused review answer should parse");
 
     // Assert

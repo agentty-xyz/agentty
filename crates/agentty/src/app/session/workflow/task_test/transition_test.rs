@@ -550,15 +550,17 @@ async fn test_commit_session_changes_falls_back_to_files_and_chat() {
             .times(1)
             .returning(|_| Box::pin(async { Ok("abc123".into()) }));
         let mut client = MockOneShotClient::new();
-        let mut sequence = mockall::Sequence::new();
         client
             .expect_submit()
-            .times(1)
-            .in_sequence(&mut sequence)
+            .times(if oversized_diff { 2..=64 } else { 1..=1 })
+            .withf(|request| request.prompt.contains("DIFF_ONLY_SECRET"))
             .returning(move |request| {
-                assert!(request.prompt.contains("DIFF_ONLY_SECRET"));
                 if oversized_diff {
-                    assert!(request.prompt.starts_with("Summarize"));
+                    assert!(request.prompt.contains("Summarize this fragment"));
+                    request
+                        .provider_call_budget
+                        .expect("shared budget")
+                        .consume()?;
                     return Ok(one_shot_submission("", 0, 0));
                 }
                 Err(agent::OneShotError::new("Input exceeds the maximum length"))
@@ -566,11 +568,10 @@ async fn test_commit_session_changes_falls_back_to_files_and_chat() {
         client
             .expect_submit()
             .times(1)
-            .in_sequence(&mut sequence)
+            .withf(|request| request.prompt.contains("Use only the changed file list"))
             .returning(|request| {
                 assert_eq!(request.permission_mode, agent::PermissionMode::ReadOnly);
                 assert_eq!(request.reasoning_level, ReasoningLevel::Low);
-                assert!(request.prompt.contains("Use only the changed file list"));
                 assert!(
                     request
                         .prompt

@@ -8,6 +8,11 @@ The fences only delimit input. Input marked as summarized omits original detail.
 relevant source before asserting a finding; do not claim complete changed-line coverage
 from summaries.
 
+Large diffs may arrive as separate batches of original diff text. A batch can continue a
+file or hunk; inspect the relevant source and diff headers before assigning line
+references. Scope findings to the supplied changes and keep project impact concise so a
+later cross-file pass can check interactions.
+
 Execution constraints (mandatory):
 
 - Use read-only inspection; do not create, modify, rename, or delete files.
