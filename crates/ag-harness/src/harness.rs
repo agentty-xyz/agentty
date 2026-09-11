@@ -28,6 +28,7 @@ use crate::turn::{
     sanitize_report_text, sanitized_completion_metadata,
 };
 use crate::write::{WriteError, WriteTool};
+use crate::write_journal::{WriteJournal, WriteRecord, WriteRecordRow};
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
 const DEFAULT_MAX_TOOL_CALLS: usize = 8;
@@ -47,6 +48,20 @@ impl Session<'_> {
     /// Returns the stable application-provided session identifier.
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Returns durable write intents and recorded outcomes, including failed
+    /// turns.
+    ///
+    /// Records survive history eviction and reopening. This reads stored
+    /// outcomes without inspecting or modifying the repository's current
+    /// files.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] if journal loading fails.
+    pub async fn writes(&self) -> Result<Vec<WriteRecord>, SessionError> {
+        WriteRecordRow::load(self.database.pool(), &self.id).await
     }
 
     /// Sends one prompt and durably records its lifecycle and messages.
@@ -98,6 +113,7 @@ impl Session<'_> {
         let retained_messages = messages.len();
         let mut request = ModelRequest::with_history(messages, prompt, self.schema.clone());
         request.set_provider_session_id(self.provider_session_id.clone());
+        let journal = guard.write_journal();
         let result = tokio::select! {
             biased;
             error = guard.ownership_failure() => {
@@ -105,7 +121,7 @@ impl Session<'_> {
 
                 return Err(error);
             }
-            result = self.harness.run_turn(request, turn_id) => result,
+            result = self.harness.run_turn(request, turn_id, Some(journal)) => result,
         };
         let (outcome, mut messages, provider_session_id) = match result {
             Ok(result) => result,
@@ -352,7 +368,7 @@ impl Harness {
         let request = ModelRequest::new(prompt, schema);
         let turn = self.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
-        let result = self.run_turn(request, turn_id).await;
+        let result = self.run_turn(request, turn_id, None).await;
 
         if let Some(turn) = turn {
             match &result {
@@ -471,9 +487,10 @@ impl Harness {
         &self,
         request: ModelRequest,
         turn_id: Option<LifecycleId>,
+        journal: Option<WriteJournal>,
     ) -> Result<(TurnOutcome, Vec<ModelMessage>, Option<String>), TurnError> {
         let started_at = Instant::now();
-        let (mut request, read_tool, write_tool) = self.prepare_request(request)?;
+        let (mut request, read_tool, write_tool) = self.prepare_request(request, journal)?;
         let mut completed_tool_calls = 0_usize;
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
@@ -557,6 +574,7 @@ impl Harness {
     fn prepare_request(
         &self,
         mut request: ModelRequest,
+        journal: Option<WriteJournal>,
     ) -> Result<(ModelRequest, Option<ReadTool>, Option<WriteTool>), TurnError> {
         if self.lifecycle.is_enabled() {
             request.mark_lifecycle_observed();
@@ -585,7 +603,11 @@ impl Harness {
         });
         let write_tool = write_allowed.then(|| {
             request = request.clone().with_tool(ToolDefinition::write());
-            WriteTool::new(self.file_system.clone(), repository.root().to_path_buf())
+            let mut tool =
+                WriteTool::new(self.file_system.clone(), repository.root().to_path_buf());
+            tool.journal = journal;
+
+            tool
         });
 
         Ok((request, read_tool, write_tool))
@@ -761,7 +783,7 @@ impl Harness {
         if let Some(tool_lifecycle) = tool_lifecycle.as_mut() {
             tool_lifecycle.started();
         }
-        let operation = execute_tool(execution);
+        let operation = execute_tool(execution, call.id());
         let result = match tool_lifecycle.as_ref() {
             Some(tool_lifecycle) => tool_lifecycle.scope(operation).await,
             None => operation.await,
@@ -812,7 +834,10 @@ struct ModelAttemptError {
     error: ModelError,
 }
 
-async fn execute_tool(execution: ToolExecution<'_>) -> Result<(String, ToolActivity), TurnError> {
+async fn execute_tool(
+    execution: ToolExecution<'_>,
+    call_id: &str,
+) -> Result<(String, ToolActivity), TurnError> {
     let started_at = Instant::now();
 
     match execution {
@@ -820,7 +845,7 @@ async fn execute_tool(execution: ToolExecution<'_>) -> Result<(String, ToolActiv
             execute_read_tool(read_tool, arguments, started_at).await
         }
         ToolExecution::Write(write_tool, arguments) => {
-            execute_write_tool(write_tool, arguments, started_at).await
+            execute_write_tool(write_tool, arguments, started_at, call_id).await
         }
     }
 }
@@ -954,8 +979,9 @@ async fn execute_write_tool(
     write_tool: &WriteTool,
     arguments: &WriteArguments,
     started_at: Instant,
+    call_id: &str,
 ) -> Result<(String, ToolActivity), TurnError> {
-    match write_tool.execute(arguments).await {
+    match write_tool.execute(arguments, call_id).await {
         Ok(output) => {
             let activity = ToolActivity::Write {
                 bytes_written: output.bytes_written(),

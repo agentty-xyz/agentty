@@ -37,6 +37,14 @@ messages, tool calls, and tool results. Failed and interrupted turns remain visi
 the database but are not replayed. Different sessions can run concurrently; one session
 accepts only one active turn at a time.
 
+Session writes have a separate durable journal. After a failed send or session reopen,
+`session.writes().await?` returns write intents and recorded `pending`, `applied`, or
+`failed` outcomes, including writes from turns evicted from replay history. Records
+include the tool-call identifier, native repository root, relative path, and SHA-256
+fingerprints of expected and intended content. Inspection reads stored outcomes; a
+`pending` or `failed` outcome does not establish the file's current contents. `run_once`
+does not create this journal.
+
 The library does not choose a database location. Configure it once with
 `Harness::database()`. The companion CLI defaults to `~/.ag-harness/db/harness.db`;
 override that with `AG_HARNESS_ROOT` or `--database`.

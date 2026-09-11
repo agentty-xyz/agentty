@@ -5,16 +5,18 @@
 mod repository;
 
 use std::error::Error;
+use std::ffi::OsString;
 use std::io::{self, Cursor};
+use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_harness::{
     CompletionMetadata, CompletionUsage, FileSystem, Harness, LifecycleEventKind, LifecycleMetrics,
-    LifecycleObserverSet, LifecycleTraceObserver, Model, ModelCompletion, ModelConfiguration,
-    ModelError, ModelMessage, ModelMetadata, ModelProvider, ModelRequest, ModelResponse,
-    ModelResponseType, OutputSchema, OutputSchemaError, Repository, RepositoryError, SessionError,
-    SessionInfo, Tool, ToolCall, TurnError,
+    LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, Model, ModelCompletion,
+    ModelConfiguration, ModelError, ModelMessage, ModelMetadata, ModelProvider, ModelRequest,
+    ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError, Repository, RepositoryError,
+    SessionError, SessionInfo, Tool, ToolCall, TurnError, WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -625,6 +627,117 @@ async fn external_observer_set_fans_out_lifecycle_events() -> Result<(), Box<dyn
         .expect("second event recorder should not be poisoned");
     assert!(!first_events.is_empty());
     assert_eq!(*first_events, *second_events);
+
+    Ok(())
+}
+
+struct FailingAfterWriteModel;
+
+#[async_trait]
+impl Model for FailingAfterWriteModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        match request.messages().last() {
+            Some(ModelMessage::User(prompt)) if prompt == "write" => Ok(
+                ModelCompletion::from_response(ModelResponse::ToolCall(ToolCall::from_json(
+                    "write-name".to_string(), "write",
+                    &json!({"path": "name.txt", "patch": "--- /dev/null\n+++ b/name.txt\n@@ -0,0 +1 @@\n+Ada\n"}).to_string(), None,
+                )?)),
+            ),
+            _ => Err(ModelError::InvalidResponse),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct NativeRootFileSystem {
+    native_root: PathBuf,
+    physical_root: PathBuf,
+}
+
+#[async_trait]
+impl FileSystem for NativeRootFileSystem {
+    async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        assert_eq!(path, self.physical_root);
+
+        Ok(self.native_root.clone())
+    }
+
+    async fn open_beneath(
+        &self,
+        root: &Path,
+        path: &Path,
+    ) -> io::Result<Box<dyn AsyncRead + Send + Unpin>> {
+        assert_eq!(root, self.native_root);
+
+        LocalFileSystem
+            .open_beneath(&self.physical_root, path)
+            .await
+    }
+
+    async fn replace_beneath(
+        &self,
+        root: &Path,
+        path: &Path,
+        expected: Option<Vec<u8>>,
+        content: Vec<u8>,
+    ) -> io::Result<()> {
+        assert_eq!(root, self.native_root);
+
+        LocalFileSystem
+            .replace_beneath(&self.physical_root, path, expected, content)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn applied_write_survives_model_failure_and_session_reopen() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?;
+    let native_root = root.join(OsString::from_vec(b"host-private-\xff".to_vec()));
+    let file_system = NativeRootFileSystem {
+        native_root: native_root.clone(),
+        physical_root: root.clone(),
+    };
+    let repository = repository::repository_with_host_git(&root);
+    let harness = Harness::new(FailingAfterWriteModel)
+        .database(directory.path().join("harness.db"))
+        .repository(repository)
+        .file_system(file_system)
+        .allow(Tool::Write);
+    let mut session = harness
+        .session("write-failure", request()?.schema().clone())
+        .create()
+        .await?;
+
+    // Act
+    let error = session
+        .send("write")
+        .await
+        .expect_err("model must fail after writing");
+    let before = session.writes().await?;
+    drop(session);
+    drop(harness);
+    // Inspection works without the original filesystem or a configured
+    // repository.
+    let inspector = Harness::new(ExternalModel).database(directory.path().join("harness.db"));
+    let reopened = inspector.resume("write-failure").await?;
+    let after = reopened.writes().await?;
+
+    // Assert
+    assert!(matches!(
+        error,
+        SessionError::Turn(TurnError::Model(ModelError::InvalidResponse))
+    ));
+    assert_eq!(std::fs::read(root.join("name.txt"))?, b"Ada\n");
+    assert_eq!(before, after);
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].status, WriteStatus::Applied);
+    assert_eq!(after[0].repository_root, native_root);
+    assert_eq!(after[0].path, "name.txt");
+    assert_eq!(after[0].call_id, "write-name");
+    assert_eq!(after[0].expected_hash, None);
+    assert_eq!(after[0].resulting_hash.len(), 64);
 
     Ok(())
 }

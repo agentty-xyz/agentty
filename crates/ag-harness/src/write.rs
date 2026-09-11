@@ -9,6 +9,7 @@ use tokio::io::AsyncReadExt as _;
 use crate::file_system::FileSystem;
 use crate::schema_contract;
 use crate::tool::WriteArguments;
+use crate::write_journal::WriteJournal;
 
 const BYTE_ORDER_MARK: &[u8] = b"\xef\xbb\xbf";
 const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
@@ -108,12 +109,13 @@ pub enum WriteError {
         /// Bounded explanation of the unsupported operation.
         reason: String,
     },
-    /// Atomically replacing the target failed.
+    /// Replacing the target or recording its durable write intent/outcome
+    /// failed.
     #[error("failed to write target `{path}`: {source}")]
     WriteTarget {
         /// Repository-relative target path.
         path: String,
-        /// Underlying filesystem failure.
+        /// Underlying filesystem or journal persistence failure.
         #[source]
         source: io::Error,
     },
@@ -153,6 +155,7 @@ impl WriteError {
 }
 
 pub(crate) struct WriteTool {
+    pub(crate) journal: Option<WriteJournal>,
     file_system: Arc<dyn FileSystem>,
     repository_root: PathBuf,
 }
@@ -160,6 +163,7 @@ pub(crate) struct WriteTool {
 impl WriteTool {
     pub(crate) fn new(file_system: Arc<dyn FileSystem>, repository_root: PathBuf) -> Self {
         Self {
+            journal: None,
             file_system,
             repository_root,
         }
@@ -168,6 +172,7 @@ impl WriteTool {
     pub(crate) async fn execute(
         &self,
         arguments: &WriteArguments,
+        call_id: &str,
     ) -> Result<WriteOutput, WriteError> {
         let root = self
             .file_system
@@ -191,13 +196,41 @@ impl WriteTool {
             });
         }
         let bytes_written = result.len();
-        self.file_system
+        let intent = match &self.journal {
+            Some(journal) => Some(
+                journal
+                    .intent(
+                        call_id,
+                        &root,
+                        arguments.path(),
+                        current.as_deref(),
+                        &result,
+                    )
+                    .await
+                    .map_err(|source| WriteError::WriteTarget {
+                        path: arguments.path().to_string(),
+                        source: io::Error::other(source),
+                    })?,
+            ),
+            None => None,
+        };
+        let replacement = self
+            .file_system
             .replace_beneath(&root, Path::new(arguments.path()), current, result)
-            .await
-            .map_err(|source| WriteError::WriteTarget {
-                path: arguments.path().to_string(),
-                source,
-            })?;
+            .await;
+        if let (Some(journal), Some(intent)) = (&self.journal, intent) {
+            journal
+                .finish(intent, replacement.is_ok())
+                .await
+                .map_err(|source| WriteError::WriteTarget {
+                    path: arguments.path().to_string(),
+                    source: io::Error::other(source),
+                })?;
+        }
+        replacement.map_err(|source| WriteError::WriteTarget {
+            path: arguments.path().to_string(),
+            source,
+        })?;
 
         Ok(WriteOutput::new(
             arguments.path().to_string(),

@@ -8,3 +8,5 @@ mod read;
 mod session;
 #[path = "harness_test/support_test.rs"]
 mod support;
+#[path = "harness_test/write_journal_test.rs"]
+mod write_journal;

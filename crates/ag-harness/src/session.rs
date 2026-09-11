@@ -18,6 +18,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
+use crate::write_journal::WriteJournal;
 use crate::{OutputSchema, OutputSchemaError, TurnError};
 
 pub(crate) const TURN_LEASE_SECONDS: i64 = 300;
@@ -613,6 +614,10 @@ WHERE id = ?
         Ok(())
     }
 
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     async fn recover_stale_turns(&self, session_id: &str) -> Result<(), SessionError> {
         let now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = self
@@ -717,7 +722,8 @@ pub enum SessionError {
     /// Durable session operations require a configured SQLite database.
     #[error("durable sessions require Harness::database(path)")]
     StorageRequired,
-    /// The model turn failed before it could be persisted.
+    /// The model turn failed; durable write records remain available through
+    /// [`crate::Session::writes`].
     #[error(transparent)]
     Turn(#[from] TurnError),
     /// A model turn and the attempt to persist its failure both failed.
@@ -818,6 +824,16 @@ pub(crate) struct TurnGuard {
 }
 
 impl TurnGuard {
+    pub(crate) fn write_journal(&self) -> WriteJournal {
+        WriteJournal {
+            owner_token: self.owner.token.clone(),
+            pool: self.pool.clone(),
+            session_id: self.owner.session_id.clone(),
+            timestamp_source: Arc::clone(&self.timestamp_source),
+            turn_position: self.owner.turn_position,
+        }
+    }
+
     fn new(database: &Database, owner: TurnOwner) -> Self {
         Self {
             armed: true,
@@ -1112,7 +1128,7 @@ fn connect_options(path: &Path) -> SqliteConnectOptions {
         .create_if_missing(true)
         .busy_timeout(DB_BUSY_TIMEOUT)
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
+        .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
 }
 

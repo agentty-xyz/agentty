@@ -78,6 +78,22 @@ it can continue model or tool work. If a turn fails and recording that failure a
 fails, `SessionError` retains both errors instead of replacing the original turn
 failure.
 
+Validated session writes commit a separate journal intent before filesystem replacement,
+then record its outcome before returning to the model. SQLite uses `FULL` synchronous
+commits so the intent is synced before file mutation. The intent requires the running
+turn's owner token and an unexpired lease. It retains the turn and tool-call identity,
+canonical repository root as native bytes, relative path, and SHA-256 fingerprints of
+expected and intended content; missing expected content denotes a create.
+
+Intent persistence failure prevents replacement. Outcome persistence failure stops the
+turn and leaves the durable intent `pending`, even if the file was changed.
+`Session::writes()` exposes these records after errors and reopening, independently of
+completed conversation history and its eviction budget. It returns stored outcomes
+without reading current files: `applied` records filesystem success, `failed` records a
+filesystem error, and `pending` means no outcome was recorded. Native roots remain
+lossless for host inspection, including non-UTF-8 Unix paths. Stateless `run_once` calls
+continue without a journal.
+
 ## Resume and provider fallback
 
 On resume, the harness validates the stored model identity and restores completed
