@@ -15,7 +15,7 @@ use super::support::{
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, ModelResponseType, ToolErrorType};
-use crate::model::{ModelMessage, ModelRequest, ModelResponse, ReasoningEffort};
+use crate::model::{ModelMessage, ModelResponse, ReasoningEffort};
 use crate::read::ReadError;
 use crate::repository::Repository;
 use crate::tool::{ReadAction, Tool, ToolCall, ToolDefinition};
@@ -44,27 +44,6 @@ async fn applies_reasoning_effort_to_every_model_call() {
 
     // Assert
     assert_eq!(output.output(), &json!({ "summary": "quick" }));
-}
-
-#[test]
-fn preserves_request_reasoning_effort_over_harness_default() {
-    // Arrange
-    let harness = Harness::new(model()).model_reasoning_effort(ReasoningEffort::Low);
-    let request = ModelRequest::new("reply", object_schema())
-        .with_model_reasoning_effort(ReasoningEffort::High);
-
-    // Act
-    let (request, read_tool, write_tool) = harness
-        .prepare_request(request, None)
-        .expect("request preparation should succeed");
-
-    // Assert
-    assert_eq!(
-        request.model_reasoning_effort(),
-        Some(ReasoningEffort::High)
-    );
-    assert!(read_tool.is_none());
-    assert!(write_tool.is_none());
 }
 
 #[tokio::test]

@@ -86,7 +86,7 @@ pub(super) fn turn(prompt: &str, answer: &str) -> Vec<ModelMessage> {
 
 pub(super) async fn complete_native_turn(database: &Database, provider_session_id: &str) {
     let mut acquired = database
-        .begin_turn("session-a", "first")
+        .begin_turn("session-a", "first", &turn_options())
         .await
         .expect("turn should begin");
     database
@@ -388,4 +388,12 @@ impl ReservationObserver for ReservationCommitControl {
             std::future::pending::<()>().await;
         }
     }
+}
+
+pub(super) fn turn_options() -> crate::TurnOptions {
+    crate::TurnOptions::new(
+        schema(),
+        crate::ToolPolicy::default(),
+        crate::TurnLimits::default(),
+    )
 }

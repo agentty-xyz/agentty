@@ -16,16 +16,20 @@ use crate::session::{Database, NewSession, SessionError, TurnGuard};
 use crate::tool::WriteArguments;
 use crate::write::WriteTool;
 use crate::write_journal::{WriteRecord, WriteRecordRow, WriteStatus, content_hash};
-use crate::{ModelError, OutputSchema, TurnError, WriteError};
+use crate::{ModelError, OutputSchema, ToolPolicy, TurnError, TurnLimits, TurnOptions, WriteError};
 
 async fn fixture() -> (Database, TurnGuard) {
     let database = Database::open_in_memory().await.expect("database");
     let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
+    let options = TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
     database
         .create_session(&NewSession::new("session", schema), None, 4096)
         .await
         .expect("session");
-    let acquired = database.begin_turn("session", "write").await.expect("turn");
+    let acquired = database
+        .begin_turn("session", "write", &options)
+        .await
+        .expect("turn");
 
     (database, acquired.guard)
 }

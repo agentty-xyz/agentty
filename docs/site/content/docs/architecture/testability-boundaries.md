@@ -90,7 +90,11 @@ deterministic in unit tests. The runtime also accepts `Terminal<B: Backend>` via
 Persistent `ag-harness` sessions inject a timestamp source and a reservation observer.
 The observer marks the boundary after SQLite commits a turn reservation, allowing tests
 to exercise cancellation at that point without conditional production control flow. Unit
-suites and their fixtures live in separate test files.
+suites and their fixtures live in separate test files. Shared-engine tests compare
+provider requests across durable and ephemeral execution. Persistence tests cover
+options snapshots, legacy reads, and continuation invalidation against canonical
+configuration; terminal lifecycle tests retain the persistence-before-completion
+boundary.
 
 The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
 private. Application workflows that submit isolated utility prompts inject
