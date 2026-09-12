@@ -131,3 +131,49 @@ session state. Durable turn durations include acquisition and persistence. Sessi
 coordination or persistence failures emit `TurnFailed` with `session_error`; model or
 tool failures retain their original classification even if recording the failure also
 fails. Dropping either operation emits cancellation once.
+
+## Next iterations
+
+1. **Shared turn engine and options**
+
+   Move output schemas and tool permissions to per-turn options used by both durable and
+   one-shot execution.
+
+1. **Owned sessions and stores**
+
+   Add owned session handles, pluggable memory and SQLite stores, and host turn IDs for
+   idempotent recovery.
+
+1. **Model switching**
+
+   Resolve models through a registry and switch a durable session without discarding its
+   normalized history.
+
+1. **Rich input and images**
+
+   Replace text-only user messages with ordered, bounded text and image content blocks.
+
+1. **Sandboxed Bash**
+
+   Add a cancellable command tool with fixed workspace scope, timeouts, output limits,
+   and explicit network policy.
+
+1. **Context management**
+
+   Preserve the durable log while projecting model-aware recent history and structured
+   compaction checkpoints.
+
+1. **Repository comparison policy**
+
+   Replace the fixed `main` comparison with a host-validated base commit OID for each
+   turn.
+
+1. **Agentty runtime adapters**
+
+   Implement durable `AgentChannel` and ephemeral `OneShotClient` adapters over the
+   shared turn engine.
+
+1. **Feature-gated product surface**
+
+   Add off-by-default Harness selection, capability checks, and deterministic Agentty
+   end-to-end coverage.
