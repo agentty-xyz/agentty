@@ -55,7 +55,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
 
     // Act
     let (request, read_tool, write_tool) = harness
-        .prepare_request(request)
+        .prepare_request(request, None)
         .expect("request preparation should succeed");
 
     // Assert
