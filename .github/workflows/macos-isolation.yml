@@ -1,0 +1,93 @@
+name: Native macOS Isolation
+
+on:
+  pull_request:
+  workflow_dispatch:
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Select native validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      required: ${{ steps.paths.outputs.required }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select affected paths
+        id: paths
+        shell: python
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          import os
+          import subprocess
+
+          required = True
+          if os.environ["EVENT_NAME"] == "pull_request":
+              paths = subprocess.check_output([
+                  "git", "diff", "--name-only", "--no-renames", "-z",
+                  os.environ["BASE_SHA"] + "..." + os.environ["HEAD_SHA"], "--",
+              ]).split(b"\0")
+              exact = {
+                  b"Cargo.toml", b"Cargo.lock", b"rust-toolchain.toml",
+                  b".pre-commit-config.yaml", b".github/workflows/macos-isolation.yml",
+              }
+              prefixes = (
+                  b"crates/ag-harness/", b".cargo/", b".config/",
+                  b".github/actions/setup-rust-prek/",
+              )
+              required = any(path in exact or path.startswith(prefixes) for path in paths)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"required={str(required).lower()}\n")
+
+  native-tests:
+    name: Native macOS probes
+    needs: changes
+    if: ${{ needs.changes.outputs.required == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Rust and prek
+        uses: $/.github/actions/setup-rust-prek
+      - name: Native isolation tests
+        run: prek run test-ag-harness-macos-isolation --all-files --hook-stage manual
+
+  native-isolation:
+    name: Seatbelt positive and negative controls
+    needs: [changes, native-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require successful validation or an intentional skip
+        shell: python
+        env:
+          SELECTION_RESULT: ${{ needs.changes.result }}
+          REQUIRED: ${{ needs.changes.outputs.required }}
+          TEST_RESULT: ${{ needs.native-tests.result }}
+        run: |
+          import os
+          import sys
+
+          selected = os.environ["SELECTION_RESULT"] == "success"
+          required = os.environ["REQUIRED"]
+          result = os.environ["TEST_RESULT"]
+          passed = (required == "true" and result == "success") or (
+              required == "false" and result == "skipped"
+          )
+          sys.exit(0 if selected and passed else 1)
