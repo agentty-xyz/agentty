@@ -177,7 +177,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
     });
     let mut first = Session {
         database: database.clone(),
-        harness: &harness,
+        harness: harness.snapshot(),
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
         provider_session_id: None,
@@ -186,7 +186,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
     };
     let mut second = Session {
         database,
-        harness: &harness,
+        harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
         provider_session_id: None,
@@ -277,7 +277,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
     });
     let mut first = Session {
         database: database.clone(),
-        harness: &harness,
+        harness: harness.snapshot(),
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
         provider_session_id: None,
@@ -286,7 +286,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
     };
     let mut second = Session {
         database,
-        harness: &harness,
+        harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
         provider_session_id: None,
@@ -360,7 +360,7 @@ END
     });
     let mut session = Session {
         database: database.clone(),
-        harness: &harness,
+        harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
         provider_session_id: None,

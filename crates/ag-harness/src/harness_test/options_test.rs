@@ -1,5 +1,6 @@
 use std::io::Cursor;
 use std::num::NonZeroUsize;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
@@ -10,7 +11,7 @@ use crate::comparison::support::ComparisonRepository;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, TurnErrorType};
-use crate::model::{ModelMessage, ModelRequest, ModelResponse, ReasoningEffort};
+use crate::model::{MockModel, ModelMessage, ModelRequest, ModelResponse, ReasoningEffort};
 use crate::repository::Repository;
 use crate::session::{Database, SessionError};
 use crate::{ComparisonBase, OutputSchema, Tool, ToolPolicy, TurnError, TurnLimits, TurnOptions};
@@ -33,6 +34,176 @@ fn readable_file_system() -> MockFileSystem {
         .returning(|_, _| Ok(Box::new(Cursor::new(b"[workspace]"))));
 
     file_system
+}
+
+fn schema_recording_model(requests: Arc<Mutex<Vec<ModelRequest>>>, calls: usize) -> MockModel {
+    let mut model = model();
+    model
+        .expect_complete()
+        .times(calls)
+        .returning(move |request| {
+            let output = if request.schema().value()["type"] == "integer" {
+                json!(42)
+            } else {
+                json!({"summary": "done"})
+            };
+            requests.lock().expect("requests lock").push(request);
+
+            Ok(response_without_metadata(ModelResponse::Output(output)))
+        });
+
+    model
+}
+
+fn assert_captured_turn_options(requests: &[ModelRequest], snapshots: &[Value]) {
+    assert!(
+        matches!(&requests[0].messages()[0], ModelMessage::System(prompt) if prompt == "captured")
+    );
+    assert_eq!(requests[1].schema().value(), &json!({"type": "integer"}));
+    assert_eq!(requests[1].tools(), []);
+    for index in [0, 2, 3] {
+        assert_eq!(requests[index].schema(), &object_schema());
+        assert_eq!(requests[index].tools().len(), 1);
+    }
+    for request in &requests[..4] {
+        assert_eq!(request.model_reasoning_effort(), Some(ReasoningEffort::Low));
+    }
+    for request in &requests[4..] {
+        assert_eq!(request.schema(), &object_schema());
+        assert_eq!(request.tools().len(), 2);
+        assert_eq!(
+            request.model_reasoning_effort(),
+            Some(ReasoningEffort::High)
+        );
+    }
+    assert_eq!(snapshots[0]["max_tool_calls"], 1);
+    assert_eq!(snapshots[1]["max_tool_calls"], 2);
+    assert_eq!(snapshots[2], snapshots[1]);
+    assert_eq!(snapshots[3]["max_tool_calls"], 7);
+    assert_eq!(
+        snapshots[3]["tool_policy"],
+        json!({"read": true, "write": true})
+    );
+}
+
+async fn stored_session_options(database_path: &Path) -> Vec<Value> {
+    let database = Database::open(database_path).await.expect("database");
+    let snapshots: Vec<String> = sqlx::query_scalar(
+        "SELECT turn_options FROM session_turn WHERE session_id = 'session' ORDER BY turn_position",
+    )
+    .fetch_all(database.pool())
+    .await
+    .expect("stored options");
+
+    snapshots
+        .iter()
+        .map(|snapshot| serde_json::from_str(snapshot).expect("snapshot JSON"))
+        .collect()
+}
+
+#[tokio::test]
+async fn handles_capture_configuration_and_isolate_explicit_turn_options() {
+    // Arrange
+    let requests = Arc::new(Mutex::new(Vec::<ModelRequest>::new()));
+    let model = schema_recording_model(Arc::clone(&requests), 6);
+    let old_events = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&old_events);
+    let directory = tempdir().expect("temporary directory");
+    let database_path = directory.path().join("history.db");
+    let harness = Harness::new(model)
+        .database(&database_path)
+        .repository(Repository::fixture("old"))
+        .file_system(readable_file_system())
+        .allow(Tool::Read)
+        .max_tool_calls(NonZeroUsize::new(2).expect("tool budget"))
+        .max_history_bytes(NonZeroUsize::new(1024).expect("history budget"))
+        .model_reasoning_effort(ReasoningEffort::Low)
+        .with_lifecycle_observer(move |event: LifecycleEvent| {
+            recorded.lock().expect("events lock").push(event);
+        });
+    let old_file_system = Arc::clone(&harness.file_system);
+    let builder = harness
+        .session("built", object_schema())
+        .system_prompt("captured");
+    let mut session = harness
+        .session("session", object_schema())
+        .create()
+        .await
+        .expect("session");
+    let mut resumed = harness.resume("session").await.expect("resumed session");
+    let new_events = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&new_events);
+
+    // Act
+    let harness = harness
+        .repository(Repository::fixture("new"))
+        .file_system(MockFileSystem::new())
+        .allow(Tool::Write)
+        .max_tool_calls(NonZeroUsize::new(7).expect("tool budget"))
+        .max_history_bytes(NonZeroUsize::new(1).expect("history budget"))
+        .model_reasoning_effort(ReasoningEffort::High)
+        .with_lifecycle_observer(move |event: LifecycleEvent| {
+            recorded.lock().expect("events lock").push(event);
+        });
+    let mut built = builder.create().await.expect("captured builder");
+    let mut new_resumed = harness
+        .resume("session")
+        .await
+        .expect("new resumed session");
+    let mut new_session = harness
+        .session("new", object_schema())
+        .create()
+        .await
+        .expect("new session");
+    drop(harness);
+    built.send("builder defaults").await.expect("built turn");
+    session
+        .send_with_options(
+            "explicit options",
+            options(
+                OutputSchema::new(json!({"type": "integer"})).expect("integer schema"),
+                ToolPolicy::default(),
+                1,
+            ),
+        )
+        .await
+        .expect("explicit turn");
+    session
+        .send("captured defaults")
+        .await
+        .expect("default turn");
+    resumed
+        .send("resumed defaults")
+        .await
+        .expect("resumed turn");
+    new_resumed
+        .send("new resumed defaults")
+        .await
+        .expect("new resumed turn");
+    new_session.send("new defaults").await.expect("new turn");
+    let snapshots = stored_session_options(&database_path).await;
+
+    // Assert
+    let requests = requests.lock().expect("requests lock");
+    assert_captured_turn_options(&requests, &snapshots);
+    for handle in [&built, &session, &resumed] {
+        assert_eq!(handle.harness.repository, Some(Repository::fixture("old")));
+        assert!(Arc::ptr_eq(&handle.harness.file_system, &old_file_system));
+        assert_eq!(handle.history.max_bytes, 1024);
+    }
+    assert_eq!(new_resumed.history.max_bytes, 1024);
+    assert_eq!(new_session.history.max_bytes, 1);
+    assert_eq!(new_session.history.messages(), [] as [ModelMessage; 0]);
+    assert_eq!(
+        new_resumed.harness.repository,
+        Some(Repository::fixture("new"))
+    );
+    assert!(!Arc::ptr_eq(
+        &new_resumed.harness.file_system,
+        &old_file_system
+    ));
+    assert_eq!(old_events.lock().expect("old events").len(), 16);
+    assert_eq!(new_events.lock().expect("new events").len(), 8);
 }
 
 #[tokio::test]

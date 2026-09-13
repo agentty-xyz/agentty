@@ -28,7 +28,8 @@ flowchart LR
   `TurnLimits`, and optional validated `ComparisonBase` for one execution. A later turn
   can use different options.
 - `Session` is the only multi-turn abstraction. It persists and restores bounded
-  history.
+  history. Sessions and builders own their runtime resources and can outlive the
+  creating `Harness` or move into spawned tasks.
 - `Model` is the object-safe provider boundary. `ModelCompletion` carries the response,
   optional metadata, and an optional native continuation identifier.
 - `run_once` executes a turn without durable history.
@@ -48,11 +49,13 @@ tools are neither advertised nor executable. The tool-call budget applies across
 provider attempts and counts individual calls inside batches.
 
 Existing `run_once` and `send` methods resolve fresh options from configured defaults.
-`send` uses the stored session schema and the current harness permissions and tool-call
-budget. An explicit override never changes these defaults, including after reopening.
-Permission downgrades retain completed conversation history and previously read content;
-they govern current tool execution. Changes during execution apply to a later turn;
-immediate revocation requires cancellation.
+`send` uses the stored session schema and the permissions and tool-call budget captured
+when its builder was obtained or the session was resumed. Handles also capture the
+repository, filesystem, reasoning effort, and lifecycle observers. Later harness
+reconfiguration affects new handles. Resume retains the stored schema, system prompt,
+and history budget. An explicit override never changes these defaults, including after
+reopening. Permission downgrades retain completed conversation history and previously
+read content; they govern current tool execution.
 
 The future Agentty adapters will resolve new options from each request's protocol
 profile, permission mode, and host-selected comparison context. Agentty owns review-loop
@@ -129,8 +132,11 @@ clear a newer turn's continuation.
 
 ## Concurrency
 
-Sessions share a bounded SQLite connection pool. Different session IDs may run
-concurrently, but only one turn can be active per session. Concurrent writers receive
+Sessions and builders share lazy initialization of a bounded SQLite connection pool.
+Initialization failures can be retried. Changing the harness database path gives new
+handles a separate lazy pool; existing handles keep their database. Building a handle
+and calling `run_once` never open storage. Different session IDs may run concurrently,
+but only one turn can be active per session. Concurrent writers receive
 `SessionError::Busy` instead of interleaving messages.
 
 ## Observability
@@ -148,10 +154,9 @@ fails. Dropping either operation emits cancellation once.
 
 ## Next iterations
 
-1. **Owned sessions and stores**
+1. **Stores and recovery**
 
-   Add owned session handles, pluggable memory and SQLite stores, and host turn IDs for
-   idempotent recovery.
+   Add pluggable memory and SQLite stores and host turn IDs for idempotent recovery.
 
 1. **Model switching**
 

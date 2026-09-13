@@ -16,8 +16,8 @@ use ag_harness::{
     LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, Model,
     ModelCompletion, ModelConfiguration, ModelError, ModelMessage, ModelMetadata, ModelProvider,
     ModelRequest, ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError, Repository,
-    RepositoryError, SessionError, SessionInfo, Tool, ToolCall, ToolPolicy, TurnError, TurnLimits,
-    TurnOptions, WriteStatus,
+    RepositoryError, Session, SessionBuilder, SessionError, SessionInfo, Tool, ToolCall,
+    ToolPolicy, TurnError, TurnLimits, TurnOptions, WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -166,8 +166,14 @@ async fn external_model_reads_tool_results_and_retains_chat_history() -> Result<
             .await?;
 
         // Act
-        let first = chat.send("Read the name").await?;
-        let second = chat.send("Recall the name").await?;
+        drop(harness);
+        let (first, second) = tokio::spawn(async move {
+            let first = chat.send("Read the name").await?;
+            let second = chat.send("Recall the name").await?;
+
+            Ok::<_, SessionError>((first, second))
+        })
+        .await??;
 
         // Assert
         assert_eq!(first.output(), &json!({ "name": "Ada" }));
@@ -416,19 +422,28 @@ async fn external_consumer_creates_and_reopens_persistent_session() -> Result<()
     let directory = tempfile::tempdir()?;
     let harness = Harness::new(ExternalModel).database(directory.path().join("harness.db"));
 
-    // Act
-    let mut session = harness
+    let builder: SessionBuilder = harness
         .session("external-session", request()?.schema().clone())
-        .system_prompt("Extract names")
-        .create()
-        .await?;
-    let first = session.send("Ada").await?;
-    drop(session);
-    let reopened = harness.resume("external-session").await?;
+        .system_prompt("Extract names");
+
+    // Act
+    drop(harness);
+    let mut session: Session = tokio::spawn(builder.create()).await??;
+    let first = tokio::spawn(async move { session.send("Ada").await }).await??;
+    let harness = Harness::new(ExternalModel).database(directory.path().join("harness.db"));
+    let mut reopened: Session = harness.resume("external-session").await?;
+    drop(harness);
+    let (id, second) = tokio::spawn(async move {
+        let outcome = reopened.send("Recall").await?;
+
+        Ok::<_, SessionError>((reopened.id().to_string(), outcome))
+    })
+    .await??;
 
     // Assert
     assert_eq!(first.output(), &json!({ "name": "Ada" }));
-    assert_eq!(reopened.id(), "external-session");
+    assert_eq!(id, "external-session");
+    assert_eq!(second.output(), first.output());
 
     Ok(())
 }
