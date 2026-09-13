@@ -1,7 +1,6 @@
 //! Completed-turn persistence for resumable harness chats.
 
 use std::collections::HashSet;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -9,8 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{SqliteConnection, SqlitePool, Transaction};
 use thiserror::Error;
@@ -18,11 +16,11 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
 
-use crate::comparison::{ComparisonBase, ComparisonIdentity};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
+use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 use crate::write_journal::WriteJournal;
-use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnError, TurnOptions};
+use crate::{OutputSchema, OutputSchemaError, TurnError, TurnOptions};
 
 pub(crate) const TURN_LEASE_SECONDS: i64 = 300;
 pub(crate) const TURN_LEASE_RENEWAL_INTERVAL_SECONDS: u64 = 100;
@@ -757,6 +755,16 @@ pub enum SessionError {
     },
 }
 
+impl From<StoredTurnOptionsError> for SessionError {
+    fn from(error: StoredTurnOptionsError) -> Self {
+        match error {
+            StoredTurnOptionsError::InvalidData { reason } => Self::InvalidData { reason },
+            StoredTurnOptionsError::Json(error) => invalid_json(&error),
+            StoredTurnOptionsError::Schema(error) => Self::Schema(error),
+        }
+    }
+}
+
 pub(crate) struct AcquiredTurn {
     pub(crate) guard: TurnGuard,
     pub(crate) provider_session_id: Option<String>,
@@ -772,92 +780,6 @@ pub(crate) struct LoadedSession {
     pub(crate) schema: OutputSchema,
     pub(crate) system_prompt: Option<String>,
     pub(crate) turns: Vec<Vec<ModelMessage>>,
-}
-
-/// Versioned durable metadata, independent of live repository validation.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoredTurnOptions {
-    #[serde(default)]
-    comparison_base: Option<ComparisonIdentity>,
-    #[serde(default)]
-    fingerprint: Option<String>,
-    max_tool_calls: NonZeroUsize,
-    output_schema: Value,
-    tool_policy: ToolPolicy,
-    version: u8,
-}
-
-impl StoredTurnOptions {
-    fn encode(options: &TurnOptions) -> String {
-        let stored = Self {
-            comparison_base: options
-                .comparison_base()
-                .map(|base| base.identity().clone()),
-            fingerprint: None,
-            max_tool_calls: options.limits().max_tool_calls(),
-            output_schema: options.schema().value().clone(),
-            tool_policy: options.tool_policy(),
-            version: 3,
-        };
-        let mut snapshot = stored.effective_options();
-        snapshot["fingerprint"] = json!(stored.fingerprint());
-
-        snapshot.to_string()
-    }
-
-    fn decode(snapshot: &str) -> Result<Self, SessionError> {
-        let stored: Self = deserialize_payload(snapshot)?;
-        if !matches!(stored.version, 1..=3) {
-            return Err(SessionError::InvalidData {
-                reason: format!("unsupported turn options version {}", stored.version),
-            });
-        }
-        OutputSchema::new(stored.output_schema.clone())?;
-        let valid = if stored.version == 1 {
-            stored.comparison_base.is_none() && stored.fingerprint.is_none()
-        } else {
-            stored
-                .comparison_base
-                .as_ref()
-                .is_none_or(ComparisonIdentity::is_valid)
-                && stored.fingerprint.as_deref() == Some(stored.fingerprint().as_str())
-        };
-        if !valid {
-            return Err(SessionError::InvalidData {
-                reason: "invalid comparison identity or effective-options fingerprint".to_string(),
-            });
-        }
-
-        Ok(stored)
-    }
-
-    fn continuation_compatible(&self, options: &TurnOptions) -> bool {
-        matches!(self.version, 2 | 3)
-            && self.output_schema == *options.schema().value()
-            && self.tool_policy == options.tool_policy()
-            && self.comparison_base.as_ref()
-                == options.comparison_base().map(ComparisonBase::identity)
-    }
-
-    fn effective_options(&self) -> Value {
-        json!({
-            "comparison_base": self.comparison_base,
-            "max_tool_calls": self.max_tool_calls,
-            "output_schema": self.output_schema,
-            "tool_policy": self.tool_policy,
-            "version": self.version,
-        })
-    }
-
-    fn fingerprint(&self) -> String {
-        let mut options = self.effective_options();
-        if self.version == 3 {
-            options.sort_all_objects();
-        }
-
-        format!("{:x}", Sha256::digest(options.to_string()))
-    }
 }
 
 struct TurnAcquisition {

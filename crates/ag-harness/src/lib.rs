@@ -22,6 +22,7 @@ mod telemetry;
 mod tool;
 mod trace;
 mod turn;
+mod turn_options_snapshot;
 mod write;
 mod write_journal;
 
