@@ -488,7 +488,7 @@ fn stored_model_identity_parts(
 }
 
 async fn run_chat<Input, Output>(
-    session: &mut Session<'_>,
+    session: &mut Session,
     requested_model: &str,
     initial_prompt: Option<String>,
     mut input: Input,

@@ -31,10 +31,12 @@ For file-level detail, read the module docstrings directly.
   handling, and squash-merge workflows behind the `GitClient` boundary.
 - `crates/ag-harness/`: Provider-neutral structured model turns with a shared engine for
   durable sessions and one-shot calls. Immutable `TurnOptions` define output schemas,
-  permissions, budgets, and optional comparison bases. The library owns SQLite history,
-  write journals, and bounded tools backed by validated `Repository` and injectable
-  `FileSystem` boundaries. Hosts own prompts, comparison-base selection, permissions,
-  and telemetry setup; the engine enforces a validated, pinned commit for comparisons.
+  permissions, budgets, and optional comparison bases. Owned sessions and builders
+  capture harness configuration and share lazy SQLite initialization. The library owns
+  SQLite history, write journals, and bounded tools backed by validated `Repository` and
+  injectable `FileSystem` boundaries. Hosts own prompts, comparison-base selection,
+  permissions, and telemetry setup; the engine enforces a validated, pinned commit for
+  comparisons.
 - `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
   process-level tests. It derives provider parsing and help from `ag-harness`, then owns
   command-line defaults, application prompts, bounded repository permission selection,

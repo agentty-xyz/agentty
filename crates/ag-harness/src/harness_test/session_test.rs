@@ -596,31 +596,78 @@ async fn session_preserves_structured_failure_after_native_resume_fallback() {
 }
 
 #[tokio::test]
+async fn building_handles_and_running_once_leave_storage_uninitialized() {
+    // Arrange
+    let mut model = model();
+    model.expect_complete().times(2).returning(|_| {
+        Ok(response_without_metadata(ModelResponse::Output(
+            json!({"summary": "done"}),
+        )))
+    });
+    let directory = tempdir().expect("temporary directory");
+    let parent = directory.path().join("blocked");
+    tokio::fs::write(&parent, "not a directory")
+        .await
+        .expect("blocking file");
+    let harness = Harness::new(model).database(parent.join("harness.db"));
+
+    // Act
+    let builder = harness.session("pending", object_schema());
+    let once = harness
+        .run_once("ephemeral", object_schema())
+        .await
+        .expect("one-shot turn");
+    let explicit = harness
+        .run_once_with_options(
+            "explicit ephemeral",
+            harness.default_options(object_schema()),
+        )
+        .await
+        .expect("explicit one-shot turn");
+
+    // Assert
+    assert_eq!(once.output(), &json!({"summary": "done"}));
+    assert_eq!(explicit.output(), once.output());
+    assert!(harness.database.get().is_none());
+    assert!(builder.harness.database.get().is_none());
+    assert_eq!(
+        tokio::fs::read_to_string(parent)
+            .await
+            .expect("blocking file"),
+        "not a directory"
+    );
+}
+
+#[tokio::test]
 async fn concurrent_session_creation_and_resume_share_one_database_pool() {
     // Arrange
     let directory = tempdir().expect("temporary directory should be created");
     let harness = Harness::new(model()).database(directory.path().join("harness.db"));
+    let first = harness.session("first", object_schema());
+    let second = harness.session("second", object_schema());
+    let database = Arc::clone(&harness.database);
     assert!(harness.database.get().is_none());
 
     // Act
-    let (first, second) = tokio::join!(
-        harness.session("first", object_schema()).create(),
-        harness.session("second", object_schema()).create()
-    );
-    let first = first.expect("first session should be created");
-    let second = second.expect("second session should be created");
+    let (first, second) = tokio::join!(tokio::spawn(first.create()), tokio::spawn(second.create()));
+    let first = first
+        .expect("first task")
+        .expect("first session should be created");
+    let second = second
+        .expect("second task")
+        .expect("second session should be created");
     let resumed = harness
         .resume("first")
         .await
         .expect("session should resume");
+    drop(harness);
     first.database.pool().close().await;
 
     // Assert
     assert!(second.database.pool().is_closed());
     assert!(resumed.database.pool().is_closed());
     assert!(
-        harness
-            .database
+        database
             .get()
             .expect("database should be initialized")
             .pool()
@@ -637,37 +684,44 @@ async fn database_initialization_retries_after_failure_and_resets_on_reconfigura
         .await
         .expect("blocking file should exist");
     let harness = Harness::new(model()).database(parent.join("harness.db"));
+    let first = harness.session("first", object_schema());
+    let retry = harness.session("first", object_schema());
+    let pending = harness.session("pending", object_schema());
 
     // Act
-    let error = harness
-        .session("first", object_schema())
-        .create()
+    let error = tokio::spawn(first.create())
         .await
+        .expect("first task")
         .err();
     assert!(harness.database.get().is_none());
     tokio::fs::remove_file(&parent)
         .await
         .expect("blocking file should be removed");
-    let session = harness
-        .session("first", object_schema())
-        .create()
+    let session = tokio::spawn(retry.create())
         .await
+        .expect("retry task")
         .expect("initialization should retry");
     let original = session.database.clone();
-    drop(session);
     let harness = harness.database(directory.path().join("other.db"));
     let missing = harness.resume("first").await.err();
-    let session = harness
+    let new_session = harness
         .session("first", object_schema())
         .create()
         .await
         .expect("new database should allow the same id");
+    drop(harness);
+    let pending = tokio::spawn(pending.create())
+        .await
+        .expect("pending task")
+        .expect("old builder should retain its database");
     original.pool().close().await;
 
     // Assert
     assert!(matches!(error, Some(SessionError::Io(_))));
     assert!(matches!(missing, Some(SessionError::NotFound { .. })));
-    assert!(!session.database.pool().is_closed());
+    assert!(session.database.pool().is_closed());
+    assert!(pending.database.pool().is_closed());
+    assert!(!new_session.database.pool().is_closed());
 }
 
 #[tokio::test]

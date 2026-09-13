@@ -23,9 +23,12 @@ use crate::write_journal::{WriteRecord, WriteRecordRow};
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
 
 /// Durable, resumable sequence of model turns.
-pub struct Session<'a> {
+///
+/// Owns its runtime resources and captured defaults, so it can outlive the
+/// creating harness and move into a spawned task.
+pub struct Session {
     database: Database,
-    harness: &'a Harness,
+    harness: Harness,
     history: SessionHistory,
     id: String,
     provider_session_id: Option<String>,
@@ -33,7 +36,7 @@ pub struct Session<'a> {
     system_prompt: Option<String>,
 }
 
-impl Session<'_> {
+impl Session {
     /// Returns the stable application-provided session identifier.
     pub fn id(&self) -> &str {
         &self.id
@@ -55,7 +58,7 @@ impl Session<'_> {
 
     /// Sends one prompt and durably records its lifecycle and messages.
     ///
-    /// Resolves the stored session schema and current harness permission and
+    /// Resolves the stored session schema and captured permission and
     /// tool-limit defaults afresh; earlier explicit overrides are not
     /// inherited.
     ///
@@ -183,14 +186,17 @@ impl Session<'_> {
 }
 
 /// Builder for one durable session.
-pub struct SessionBuilder<'a> {
-    harness: &'a Harness,
+///
+/// Captures harness configuration immediately and can outlive the harness
+/// or move into a spawned task before opening storage.
+pub struct SessionBuilder {
+    harness: Harness,
     id: String,
     schema: OutputSchema,
     system_prompt: Option<String>,
 }
 
-impl<'a> SessionBuilder<'a> {
+impl SessionBuilder {
     /// Adds a system prompt that is restored with the session.
     #[must_use]
     pub fn system_prompt(mut self, system_prompt: impl Into<String>) -> Self {
@@ -205,8 +211,28 @@ impl<'a> SessionBuilder<'a> {
     ///
     /// Returns [`SessionError`] when storage is not configured, the identifier
     /// already exists, or SQLite cannot create the session.
-    pub async fn create(self) -> Result<Session<'a>, SessionError> {
-        self.harness.create_session(self).await
+    pub async fn create(self) -> Result<Session, SessionError> {
+        let database = self.harness.open_database().await?;
+        let config =
+            NewSession::new(self.id, self.schema).with_optional_system_prompt(self.system_prompt);
+        database
+            .create_session(
+                &config,
+                self.harness.model.metadata(),
+                self.harness.max_history_bytes,
+            )
+            .await?;
+        let history = SessionHistory::new(self.harness.max_history_bytes);
+
+        Ok(Session {
+            database,
+            harness: self.harness,
+            history,
+            id: config.id().to_string(),
+            provider_session_id: None,
+            schema: config.schema().clone(),
+            system_prompt: config.system_prompt().map(str::to_string),
+        })
     }
 }
 
@@ -265,8 +291,10 @@ fn retained_bytes(messages: &[ModelMessage]) -> usize {
 /// A turn advertises policy-approved tools, executes validated native calls,
 /// returns tool results to the model, and finishes with locally validated
 /// structured output.
+/// Session builders and resumed sessions capture this configuration; later
+/// reconfiguration affects only newly obtained handles.
 pub struct Harness {
-    database: OnceCell<Database>,
+    database: Arc<OnceCell<Database>>,
     database_path: Option<PathBuf>,
     file_system: Arc<dyn FileSystem>,
     lifecycle: LifecycleEmitter,
@@ -282,7 +310,7 @@ impl Harness {
     /// Creates a deny-by-default harness backed by the local filesystem.
     pub fn new(model: impl Model + 'static) -> Self {
         Self {
-            database: OnceCell::new(),
+            database: Arc::new(OnceCell::new()),
             database_path: None,
             file_system: Arc::new(LocalFileSystem),
             lifecycle: LifecycleEmitter::default(),
@@ -298,10 +326,11 @@ impl Harness {
     /// Configures the SQLite database used by durable sessions.
     ///
     /// The first create or resume initializes one shared connection pool and
-    /// runs migrations. Reconfiguring the path resets that shared database.
+    /// runs migrations. Reconfiguring the path starts a new lazy pool for
+    /// future handles; existing handles retain their shared database.
     #[must_use]
     pub fn database(mut self, path: impl Into<PathBuf>) -> Self {
-        self.database = OnceCell::new();
+        self.database = Arc::new(OnceCell::new());
         self.database_path = Some(path.into());
 
         self
@@ -417,10 +446,11 @@ impl Harness {
     /// Builds a durable session with `schema` as its default output contract.
     ///
     /// Explicit turn options may select a different schema without changing
-    /// the stored default.
-    pub fn session(&self, id: impl Into<String>, schema: OutputSchema) -> SessionBuilder<'_> {
+    /// the stored default. Captures current configuration without opening
+    /// the database.
+    pub fn session(&self, id: impl Into<String>, schema: OutputSchema) -> SessionBuilder {
         SessionBuilder {
-            harness: self,
+            harness: self.snapshot(),
             id: id.into(),
             schema,
             system_prompt: None,
@@ -429,11 +459,14 @@ impl Harness {
 
     /// Resumes a durable session and restores its bounded completed history.
     ///
+    /// Captures current harness defaults while retaining the stored schema,
+    /// system prompt, and history budget.
+    ///
     /// # Errors
     ///
     /// Returns [`SessionError`] when storage is not configured, the session is
     /// missing, its model differs, or SQLite cannot load it.
-    pub async fn resume(&self, id: &str) -> Result<Session<'_>, SessionError> {
+    pub async fn resume(&self, id: &str) -> Result<Session, SessionError> {
         let database = self.open_database().await?;
         let loaded = database.load_session(id).await?;
         self.validate_session_model(id, &loaded)?;
@@ -444,7 +477,7 @@ impl Harness {
 
         Ok(Session {
             database,
-            harness: self,
+            harness: self.snapshot(),
             history,
             id: id.to_string(),
             provider_session_id: loaded.provider_session_id,
@@ -453,26 +486,19 @@ impl Harness {
         })
     }
 
-    async fn create_session<'a>(
-        &'a self,
-        builder: SessionBuilder<'a>,
-    ) -> Result<Session<'a>, SessionError> {
-        let database = self.open_database().await?;
-        let config = NewSession::new(builder.id, builder.schema)
-            .with_optional_system_prompt(builder.system_prompt);
-        database
-            .create_session(&config, self.model.metadata(), self.max_history_bytes)
-            .await?;
-
-        Ok(Session {
-            database,
-            harness: self,
-            history: SessionHistory::new(self.max_history_bytes),
-            id: config.id().to_string(),
-            provider_session_id: None,
-            schema: config.schema().clone(),
-            system_prompt: config.system_prompt().map(str::to_string),
-        })
+    fn snapshot(&self) -> Self {
+        Self {
+            database: Arc::clone(&self.database),
+            database_path: self.database_path.clone(),
+            file_system: Arc::clone(&self.file_system),
+            lifecycle: self.lifecycle.clone(),
+            limits: self.limits,
+            max_history_bytes: self.max_history_bytes,
+            model: Arc::clone(&self.model),
+            model_reasoning_effort: self.model_reasoning_effort,
+            policy: self.policy,
+            repository: self.repository.clone(),
+        }
     }
 
     async fn open_database(&self) -> Result<Database, SessionError> {
