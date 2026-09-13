@@ -1,4 +1,4 @@
-mod command;
+pub(crate) mod command;
 mod file;
 mod inspection;
 mod output;

@@ -199,6 +199,8 @@ pub enum TurnErrorType {
     ToolCallLimit,
     /// A repository-scoped tool was enabled without a repository root.
     RepositoryRequired,
+    /// The comparison base belongs to a different repository scope.
+    ComparisonRepositoryMismatch,
     /// Durable session coordination or persistence failed.
     Session,
 }
@@ -213,6 +215,9 @@ impl TurnErrorType {
             Self::ToolDenied => crate::telemetry::ERROR_TOOL_DENIED,
             Self::ToolCallLimit => crate::telemetry::ERROR_TOOL_CALL_LIMIT,
             Self::RepositoryRequired => crate::telemetry::ERROR_REPOSITORY_REQUIRED,
+            Self::ComparisonRepositoryMismatch => {
+                crate::telemetry::ERROR_COMPARISON_REPOSITORY_MISMATCH
+            }
             Self::Session => crate::telemetry::ERROR_SESSION,
         }
     }

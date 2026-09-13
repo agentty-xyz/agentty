@@ -138,6 +138,13 @@ impl Engine<'_> {
         {
             request = request.with_model_reasoning_effort(reasoning_effort);
         }
+        if let Some(base) = self.options.comparison_base()
+            && !self
+                .repository
+                .is_some_and(|repository| base.matches_repository(repository))
+        {
+            return Err(TurnError::ComparisonRepositoryMismatch);
+        }
         let read_allowed = self.options.tool_policy().allows(Tool::Read);
         let write_allowed = self.options.tool_policy().allows(Tool::Write);
         if !read_allowed && !write_allowed {
@@ -148,11 +155,16 @@ impl Engine<'_> {
             .as_ref()
             .ok_or(TurnError::RepositoryRequired)?;
         let read_tool = read_allowed.then(|| {
-            request = request.clone().with_tool(ToolDefinition::read());
+            request = request
+                .clone()
+                .with_tool(ToolDefinition::read_with_comparison_base(
+                    self.options.comparison_base(),
+                ));
             ReadTool::with_git(
                 Arc::clone(self.file_system),
                 repository.root().to_path_buf(),
                 repository.git_executable().to_path_buf(),
+                self.options.comparison_base().cloned(),
             )
         });
         let write_tool = write_allowed.then(|| {

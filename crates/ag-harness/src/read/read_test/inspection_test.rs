@@ -5,6 +5,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::support::{command_output, inspection_file_system};
+use crate::comparison::support::COMPARISON_OID;
 use crate::read::command::MockRepositoryCommandRunner;
 use crate::read::output::{InspectionError, ReadError};
 use crate::read::runtime::{MAX_READ_BYTES, ReadTool};
@@ -144,8 +145,8 @@ fn bounds_escaping_heavy_inspection_results_after_json_encoding() {
 
     // Act
     let items = ReadTool::bounded_items_result("list", &items, false);
-    let text =
-        ReadTool::bounded_text_result("diff", &text, false).expect("text result should encode");
+    let text = ReadTool::bounded_text_result("diff", &text, false, Some(COMPARISON_OID))
+        .expect("text result should encode");
     let items_value: Value = serde_json::from_str(&items).expect("items should be JSON");
     let text_value: Value = serde_json::from_str(&text).expect("text should be JSON");
 
@@ -154,4 +155,5 @@ fn bounds_escaping_heavy_inspection_results_after_json_encoding() {
     assert!(text.len() <= MAX_TOOL_RESULT_BYTES);
     assert_eq!(items_value["truncated"], true);
     assert_eq!(text_value["truncated"], true);
+    assert_eq!(text_value["comparison_base"], COMPARISON_OID);
 }

@@ -29,23 +29,12 @@ For file-level detail, read the module docstrings directly.
 - `crates/ag-git/`: Shared git library crate with worktree creation, repository
   metadata, commit/diff/push/pull sync, merge-conflict preflights, rebase/conflict
   handling, and squash-merge workflows behind the `GitClient` boundary.
-- `crates/ag-harness/`: Application-facing LLM harness crate with the provider-neutral
-  object-safe `Model` boundary, its `ModelClient` implementation, the built-in provider
-  catalog and environment-backed configuration, private Qwen, Kimi, and Muse policies, a
-  shared Chat Completions backend with JSON Object and JSON Schema modes,
-  backend-neutral request-duration telemetry, and a shared internal engine with closed
-  built-in `read` and `write` capabilities. Both durable and one-shot entry points pass
-  immutable `TurnOptions` with a required schema, effective deny-by-default
-  `ToolPolicy`, and tool-call budget to that engine. Its durable `Session` API records
-  pending, running, completed, failed, and interrupted turns in SQLite, while replaying
-  only bounded whole completed turns. `Harness` owns a lazily initialized database pool
-  shared by its sessions; `Session::send` owns terminal lifecycle events through durable
-  completion. A separate write journal retains intents and recorded outcomes across turn
-  failure and history eviction for host inspection. The `read` tool provides bounded
-  worktree reads, path listing, literal search, host-bound diffs, and base/HEAD file
-  inspection; stale-safe patch writes and file reads use the injectable `FileSystem`
-  boundary. Application binaries own prompts, tool permissions, and telemetry setup; the
-  v0 read tool owns its fixed `main` comparison base.
+- `crates/ag-harness/`: Provider-neutral structured model turns with a shared engine for
+  durable sessions and one-shot calls. Immutable `TurnOptions` define output schemas,
+  permissions, budgets, and optional comparison bases. The library owns SQLite history,
+  write journals, and bounded tools backed by validated `Repository` and injectable
+  `FileSystem` boundaries. Hosts own prompts, comparison-base selection, permissions,
+  and telemetry setup; the engine enforces a validated, pinned commit for comparisons.
 - `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
   process-level tests. It derives provider parsing and help from `ag-harness`, then owns
   command-line defaults, application prompts, bounded repository permission selection,

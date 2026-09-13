@@ -8,6 +8,7 @@ use std::task::{Context, Poll};
 use mockall::Sequence;
 use tokio::io::{AsyncRead, ReadBuf};
 
+use crate::ComparisonBase;
 use crate::file_system::{FileSystem, MockFileSystem};
 use crate::read::command::{RepositoryCommandOutput, RepositoryCommandRunner};
 use crate::read::runtime::ReadTool;
@@ -116,7 +117,12 @@ pub(super) fn truncated_command_output(
 
 impl ReadTool {
     pub(super) fn new(file_system: Arc<dyn FileSystem>, repository_root: PathBuf) -> Self {
-        Self::with_git(file_system, repository_root, test_git_executable())
+        Self::with_git(
+            file_system,
+            repository_root.clone(),
+            test_git_executable(),
+            Some(ComparisonBase::fixture(repository_root)),
+        )
     }
 
     pub(super) fn with_command_runner(
