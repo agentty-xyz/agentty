@@ -87,13 +87,10 @@ the provider transport traits) keep subprocess sequencing and retry behavior
 deterministic in unit tests. The runtime also accepts `Terminal<B: Backend>` via
 `run_with_backend`, enabling in-process TUI tests with `TestBackend`.
 
-Private `ag-harness` supervision injects an inert backend binding, a resource-owning
-process interface, and a monotonic clock. Deterministic tests cover stalled preparation
-and partial startup, independent descendant lifetime and pipe EOFs, output floods,
-cancellation, dropped callers, bounded cleanup retries, and combined failures. Contract
-tests also exercise grants, shared output budgets, and independent result fields. There
-is no production backend; filesystem isolation and actual descendant cleanup require
-future backend enforcement and are not established by these tests.
+Private `ag-harness` supervision uses injected backends and clocks to test deadlines,
+cancellation, output limits, and cleanup. Native Linux tests verify permitted access,
+policy enforcement, and process cleanup with real isolated processes. These components
+remain private and are not yet connected to a production executor.
 
 Persistent `ag-harness` execution uses an internal object-safe transactional store.
 Barrier-controlled store fixtures exercise stalled renewal and terminal persistence,
