@@ -8,8 +8,8 @@ use tokio::io::AsyncReadExt as _;
 
 use crate::file_system::FileSystem;
 use crate::schema_contract;
+use crate::session::WriteJournal;
 use crate::tool::WriteArguments;
-use crate::write_journal::WriteJournal;
 
 const BYTE_ORDER_MARK: &[u8] = b"\xef\xbb\xbf";
 const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;

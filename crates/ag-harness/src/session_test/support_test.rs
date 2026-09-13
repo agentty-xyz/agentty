@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;
-use sqlx::SqlSafeStr as _;
 use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{SqlSafeStr as _, SqlitePool};
 
 use crate::model::{MockModel, ModelMessage, ModelMetadata};
 use crate::schema_contract::OutputSchema;
@@ -236,6 +236,10 @@ impl NewSession {
 }
 
 impl Database {
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     /// Opens an isolated in-memory SQLite database and runs migrations.
     ///
     /// # Errors

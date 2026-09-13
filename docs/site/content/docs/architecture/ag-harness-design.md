@@ -92,7 +92,10 @@ fail before a model call. A new invocation resolves its explicit selection again
 ## Session lifecycle
 
 SQLite is canonical. Provider-native continuation is an optional optimization, never the
-only copy of conversation state.
+only copy of conversation state. The internal concrete `Database` owns SQLite queries,
+transactions, row decoding, and write-journal persistence. Runtime and tools use owned
+session and journal handles; connection-pool access stays inside the backend. Durable
+option snapshots use the separate backend-neutral codec.
 
 ```mermaid
 flowchart TD
