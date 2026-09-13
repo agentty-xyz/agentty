@@ -87,13 +87,18 @@ the provider transport traits) keep subprocess sequencing and retry behavior
 deterministic in unit tests. The runtime also accepts `Terminal<B: Backend>` via
 `run_with_backend`, enabling in-process TUI tests with `TestBackend`.
 
+Private macOS isolation tests compare real sandbox denials with unsandboxed positive
+controls across the policy boundaries. These opt-in tests require arm64 macOS 26 and
+Xcode Command Line Tools. Ordinary tests cover configuration validation; they do not
+establish native enforcement.
+
 Private `ag-harness` supervision injects an inert backend binding, a resource-owning
 process interface, and a monotonic clock. Deterministic tests cover stalled preparation
 and partial startup, independent descendant lifetime and pipe EOFs, output floods,
 cancellation, dropped callers, bounded cleanup retries, and combined failures. Contract
-tests also exercise grants, shared output budgets, and independent result fields. There
-is no production backend; filesystem isolation and actual descendant cleanup require
-future backend enforcement and are not established by these tests.
+tests also exercise grants, shared output budgets, and independent result fields. No
+production backend connects this supervision to native execution; actual descendant
+cleanup still requires backend enforcement and is not established by these tests.
 
 Persistent `ag-harness` sessions inject a timestamp source and a reservation observer.
 The observer marks the boundary after SQLite commits a turn reservation, allowing tests

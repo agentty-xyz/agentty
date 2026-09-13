@@ -39,7 +39,8 @@ For file-level detail, read the module docstrings directly.
   and telemetry setup; the engine enforces a validated, pinned commit for comparisons.
   Private execution contracts and platform-independent supervision own bounded
   preparation, process-tree completion, output draining, and retained cleanup through
-  injected boundaries, without a production backend or a public tool surface.
+  injected boundaries. Backend-private macOS construction enforces native sandbox
+  policy. Neither exposes a production backend or a public tool surface.
 - `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
   process-level tests. It derives provider parsing and help from `ag-harness`, then owns
   command-line defaults, application prompts, bounded repository permission selection,
