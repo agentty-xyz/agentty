@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT provider,\n       model,\n       output_schema,\n       system_prompt,\n       max_history_bytes AS \"max_history_bytes!: i64\",\n       provider_session_id\nFROM session\nWHERE id = ?\n",
+  "query": "\nSELECT provider,\n       model,\n       output_schema,\n       system_prompt,\n       max_history_bytes AS \"max_history_bytes!: i64\",\n       provider_session_id,\n       (SELECT turn_options FROM session_turn\n        WHERE session_id = session.id ORDER BY turn_position DESC LIMIT 1) AS \"turn_options?: String\"\nFROM session\nWHERE id = ?\n",
   "describe": {
     "columns": [
       {
@@ -68,6 +68,17 @@
             "name": "provider_session_id"
           }
         }
+      },
+      {
+        "name": "turn_options?: String",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_turn",
+            "name": "turn_options"
+          }
+        }
       }
     ],
     "parameters": {
@@ -79,8 +90,9 @@
       false,
       true,
       false,
+      true,
       true
     ]
   },
-  "hash": "324a4345246d93c36980918aa3940fd1745ac3120b45edb7633ba1c684d4a3c7"
+  "hash": "e0ed7813e2de9a9ca86f7dd6336f509bd51c5469f3b896b9c42f8c62b9fb9baa"
 }

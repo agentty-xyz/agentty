@@ -16,7 +16,8 @@ use ag_harness::{
     LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, Model, ModelCompletion,
     ModelConfiguration, ModelError, ModelMessage, ModelMetadata, ModelProvider, ModelRequest,
     ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError, Repository, RepositoryError,
-    SessionError, SessionInfo, Tool, ToolCall, TurnError, WriteStatus,
+    SessionError, SessionInfo, Tool, ToolCall, ToolPolicy, TurnError, TurnLimits, TurnOptions,
+    WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -738,6 +739,51 @@ async fn applied_write_survives_model_failure_and_session_reopen() -> Result<(),
     assert_eq!(after[0].call_id, "write-name");
     assert_eq!(after[0].expected_hash, None);
     assert_eq!(after[0].resulting_hash.len(), 64);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_options_support_both_entry_points_and_retain_history_after_revocation()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let model = ExternalToolModel {
+        batched: false,
+        requests: Arc::clone(&requests),
+    };
+    let directory = tempfile::tempdir()?;
+    let harness = Harness::new(model)
+        .database(directory.path().join("options.db"))
+        .repository(repository::repository_with_host_git(directory.path()))
+        .file_system(NameFileSystem);
+    let schema = request()?.schema().clone();
+    let policy = ToolPolicy::default().allow(Tool::Read);
+    let limits = TurnLimits::default();
+    let options = TurnOptions::new(schema.clone(), policy, limits);
+
+    // Act
+    let once = harness
+        .run_once_with_options("Read the name", options.clone())
+        .await?;
+    let mut session = harness.session("options", schema.clone()).create().await?;
+    let durable = session
+        .send_with_options("Read the name", options.clone())
+        .await?;
+    let denied = TurnOptions::new(schema.clone(), policy.deny(Tool::Read), limits);
+    let recalled = session.send_with_options("Recall the name", denied).await?;
+
+    // Assert
+    assert_eq!(once.output(), durable.output());
+    assert_eq!(recalled.output(), &json!({"name":"Ada"}));
+    assert_eq!(recalled.report().tool_calls().len(), 0);
+    assert_eq!(options.schema(), &schema);
+    assert!(options.tool_policy().allows(Tool::Read));
+    assert_eq!(options.limits().max_tool_calls().get(), 8);
+    let requests = requests
+        .lock()
+        .map_err(|_| io::Error::other("requests lock poisoned"))?;
+    assert!(requests.last().expect("last request").iter().any(|message| matches!(message, ModelMessage::ToolResult { content, .. } if content.contains("Ada"))));
 
     Ok(())
 }

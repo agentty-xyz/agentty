@@ -1,6 +1,7 @@
-//! Public turn outcomes, observable activity, and terminal errors.
+//! Immutable turn options, outcomes, observable activity, and terminal errors.
 
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -8,9 +9,77 @@ use thiserror::Error;
 
 use crate::lifecycle::{ModelResponseType, TurnErrorType};
 use crate::model::{CompletionMetadata, ModelError};
+use crate::policy::ToolPolicy;
 use crate::read::ReadError;
+use crate::schema_contract::OutputSchema;
 use crate::tool::ReadAction;
 use crate::write::WriteError;
+
+/// Fully resolved configuration, fixed for the lifetime of one engine run.
+///
+/// Construct a new value for each turn. Explicit options never inherit
+/// permissions or schema changes from an earlier turn. Counters, cancellation,
+/// and conversation history belong to execution state, not this snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TurnOptions {
+    limits: TurnLimits,
+    schema: OutputSchema,
+    tool_policy: ToolPolicy,
+}
+
+impl TurnOptions {
+    /// Resolves a required schema, explicit permissions, and execution limits.
+    pub fn new(schema: OutputSchema, tool_policy: ToolPolicy, limits: TurnLimits) -> Self {
+        Self {
+            limits,
+            schema,
+            tool_policy,
+        }
+    }
+
+    /// Returns the execution bounds for this turn.
+    pub fn limits(&self) -> TurnLimits {
+        self.limits
+    }
+
+    /// Returns the schema required for every terminal model output.
+    pub fn schema(&self) -> &OutputSchema {
+        &self.schema
+    }
+
+    /// Returns the complete permissions for this turn.
+    pub fn tool_policy(&self) -> ToolPolicy {
+        self.tool_policy
+    }
+
+    pub(crate) fn continuation_compatible(&self, other: &Self) -> bool {
+        self.schema == other.schema && self.tool_policy == other.tool_policy
+    }
+}
+
+/// Immutable execution bounds; consuming a budget does not modify these limits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TurnLimits {
+    max_tool_calls: NonZeroUsize,
+}
+
+impl TurnLimits {
+    /// Sets the total permitted tool calls, including calls in batches.
+    pub fn new(max_tool_calls: NonZeroUsize) -> Self {
+        Self { max_tool_calls }
+    }
+
+    /// Returns the total permitted tool calls in a turn.
+    pub fn max_tool_calls(self) -> NonZeroUsize {
+        self.max_tool_calls
+    }
+}
+
+impl Default for TurnLimits {
+    fn default() -> Self {
+        Self::new(NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN))
+    }
+}
 
 /// Successful model turn paired with observable execution activity.
 #[derive(Clone, Debug, Eq, PartialEq)]

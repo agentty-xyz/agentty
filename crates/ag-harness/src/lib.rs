@@ -6,6 +6,7 @@
 //! remain behind injectable boundaries.
 
 mod chat_completion;
+mod engine;
 mod file_system;
 mod harness;
 mod lifecycle;
@@ -34,6 +35,7 @@ pub use model::{
     ModelErrorType, ModelMessage, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,
     ReasoningEffort,
 };
+pub use policy::ToolPolicy;
 pub use provider::{
     KIMI_K2_6, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, ModelConfiguration,
     ModelConfigurationError, ModelProvider, ModelProviderParseError, Muse, MuseConfig, QWEN_PLUS,
@@ -49,6 +51,8 @@ pub use tool::{
     WriteArguments,
 };
 pub use trace::LifecycleTraceObserver;
-pub use turn::{ModelRequestActivity, ToolActivity, TurnError, TurnOutcome, TurnReport};
+pub use turn::{
+    ModelRequestActivity, ToolActivity, TurnError, TurnLimits, TurnOptions, TurnOutcome, TurnReport,
+};
 pub use write::{WriteError, WriteOutput};
 pub use write_journal::{WriteRecord, WriteStatus};

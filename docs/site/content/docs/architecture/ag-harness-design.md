@@ -7,7 +7,8 @@ weight = 6
 # `ag-harness`
 
 `ag-harness` is a Rust library for structured model turns. Applications select a model,
-an output schema, a SQLite database, and the repository tools the model may use.
+per-turn output schemas and tool permissions, and a SQLite database for durable
+sessions.
 
 ```mermaid
 flowchart LR
@@ -19,8 +20,12 @@ flowchart LR
 
 ## Public boundary
 
-- `Harness` owns the model, repository policy, lifecycle observers, and shared database
-  pool.
+- `Harness` owns the model, validated repository, configured defaults, lifecycle
+  observers, and shared database pool.
+- One internal engine prepares requests, runs provider attempts and tools, retries
+  rejected native continuations, and validates output for both entry points.
+- Immutable `TurnOptions` fixes the required schema, effective `ToolPolicy`, and
+  `TurnLimits` for one execution. A later turn can use different options.
 - `Session` is the only multi-turn abstraction. It persists and restores bounded
   history.
 - `Model` is the object-safe provider boundary. `ModelCompletion` carries the response,
@@ -36,6 +41,26 @@ override. `Repository` canonicalizes the selection once and never performs its o
 `PATH` discovery. Unix hosts also verify effective execute access; other platforms defer
 that check to process creation. Repository-relative tool arguments reject `.git`
 components before filesystem access.
+
+## Per-turn options
+
+`Harness::run_once_with_options` and `Session::send_with_options` accept a complete
+`TurnOptions` snapshot. Explicit permissions replace harness defaults; they are never
+merged with defaults or earlier turns. An empty `ToolPolicy` denies every tool. Denied
+tools are neither advertised nor executable. The tool-call budget applies across all
+provider attempts and counts individual calls inside batches.
+
+Existing `run_once` and `send` methods resolve fresh options from configured defaults.
+`send` uses the stored session schema and the current harness permissions and tool-call
+budget. An explicit override never changes these defaults, including after reopening.
+Permission downgrades retain completed conversation history and previously read content;
+they govern current tool execution. Changes during execution apply to a later turn;
+immediate revocation requires cancellation.
+
+The future Agentty adapters will resolve new options from each request's protocol
+profile and permission mode. Agentty owns review-loop behavior. Mutable counters,
+cancellation, and shared provider-call budget accounting remain execution state rather
+than configuration. Sandboxed Bash and Agentty permission mapping remain later work.
 
 ## Session lifecycle
 
@@ -60,8 +85,14 @@ Only completed turns are replayed. A process that disappears may leave a leased 
 entering model context.
 
 The database stores the output schema, system prompt, model identity, history budget,
-provider continuation identifier, messages, and turn state. Oldest complete turns are
-excluded from replay when the configured byte budget is exceeded.
+provider continuation identifier, messages, and turn state. Each new durable turn also
+stores a versioned snapshot of its effective schema, permissions, and tool-call budget,
+atomically with reservation and the prompt before execution. The session schema remains
+the default for legacy callers. Historical turns without options remain readable;
+missing historical permissions are unknown, never inferred from current defaults.
+Recovery validates stored options and marks abandoned turns interrupted without
+re-executing them. Oldest complete turns are excluded from replay when the configured
+byte budget is exceeded.
 
 Starting a turn loads bounded completed history in a read-only snapshot, then opens a
 short writer transaction. The writer revalidates the snapshot and commits the turn as
@@ -98,15 +129,20 @@ continue without a journal.
 
 On resume, the harness validates the stored model identity and restores completed
 history. If a completion includes a provider session identifier, the next request also
-offers it to the adapter. `ModelError::ResumeUnavailable` causes one retry with the
-provider identifier removed and the same SQLite history retained. The rejected native
-resume and the replay are reported as separate provider attempts. A successful replay
-replaces the stored continuation identifier with the one it returns, or clears the
-identifier when it returns none. Failed turns, cancellation, and expired-lease recovery
-clear the stored provider identifier atomically with the terminal turn state because the
-harness cannot know whether the remote conversation advanced. Cleanup clears the
-identifier only when it actually interrupts an active turn, so delayed cleanup cannot
-invalidate a newer continuation. The next request replays completed SQLite history.
+offers it to the adapter only when the last completed turn's schema and permissions
+match the current options. Acquisition checks canonical persisted options, including for
+stale session handles. Schema or permission changes, or missing legacy options, clear
+the native identifier atomically with reservation and replay completed history. A
+tool-budget change alone does not invalidate continuation.
+`ModelError::ResumeUnavailable` causes one retry with the provider identifier removed
+and the same SQLite history retained. The rejected native resume and the replay are
+reported as separate provider attempts. A successful replay replaces the stored
+continuation identifier with the one it returns, or clears the identifier when it
+returns none. Failed turns, cancellation, and expired-lease recovery clear the stored
+provider identifier atomically with the terminal turn state because the harness cannot
+know whether the remote conversation advanced. Cleanup clears the identifier only when
+it actually interrupts an active turn, so delayed cleanup cannot invalidate a newer
+continuation. The next request replays completed SQLite history.
 
 ## Concurrency
 
@@ -133,11 +169,6 @@ tool failures retain their original classification even if recording the failure
 fails. Dropping either operation emits cancellation once.
 
 ## Next iterations
-
-1. **Shared turn engine and options**
-
-   Move output schemas and tool permissions to per-turn options used by both durable and
-   one-shot execution.
 
 1. **Owned sessions and stores**
 

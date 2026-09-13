@@ -1,6 +1,7 @@
 //! Completed-turn persistence for resumable harness chats.
 
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -8,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{SqliteConnection, SqlitePool, Transaction};
 use thiserror::Error;
@@ -19,7 +20,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 use crate::write_journal::WriteJournal;
-use crate::{OutputSchema, OutputSchemaError, TurnError};
+use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnError, TurnLimits, TurnOptions};
 
 pub(crate) const TURN_LEASE_SECONDS: i64 = 300;
 pub(crate) const TURN_LEASE_RENEWAL_INTERVAL_SECONDS: u64 = 100;
@@ -46,6 +47,14 @@ struct SessionRow {
     provider: Option<String>,
     provider_session_id: Option<String>,
     system_prompt: Option<String>,
+    turn_options: Option<String>,
+}
+
+#[derive(Eq, PartialEq)]
+struct TurnConfigurationRow {
+    max_history_bytes: i64,
+    provider_session_id: Option<String>,
+    turn_options: Option<String>,
 }
 
 struct TurnSizeRow {
@@ -289,7 +298,9 @@ SELECT provider,
        output_schema,
        system_prompt,
        max_history_bytes AS "max_history_bytes!: i64",
-       provider_session_id
+       provider_session_id,
+       (SELECT turn_options FROM session_turn
+        WHERE session_id = session.id ORDER BY turn_position DESC LIMIT 1) AS "turn_options?: String"
 FROM session
 WHERE id = ?
 "#,
@@ -306,6 +317,9 @@ WHERE id = ?
             }
         })?;
         let schema = OutputSchema::new(output_schema)?;
+        if let Some(snapshot) = row.turn_options {
+            StoredTurnOptions::decode(&snapshot)?;
+        }
         let turns = self.load_turns(id, max_history_bytes).await?;
 
         Ok(LoadedSession {
@@ -340,18 +354,31 @@ WHERE id = ?
         &self,
         session_id: &str,
         prompt: &str,
+        options: &TurnOptions,
     ) -> Result<AcquiredTurn, SessionError> {
         let message = EncodedMessage::from_message(&ModelMessage::User(prompt.to_string()))?;
 
         loop {
             let acquisition = self.load_turn_acquisition(session_id).await?;
+            let previous_options = acquisition
+                .configuration
+                .turn_options
+                .as_deref()
+                .map(StoredTurnOptions::decode)
+                .transpose()?;
+            let compatible = previous_options
+                .as_ref()
+                .is_some_and(|previous| options.continuation_compatible(previous));
             if let Some(guard) = self
-                .reserve_turn(session_id, &message, &acquisition)
+                .reserve_turn(session_id, &message, &acquisition, options, compatible)
                 .await?
             {
                 return Ok(AcquiredTurn {
                     guard,
-                    provider_session_id: acquisition.provider_session_id,
+                    provider_session_id: acquisition
+                        .configuration
+                        .provider_session_id
+                        .filter(|_| compatible),
                     turn_position: acquisition.turn_position,
                     turns: acquisition.turns,
                 });
@@ -368,18 +395,9 @@ WHERE id = ?
             .begin()
             .await
             .session_context("load persistent session turn acquisition")?;
-        let session = sqlx::query_as::<_, (i64, Option<String>)>(
-            "SELECT max_history_bytes, provider_session_id FROM session WHERE id = ?",
-        )
-        .bind(session_id)
-        .fetch_optional(&mut *transaction)
-        .await
-        .session_context("load persistent session turn acquisition")?
-        .ok_or_else(|| SessionError::NotFound {
-            id: session_id.to_string(),
-        })?;
-        let (max_history_bytes, provider_session_id) = session;
-        let max_history_bytes = decode_max_history_bytes(session_id, max_history_bytes)?;
+        let configuration = load_turn_configuration(&mut transaction, session_id).await?;
+        let max_history_bytes =
+            decode_max_history_bytes(session_id, configuration.max_history_bytes)?;
         let turn_position = next_turn_position(&mut transaction, session_id).await?;
         let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
         let turns = load_turns_from(&mut transaction, session_id, max_history_bytes).await?;
@@ -389,9 +407,8 @@ WHERE id = ?
             .session_context("load persistent session turn acquisition")?;
 
         Ok(TurnAcquisition {
+            configuration,
             latest_completed_turn,
-            max_history_bytes,
-            provider_session_id,
             turn_position,
             turns,
         })
@@ -402,6 +419,8 @@ WHERE id = ?
         session_id: &str,
         message: &EncodedMessage,
         acquisition: &TurnAcquisition,
+        options: &TurnOptions,
+        continuation_compatible: bool,
     ) -> Result<Option<TurnGuard>, SessionError> {
         let operation = "reserve persistent session turn";
         let recovery_now = self.timestamp_source.now_timestamp_seconds();
@@ -413,22 +432,10 @@ WHERE id = ?
                 .await
                 .session_context("recover abandoned persistent session turn")?;
         }
-        let session = sqlx::query_as::<_, (i64, Option<String>)>(
-            "SELECT max_history_bytes, provider_session_id FROM session WHERE id = ?",
-        )
-        .bind(session_id)
-        .fetch_optional(&mut *transaction)
-        .await
-        .session_context(operation)?
-        .ok_or_else(|| SessionError::NotFound {
-            id: session_id.to_string(),
-        })?;
-        let (max_history_bytes, provider_session_id) = session;
-        let max_history_bytes = decode_max_history_bytes(session_id, max_history_bytes)?;
+        let configuration = load_turn_configuration(&mut transaction, session_id).await?;
         let turn_position = next_turn_position(&mut transaction, session_id).await?;
         let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
-        if max_history_bytes != acquisition.max_history_bytes
-            || provider_session_id != acquisition.provider_session_id
+        if configuration != acquisition.configuration
             || turn_position != acquisition.turn_position
             || latest_completed_turn != acquisition.latest_completed_turn
         {
@@ -438,21 +445,23 @@ WHERE id = ?
         }
         let reservation_now = self.timestamp_source.now_timestamp_seconds();
         let lease_expires_at = reservation_now.saturating_add(TURN_LEASE_SECONDS);
-        let result = sqlx::query_scalar::<_, Vec<u8>>(
-            r"
+        let snapshot = StoredTurnOptions::encode(options);
+        let result = sqlx::query_scalar!(
+            r#"
 INSERT INTO session_turn (
     session_id, turn_position, status, error_type, lease_expires_at, created_at, updated_at,
-    owner_token
+    owner_token, turn_options
 )
-VALUES (?, ?, 'running', NULL, ?, ?, ?, randomblob(16))
-RETURNING owner_token
-",
+VALUES (?, ?, 'running', NULL, ?, ?, ?, randomblob(16), ?)
+RETURNING owner_token AS "owner_token!: Vec<u8>"
+"#,
+            session_id,
+            acquisition.turn_position,
+            lease_expires_at,
+            reservation_now,
+            reservation_now,
+            snapshot
         )
-        .bind(session_id)
-        .bind(acquisition.turn_position)
-        .bind(lease_expires_at)
-        .bind(reservation_now)
-        .bind(reservation_now)
         .fetch_one(&mut *transaction)
         .await;
         let owner_token = result.map_err(|error| {
@@ -485,6 +494,15 @@ RETURNING owner_token
             operation,
         )
         .await?;
+        if !continuation_compatible {
+            sqlx::query!(
+                "UPDATE session SET provider_session_id = NULL WHERE id = ?",
+                session_id
+            )
+            .execute(&mut *transaction)
+            .await
+            .session_context(operation)?;
+        }
         transaction.commit().await.session_context(operation)?;
         self.reservation_observer.committed().await;
         self.abandoned_turns.remove(&abandoned_turns);
@@ -754,10 +772,46 @@ pub(crate) struct LoadedSession {
     pub(crate) turns: Vec<Vec<ModelMessage>>,
 }
 
+/// Versioned durable representation; omitted legacy permissions remain unknown.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredTurnOptions {
+    max_tool_calls: NonZeroUsize,
+    output_schema: Value,
+    tool_policy: ToolPolicy,
+    version: u8,
+}
+
+impl StoredTurnOptions {
+    fn encode(options: &TurnOptions) -> String {
+        json!({
+            "max_tool_calls": options.limits().max_tool_calls(),
+            "output_schema": options.schema().value(),
+            "tool_policy": options.tool_policy(),
+            "version": 1,
+        })
+        .to_string()
+    }
+
+    fn decode(snapshot: &str) -> Result<TurnOptions, SessionError> {
+        let stored: Self = deserialize_payload(snapshot)?;
+        if stored.version != 1 {
+            return Err(SessionError::InvalidData {
+                reason: format!("unsupported turn options version {}", stored.version),
+            });
+        }
+
+        Ok(TurnOptions::new(
+            OutputSchema::new(stored.output_schema)?,
+            stored.tool_policy,
+            TurnLimits::new(stored.max_tool_calls),
+        ))
+    }
+}
+
 struct TurnAcquisition {
+    configuration: TurnConfigurationRow,
     latest_completed_turn: Option<i64>,
-    max_history_bytes: usize,
-    provider_session_id: Option<String>,
     turn_position: i64,
     turns: Vec<Vec<ModelMessage>>,
 }
@@ -1130,6 +1184,29 @@ fn connect_options(path: &Path) -> SqliteConnectOptions {
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
+}
+
+async fn load_turn_configuration(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+) -> Result<TurnConfigurationRow, SessionError> {
+    sqlx::query_as!(
+        TurnConfigurationRow,
+        r#"
+SELECT max_history_bytes AS "max_history_bytes!: i64", provider_session_id,
+       (SELECT turn_options FROM session_turn
+        WHERE session_id = session.id AND status = 'completed'
+        ORDER BY turn_position DESC LIMIT 1) AS "turn_options?: String"
+FROM session WHERE id = ?
+"#,
+        session_id
+    )
+    .fetch_optional(connection)
+    .await
+    .session_context("load persistent session turn acquisition")?
+    .ok_or_else(|| SessionError::NotFound {
+        id: session_id.to_string(),
+    })
 }
 
 async fn load_turns_from(

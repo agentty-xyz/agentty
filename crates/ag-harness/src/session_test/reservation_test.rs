@@ -6,7 +6,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use tempfile::tempdir;
 
 use super::support::{
-    ReservationCommitControl, active_turn_owner, complete_native_turn, schema, turn,
+    ReservationCommitControl, active_turn_owner, complete_native_turn, schema, turn, turn_options,
 };
 use crate::model::{ModelError, ModelMessage};
 use crate::session::{
@@ -75,7 +75,7 @@ async fn beginning_a_turn_for_a_missing_session_reports_not_found() {
 
     // Act
     let error = database
-        .begin_turn("missing", "prompt")
+        .begin_turn("missing", "prompt", &turn_options())
         .await
         .err()
         .expect("missing session should fail");
@@ -109,7 +109,7 @@ END
 
     // Act
     let error = database
-        .begin_turn("session-a", "prompt")
+        .begin_turn("session-a", "prompt", &turn_options())
         .await
         .err()
         .expect("database failure should be preserved");
@@ -139,7 +139,7 @@ async fn beginning_a_turn_does_not_reserve_when_history_loading_fails() {
 
     // Act
     let error = database
-        .begin_turn("session-a", "new prompt")
+        .begin_turn("session-a", "new prompt", &turn_options())
         .await
         .err()
         .expect("invalid history should fail acquisition");
@@ -181,7 +181,7 @@ async fn beginning_a_turn_calculates_the_lease_when_reserving() {
 
     // Act
     let acquired = database
-        .begin_turn("session-a", "prompt")
+        .begin_turn("session-a", "prompt", &turn_options())
         .await
         .expect("turn should begin");
     let row = sqlx::query_as::<_, (String, i64, i64, i64)>(
@@ -224,7 +224,7 @@ async fn reserving_a_turn_rejects_a_stale_acquisition_snapshot() {
 
     // Act
     let reserved = database
-        .reserve_turn("session-a", &message, &acquisition)
+        .reserve_turn("session-a", &message, &acquisition, &turn_options(), true)
         .await
         .expect("reservation should be checked");
     let active_turns = sqlx::query_scalar::<_, i64>(
@@ -262,7 +262,7 @@ async fn reserving_a_turn_for_a_removed_session_reports_not_found() {
 
     // Act
     let result = database
-        .reserve_turn("session-a", &message, &acquisition)
+        .reserve_turn("session-a", &message, &acquisition, &turn_options(), true)
         .await;
 
     // Assert
@@ -293,7 +293,7 @@ async fn cancelling_turn_acquisition_leaves_no_active_turn() {
     // Act
     let cancellation = tokio::time::timeout(
         Duration::from_millis(50),
-        database.begin_turn("session-a", "cancelled"),
+        database.begin_turn("session-a", "cancelled", &turn_options()),
     )
     .await;
     blocker
@@ -301,7 +301,7 @@ async fn cancelling_turn_acquisition_leaves_no_active_turn() {
         .await
         .expect("blocking transaction should roll back");
     let acquired = database
-        .begin_turn("session-a", "replacement")
+        .begin_turn("session-a", "replacement", &turn_options())
         .await
         .expect("replacement turn should begin immediately");
 
@@ -332,12 +332,12 @@ async fn cancelling_after_commit_recovers_the_owned_turn_immediately() {
     // Act
     let cancellation = tokio::time::timeout(
         Duration::from_secs(1),
-        database.begin_turn("session-a", "cancelled"),
+        database.begin_turn("session-a", "cancelled", &turn_options()),
     )
     .await;
     let commit_seen = commit_control.commit_seen.load(Ordering::SeqCst);
     let acquired = replacement_database
-        .begin_turn("session-a", "replacement")
+        .begin_turn("session-a", "replacement", &turn_options())
         .await
         .expect("replacement turn should begin immediately");
     let turns = sqlx::query_as::<_, (i64, String)>(
@@ -374,7 +374,7 @@ async fn registered_cancelled_owner_preserves_its_reason_during_recovery() {
         .expect("session should be created");
     complete_native_turn(&database, "native-session").await;
     let abandoned = database
-        .begin_turn("session-a", "abandoned")
+        .begin_turn("session-a", "abandoned", &turn_options())
         .await
         .expect("turn should begin");
     let mut owner = active_turn_owner(&database, "session-a", abandoned.turn_position).await;
@@ -383,7 +383,7 @@ async fn registered_cancelled_owner_preserves_its_reason_during_recovery() {
 
     // Act
     let replacement = database
-        .begin_turn("session-a", "replacement")
+        .begin_turn("session-a", "replacement", &turn_options())
         .await
         .expect("replacement turn should begin");
     let turns = sqlx::query_as::<_, (i64, String, Option<String>)>(
@@ -422,7 +422,7 @@ async fn stopped_ownership_monitor_reports_ownership_loss() {
         .await
         .expect("session should be created");
     let mut acquired = database
-        .begin_turn("session-a", "prompt")
+        .begin_turn("session-a", "prompt", &turn_options())
         .await
         .expect("turn should begin");
     acquired
@@ -470,11 +470,11 @@ async fn abandoned_owners_are_scoped_to_their_database() {
             .expect("session should be created");
     }
     let first_turn = first_database
-        .begin_turn("session-a", "first abandoned")
+        .begin_turn("session-a", "first abandoned", &turn_options())
         .await
         .expect("first turn should begin");
     let second_turn = second_database
-        .begin_turn("session-a", "second abandoned")
+        .begin_turn("session-a", "second abandoned", &turn_options())
         .await
         .expect("second turn should begin");
     let first_owner =
@@ -486,14 +486,14 @@ async fn abandoned_owners_are_scoped_to_their_database() {
 
     // Act
     let second_replacement = second_database
-        .begin_turn("session-a", "second replacement")
+        .begin_turn("session-a", "second replacement", &turn_options())
         .await
         .expect("second replacement should begin");
     let first_owners = first_database
         .abandoned_turns
         .for_session(&first_database.identity, "session-a");
     let first_replacement = first_database
-        .begin_turn("session-a", "first replacement")
+        .begin_turn("session-a", "first replacement", &turn_options())
         .await
         .expect("first replacement should begin");
 
@@ -514,7 +514,7 @@ async fn failing_or_completing_a_turn_that_is_not_running_reports_invalid_data()
         .await
         .expect("session should be created");
     let turn_position = database
-        .begin_turn("session-a", "prompt")
+        .begin_turn("session-a", "prompt", &turn_options())
         .await
         .expect("turn should begin")
         .turn_position;
@@ -564,7 +564,7 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
         .expect("session should be created");
     complete_native_turn(&database, "native-session").await;
     let mut abandoned = database
-        .begin_turn("session-a", "abandoned")
+        .begin_turn("session-a", "abandoned", &turn_options())
         .await
         .expect("turn should begin");
     abandoned.guard.disarm();
@@ -584,7 +584,7 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
         .await
         .expect("session should load");
     let replacement = database
-        .begin_turn("session-a", "replacement")
+        .begin_turn("session-a", "replacement", &turn_options())
         .await
         .expect("replacement turn should begin");
     let status = sqlx::query_scalar::<_, String>(
@@ -617,7 +617,7 @@ async fn interruption_rolls_back_when_clearing_continuation_fails() {
             .expect("session should be created");
         complete_native_turn(&database, "native-session").await;
         let mut acquired = database
-            .begin_turn("session-a", "abandoned")
+            .begin_turn("session-a", "abandoned", &turn_options())
             .await
             .expect("turn should begin");
         acquired.guard.disarm();
@@ -685,7 +685,7 @@ async fn delayed_or_unowned_cleanup_preserves_provider_continuation() {
         .expect("session should be created");
     complete_native_turn(&database, "native-session").await;
     let mut acquired = database
-        .begin_turn("session-a", "pending")
+        .begin_turn("session-a", "pending", &turn_options())
         .await
         .expect("turn should begin");
     acquired.guard.disarm();

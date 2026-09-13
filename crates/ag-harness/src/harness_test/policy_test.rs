@@ -13,7 +13,7 @@ use super::support::{
 };
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
-use crate::lifecycle::{LifecycleEventKind, TurnErrorType};
+use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, ToolErrorType, TurnErrorType};
 use crate::model::{ModelError, ModelErrorType, ModelMessage, ModelResponse};
 use crate::tool::ToolDefinition;
 use crate::turn::TurnError;
@@ -271,26 +271,45 @@ async fn rejects_disabled_read_call() {
 
 #[tokio::test]
 async fn enforces_tool_call_limit() {
-    // Arrange
-    let mut model = model();
-    model.expect_complete().times(2).returning(|_| {
-        Ok(response_without_metadata(ModelResponse::ToolCall(
-            read_call("call_read"),
-        )))
-    });
-    let harness = read_harness(model, readable_file_system())
-        .max_tool_calls(NonZeroUsize::new(1).expect("limit should be non-zero"))
-        .with_lifecycle_observer(|_| {});
+    for observed in [false, true] {
+        // Arrange
+        let mut model = model();
+        model.expect_complete().times(2).returning(|_| {
+            Ok(response_without_metadata(ModelResponse::ToolCall(
+                read_call("call_read"),
+            )))
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut harness = read_harness(model, readable_file_system())
+            .max_tool_calls(NonZeroUsize::new(1).expect("limit should be non-zero"));
+        if observed {
+            let events = Arc::clone(&events);
+            harness = harness.with_lifecycle_observer(move |event: LifecycleEvent| {
+                events.lock().expect("events lock").push(event);
+            });
+        }
 
-    // Act
-    let error = harness
-        .run_once("inspect", object_schema())
-        .await
-        .expect_err("second tool call should exceed the limit");
+        // Act
+        let error = harness
+            .run_once("inspect", object_schema())
+            .await
+            .expect_err("second tool call should exceed the limit");
 
-    // Assert
-    assert!(matches!(&error, TurnError::ToolCallLimit { limit: 1 }));
-    assert_eq!(error.error_type(), TurnErrorType::ToolCallLimit);
+        // Assert
+        assert!(matches!(&error, TurnError::ToolCallLimit { limit: 1 }));
+        assert_eq!(error.error_type(), TurnErrorType::ToolCallLimit);
+        let events = events.lock().expect("events lock");
+        assert_eq!(
+            events.iter().any(|event| matches!(
+                event.kind(),
+                LifecycleEventKind::ToolFailed {
+                    error_type: ToolErrorType::CallLimit,
+                    ..
+                }
+            )),
+            observed
+        );
+    }
 }
 
 #[tokio::test]

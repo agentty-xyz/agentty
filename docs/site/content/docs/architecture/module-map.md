@@ -33,8 +33,10 @@ For file-level detail, read the module docstrings directly.
   object-safe `Model` boundary, its `ModelClient` implementation, the built-in provider
   catalog and environment-backed configuration, private Qwen, Kimi, and Muse policies, a
   shared Chat Completions backend with JSON Object and JSON Schema modes,
-  backend-neutral request-duration telemetry, and a deny-by-default `Harness` loop with
-  closed built-in `read` and `write` capabilities. Its durable `Session` API records
+  backend-neutral request-duration telemetry, and a shared internal engine with closed
+  built-in `read` and `write` capabilities. Both durable and one-shot entry points pass
+  immutable `TurnOptions` with a required schema, effective deny-by-default
+  `ToolPolicy`, and tool-call budget to that engine. Its durable `Session` API records
   pending, running, completed, failed, and interrupted turns in SQLite, while replaying
   only bounded whole completed turns. `Harness` owns a lazily initialized database pool
   shared by its sessions; `Session::send` owns terminal lifecycle events through durable
