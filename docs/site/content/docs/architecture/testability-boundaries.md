@@ -87,6 +87,12 @@ the provider transport traits) keep subprocess sequencing and retry behavior
 deterministic in unit tests. The runtime also accepts `Terminal<B: Backend>` via
 `run_with_backend`, enabling in-process TUI tests with `TestBackend`.
 
+Private `ag-harness` execution contracts inject inert preparation, execution, and
+separately retained cancellation/cleanup control. Contract tests use only fakes to
+exercise grants, shared output budgets, deadlines, and independent result fields. There
+is no production executor; filesystem isolation and descendant cleanup require future
+backend enforcement and are not established by these tests.
+
 Persistent `ag-harness` sessions inject a timestamp source and a reservation observer.
 The observer marks the boundary after SQLite commits a turn reservation, allowing tests
 to exercise cancellation at that point without conditional production control flow. Unit

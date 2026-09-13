@@ -63,6 +63,17 @@ behavior. Mutable counters, cancellation, and shared provider-call budget accoun
 remain execution state rather than configuration. Sandboxed Bash and Agentty permission
 mapping remain later work.
 
+Private execution contracts define immutable command and sandbox policy values, explicit
+workspace-write, external-read, environment, and host-information grants, and deny-only
+networking. Git metadata remains read-only, including linked-worktree administration. A
+shared stdout/stderr byte budget and monotonic deadline bound the execution contract;
+retained cancellation and cleanup control survives a dropped execution future. Results
+keep the main exit, termination reason, output truncation, and cleanup failure separate.
+Applied writes are not rolled back; aggregate memory, process-count, and disk quotas are
+excluded. These contracts have no production executor or public entry point. Future
+backends must enforce the policy against hostile commands, descendants, and repository
+contents before launching anything.
+
 ## Repository comparisons
 
 Hosts supply a validated `ComparisonBase` through `TurnOptions`. It pins a full commit

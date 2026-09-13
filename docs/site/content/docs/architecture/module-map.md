@@ -36,7 +36,8 @@ For file-level detail, read the module docstrings directly.
   SQLite history, write journals, and bounded tools backed by validated `Repository` and
   injectable `FileSystem` boundaries. Hosts own prompts, comparison-base selection,
   permissions, and telemetry setup; the engine enforces a validated, pinned commit for
-  comparisons.
+  comparisons. Private execution contracts define sandbox policy and lifecycle semantics
+  without an executable backend or a public tool surface.
 - `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
   process-level tests. It derives provider parsing and help from `ag-harness`, then owns
   command-line defaults, application prompts, bounded repository permission selection,

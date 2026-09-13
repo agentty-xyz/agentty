@@ -8,6 +8,7 @@
 mod chat_completion;
 mod comparison;
 mod engine;
+mod execution;
 mod file_system;
 mod harness;
 mod lifecycle;
