@@ -307,10 +307,11 @@ pub(super) enum Termination {
 }
 
 /// Output truncation never overwrites the exit or termination reason. Cleanup
-/// failure never erases a successful main exit, and writes are never rolled
-/// back.
+/// failure never erases the execution error or main exit, and writes are never
+/// rolled back.
 pub(super) struct ExecutionResult {
     pub(super) cleanup_failure: Option<ExecutionError>,
+    pub(super) execution_failure: Option<ExecutionError>,
     pub(super) main_exit: MainExit,
     pub(super) output: Output,
     pub(super) termination: Termination,
@@ -357,7 +358,11 @@ pub(super) trait ExecutionControl: Send + Sync {
 pub(super) enum ExecutionError {
     Unsupported,
     Setup,
+    Process,
+    Supervision,
     Cleanup,
+    /// Cleanup exhausted its bounds without confirming resource release.
+    CleanupUnconfirmed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

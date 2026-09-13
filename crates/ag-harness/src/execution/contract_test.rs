@@ -422,6 +422,7 @@ fn result_dimensions_do_not_overwrite_each_other() {
                 output.capture(Stream::Stdout, b"out");
                 let result = ExecutionResult {
                     cleanup_failure,
+                    execution_failure: None,
                     main_exit,
                     output,
                     termination,
@@ -582,6 +583,7 @@ impl Execution for FakeExecution {
 
         ExecutionResult {
             cleanup_failure: None,
+            execution_failure: None,
             main_exit: MainExit::Unavailable,
             output: Output::new(self.limits),
             termination: Termination::Cancelled,
