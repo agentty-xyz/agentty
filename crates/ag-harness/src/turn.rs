@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::comparison::ComparisonBase;
 use crate::lifecycle::{ModelResponseType, TurnErrorType};
 use crate::model::{CompletionMetadata, ModelError};
 use crate::policy::ToolPolicy;
@@ -22,6 +23,7 @@ use crate::write::WriteError;
 /// and conversation history belong to execution state, not this snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TurnOptions {
+    comparison_base: Option<ComparisonBase>,
     limits: TurnLimits,
     schema: OutputSchema,
     tool_policy: ToolPolicy,
@@ -31,6 +33,7 @@ impl TurnOptions {
     /// Resolves a required schema, explicit permissions, and execution limits.
     pub fn new(schema: OutputSchema, tool_policy: ToolPolicy, limits: TurnLimits) -> Self {
         Self {
+            comparison_base: None,
             limits,
             schema,
             tool_policy,
@@ -52,8 +55,17 @@ impl TurnOptions {
         self.tool_policy
     }
 
-    pub(crate) fn continuation_compatible(&self, other: &Self) -> bool {
-        self.schema == other.schema && self.tool_policy == other.tool_policy
+    /// Sets the host-validated comparison base for this turn only.
+    #[must_use]
+    pub fn with_comparison_base(mut self, base: ComparisonBase) -> Self {
+        self.comparison_base = Some(base);
+
+        self
+    }
+
+    /// Returns the selected comparison base, if comparisons are available.
+    pub fn comparison_base(&self) -> Option<&ComparisonBase> {
+        self.comparison_base.as_ref()
     }
 }
 
@@ -377,6 +389,9 @@ pub enum TurnError {
     /// Repository-scoped tools were enabled without a repository root.
     #[error("repository root is required when a repository tool is allowed")]
     RepositoryRequired,
+    /// The comparison base was validated for another repository scope.
+    #[error("comparison base does not belong to the configured repository scope")]
+    ComparisonRepositoryMismatch,
     /// A repository write failed.
     #[error(transparent)]
     Write(#[from] WriteError),
@@ -395,7 +410,9 @@ impl TurnError {
             Self::Model(error) => TurnErrorType::Model(error.error_type()),
             Self::ToolDenied { .. } => TurnErrorType::ToolDenied,
             Self::Read(_) | Self::Write(_) => TurnErrorType::Tool,
-            Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
+            Self::RepositoryRequired | Self::ComparisonRepositoryMismatch => {
+                TurnErrorType::RepositoryRequired
+            }
             Self::ToolCallLimit { .. } => TurnErrorType::ToolCallLimit,
         }
     }

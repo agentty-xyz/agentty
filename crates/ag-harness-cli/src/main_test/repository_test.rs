@@ -1,10 +1,10 @@
 use std::env;
 
-use ag_harness::Repository;
+use ag_harness::{Repository, Tool};
 use clap::Parser;
 
 use super::support::test_git_executable;
-use crate::{Cli, CliError, repository_from_path, repository_or_default};
+use crate::{Cli, CliError, comparison_options, repository_from_path, repository_or_default};
 
 #[test]
 fn cli_accepts_the_default_git_executable() {
@@ -98,4 +98,50 @@ fn git_executable_default_preserves_repository_root_errors() {
         error,
         CliError::Repository(ag_harness::RepositoryError::Root { .. })
     ));
+}
+
+#[tokio::test]
+async fn comparison_selection_is_explicit_validated_and_preserves_permissions() {
+    // Arrange
+    let repository =
+        Repository::new(env!("CARGO_MANIFEST_DIR"), test_git_executable()).expect("repository");
+
+    // Act
+    let absent = comparison_options(&repository, None, false)
+        .await
+        .expect("no base required");
+    let selected = comparison_options(&repository, Some("HEAD"), true)
+        .await
+        .expect("explicit commit");
+    let invalid = comparison_options(&repository, Some("HEAD^{tree}"), false).await;
+
+    // Assert
+    assert!(absent.comparison_base().is_none());
+    assert!(absent.tool_policy().allows(Tool::Read));
+    assert!(!absent.tool_policy().allows(Tool::Write));
+    assert!(selected.comparison_base().is_some());
+    assert!(selected.tool_policy().allows(Tool::Write));
+    assert!(matches!(invalid, Err(CliError::ComparisonBase(_))));
+}
+
+#[test]
+fn run_and_resume_accept_explicit_comparison_selection() {
+    // Arrange
+    let requests = [
+        vec!["ag-harness", "run", "model", "--comparison-base", "release"],
+        vec!["ag-harness", "resume", "session", "--comparison-base", "v1"],
+    ];
+
+    // Act
+    let selections: Vec<_> = requests
+        .into_iter()
+        .map(|arguments| {
+            Cli::try_parse_from(arguments)
+                .expect("CLI selection")
+                .comparison_base
+        })
+        .collect();
+
+    // Assert
+    assert_eq!(selections, [Some("release".into()), Some("v1".into())]);
 }

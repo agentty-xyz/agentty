@@ -8,8 +8,9 @@ use std::process::ExitCode;
 use std::{env, io};
 
 use ag_harness::{
-    Harness, ModelConfiguration, ModelConfigurationError, ModelProvider, OutputSchema,
-    ReasoningEffort, Repository, Session, SessionInfo, Tool, TurnOutcome,
+    ComparisonBase, Harness, ModelConfiguration, ModelConfigurationError, ModelProvider,
+    OutputSchema, ReasoningEffort, Repository, Session, SessionInfo, Tool, ToolPolicy, TurnLimits,
+    TurnOptions, TurnOutcome,
 };
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Args, Parser, Subcommand};
@@ -19,7 +20,8 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as
 
 const READ_ONLY_SYSTEM_PROMPT: &str = concat!(
     "You are operating in a read-only repository harness. The read tool supports file, list, ",
-    "search, diff, and show actions. For change review, call diff first, then use search, file, ",
+    "search, diff, and show actions. For change review, call diff first when a comparison base is \
+     configured, then use search, file, ",
     "list, or show for evidence. Use repository tools only when the user explicitly asks about ",
     "repository contents. Treat an unambiguous reference to the repository, project, codebase, ",
     "code, a file, or a change as an explicit repository request. Treat replies, response speed, ",
@@ -34,7 +36,8 @@ const READ_ONLY_SYSTEM_PROMPT: &str = concat!(
 );
 const READ_WRITE_SYSTEM_PROMPT: &str = concat!(
     "You are operating in a repository harness with read and write tools. The read tool supports ",
-    "file, list, search, diff, and show actions. For change review, call diff first. When a user ",
+    "file, list, search, diff, and show actions. For change review, call diff first when a \
+     comparison base is configured. When a user ",
     "explicitly asks about repository contents, call read immediately and use its result before ",
     "answering. Treat an unambiguous reference to the repository, project, codebase, code, a \
      file, ",
@@ -57,6 +60,11 @@ const READ_WRITE_SYSTEM_PROMPT: &str = concat!(
     after_help = provider_help()
 )]
 struct Cli {
+    /// Explicit comparison revision, resolved once to a commit for this
+    /// invocation. Omit to keep comparisons unavailable while allowing
+    /// other reads.
+    #[arg(long, global = true, value_name = "REV")]
+    comparison_base: Option<String>,
     /// SQLite database used for durable session history.
     #[arg(long, global = true, value_name = "FILE")]
     database: Option<PathBuf>,
@@ -272,6 +280,12 @@ where
                 &mut environment,
             )?;
             let repository = repository_or_default(args.read_dir, git_executable)?;
+            let options = comparison_options(
+                &repository,
+                cli.comparison_base.as_deref(),
+                args.allow_write,
+            )
+            .await?;
             let (harness, system_prompt) = configured_harness(
                 client,
                 database,
@@ -287,7 +301,16 @@ where
             let mut output = output;
             announce_session(&mut output, &session_id).await?;
 
-            run_chat(&mut session, &args.model, args.prompt, input, output, mode).await
+            run_chat(
+                &mut session,
+                &args.model,
+                args.prompt,
+                input,
+                output,
+                mode,
+                options,
+            )
+            .await
         }
         Command::Resume(args) => {
             let info = SessionInfo::load(&database, &args.session).await?;
@@ -295,6 +318,12 @@ where
             let client =
                 model_client(provider, &model, args.base_url.as_deref(), &mut environment)?;
             let repository = repository_or_default(args.read_dir, git_executable)?;
+            let options = comparison_options(
+                &repository,
+                cli.comparison_base.as_deref(),
+                args.allow_write,
+            )
+            .await?;
             let (harness, _) = configured_harness(
                 client,
                 database,
@@ -306,7 +335,16 @@ where
             let mut output = output;
             announce_session(&mut output, &args.session).await?;
 
-            run_chat(&mut session, &model, args.prompt, input, output, mode).await
+            run_chat(
+                &mut session,
+                &model,
+                args.prompt,
+                input,
+                output,
+                mode,
+                options,
+            )
+            .await
         }
     }
 }
@@ -390,6 +428,25 @@ fn model_client(
         .map_err(CliError::from)
 }
 
+async fn comparison_options(
+    repository: &Repository,
+    revision: Option<&str>,
+    allow_write: bool,
+) -> Result<TurnOptions, CliError> {
+    let mut policy = ToolPolicy::default().allow(Tool::Read);
+    if allow_write {
+        policy = policy.allow(Tool::Write);
+    }
+    let options = TurnOptions::new(chat_schema()?, policy, TurnLimits::default());
+
+    match revision {
+        Some(revision) => {
+            Ok(options.with_comparison_base(ComparisonBase::resolve(repository, revision).await?))
+        }
+        None => Ok(options),
+    }
+}
+
 fn configured_harness(
     client: ag_harness::ModelClient,
     database: PathBuf,
@@ -437,6 +494,7 @@ async fn run_chat<Input, Output>(
     mut input: Input,
     mut output: Output,
     mode: ChatMode,
+    options: TurnOptions,
 ) -> Result<(), CliError>
 where
     Input: AsyncBufRead + Unpin,
@@ -459,7 +517,7 @@ where
         if prompt.trim().is_empty() {
             continue;
         }
-        match session.send(prompt).await {
+        match session.send_with_options(prompt, options.clone()).await {
             Ok(outcome) => write_outcome(&mut output, requested_model, &outcome).await?,
             Err(error) if mode == ChatMode::Interactive => {
                 write_turn_error(&mut output, &error).await?;
@@ -685,6 +743,8 @@ fn chat_schema() -> Result<OutputSchema, CliError> {
 
 #[derive(Debug, Error)]
 enum CliError {
+    #[error(transparent)]
+    ComparisonBase(#[from] ag_harness::ComparisonBaseError),
     #[error("--base-url or {name} is required")]
     BaseUrlRequired { name: &'static str },
     #[error("one or more chat turns failed")]

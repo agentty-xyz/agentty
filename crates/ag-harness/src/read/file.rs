@@ -118,6 +118,7 @@ impl ReadTool {
             .and_then(|additional_lines| start_line.checked_add(additional_lines));
 
         Ok(ReadOutput {
+            comparison_base: None,
             content,
             end_line,
             next_offset,

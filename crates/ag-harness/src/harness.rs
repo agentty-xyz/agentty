@@ -71,10 +71,10 @@ impl Session<'_> {
     /// Sends a durable turn using exactly these options, without changing
     /// defaults.
     ///
-    /// Schema or permission changes discard native continuation and replay
-    /// completed history. Permission downgrades retain earlier tool results.
-    /// Options are persisted before execution; completion is reported only
-    /// after the resulting messages are committed.
+    /// Schema, permission, or comparison changes discard native continuation
+    /// and replay completed history. Permission downgrades retain earlier
+    /// tool results. Options are persisted before execution; completion is
+    /// reported only after the resulting messages are committed.
     ///
     /// # Errors
     ///

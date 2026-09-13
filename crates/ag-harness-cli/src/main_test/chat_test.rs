@@ -1,7 +1,7 @@
 use std::env;
 use std::sync::atomic::AtomicUsize;
 
-use ag_harness::{Harness, Repository, Tool};
+use ag_harness::{Harness, Repository, Tool, ToolPolicy, TurnLimits, TurnOptions};
 use serde_json::json;
 use tokio::io::BufReader;
 
@@ -37,6 +37,11 @@ async fn interactive_chat_prints_prompts_and_handles_blank_input() {
         input,
         &mut output,
         ChatMode::Interactive,
+        TurnOptions::new(
+            chat_schema().expect("schema"),
+            ToolPolicy::default(),
+            TurnLimits::default(),
+        ),
     )
     .await
     .expect("interactive chat should finish at EOF");
@@ -78,6 +83,11 @@ async fn interactive_chat_continues_after_a_failed_turn() {
         input,
         &mut output,
         ChatMode::Interactive,
+        TurnOptions::new(
+            chat_schema().expect("schema"),
+            ToolPolicy::default(),
+            TurnLimits::default(),
+        ),
     )
     .await
     .expect("interactive chat should recover and finish at EOF");
@@ -116,6 +126,11 @@ async fn noninteractive_chat_reports_a_failure_before_retrying() {
         input,
         &mut output,
         ChatMode::NonInteractive,
+        TurnOptions::new(
+            chat_schema().expect("schema"),
+            ToolPolicy::default(),
+            TurnLimits::default(),
+        ),
     )
     .await
     .expect_err("a recovered chat should retain its failed exit status");
@@ -154,6 +169,11 @@ async fn noninteractive_chat_returns_the_last_failure_at_eof() {
         input,
         &mut output,
         ChatMode::NonInteractive,
+        TurnOptions::new(
+            chat_schema().expect("schema"),
+            ToolPolicy::default(),
+            TurnLimits::default(),
+        ),
     )
     .await
     .expect_err("the final failed turn should be returned at EOF");
@@ -191,6 +211,11 @@ async fn chat_rejects_model_output_that_violates_schema() {
         input,
         &mut output,
         ChatMode::OneShot,
+        TurnOptions::new(
+            chat_schema().expect("schema"),
+            ToolPolicy::default(),
+            TurnLimits::default(),
+        ),
     )
     .await
     .expect_err("schema-invalid output should fail");
@@ -232,6 +257,11 @@ async fn one_shot_chat_does_not_read_follow_up_terminal_input() {
         input,
         &mut output,
         ChatMode::OneShot,
+        TurnOptions::new(
+            chat_schema().expect("schema"),
+            ToolPolicy::default(),
+            TurnLimits::default(),
+        ),
     )
     .await
     .expect("one-shot chat should finish after the initial prompt");
@@ -270,6 +300,11 @@ async fn one_shot_chat_returns_turn_failures() {
         input,
         &mut output,
         ChatMode::OneShot,
+        TurnOptions::new(
+            chat_schema().expect("schema"),
+            ToolPolicy::default(),
+            TurnLimits::default(),
+        ),
     )
     .await
     .expect_err("one-shot chat should return its failed turn");

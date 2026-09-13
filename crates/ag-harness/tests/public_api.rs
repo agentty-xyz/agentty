@@ -12,12 +12,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_harness::{
-    CompletionMetadata, CompletionUsage, FileSystem, Harness, LifecycleEventKind, LifecycleMetrics,
-    LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, Model, ModelCompletion,
-    ModelConfiguration, ModelError, ModelMessage, ModelMetadata, ModelProvider, ModelRequest,
-    ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError, Repository, RepositoryError,
-    SessionError, SessionInfo, Tool, ToolCall, ToolPolicy, TurnError, TurnLimits, TurnOptions,
-    WriteStatus,
+    ComparisonBase, CompletionMetadata, CompletionUsage, FileSystem, Harness, LifecycleEventKind,
+    LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, Model,
+    ModelCompletion, ModelConfiguration, ModelError, ModelMessage, ModelMetadata, ModelProvider,
+    ModelRequest, ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError, Repository,
+    RepositoryError, SessionError, SessionInfo, Tool, ToolCall, ToolPolicy, TurnError, TurnLimits,
+    TurnOptions, WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -784,6 +784,79 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         .lock()
         .map_err(|_| io::Error::other("requests lock poisoned"))?;
     assert!(requests.last().expect("last request").iter().any(|message| matches!(message, ModelMessage::ToolResult { content, .. } if content.contains("Ada"))));
+
+    Ok(())
+}
+
+struct ExternalComparisonModel;
+
+#[async_trait]
+impl Model for ExternalComparisonModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let response = if matches!(request.messages().last(), Some(ModelMessage::User(_))) {
+            ModelResponse::ToolCall(ToolCall::from_json(
+                "base-file".into(),
+                "read",
+                r#"{"action":"show","side":"base","path":"Cargo.toml"}"#,
+                None,
+            )?)
+        } else {
+            let Some(ModelMessage::ToolResult { content, .. }) = request.messages().last() else {
+                return Err(ModelError::InvalidResponse);
+            };
+            let result: serde_json::Value =
+                serde_json::from_str(content).map_err(ModelError::request)?;
+            assert!(
+                result["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("name = \"ag-harness\""))
+            );
+            assert!(
+                request.tools()[0].description().contains(
+                    result["comparison_base"]
+                        .as_str()
+                        .ok_or(ModelError::InvalidResponse)?
+                )
+            );
+            ModelResponse::Output(json!({"name":result["comparison_base"]}))
+        };
+
+        Ok(ModelCompletion::from_response(response))
+    }
+}
+
+#[tokio::test]
+async fn host_comparison_api_supports_both_entry_points_and_nested_scope()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let repository = repository::repository_with_host_git(Path::new(env!("CARGO_MANIFEST_DIR")));
+    let base = ComparisonBase::resolve(&repository, "HEAD").await?;
+    let validated = ComparisonBase::validate(&repository, base.oid()).await?;
+    let directory = tempfile::tempdir()?;
+    let harness = Harness::new(ExternalComparisonModel)
+        .repository(repository)
+        .database(directory.path().join("comparison.db"));
+    let options = TurnOptions::new(
+        request()?.schema().clone(),
+        ToolPolicy::default().allow(Tool::Read),
+        TurnLimits::default(),
+    )
+    .with_comparison_base(base.clone());
+
+    // Act
+    let once = harness
+        .run_once_with_options("inspect base", options.clone())
+        .await?;
+    let mut session = harness
+        .session("comparison", request()?.schema().clone())
+        .create()
+        .await?;
+    let durable = session.send_with_options("inspect base", options).await?;
+
+    // Assert
+    assert_eq!(base, validated);
+    assert_eq!(once.output(), &json!({"name":base.oid()}));
+    assert_eq!(durable.output(), once.output());
 
     Ok(())
 }

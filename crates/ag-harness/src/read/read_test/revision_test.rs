@@ -5,10 +5,13 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::support::{arguments, command_output, inspection_file_system, truncated_command_output};
+use crate::comparison::support::{COMPARISON_OID, ComparisonRepository};
 use crate::file_system::LocalFileSystem;
 use crate::read::command::MockRepositoryCommandRunner;
 use crate::read::output::{InspectionError, ReadError};
 use crate::read::runtime::{MAX_SCAN_BYTES, ReadTool};
+use crate::repository::support::test_git_executable;
+use crate::{ComparisonBase, Repository};
 
 #[tokio::test]
 async fn shows_selected_lines_from_base_revision() {
@@ -24,7 +27,8 @@ async fn shows_selected_lines_from_base_revision() {
     runner
         .expect_run_large()
         .withf(|root, arguments| {
-            root == Path::new("/repo") && arguments == ["cat-file", "blob", "main:src/lib.rs"]
+            root == Path::new("/repo")
+                && arguments == ["cat-file", "blob", &format!("{COMPARISON_OID}:src/lib.rs")]
         })
         .times(1)
         .returning(|_, _| Ok(command_output(0, "one\ntwo\nthree\n")));
@@ -47,8 +51,9 @@ async fn shows_selected_lines_from_base_revision() {
     let result: Value = serde_json::from_str(&result).expect("show result should be JSON");
 
     // Assert
-    assert_eq!(summary, "main:src/lib.rs");
+    assert_eq!(summary, format!("{COMPARISON_OID}:src/lib.rs"));
     assert_eq!(result["content"], "two");
+    assert_eq!(result["comparison_base"], COMPARISON_OID);
     assert_eq!(result["start_line"], 2);
     assert_eq!(result["end_line"], 2);
     assert_eq!(result["next_offset"], 3);
@@ -311,4 +316,96 @@ async fn rejects_truncated_git_prefix_before_reading_revision_file() {
         InspectionError::RepositoryCommandRejected { detail }
             if detail == "Git returned a truncated repository prefix"
     ));
+}
+
+#[tokio::test]
+async fn comparisons_keep_the_selected_oid_after_branch_movement_and_with_nested_scope() {
+    // Arrange
+    let fixture = ComparisonRepository::new().await;
+    let repository = Repository::new(
+        fixture.directory.path().join("scope"),
+        test_git_executable(),
+    )
+    .expect("nested scope");
+    let base = ComparisonBase::resolve(&repository, "release")
+        .await
+        .expect("base");
+    let tool = ReadTool::with_git(
+        Arc::new(LocalFileSystem),
+        repository.root().to_path_buf(),
+        test_git_executable(),
+        Some(base),
+    );
+    let show = serde_json::from_value(json!({"action":"show", "side":"base", "path":"name.txt"}))
+        .expect("show");
+    let diff = serde_json::from_value(json!({"action":"diff"})).expect("diff");
+
+    // Act
+    fixture.move_branch().await;
+    let replacements = fixture.directory.path().join(".git/refs/replace");
+    tokio::fs::create_dir_all(&replacements)
+        .await
+        .expect("replacement refs");
+    tokio::fs::write(replacements.join(&fixture.base), &fixture.next)
+        .await
+        .expect("replacement commit");
+    let (shown, summary) = tool.execute_inspection(&show).await.expect("pinned show");
+    let (patch, diff_summary) = tool.execute_inspection(&diff).await.expect("pinned diff");
+    let shown: Value = serde_json::from_str(&shown).expect("show JSON");
+    let patch: Value = serde_json::from_str(&patch).expect("diff JSON");
+
+    // Assert
+    assert_eq!(shown["content"], "base");
+    assert_eq!(shown["comparison_base"], fixture.base);
+    assert_eq!(patch["comparison_base"], fixture.base);
+    assert_eq!(summary, format!("{}:name.txt", fixture.base));
+    assert_eq!(diff_summary, fixture.base);
+    assert!(patch["result"].as_str().expect("patch").contains("-base"));
+    assert!(
+        !patch["result"]
+            .as_str()
+            .expect("patch")
+            .contains("outside.txt")
+    );
+}
+
+#[tokio::test]
+async fn missing_comparison_base_only_rejects_comparison_actions() {
+    // Arrange
+    let fixture = ComparisonRepository::new().await;
+    let tool = ReadTool::with_git(
+        Arc::new(LocalFileSystem),
+        fixture.repository.root().to_path_buf(),
+        test_git_executable(),
+        None,
+    );
+    let requests = [
+        json!({"action":"file", "path":"scope/name.txt"}),
+        json!({"action":"list"}),
+        json!({"action":"search", "query":"working"}),
+        json!({"action":"show", "side":"head", "path":"scope/name.txt"}),
+        json!({"action":"diff"}),
+        json!({"action":"show", "side":"base", "path":"scope/name.txt"}),
+    ];
+
+    // Act
+    let mut results = Vec::new();
+    for request in requests {
+        results.push(
+            tool.execute_inspection(&serde_json::from_value(request).expect("arguments"))
+                .await,
+        );
+    }
+
+    // Assert
+    assert!(results[..4].iter().all(Result::is_ok));
+    for result in &results[4..] {
+        let error = result.as_ref().expect_err("comparison unavailable");
+        assert!(error.is_model_correctable());
+        assert!(
+            error
+                .to_string()
+                .contains("comparison base is not configured")
+        );
+    }
 }
