@@ -5,7 +5,7 @@ use tempfile::tempdir;
 
 use super::support::{create_version_one_database, schema, turn_options};
 use crate::session::{Database, NewSession, SessionError, StoredTurnOptions};
-use crate::{Tool, ToolPolicy, TurnError, TurnLimits, TurnOptions};
+use crate::{ComparisonBase, Tool, ToolPolicy, TurnError, TurnLimits, TurnOptions};
 
 #[test]
 fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
@@ -19,7 +19,7 @@ fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
     let snapshot: Value = serde_json::from_str(&encoded).expect("snapshot JSON");
     let mut invalid = Vec::new();
     for (key, value) in [
-        ("version", json!(2)),
+        ("version", json!(3)),
         ("max_tool_calls", json!(0)),
         ("output_schema", json!({"type":"invalid"})),
         ("tool_policy", json!({"read":true})),
@@ -39,7 +39,8 @@ fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
         .collect();
 
     // Assert
-    assert_eq!(decoded, options);
+    assert!(decoded.continuation_compatible(&options));
+    assert_eq!(decoded.max_tool_calls, options.limits().max_tool_calls());
     assert!(errors.iter().all(Result::is_err));
 }
 
@@ -89,9 +90,10 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
 
     // Assert
     assert_eq!(running.0, "running");
-    assert_eq!(
-        StoredTurnOptions::decode(&running.1).expect("running options"),
-        options
+    assert!(
+        StoredTurnOptions::decode(&running.1)
+            .expect("running options")
+            .continuation_compatible(&options)
     );
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].0, "failed");
@@ -152,7 +154,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
         .await
         .expect("completion");
     first.guard.disarm();
-    sqlx::query("UPDATE session_turn SET turn_options = json_set(turn_options, '$.version', 2)")
+    sqlx::query("UPDATE session_turn SET turn_options = json_set(turn_options, '$.version', 3)")
         .execute(database.pool())
         .await
         .expect("corrupt version");
@@ -171,4 +173,80 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
     assert!(matches!(loaded, Err(SessionError::InvalidData { .. })));
     assert!(matches!(reserved, Err(SessionError::InvalidData { .. })));
     assert_eq!(count, 1);
+}
+
+#[test]
+fn comparison_snapshots_preserve_identity_and_fingerprint_all_effective_options() {
+    // Arrange
+    let plain = turn_options();
+    let selected = plain
+        .clone()
+        .with_comparison_base(ComparisonBase::fixture("deleted-repository"));
+    let other_scope = plain
+        .clone()
+        .with_comparison_base(ComparisonBase::fixture("other-repository"));
+    let budget = TurnOptions::new(
+        plain.schema().clone(),
+        plain.tool_policy(),
+        TurnLimits::new(NonZeroUsize::new(17).expect("budget")),
+    );
+
+    // Act
+    let snapshots: Vec<_> = [&plain, &selected, &other_scope, &budget]
+        .into_iter()
+        .map(|options| {
+            StoredTurnOptions::decode(&StoredTurnOptions::encode(options)).expect("stored metadata")
+        })
+        .collect();
+    let fingerprints: Vec<_> = snapshots
+        .iter()
+        .map(StoredTurnOptions::fingerprint)
+        .collect();
+
+    // Assert
+    assert!(snapshots[1].continuation_compatible(&selected));
+    assert!(!snapshots[1].continuation_compatible(&plain));
+    assert!(!snapshots[1].continuation_compatible(&other_scope));
+    assert!(snapshots[0].continuation_compatible(&budget));
+    for (index, fingerprint) in fingerprints.iter().enumerate() {
+        assert_eq!(fingerprint.len(), 64);
+        assert!(!fingerprints[..index].contains(fingerprint));
+    }
+}
+
+#[test]
+fn version_one_options_remain_readable_but_never_imply_a_known_base() {
+    // Arrange
+    let options = turn_options();
+    let legacy = json!({"version":1, "output_schema":options.schema().value(), "tool_policy":options.tool_policy(), "max_tool_calls":options.limits().max_tool_calls()});
+    let mut conflicting = legacy.clone();
+    conflicting["comparison_base"] = json!(ComparisonBase::fixture("repo").identity());
+
+    // Act
+    let stored = StoredTurnOptions::decode(&legacy.to_string()).expect("legacy options");
+    let invalid = StoredTurnOptions::decode(&conflicting.to_string());
+
+    // Assert
+    assert!(stored.comparison_base.is_none());
+    assert!(!stored.continuation_compatible(&options));
+    assert!(invalid.is_err());
+}
+
+#[test]
+fn comparison_metadata_and_fingerprint_corruption_are_rejected() {
+    // Arrange
+    let options = turn_options().with_comparison_base(ComparisonBase::fixture("repo"));
+    let mut snapshot: Value =
+        serde_json::from_str(&StoredTurnOptions::encode(&options)).expect("snapshot");
+    snapshot["comparison_base"]["oid"] = json!("HEAD");
+    let stored: StoredTurnOptions =
+        serde_json::from_value(snapshot.clone()).expect("typed metadata");
+    snapshot["fingerprint"] = json!(stored.fingerprint());
+    let mut mismatched: Value =
+        serde_json::from_str(&StoredTurnOptions::encode(&options)).expect("snapshot");
+    mismatched["fingerprint"] = json!("incorrect");
+
+    // Act / Assert
+    assert!(StoredTurnOptions::decode(&snapshot.to_string()).is_err());
+    assert!(StoredTurnOptions::decode(&mismatched.to_string()).is_err());
 }

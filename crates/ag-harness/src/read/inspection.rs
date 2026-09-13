@@ -5,16 +5,17 @@ use serde::Serialize;
 
 use super::command::RepositoryCommandOutput;
 use super::runtime::{
-    DEFAULT_RESULT_LINES, DEFAULT_REVIEW_BASE, MAX_READ_BYTES, MAX_READ_LINES,
-    MAX_UNTRACKED_DIFF_FILES, ReadTool,
+    DEFAULT_RESULT_LINES, MAX_READ_BYTES, MAX_READ_LINES, MAX_UNTRACKED_DIFF_FILES, ReadTool,
 };
 use super::{InspectionError, ReadError};
-use crate::schema_contract;
 use crate::tool::{MAX_TOOL_RESULT_BYTES, ReadArguments, ReadSide};
+use crate::{ComparisonBase, schema_contract};
 
 #[derive(Serialize)]
-struct InspectionOutput<T> {
+struct InspectionOutput<'a, T> {
     action: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    comparison_base: Option<&'a str>,
     result: T,
     truncated: bool,
 }
@@ -89,7 +90,7 @@ impl ReadTool {
         &self,
         arguments: &ReadArguments,
     ) -> Result<(String, String), InspectionError> {
-        let base = DEFAULT_REVIEW_BASE;
+        let base = self.comparison_oid()?;
         let root = self.repository_root().await?;
         let mut command = vec![
             "diff".to_string(),
@@ -160,7 +161,7 @@ impl ReadTool {
         }
 
         Ok((
-            Self::bounded_text_result("diff", &text, truncated)?,
+            Self::bounded_text_result("diff", &text, truncated, Some(base))?,
             base.to_string(),
         ))
     }
@@ -203,9 +204,11 @@ impl ReadTool {
         action: &'static str,
         text: &str,
         truncated: bool,
+        comparison_base: Option<&str>,
     ) -> Result<String, ReadError> {
         let result = InspectionOutput {
             action,
+            comparison_base,
             result: &text,
             truncated,
         };
@@ -225,6 +228,7 @@ impl ReadTool {
             let midpoint = fitting_boundary + (candidate_boundary - fitting_boundary).div_ceil(2);
             let candidate = InspectionOutput {
                 action,
+                comparison_base,
                 result: &text[..boundaries[midpoint]],
                 truncated: true,
             };
@@ -236,6 +240,7 @@ impl ReadTool {
         }
         let result = InspectionOutput {
             action,
+            comparison_base,
             result: &text[..boundaries[fitting_boundary]],
             truncated: true,
         };
@@ -291,7 +296,7 @@ impl ReadTool {
         side: ReadSide,
     ) -> Result<(String, String), InspectionError> {
         let revision = match side {
-            ReadSide::Base => DEFAULT_REVIEW_BASE,
+            ReadSide::Base => self.comparison_oid()?,
             ReadSide::Head => "HEAD",
         };
         let root = self.repository_root().await?;
@@ -302,7 +307,7 @@ impl ReadTool {
             format!("{revision}:{prefix}{path}"),
         ];
         let output = self.run_large_command_at(&root, command, &[0]).await?;
-        let output = Self::read(
+        let mut output = Self::read(
             Box::new(Cursor::new(output.stdout)),
             arguments,
             path.to_string(),
@@ -310,7 +315,20 @@ impl ReadTool {
         )
         .await?;
 
+        if side == ReadSide::Base {
+            output.comparison_base = Some(revision.to_string());
+        }
+
         Ok((output.to_tool_result()?, format!("{revision}:{path}")))
+    }
+
+    fn comparison_oid(&self) -> Result<&str, InspectionError> {
+        self.comparison_base
+            .as_ref()
+            .map(ComparisonBase::oid)
+            .ok_or_else(|| InspectionError::RepositoryCommandRejected {
+                detail: "comparison base is not configured by the host".to_string(),
+            })
     }
 
     async fn repository_prefix(&self, root: &Path) -> Result<String, InspectionError> {

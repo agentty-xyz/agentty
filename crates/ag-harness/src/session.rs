@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{SqliteConnection, SqlitePool, Transaction};
 use thiserror::Error;
@@ -17,10 +18,11 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
 
+use crate::comparison::{ComparisonBase, ComparisonIdentity};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 use crate::write_journal::WriteJournal;
-use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnError, TurnLimits, TurnOptions};
+use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnError, TurnOptions};
 
 pub(crate) const TURN_LEASE_SECONDS: i64 = 300;
 pub(crate) const TURN_LEASE_RENEWAL_INTERVAL_SECONDS: u64 = 100;
@@ -368,7 +370,7 @@ WHERE id = ?
                 .transpose()?;
             let compatible = previous_options
                 .as_ref()
-                .is_some_and(|previous| options.continuation_compatible(previous));
+                .is_some_and(|previous| previous.continuation_compatible(options));
             if let Some(guard) = self
                 .reserve_turn(session_id, &message, &acquisition, options, compatible)
                 .await?
@@ -772,10 +774,14 @@ pub(crate) struct LoadedSession {
     pub(crate) turns: Vec<Vec<ModelMessage>>,
 }
 
-/// Versioned durable representation; omitted legacy permissions remain unknown.
-#[derive(Deserialize)]
+/// Versioned durable metadata, independent of live repository validation.
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredTurnOptions {
+    #[serde(default)]
+    comparison_base: Option<ComparisonIdentity>,
+    #[serde(default)]
+    fingerprint: Option<String>,
     max_tool_calls: NonZeroUsize,
     output_schema: Value,
     tool_policy: ToolPolicy,
@@ -784,28 +790,68 @@ struct StoredTurnOptions {
 
 impl StoredTurnOptions {
     fn encode(options: &TurnOptions) -> String {
-        json!({
-            "max_tool_calls": options.limits().max_tool_calls(),
-            "output_schema": options.schema().value(),
-            "tool_policy": options.tool_policy(),
-            "version": 1,
-        })
-        .to_string()
+        let stored = Self {
+            comparison_base: options
+                .comparison_base()
+                .map(|base| base.identity().clone()),
+            fingerprint: None,
+            max_tool_calls: options.limits().max_tool_calls(),
+            output_schema: options.schema().value().clone(),
+            tool_policy: options.tool_policy(),
+            version: 2,
+        };
+        let mut snapshot = stored.effective_options();
+        snapshot["fingerprint"] = json!(stored.fingerprint());
+
+        snapshot.to_string()
     }
 
-    fn decode(snapshot: &str) -> Result<TurnOptions, SessionError> {
+    fn decode(snapshot: &str) -> Result<Self, SessionError> {
         let stored: Self = deserialize_payload(snapshot)?;
-        if stored.version != 1 {
+        if !matches!(stored.version, 1 | 2) {
             return Err(SessionError::InvalidData {
                 reason: format!("unsupported turn options version {}", stored.version),
             });
         }
+        OutputSchema::new(stored.output_schema.clone())?;
+        let valid = if stored.version == 1 {
+            stored.comparison_base.is_none() && stored.fingerprint.is_none()
+        } else {
+            stored
+                .comparison_base
+                .as_ref()
+                .is_none_or(ComparisonIdentity::is_valid)
+                && stored.fingerprint.as_deref() == Some(stored.fingerprint().as_str())
+        };
+        if !valid {
+            return Err(SessionError::InvalidData {
+                reason: "invalid comparison identity or effective-options fingerprint".to_string(),
+            });
+        }
 
-        Ok(TurnOptions::new(
-            OutputSchema::new(stored.output_schema)?,
-            stored.tool_policy,
-            TurnLimits::new(stored.max_tool_calls),
-        ))
+        Ok(stored)
+    }
+
+    fn continuation_compatible(&self, options: &TurnOptions) -> bool {
+        self.version == 2
+            && self.output_schema == *options.schema().value()
+            && self.tool_policy == options.tool_policy()
+            && self.comparison_base.as_ref()
+                == options.comparison_base().map(ComparisonBase::identity)
+    }
+
+    fn effective_options(&self) -> Value {
+        json!({
+            "comparison_base": self.comparison_base,
+            "max_tool_calls": self.max_tool_calls,
+            "output_schema": self.output_schema,
+            "tool_policy": self.tool_policy,
+            "version": self.version,
+        })
+    }
+
+    fn fingerprint(&self) -> String {
+        format!("{:x}", Sha256::digest(self.effective_options().to_string()))
     }
 }
 

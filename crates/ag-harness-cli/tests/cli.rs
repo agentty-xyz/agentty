@@ -1,8 +1,9 @@
 //! Process-level coverage for the `ag-harness` command-line interface.
 
-use std::fs;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
+use std::{fs, io};
 
 use ag_harness::{ModelProvider, ToolDefinition};
 use assert_cmd::cargo::cargo_bin;
@@ -14,7 +15,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const READ_ONLY_SYSTEM_PROMPT: &str = concat!(
     "You are operating in a read-only repository harness. The read tool supports file, list, ",
-    "search, diff, and show actions. For change review, call diff first, then use search, file, ",
+    "search, diff, and show actions. For change review, call diff first when a comparison base is \
+     configured, then use search, file, ",
     "list, or show for evidence. Use repository tools only when the user explicitly asks about ",
     "repository contents. Treat an unambiguous reference to the repository, project, codebase, ",
     "code, a file, or a change as an explicit repository request. Treat replies, response speed, ",
@@ -29,7 +31,8 @@ const READ_ONLY_SYSTEM_PROMPT: &str = concat!(
 );
 const READ_WRITE_SYSTEM_PROMPT: &str = concat!(
     "You are operating in a repository harness with read and write tools. The read tool supports ",
-    "file, list, search, diff, and show actions. For change review, call diff first. When a user ",
+    "file, list, search, diff, and show actions. For change review, call diff first when a \
+     comparison base is configured. When a user ",
     "explicitly asks about repository contents, call read immediately and use its result before ",
     "answering. Treat an unambiguous reference to the repository, project, codebase, code, a \
      file, ",
@@ -63,7 +66,7 @@ fn structured_output_instruction() -> String {
 }
 
 fn read_tool() -> serde_json::Value {
-    let definition = ToolDefinition::read();
+    let definition = ToolDefinition::read_with_comparison_base(None);
 
     json!({
         "type": "function",
@@ -1051,4 +1054,139 @@ fn missing_api_key_fails_without_model_output() {
         String::from_utf8(output.stderr).expect("error should be UTF-8"),
         "MODEL_API_KEY is unavailable\n"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn comparison_base_is_pinned_across_chat_and_resolved_again_on_resume() {
+    // Arrange
+    let storage = tempfile::tempdir().expect("fixture storage");
+    let root = storage.path().join("repository");
+    let (expected_oid, tree) = comparison_repository(&root)
+        .await
+        .expect("comparison repository");
+    let server = MockServer::start().await;
+    let moving_branch = root.join(".git/refs/heads/release");
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(&request.body).expect("model request");
+            assert!(
+                body["tools"][0]["function"]["description"]
+                    .as_str()
+                    .expect("description")
+                    .contains(&expected_oid)
+            );
+            fs::write(&moving_branch, &tree)
+                .expect("move fixture ref to a non-commit after resolution");
+            response("pinned", 1, 1)
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let database = storage.path().join("session.db");
+    let mut command = tokio::process::Command::new(cargo_bin!("ag-harness"));
+    command
+        .arg("--git-executable")
+        .arg(test_git_executable())
+        .arg("--database")
+        .arg(&database)
+        .args([
+            "run",
+            "muse-test",
+            "--session",
+            "pinned",
+            "--comparison-base",
+            "release",
+            "--base-url",
+            &server.uri(),
+            "--read-dir",
+        ])
+        .arg(&root)
+        .env("MODEL_API_KEY", "test-key")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // Act
+    let mut child = command.spawn().expect("CLI invocation");
+    child
+        .stdin
+        .take()
+        .expect("input")
+        .write_all(b"first\nsecond\n")
+        .await
+        .expect("two turns");
+    let output = child.wait_with_output().await.expect("completed chat");
+    let resumed = tokio::process::Command::new(cargo_bin!("ag-harness"))
+        .arg("--git-executable")
+        .arg(test_git_executable())
+        .arg("--database")
+        .arg(&database)
+        .args([
+            "resume",
+            "pinned",
+            "third",
+            "--comparison-base",
+            "release",
+            "--base-url",
+            &server.uri(),
+            "--read-dir",
+        ])
+        .arg(&root)
+        .env("MODEL_API_KEY", "test-key")
+        .output()
+        .await
+        .expect("resume invocation");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .matches("assistant> pinned")
+            .count(),
+        2
+    );
+    assert!(!resumed.status.success());
+    assert!(String::from_utf8_lossy(&resumed.stderr).contains("comparison validation"));
+}
+
+async fn comparison_repository(root: &Path) -> io::Result<(String, String)> {
+    for directory in [".git/objects/info", ".git/refs/heads"] {
+        tokio::fs::create_dir_all(root.join(directory)).await?;
+    }
+    let mut source = Vec::new();
+    for argument in ["--git-common-dir", "HEAD", "HEAD^{tree}"] {
+        let output = tokio::process::Command::new(test_git_executable())
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .args(["rev-parse", argument])
+            .output()
+            .await?;
+        assert!(output.status.success());
+        source.push(
+            String::from_utf8(output.stdout)
+                .map_err(io::Error::other)?
+                .trim()
+                .to_string(),
+        );
+    }
+    let objects = tokio::fs::canonicalize(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(&source[0])
+            .join("objects"),
+    )
+    .await?;
+    tokio::fs::write(
+        root.join(".git/objects/info/alternates"),
+        objects.as_os_str().as_encoded_bytes(),
+    )
+    .await?;
+    tokio::fs::write(root.join(".git/HEAD"), "ref: refs/heads/release\n").await?;
+    tokio::fs::write(root.join(".git/refs/heads/release"), &source[1]).await?;
+
+    Ok((source[1].clone(), source[2].clone()))
 }

@@ -24,8 +24,9 @@ flowchart LR
   observers, and shared database pool.
 - One internal engine prepares requests, runs provider attempts and tools, retries
   rejected native continuations, and validates output for both entry points.
-- Immutable `TurnOptions` fixes the required schema, effective `ToolPolicy`, and
-  `TurnLimits` for one execution. A later turn can use different options.
+- Immutable `TurnOptions` fixes the required schema, effective `ToolPolicy`,
+  `TurnLimits`, and optional validated `ComparisonBase` for one execution. A later turn
+  can use different options.
 - `Session` is the only multi-turn abstraction. It persists and restores bounded
   history.
 - `Model` is the object-safe provider boundary. `ModelCompletion` carries the response,
@@ -58,9 +59,32 @@ they govern current tool execution. Changes during execution apply to a later tu
 immediate revocation requires cancellation.
 
 The future Agentty adapters will resolve new options from each request's protocol
-profile and permission mode. Agentty owns review-loop behavior. Mutable counters,
-cancellation, and shared provider-call budget accounting remain execution state rather
-than configuration. Sandboxed Bash and Agentty permission mapping remain later work.
+profile, permission mode, and host-selected comparison context. Agentty owns review-loop
+behavior. Mutable counters, cancellation, and shared provider-call budget accounting
+remain execution state rather than configuration. Sandboxed Bash and Agentty permission
+mapping remain later work.
+
+## Repository comparisons
+
+Hosts use `ComparisonBase::resolve` for an explicit revision or
+`ComparisonBase::validate` for a full commit OID, then supply the value through
+`TurnOptions::with_comparison_base`. Resolution peels annotated tags to commits;
+validation rejects non-commit objects. The value is bound to its canonical repository
+scope and never follows a moving branch. Harness uses the supplied OID directly for
+`diff` and `show(base)`, including nested scopes, tool descriptions, and result
+metadata. Git replacement refs do not change the selected object. Worktree and `HEAD`
+reads remain live; only the comparison base is frozen.
+
+Without a base, the advertised read schema omits comparisons and runtime checks reject
+them. File, list, search, and `show(head)` remain available. Models cannot provide
+arbitrary revisions. The existing trusted-executable and repository-path checks also
+apply to host comparison validation.
+
+The companion CLI accepts `--comparison-base <REV>` on `run` and `resume`. It resolves
+once per invocation and reuses the commit for every chat turn. An invalid explicit
+selection fails before any model call. Omitting the flag leaves comparisons unavailable;
+there is no default branch. A new invocation, including resume, resolves its explicit
+selection again rather than inheriting a historical base.
 
 ## Session lifecycle
 
@@ -86,13 +110,15 @@ entering model context.
 
 The database stores the output schema, system prompt, model identity, history budget,
 provider continuation identifier, messages, and turn state. Each new durable turn also
-stores a versioned snapshot of its effective schema, permissions, and tool-call budget,
+stores a versioned snapshot of its effective schema, permissions, tool-call budget, and
+comparison identity, with an internal fingerprint of the complete effective options,
 atomically with reservation and the prompt before execution. The session schema remains
 the default for legacy callers. Historical turns without options remain readable;
 missing historical permissions are unknown, never inferred from current defaults.
 Recovery validates stored options and marks abandoned turns interrupted without
-re-executing them. Oldest complete turns are excluded from replay when the configured
-byte budget is exceeded.
+re-executing them. Historical comparison metadata does not require live Git validation
+or continued availability of the original repository or objects. Oldest complete turns
+are excluded from replay when the configured byte budget is exceeded.
 
 Starting a turn loads bounded completed history in a read-only snapshot, then opens a
 short writer transaction. The writer revalidates the snapshot and commits the turn as
@@ -129,15 +155,15 @@ continue without a journal.
 
 On resume, the harness validates the stored model identity and restores completed
 history. If a completion includes a provider session identifier, the next request also
-offers it to the adapter only when the last completed turn's schema and permissions
-match the current options. Acquisition checks canonical persisted options, including for
-stale session handles. Schema or permission changes, or missing legacy options, clear
-the native identifier atomically with reservation and replay completed history. A
-tool-budget change alone does not invalidate continuation.
-`ModelError::ResumeUnavailable` causes one retry with the provider identifier removed
-and the same SQLite history retained. The rejected native resume and the replay are
-reported as separate provider attempts. A successful replay replaces the stored
-continuation identifier with the one it returns, or clears the identifier when it
+offers it to the adapter only when the last completed turn's schema, permissions, and
+comparison identity match the current options. Acquisition checks canonical persisted
+options, including for stale session handles. Schema, permission, or comparison changes,
+or unknown legacy comparison semantics, clear the native identifier atomically with
+reservation and replay completed history. A tool-budget change alone does not invalidate
+continuation. `ModelError::ResumeUnavailable` causes one retry with the provider
+identifier removed and the same SQLite history retained. The rejected native resume and
+the replay are reported as separate provider attempts. A successful replay replaces the
+stored continuation identifier with the one it returns, or clears the identifier when it
 returns none. Failed turns, cancellation, and expired-lease recovery clear the stored
 provider identifier atomically with the terminal turn state because the harness cannot
 know whether the remote conversation advanced. Cleanup clears the identifier only when
@@ -194,15 +220,16 @@ fails. Dropping either operation emits cancellation once.
    Preserve the durable log while projecting model-aware recent history and structured
    compaction checkpoints.
 
-1. **Repository comparison policy**
-
-   Replace the fixed `main` comparison with a host-validated base commit OID for each
-   turn.
-
 1. **Agentty runtime adapters**
 
    Implement durable `AgentChannel` and ephemeral `OneShotClient` adapters over the
-   shared turn engine.
+   shared turn engine. Carry host-selected comparison context in both request paths,
+   validate it against the execution repository, and build fresh per-turn options.
+   Agentty owns baseline selection: its effective diff baseline may be a merge base or
+   advance past already-applied patches, rather than the target branch tip. Reuse that
+   policy through Agentty's Git boundary so Harness inspection agrees with the product
+   diff, including diverged branches and stacked sessions. Do not infer the base from
+   prompt text or impose the companion CLI's invocation lifetime on Agentty.
 
 1. **Feature-gated product surface**
 

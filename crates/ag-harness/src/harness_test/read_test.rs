@@ -54,7 +54,10 @@ async fn completes_read_tool_round_trip() {
     model.expect_complete().times(2).returning(move |request| {
         let call_index = call_count.fetch_add(1, Ordering::SeqCst);
         if call_index == 0 {
-            assert_eq!(request.tools(), &[ToolDefinition::read()]);
+            assert_eq!(
+                request.tools(),
+                &[ToolDefinition::read_with_comparison_base(None)]
+            );
 
             return Ok(response_without_metadata(ModelResponse::ToolCall(
                 read_call("call_read"),

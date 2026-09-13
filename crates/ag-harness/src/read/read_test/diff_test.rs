@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use super::support::{
     arguments, command_output, file_system, inspection_file_system, truncated_command_output,
 };
+use crate::comparison::support::COMPARISON_OID;
 use crate::read::command::MockRepositoryCommandRunner;
 use crate::read::runtime::{MAX_READ_BYTES, MAX_UNTRACKED_DIFF_FILES, ReadTool};
 
@@ -48,7 +49,7 @@ async fn reads_host_bound_diff_with_path_filter() {
                         "--no-textconv",
                         "--relative",
                         "--unified=20",
-                        "main",
+                        COMPARISON_OID,
                         "--",
                         "crates/ag-harness",
                     ]
@@ -89,9 +90,10 @@ async fn reads_host_bound_diff_with_path_filter() {
     let result: Value = serde_json::from_str(&result).expect("diff result should be JSON");
 
     // Assert
-    assert_eq!(summary, "main");
+    assert_eq!(summary, COMPARISON_OID);
     assert_eq!(result["result"], "diff --git a/file b/file\n");
     assert_eq!(result["truncated"], false);
+    assert_eq!(result["comparison_base"], COMPARISON_OID);
 }
 
 #[tokio::test]
@@ -110,7 +112,7 @@ async fn includes_untracked_files_in_host_bound_diff() {
                         "--no-textconv",
                         "--relative",
                         "--unified=20",
-                        "main",
+                        COMPARISON_OID,
                         "--",
                         ".",
                     ]

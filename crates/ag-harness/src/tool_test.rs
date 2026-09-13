@@ -6,7 +6,7 @@ use super::{
     ReadAction, ReadArguments, ReadSide, ToolCall, ToolCallArguments, ToolDefinition,
     WriteArguments,
 };
-use crate::{model, schema_contract};
+use crate::{ComparisonBase, model, schema_contract};
 
 #[test]
 fn tool_call_from_json_rejects_blank_and_oversized_identifiers() {
@@ -593,5 +593,33 @@ fn read_arguments_reject_non_integral_or_out_of_range_numbers() {
         errors
             .into_iter()
             .all(|error| !error.to_string().is_empty())
+    );
+}
+
+#[test]
+fn read_capabilities_and_description_follow_the_selected_base() {
+    // Arrange
+    let base = ComparisonBase::fixture("repo");
+    let comparison = json!({"action":"diff"});
+    let show_base = json!({"action":"show", "side":"base", "path":"name.txt"});
+    let show_head = json!({"action":"show", "side":"head", "path":"name.txt"});
+
+    // Act
+    let enabled = ToolDefinition::read_with_comparison_base(Some(&base));
+    let disabled = ToolDefinition::read_with_comparison_base(None);
+    let enabled_schema = Validator::new(enabled.parameters()).expect("enabled schema");
+    let disabled_schema = Validator::new(disabled.parameters()).expect("disabled schema");
+
+    // Assert
+    assert!(enabled.description().contains(base.oid()));
+    assert!(enabled_schema.is_valid(&comparison));
+    assert!(enabled_schema.is_valid(&show_base));
+    assert!(!disabled_schema.is_valid(&comparison));
+    assert!(!disabled_schema.is_valid(&show_base));
+    assert!(disabled_schema.is_valid(&show_head));
+    assert!(disabled.description().contains("unavailable"));
+    assert!(
+        serde_json::from_value::<ReadArguments>(json!({"action":"diff", "revision":"HEAD"}))
+            .is_err()
     );
 }

@@ -874,7 +874,7 @@ impl<'a> From<&'a tool::ToolDefinition> for ChatCompletionTool<'a> {
 
 #[derive(Serialize)]
 struct ChatCompletionFunction<'a> {
-    description: &'static str,
+    description: &'a str,
     name: &'static str,
     parameters: &'a Value,
 }

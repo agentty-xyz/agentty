@@ -14,15 +14,15 @@ const MAX_COMMAND_DIAGNOSTIC_BYTES: usize = 4 * 1024;
 const REPOSITORY_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
-pub(super) struct RepositoryCommandOutput {
-    pub(super) code: Option<i32>,
-    pub(super) stderr: Vec<u8>,
-    pub(super) stdout: Vec<u8>,
-    pub(super) truncated: bool,
+pub(crate) struct RepositoryCommandOutput {
+    pub(crate) code: Option<i32>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) truncated: bool,
 }
 
 impl RepositoryCommandOutput {
-    pub(super) fn retain_complete_records(mut self, delimiter: u8) -> Self {
+    pub(crate) fn retain_complete_records(mut self, delimiter: u8) -> Self {
         if self.truncated {
             let retained = self
                 .stdout
@@ -37,14 +37,14 @@ impl RepositoryCommandOutput {
 }
 
 #[derive(Debug)]
-pub(super) struct BoundedStreamOutput {
-    pub(super) bytes: Vec<u8>,
-    pub(super) truncated: bool,
+pub(crate) struct BoundedStreamOutput {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) truncated: bool,
 }
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub(super) trait RepositoryCommandRunner: Send + Sync {
+pub(crate) trait RepositoryCommandRunner: Send + Sync {
     async fn run(&self, root: &Path, arguments: &[String]) -> io::Result<RepositoryCommandOutput>;
 
     async fn run_large(
@@ -54,12 +54,12 @@ pub(super) trait RepositoryCommandRunner: Send + Sync {
     ) -> io::Result<RepositoryCommandOutput>;
 }
 
-pub(super) struct LocalRepositoryCommandRunner {
+pub(crate) struct LocalRepositoryCommandRunner {
     git_executable: PathBuf,
 }
 
 impl LocalRepositoryCommandRunner {
-    pub(super) fn new(git_executable: PathBuf) -> Self {
+    pub(crate) fn new(git_executable: PathBuf) -> Self {
         Self { git_executable }
     }
 }
@@ -111,6 +111,7 @@ impl LocalRepositoryCommandRunner {
         command
             .env_clear()
             .arg("--no-pager")
+            .arg("--no-replace-objects")
             .args(["-c", "core.fsmonitor=false"])
             .args(arguments)
             .current_dir(root)
@@ -149,7 +150,7 @@ impl LocalRepositoryCommandRunner {
         Self::with_timeout(REPOSITORY_COMMAND_TIMEOUT, operation).await
     }
 
-    pub(super) async fn with_timeout<T>(
+    pub(crate) async fn with_timeout<T>(
         timeout: Duration,
         operation: impl Future<Output = io::Result<T>>,
     ) -> io::Result<T> {
@@ -158,7 +159,7 @@ impl LocalRepositoryCommandRunner {
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "git inspection timed out"))?
     }
 
-    pub(super) async fn verify_repository_root(
+    pub(crate) async fn verify_repository_root(
         root: &Path,
         output: RepositoryCommandOutput,
     ) -> io::Result<()> {
@@ -183,7 +184,7 @@ impl LocalRepositoryCommandRunner {
         Ok(())
     }
 
-    pub(super) async fn read_bounded(
+    pub(crate) async fn read_bounded(
         mut reader: impl AsyncRead + Unpin,
         limit: usize,
     ) -> io::Result<BoundedStreamOutput> {
