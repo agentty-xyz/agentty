@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use super::command::{LocalRepositoryCommandRunner, RepositoryCommandRunner};
 use super::{InspectionError, ReadError, ReadOutput};
+use crate::ComparisonBase;
 use crate::file_system::FileSystem;
 use crate::tool::{ReadAction, ReadArguments, ReadSide};
 
 pub(super) const DEFAULT_RESULT_LINES: u64 = 200;
-pub(super) const DEFAULT_REVIEW_BASE: &str = "main";
 pub(super) const MAX_READ_BYTES: usize = 50 * 1024;
 pub(super) const MAX_READ_LINES: u64 = 2_000;
 pub(super) const MAX_SCAN_BYTES: usize = 8 * 1024 * 1024;
@@ -15,6 +15,7 @@ pub(super) const MAX_UNTRACKED_DIFF_FILES: usize = 100;
 
 /// Bounded built-in repository inspector.
 pub(crate) struct ReadTool {
+    pub(super) comparison_base: Option<ComparisonBase>,
     pub(super) command_runner: Arc<dyn RepositoryCommandRunner>,
     pub(super) file_system: Arc<dyn FileSystem>,
     pub(super) repository_root: PathBuf,
@@ -26,8 +27,10 @@ impl ReadTool {
         file_system: Arc<dyn FileSystem>,
         repository_root: PathBuf,
         git_executable: PathBuf,
+        comparison_base: Option<ComparisonBase>,
     ) -> Self {
         Self {
+            comparison_base,
             command_runner: Arc::new(LocalRepositoryCommandRunner::new(git_executable)),
             file_system,
             repository_root,

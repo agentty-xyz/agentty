@@ -4,13 +4,13 @@ use std::num::NonZeroU64;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Number, Value, json};
 
-use crate::{model, schema_contract};
+use crate::{ComparisonBase, model, schema_contract};
 
 const READ_DESCRIPTION: &str = concat!(
     "Inspect the repository with one bounded read-only action. Use `file` with `path` and ",
     "optional `offset`/`limit` for worktree text; `list` with optional `path`/`limit`; ",
     "`search` with `query` and optional `path`/`limit`; `diff` with optional `path` for ",
-    "changes from `main`; or `show` with `path`, `side` (`base` for `main` or `head`), ",
+    "changes from the host-selected commit; or `show` with `path`, `side` (`base` or `head`), ",
     "and optional `offset`/`limit`."
 );
 const READ_NAME: &str = "read";
@@ -40,7 +40,7 @@ pub enum Tool {
 /// not execute tools or access the filesystem.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ToolDefinition {
-    description: &'static str,
+    description: String,
     name: &'static str,
     parameters: Value,
 }
@@ -49,7 +49,7 @@ impl ToolDefinition {
     /// Defines the native `read` function tool.
     pub fn read() -> Self {
         Self {
-            description: READ_DESCRIPTION,
+            description: READ_DESCRIPTION.to_string(),
             name: READ_NAME,
             parameters: json!({
                 "type": "object",
@@ -85,10 +85,32 @@ impl ToolDefinition {
         }
     }
 
+    /// Defines the read capabilities available with the turn's selected base.
+    pub fn read_with_comparison_base(base: Option<&ComparisonBase>) -> Self {
+        let mut definition = Self::read();
+        if let Some(base) = base {
+            definition.description =
+                format!("{READ_DESCRIPTION} Comparison base OID: {}.", base.oid());
+        } else {
+            definition.parameters["properties"]["action"]["enum"] =
+                json!(["file", "list", "search", "show"]);
+            definition.parameters["properties"]["side"]["enum"] = json!(["head", null]);
+            definition.description = "Inspect repository worktree text with file, list, or \
+                                      search, or use show with side head for committed text. No \
+                                      comparison base is configured; diff and show(base) are \
+                                      unavailable. File and show accept path and optional \
+                                      offset/limit; list accepts optional path/limit; search \
+                                      requires query and accepts optional path/limit."
+                .to_string();
+        }
+
+        definition
+    }
+
     /// Defines the native `write` function tool.
     pub fn write() -> Self {
         Self {
-            description: WRITE_DESCRIPTION,
+            description: WRITE_DESCRIPTION.to_string(),
             name: WRITE_NAME,
             parameters: json!({
                 "type": "object",
@@ -107,8 +129,8 @@ impl ToolDefinition {
     }
 
     /// Returns the description sent with the native function definition.
-    pub fn description(&self) -> &'static str {
-        self.description
+    pub fn description(&self) -> &str {
+        &self.description
     }
 
     /// Returns the native function name.
@@ -486,7 +508,7 @@ impl ReadAction {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadSide {
-    /// Built-in `main` review base.
+    /// Host-selected comparison commit, fixed for the turn.
     Base,
     /// Current `HEAD` commit.
     Head,

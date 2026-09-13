@@ -6,6 +6,7 @@
 //! remain behind injectable boundaries.
 
 mod chat_completion;
+mod comparison;
 mod engine;
 mod file_system;
 mod harness;
@@ -24,6 +25,7 @@ mod turn;
 mod write;
 mod write_journal;
 
+pub use comparison::{ComparisonBase, ComparisonBaseError};
 pub use file_system::{FileSystem, LocalFileSystem};
 pub use harness::{Harness, Session, SessionBuilder};
 pub use lifecycle::{

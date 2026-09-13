@@ -1051,7 +1051,9 @@ runtime flow:
 
 The standalone `ag-harness` library resolves immutable options before each engine run.
 Durable acquisition commits those options with the prompt and revalidates native
-continuation against the last completed turn's schema and permissions. Its session emits
-completion only after persisting the result; one-shot execution uses the same engine
-without opening SQLite. These are library boundaries for the planned Agentty adapters,
-not a replacement for the current Agentty runtime.
+continuation against the last completed turn's schema, permissions, and comparison
+identity. A host-validated comparison OID stays fixed throughout execution; worktree and
+`HEAD` reads remain live. Its session emits completion only after persisting the result;
+one-shot execution uses the same engine without opening SQLite. These are library
+boundaries for the planned Agentty adapters, not a replacement for the current Agentty
+runtime.

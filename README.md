@@ -152,6 +152,13 @@ controller. Agentty selects each provider's native read-only or plan policy, den
 mutation permission requests, and archives any unexpected temporary diff for inspection
 before discarding it without integration.
 
+### Standalone Harness CLI
+
+The separate `ag-harness-cli` crate provides the `ag-harness` command. Repository
+comparisons require `--comparison-base <REV>` on `run` or `resume`; the selected commit
+stays fixed for that invocation. Without the flag, ordinary repository reads remain
+available. Harness is not yet an Agentty backend.
+
 ## Documentation
 
 Documentation for installation and workflows is available at

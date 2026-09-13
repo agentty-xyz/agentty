@@ -24,8 +24,9 @@ flowchart LR
   observers, and shared database pool.
 - One internal engine prepares requests, runs provider attempts and tools, retries
   rejected native continuations, and validates output for both entry points.
-- Immutable `TurnOptions` fixes the required schema, effective `ToolPolicy`, and
-  `TurnLimits` for one execution. A later turn can use different options.
+- Immutable `TurnOptions` fixes the required schema, effective `ToolPolicy`,
+  `TurnLimits`, and optional validated `ComparisonBase` for one execution. A later turn
+  can use different options.
 - `Session` is the only multi-turn abstraction. It persists and restores bounded
   history.
 - `Model` is the object-safe provider boundary. `ModelCompletion` carries the response,
@@ -34,13 +35,9 @@ flowchart LR
 
 Repository tools are denied by default. `Tool::Read` and `Tool::Write` must be enabled
 explicitly, and both receive a validated `Repository` configuration. The library host
-selects an absolute Git executable whose configured location and canonical target are
-outside the containing worktree. The companion CLI defaults to the first valid `git`
-executable found in an absolute `PATH` entry and exposes `--git-executable` as an
-override. `Repository` canonicalizes the selection once and never performs its own
-`PATH` discovery. Unix hosts also verify effective execute access; other platforms defer
-that check to process creation. Repository-relative tool arguments reject `.git`
-components before filesystem access.
+selects a trusted Git executable outside the worktree. The companion CLI discovers a
+suitable executable or accepts `--git-executable`; the library never searches `PATH`.
+Repository tools enforce path containment and exclude Git metadata.
 
 ## Per-turn options
 
@@ -58,9 +55,25 @@ they govern current tool execution. Changes during execution apply to a later tu
 immediate revocation requires cancellation.
 
 The future Agentty adapters will resolve new options from each request's protocol
-profile and permission mode. Agentty owns review-loop behavior. Mutable counters,
-cancellation, and shared provider-call budget accounting remain execution state rather
-than configuration. Sandboxed Bash and Agentty permission mapping remain later work.
+profile, permission mode, and host-selected comparison context. Agentty owns review-loop
+behavior. Mutable counters, cancellation, and shared provider-call budget accounting
+remain execution state rather than configuration. Sandboxed Bash and Agentty permission
+mapping remain later work.
+
+## Repository comparisons
+
+Hosts supply a validated `ComparisonBase` through `TurnOptions`. It pins a full commit
+OID in the selected repository scope for `diff` and `show(base)`, regardless of branch
+movement or replacement refs. Descriptions and results identify that base. Worktree and
+`HEAD` reads remain live; models cannot select another comparison revision.
+
+There is no default base. Without one, comparisons are neither advertised nor
+executable; file, list, search, and `show(head)` remain available. Validation preserves
+the trusted Git executable and repository-path boundaries.
+
+The CLI resolves `--comparison-base <REV>` once per `run` or `resume` invocation and
+reuses the commit across its chat turns. Commit tags are accepted; invalid selections
+fail before a model call. A new invocation resolves its explicit selection again.
 
 ## Session lifecycle
 
@@ -84,76 +97,41 @@ Only completed turns are replayed. A process that disappears may leave a leased 
 `interrupted`. Failed and interrupted prompts remain available for diagnostics without
 entering model context.
 
-The database stores the output schema, system prompt, model identity, history budget,
-provider continuation identifier, messages, and turn state. Each new durable turn also
-stores a versioned snapshot of its effective schema, permissions, and tool-call budget,
-atomically with reservation and the prompt before execution. The session schema remains
-the default for legacy callers. Historical turns without options remain readable;
-missing historical permissions are unknown, never inferred from current defaults.
-Recovery validates stored options and marks abandoned turns interrupted without
-re-executing them. Oldest complete turns are excluded from replay when the configured
-byte budget is exceeded.
+Each durable turn records its effective options and comparison identity before
+execution, with a versioned internal fingerprint. Older history remains readable;
+missing historical options are not inferred from current defaults. Reading historical
+comparison metadata does not require the original repository or Git objects. Only
+bounded, completed history enters model context.
 
-Starting a turn loads bounded completed history in a read-only snapshot, then opens a
-short writer transaction. The writer revalidates the snapshot and commits the turn as
-`running` with a fresh lease. If the snapshot changed, acquisition retries before
-persisting the prompt. This keeps cancellation before the commit side-effect free and
-keeps history canonical when multiple session handles were opened before the latest turn
-completed. Each active turn also has an opaque owner token. If cancellation races with a
-successful SQLite commit acknowledgment, cleanup scoped to the canonical database
-identity and owner token interrupts only that abandoned turn before another turn is
-reserved. The owner guard renews the lease while provider or tool work remains active;
-dropping the send future stops renewal and records the turn as interrupted by
-cancellation. A failed renewal or lost owner token cancels the in-flight request before
-it can continue model or tool work. If a turn fails and recording that failure also
-fails, `SessionError` retains both errors instead of replacing the original turn
-failure.
+Turn ownership and renewable leases prevent concurrent execution within one session.
+Acquisition revalidates persisted history so stale handles cannot replay an outdated
+conversation. Cancellation interrupts the abandoned turn; loss of ownership stops
+in-flight work. Cleanup cannot interrupt a newer turn. If recording a failure also
+fails, `SessionError` retains both errors.
 
-Validated session writes commit a separate journal intent before filesystem replacement,
-then record its outcome before returning to the model. SQLite uses `FULL` synchronous
-commits so the intent is synced before file mutation. The intent requires the running
-turn's owner token and an unexpired lease. It retains the turn and tool-call identity,
-canonical repository root as native bytes, relative path, and SHA-256 fingerprints of
-expected and intended content; missing expected content denotes a create.
-
-Intent persistence failure prevents replacement. Outcome persistence failure stops the
-turn and leaves the durable intent `pending`, even if the file was changed.
-`Session::writes()` exposes these records after errors and reopening, independently of
-completed conversation history and its eviction budget. It returns stored outcomes
-without reading current files: `applied` records filesystem success, `failed` records a
-filesystem error, and `pending` means no outcome was recorded. Native roots remain
-lossless for host inspection, including non-UTF-8 Unix paths. Stateless `run_once` calls
-continue without a journal.
+Durable writes persist an intent before changing files and an outcome before returning
+to the model. Intent persistence failure prevents the write; outcome persistence failure
+stops the turn and leaves the result unknown. `Session::writes()` exposes these records
+after errors, reopening, and history eviction. They describe past attempts, not current
+file contents. Stateless `run_once` calls have no durable journal.
 
 ## Resume and provider fallback
 
 On resume, the harness validates the stored model identity and restores completed
-history. If a completion includes a provider session identifier, the next request also
-offers it to the adapter only when the last completed turn's schema and permissions
-match the current options. Acquisition checks canonical persisted options, including for
-stale session handles. Schema or permission changes, or missing legacy options, clear
-the native identifier atomically with reservation and replay completed history. A
-tool-budget change alone does not invalidate continuation.
-`ModelError::ResumeUnavailable` causes one retry with the provider identifier removed
-and the same SQLite history retained. The rejected native resume and the replay are
-reported as separate provider attempts. A successful replay replaces the stored
-continuation identifier with the one it returns, or clears the identifier when it
-returns none. Failed turns, cancellation, and expired-lease recovery clear the stored
-provider identifier atomically with the terminal turn state because the harness cannot
-know whether the remote conversation advanced. Cleanup clears the identifier only when
-it actually interrupts an active turn, so delayed cleanup cannot invalidate a newer
-continuation. The next request replays completed SQLite history.
+history. A provider continuation is reusable only when the last completed turn's schema,
+permissions, and comparison identity match the current options. Unknown legacy semantics
+force history replay; a tool-budget change alone does not invalidate continuation.
+
+`ModelError::ResumeUnavailable` triggers one retry using the same SQLite history without
+the rejected identifier. Failed or cancelled turns and expired leases also invalidate
+continuation, because the remote conversation may have advanced. Delayed cleanup cannot
+clear a newer turn's continuation.
 
 ## Concurrency
 
-The first create or resume initializes the harness's database pool and runs migrations.
-Concurrent initialization is serialized, and failed initialization can be retried. All
-sessions created or resumed through that harness share its four-connection limit.
-Reconfiguring the database path resets the pool; separate harnesses own separate pools.
-
-Different session IDs may run concurrently through the SQLite connection pool. A partial
-unique index permits only one `pending` or `running` turn for a given session, so
-concurrent writers receive `SessionError::Busy` instead of interleaving messages.
+Sessions share a bounded SQLite connection pool. Different session IDs may run
+concurrently, but only one turn can be active per session. Concurrent writers receive
+`SessionError::Busy` instead of interleaving messages.
 
 ## Observability
 
@@ -194,15 +172,16 @@ fails. Dropping either operation emits cancellation once.
    Preserve the durable log while projecting model-aware recent history and structured
    compaction checkpoints.
 
-1. **Repository comparison policy**
-
-   Replace the fixed `main` comparison with a host-validated base commit OID for each
-   turn.
-
 1. **Agentty runtime adapters**
 
    Implement durable `AgentChannel` and ephemeral `OneShotClient` adapters over the
-   shared turn engine.
+   shared turn engine. Carry host-selected comparison context in both request paths,
+   validate it against the execution repository, and build fresh per-turn options.
+   Agentty owns baseline selection: its effective diff baseline may be a merge base or
+   advance past already-applied patches, rather than the target branch tip. Reuse that
+   policy through Agentty's Git boundary so Harness inspection agrees with the product
+   diff, including diverged branches and stacked sessions. Do not infer the base from
+   prompt text or impose the companion CLI's invocation lifetime on Agentty.
 
 1. **Feature-gated product surface**
 

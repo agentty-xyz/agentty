@@ -9,6 +9,8 @@ use crate::tool::MAX_TOOL_RESULT_BYTES;
 /// Bounded text returned by one successful `read` execution.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReadOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) comparison_base: Option<String>,
     pub(super) content: String,
     pub(super) end_line: Option<u64>,
     pub(super) next_offset: Option<u64>,
@@ -89,6 +91,7 @@ impl ReadOutput {
         let next_offset = self.start_line.checked_add(lines);
 
         Self {
+            comparison_base: self.comparison_base.clone(),
             content: self.content[..content_end].to_string(),
             end_line,
             next_offset,

@@ -6,30 +6,40 @@ SQLite sessions.
 ## Durable sessions
 
 ```rust
-use ag_harness::{Harness, Muse, MUSE_SPARK_1_3, Repository, Tool};
+use ag_harness::{
+    ComparisonBase, Harness, Muse, MUSE_SPARK_1_3, Repository, Tool, ToolPolicy,
+    TurnLimits, TurnOptions,
+};
 
 let repository = Repository::new(".", git_executable)?;
+let options = TurnOptions::new(
+    output_schema.clone(),
+    ToolPolicy::default().allow(Tool::Read),
+    TurnLimits::default(),
+)
+.with_comparison_base(ComparisonBase::resolve(&repository, "HEAD").await?);
 let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?)
     .database("harness.db")
     .repository(repository)
-    .allow(Tool::Read)
-    .allow(Tool::Write);
+    .allow(Tool::Read);
 
 let mut session = harness
-    .session("review-42", output_schema)
+    .session("review-42", output_schema.clone())
     .system_prompt("Keep the review concise.")
     .create()
     .await?;
 
-let result = session.send("Review the current changes").await?;
+let result = session
+    .send_with_options("Review the current changes", options.clone())
+    .await?;
 println!("{}", result.output());
 ```
 
-Resume the same session after restarting the application:
+Resume a stored session and supply the desired options for the next turn:
 
 ```rust
 let mut session = harness.resume("review-42").await?;
-let result = session.send("Now focus on error handling").await?;
+let result = session.send_with_options("Now focus on error handling", options).await?;
 ```
 
 SQLite is the source of truth. A completed turn retains the user prompt, assistant
@@ -37,13 +47,9 @@ messages, tool calls, and tool results. Failed and interrupted turns remain visi
 the database but are not replayed. Different sessions can run concurrently; one session
 accepts only one active turn at a time.
 
-Session writes have a separate durable journal. After a failed send or session reopen,
-`session.writes().await?` returns write intents and recorded `pending`, `applied`, or
-`failed` outcomes, including writes from turns evicted from replay history. Records
-include the tool-call identifier, native repository root, relative path, and SHA-256
-fingerprints of expected and intended content. Inspection reads stored outcomes; a
-`pending` or `failed` outcome does not establish the file's current contents. `run_once`
-does not create this journal.
+Write intents and outcomes remain available through `session.writes().await?` after
+failure, reopen, or history eviction. These records describe past operations, not the
+current filesystem. `run_once` does not create a durable write journal.
 
 The library does not choose a database location. Configure it once with
 `Harness::database()`. The companion CLI defaults to `~/.ag-harness/db/harness.db`;
@@ -59,11 +65,14 @@ let result = harness.run_once("Summarize Cargo.toml", output_schema).await?;
 
 ## Permissions and models
 
-Tools are denied by default. `Tool::Read` provides bounded file, list, search, diff, and
-show operations. `Tool::Write` applies one bounded unified diff. Enabling either tool
-requires a `Repository` built from the repository root and an absolute, host-controlled
-Git executable. Construction canonicalizes both paths and rejects an executable inside
-the containing worktree before any model request.
+Tools are denied by default. `Tool::Read` enables file, list, search, and `show(head)`.
+Comparisons (`diff` and `show(base)`) also require a host-selected `ComparisonBase` in
+`TurnOptions`; no base is chosen implicitly. The base stays pinned while worktree and
+`HEAD` reads remain live. The companion CLI requires `--comparison-base <REV>` for
+comparisons.
+
+`Tool::Write` applies one bounded unified diff. Either tool requires a `Repository` with
+a trusted Git executable outside the containing worktree.
 
 External providers implement the single `Model` trait and return `ModelCompletion`. They
 receive the complete ordered history in `ModelRequest::messages()`. A provider may also

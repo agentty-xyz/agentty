@@ -92,9 +92,10 @@ The observer marks the boundary after SQLite commits a turn reservation, allowin
 to exercise cancellation at that point without conditional production control flow. Unit
 suites and their fixtures live in separate test files. Shared-engine tests compare
 provider requests across durable and ephemeral execution. Persistence tests cover
-options snapshots, legacy reads, and continuation invalidation against canonical
-configuration; terminal lifecycle tests retain the persistence-before-completion
-boundary.
+options snapshots, legacy reads without live repository validation, and continuation
+invalidation against canonical configuration. Host comparison validation shares the
+bounded repository command runner; real-Git fixtures cover pinned OIDs and nested
+scopes; terminal lifecycle tests retain the persistence-before-completion boundary.
 
 The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
 private. Application workflows that submit isolated utility prompts inject
