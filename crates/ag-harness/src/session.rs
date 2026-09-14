@@ -1,6 +1,9 @@
-//! Completed-turn persistence for resumable harness chats.
+//! Concrete SQLite persistence for resumable harness chats and write journals.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
+use std::future::Future;
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -19,7 +22,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
-use crate::write_journal::WriteJournal;
+use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
 use crate::{OutputSchema, OutputSchemaError, TurnError, TurnOptions};
 
 pub(crate) const TURN_LEASE_SECONDS: i64 = 300;
@@ -28,6 +31,66 @@ pub(crate) const TURN_LEASE_RENEWAL_INTERVAL_SECONDS: u64 = 100;
 const DB_POOL_MAX_CONNECTIONS: u32 = 4;
 const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const TURN_SIZE_PAGE_SIZE: i64 = 64;
+
+struct WriteRecordRow {
+    call_id: String,
+    expected_hash: Option<String>,
+    id: i64,
+    path: String,
+    repository_root: Vec<u8>,
+    resulting_hash: String,
+    status: String,
+    turn_position: i64,
+}
+
+impl WriteRecordRow {
+    async fn load(pool: &SqlitePool, session_id: &str) -> Result<Vec<WriteRecord>, SessionError> {
+        let rows = sqlx::query_as!(
+            WriteRecordRow,
+            r#"
+SELECT w.id AS "id!", w.call_id, w.expected_hash, w.path, w.repository_root, w.resulting_hash,
+       w.status, w.turn_position
+FROM session_write w
+WHERE w.session_id = ?
+ORDER BY w.turn_position, w.id
+"#,
+            session_id
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|source| SessionError::QueryContext {
+            operation: "load persistent writes",
+            source,
+        })?;
+
+        rows.into_iter().map(Self::into_record).collect()
+    }
+
+    fn into_record(self) -> Result<WriteRecord, SessionError> {
+        let repository_root = PathBuf::from(OsString::from_vec(self.repository_root));
+        let status = match self.status.as_str() {
+            "pending" => WriteStatus::Pending,
+            "applied" => WriteStatus::Applied,
+            "failed" => WriteStatus::Failed,
+            _ => {
+                return Err(SessionError::InvalidData {
+                    reason: "invalid persistent write status".to_string(),
+                });
+            }
+        };
+
+        Ok(WriteRecord {
+            call_id: self.call_id,
+            expected_hash: self.expected_hash,
+            id: self.id,
+            path: self.path,
+            repository_root,
+            resulting_hash: self.resulting_hash,
+            status,
+            turn_position: self.turn_position,
+        })
+    }
+}
 
 struct ModelIdentityRow {
     model: Option<String>,
@@ -632,8 +695,100 @@ WHERE id = ?
         Ok(())
     }
 
-    pub(crate) fn pool(&self) -> &SqlitePool {
-        &self.pool
+    pub(crate) async fn load_writes(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<WriteRecord>, SessionError> {
+        WriteRecordRow::load(&self.pool, session_id).await
+    }
+
+    async fn write_intent(
+        &self,
+        owner: &TurnOwner,
+        call_id: &str,
+        root: &Path,
+        path: &str,
+        expected: Option<&[u8]>,
+        resulting: &[u8],
+    ) -> Result<i64, SessionError> {
+        let root = root.as_os_str().as_bytes();
+        let expected_hash = expected.map(content_hash);
+        let resulting_hash = content_hash(resulting);
+        let mut transaction =
+            self.pool
+                .begin()
+                .await
+                .map_err(|source| SessionError::QueryContext {
+                    operation: "begin write intent",
+                    source,
+                })?;
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let row = sqlx::query!(
+            r#"
+INSERT INTO session_write (
+    session_id, turn_position, call_id, repository_root, path,
+    expected_hash, resulting_hash, status
+)
+SELECT session_id, turn_position, ?, ?, ?, ?, ?, 'pending'
+FROM session_turn
+WHERE session_id = ? AND turn_position = ? AND owner_token = ?
+  AND status = 'running' AND lease_expires_at > ?
+RETURNING id AS "id!"
+"#,
+            call_id,
+            root,
+            path,
+            expected_hash,
+            resulting_hash,
+            owner.session_id,
+            owner.turn_position,
+            owner.token,
+            now
+        )
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|source| SessionError::QueryContext {
+            operation: "persist write intent",
+            source,
+        })?
+        .ok_or_else(|| SessionError::OwnershipLost {
+            id: owner.session_id.clone(),
+            turn_position: owner.turn_position,
+        })?;
+
+        // `RETURNING` can yield an ID before SQLite reports commit errors.
+        transaction
+            .commit()
+            .await
+            .map_err(|source| SessionError::QueryContext {
+                operation: "commit write intent",
+                source,
+            })?;
+
+        Ok(row.id)
+    }
+
+    async fn finish_write(
+        &self,
+        session_id: &str,
+        id: i64,
+        applied: bool,
+    ) -> Result<(), SessionError> {
+        let status = if applied { "applied" } else { "failed" };
+        sqlx::query!(
+            "UPDATE session_write SET status = ? WHERE id = ? AND session_id = ?",
+            status,
+            id,
+            session_id
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|source| SessionError::QueryContext {
+            operation: "persist write outcome",
+            source,
+        })?;
+
+        Ok(())
     }
 
     async fn recover_stale_turns(&self, session_id: &str) -> Result<(), SessionError> {
@@ -838,40 +993,62 @@ fn shared_abandoned_turn_registry() -> Arc<AbandonedTurnRegistry> {
     Arc::clone(REGISTRY.get_or_init(Arc::default))
 }
 
+/// Owned journal access scoped to the turn that acquired it.
+pub(crate) struct WriteJournal {
+    database: Database,
+    owner: TurnOwner,
+}
+
+impl WriteJournal {
+    pub(crate) fn intent(
+        &self,
+        call_id: &str,
+        root: &Path,
+        path: &str,
+        expected: Option<&[u8]>,
+        resulting: &[u8],
+    ) -> impl Future<Output = Result<i64, SessionError>> + Send {
+        self.database
+            .write_intent(&self.owner, call_id, root, path, expected, resulting)
+    }
+
+    pub(crate) fn finish(
+        &self,
+        id: i64,
+        applied: bool,
+    ) -> impl Future<Output = Result<(), SessionError>> + Send {
+        self.database
+            .finish_write(&self.owner.session_id, id, applied)
+    }
+}
+
 pub(crate) struct TurnGuard {
     armed: bool,
+    database: Database,
     owner: TurnOwner,
     ownership_failure: Option<oneshot::Receiver<SessionError>>,
-    pool: SqlitePool,
-    registry: Arc<AbandonedTurnRegistry>,
     renewal_stop: Option<oneshot::Sender<()>>,
     renewal_task: Option<JoinHandle<()>>,
     runtime: tokio::runtime::Handle,
-    timestamp_source: Arc<dyn TimestampSource>,
 }
 
 impl TurnGuard {
     pub(crate) fn write_journal(&self) -> WriteJournal {
         WriteJournal {
-            owner_token: self.owner.token.clone(),
-            pool: self.pool.clone(),
-            session_id: self.owner.session_id.clone(),
-            timestamp_source: Arc::clone(&self.timestamp_source),
-            turn_position: self.owner.turn_position,
+            database: self.database.clone(),
+            owner: self.owner.clone(),
         }
     }
 
     fn new(database: &Database, owner: TurnOwner) -> Self {
         Self {
             armed: true,
+            database: database.clone(),
             owner,
             ownership_failure: None,
-            pool: database.pool.clone(),
-            registry: Arc::clone(&database.abandoned_turns),
             renewal_stop: None,
             renewal_task: None,
             runtime: tokio::runtime::Handle::current(),
-            timestamp_source: Arc::clone(&database.timestamp_source),
         }
     }
 
@@ -880,8 +1057,8 @@ impl TurnGuard {
         let owner = self.owner.clone();
         let interval = Duration::from_secs(TURN_LEASE_RENEWAL_INTERVAL_SECONDS);
         let first_renewal = Instant::now() + interval;
-        let pool = self.pool.clone();
-        let timestamp_source = Arc::clone(&self.timestamp_source);
+        let pool = self.database.pool.clone();
+        let timestamp_source = Arc::clone(&self.database.timestamp_source);
         let (renewal_stop, mut stop_requested) = oneshot::channel();
         let (ownership_failed, ownership_failure) = oneshot::channel();
         self.renewal_stop = Some(renewal_stop);
@@ -954,11 +1131,11 @@ impl Drop for TurnGuard {
             return;
         }
         let owner = self.owner.clone();
-        self.registry.register(owner.clone());
+        self.database.abandoned_turns.register(owner.clone());
 
-        let pool = self.pool.clone();
-        let registry = Arc::clone(&self.registry);
-        let timestamp_source = Arc::clone(&self.timestamp_source);
+        let pool = self.database.pool.clone();
+        let registry = Arc::clone(&self.database.abandoned_turns);
+        let timestamp_source = Arc::clone(&self.database.timestamp_source);
         std::mem::drop(self.runtime.spawn(async move {
             let result = async {
                 let mut transaction = pool.begin().await?;

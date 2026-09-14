@@ -7,15 +7,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use serde_json::json;
-use sqlx::SqlitePool;
 use tempfile::tempdir;
 use tokio::io::AsyncRead;
 
 use crate::file_system::{FileSystem, LocalFileSystem, MockFileSystem};
-use crate::session::{Database, NewSession, SessionError, TurnGuard};
+use crate::session::{Database, NewSession, SessionError, TurnGuard, WriteRecordRow};
 use crate::tool::WriteArguments;
 use crate::write::WriteTool;
-use crate::write_journal::{WriteRecord, WriteRecordRow, WriteStatus, content_hash};
+use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
 use crate::{ModelError, OutputSchema, ToolPolicy, TurnError, TurnLimits, TurnOptions, WriteError};
 
 async fn fixture() -> (Database, TurnGuard) {
@@ -76,9 +75,7 @@ async fn applied_and_failed_outcomes_survive_failed_turns() {
         .await
         .expect_err("filesystem failure");
     fail(&database, &mut guard).await;
-    let records = WriteRecordRow::load(database.pool(), "session")
-        .await
-        .expect("records");
+    let records = database.load_writes("session").await.expect("records");
 
     // Assert
     assert!(matches!(error, WriteError::WriteTarget { .. }));
@@ -118,9 +115,7 @@ async fn intent_failure_prevents_mutation_and_outcome_failure_keeps_pending_inte
             .await
             .expect_err("journal failure");
         fail(&database, &mut guard).await;
-        let records = WriteRecordRow::load(database.pool(), "session")
-            .await
-            .expect("records");
+        let records = database.load_writes("session").await.expect("records");
 
         // Assert
         assert!(!error.is_model_correctable());
@@ -176,7 +171,8 @@ async fn rejected_intent_commit_prevents_file_mutation() {
 
     // Act
     let result = tool.execute(&arguments(), "create").await;
-    let records = WriteRecordRow::load(database.pool(), "session")
+    let records = database
+        .load_writes("session")
         .await
         .expect("journal after rejected commit");
     guard.disarm();
@@ -309,7 +305,8 @@ async fn journal_preserves_native_roots_fingerprints_and_duplicate_call_ids() {
         .await
         .expect("same identifier in a later model response");
     fail(&database, &mut guard).await;
-    let records = WriteRecordRow::load(database.pool(), "session")
+    let records = database
+        .load_writes("session")
         .await
         .expect("native records");
 
@@ -354,9 +351,7 @@ async fn journal_rejects_lost_ownership_before_file_mutation() {
             .execute(&arguments(), "call")
             .await
             .expect_err("lost owner");
-        let records = WriteRecordRow::load(database.pool(), "session")
-            .await
-            .expect("journal");
+        let records = database.load_writes("session").await.expect("journal");
         guard.disarm();
 
         // Assert
@@ -399,12 +394,12 @@ async fn journal_reports_corrupt_status_and_unavailable_storage() {
         .expect("corrupt status");
 
     // Act
-    let invalid = WriteRecordRow::load(database.pool(), "session").await;
+    let invalid = database.load_writes("session").await;
     sqlx::query("DROP TABLE session_write")
         .execute(database.pool())
         .await
         .expect("remove storage");
-    let missing = WriteRecordRow::load(database.pool(), "session").await;
+    let missing = database.load_writes("session").await;
 
     // Assert
     assert!(matches!(invalid, Err(SessionError::InvalidData { .. })));
@@ -418,7 +413,7 @@ async fn journal_reports_corrupt_status_and_unavailable_storage() {
 }
 
 struct InspectingFileSystem {
-    pool: SqlitePool,
+    database: Database,
 }
 
 #[async_trait]
@@ -442,7 +437,9 @@ impl FileSystem for InspectingFileSystem {
         expected: Option<Vec<u8>>,
         content: Vec<u8>,
     ) -> io::Result<()> {
-        let records = WriteRecordRow::load(&self.pool, "session")
+        let records = self
+            .database
+            .load_writes("session")
             .await
             .expect("committed intent");
         assert_eq!(records.len(), 1);
@@ -465,7 +462,7 @@ async fn intent_is_committed_before_replacement_and_outcome_before_return() {
     let directory = tempdir().expect("repository");
     let mut tool = WriteTool::new(
         Arc::new(InspectingFileSystem {
-            pool: database.pool().clone(),
+            database: database.clone(),
         }),
         directory.path().to_path_buf(),
     );
@@ -473,9 +470,7 @@ async fn intent_is_committed_before_replacement_and_outcome_before_return() {
 
     // Act
     tool.execute(&arguments(), "create").await.expect("write");
-    let records = WriteRecordRow::load(database.pool(), "session")
-        .await
-        .expect("outcome");
+    let records = database.load_writes("session").await.expect("outcome");
     guard.disarm();
 
     // Assert
@@ -486,4 +481,35 @@ async fn intent_is_committed_before_replacement_and_outcome_before_return() {
             .expect("file"),
         b"new\n"
     );
+}
+
+#[tokio::test]
+async fn journal_handle_retains_temporary_database_and_turn_ownership() {
+    // Arrange
+    let (database, mut guard) = fixture().await;
+    let journal = guard.write_journal();
+    let renewal_task = guard.renewal_task.take().expect("renewal task");
+    guard.disarm();
+    renewal_task.await.expect("renewal stopped");
+    drop(guard);
+    drop(database);
+
+    // Act
+    let id = journal
+        .intent("retained", Path::new("repo"), "file.txt", None, b"new")
+        .await
+        .expect("journal retains its temporary database and owner");
+    journal.finish(id, true).await.expect("persist outcome");
+    let records = journal
+        .database
+        .load_writes("session")
+        .await
+        .expect("records");
+
+    // Assert
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].id, id);
+    assert_eq!(records[0].call_id, "retained");
+    assert_eq!(records[0].status, WriteStatus::Applied);
+    assert_eq!(records[0].turn_position, 0);
 }

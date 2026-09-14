@@ -9,6 +9,7 @@ use crate::model::{
 };
 use crate::read::{self, ReadError, ReadTool};
 use crate::repository::Repository;
+use crate::session::WriteJournal;
 use crate::tool::{
     ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments,
 };
@@ -17,7 +18,6 @@ use crate::turn::{
     TurnReport, sanitize_report_text, sanitized_completion_metadata,
 };
 use crate::write::{WriteError, WriteTool};
-use crate::write_journal::WriteJournal;
 
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {

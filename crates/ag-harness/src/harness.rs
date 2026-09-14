@@ -18,7 +18,7 @@ use crate::schema_contract::OutputSchema;
 use crate::session::{AcquiredTurn, Database, LoadedSession, NewSession, SessionError};
 use crate::tool::Tool;
 use crate::turn::{TurnError, TurnLimits, TurnOptions, TurnOutcome};
-use crate::write_journal::{WriteRecord, WriteRecordRow};
+use crate::write_journal::WriteRecord;
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
 
@@ -53,7 +53,7 @@ impl Session {
     ///
     /// Returns [`SessionError`] if journal loading fails.
     pub async fn writes(&self) -> Result<Vec<WriteRecord>, SessionError> {
-        WriteRecordRow::load(self.database.pool(), &self.id).await
+        self.database.load_writes(&self.id).await
     }
 
     /// Sends one prompt and durably records its lifecycle and messages.

@@ -10,3 +10,5 @@ mod reservation;
 mod storage;
 #[path = "session_test/support_test.rs"]
 mod support;
+#[path = "write_journal_test.rs"]
+mod write_journal;
