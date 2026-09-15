@@ -101,4 +101,13 @@ pub trait OneShotClient: Send + Sync {
             result = self.submit(request) => result,
         }
     }
+
+    /// Releases retained provider resources after all submissions and their
+    /// asynchronous cancellation cleanup have finished. Stateless adapters need
+    /// no cleanup.
+    async fn close(&self) {}
 }
+
+#[cfg(test)]
+#[path = "one_shot_test.rs"]
+mod tests;

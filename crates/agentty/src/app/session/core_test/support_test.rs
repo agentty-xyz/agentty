@@ -32,6 +32,7 @@ use crate::infra::fs::FsClient;
 /// Builds one loading focused-review entry with a stable test profile.
 pub(super) fn test_loading_review(diff_hash: u64) -> ReviewCacheEntry {
     ReviewCacheEntry::Loading {
+        progress: None,
         diff_hash,
         review_agent: (
             AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),

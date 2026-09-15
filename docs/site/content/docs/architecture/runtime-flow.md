@@ -890,11 +890,21 @@ their triggers:
   persistent read-only research sessions continue to use sandboxed plan mode.
 
   Review preparation budgets the rendered prompt and splits oversized original diffs
-  into read-only review batches, preserving all source fragments. It combines distinct
-  findings in severity order without letting a later pass discard earlier findings, then
-  checks cross-file interactions from the file headers and batch results. A later
-  failure preserves completed findings and adds a separate coverage section with retry
-  guidance. Incomplete reviews reuse the existing `f` regeneration flow.
+  into read-only review batches, preserving all source fragments. Each review runs up to
+  three batches concurrently in bounded waves and merges results in source order,
+  including subdivisions retried after input-size rejection, with findings sorted by
+  severity. A review-scoped runtime pool reuses idle Codex and Gemini processes with
+  fresh conversation context for each submission; other transports retain their isolated
+  startup behavior. Protocol repair continues the same conversation and retains pooled
+  runtimes until the next submission resets their context. Summary calls use low
+  reasoning effort, while review calls preserve the selected profile. All calls share a
+  15-minute deadline, including transport retries and protocol repair. Completion,
+  failure, and timeout close the pool. Progress events carry the session and diff hash;
+  only the matching loading generation updates its transient display. The cross-file
+  pass starts after all batches finish. A failed batch stops new waves while its running
+  peers finish; successful findings survive and unreviewed fragments appear in a
+  separate coverage section with retry guidance. Incomplete reviews reuse the existing
+  `f` regeneration flow.
 
   Commit-message preparation and review history use the shared bounded summary reducer.
   Small fragments stay verbatim; empty or oversized summaries receive one corrective

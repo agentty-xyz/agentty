@@ -137,6 +137,53 @@ async fn terminal_acknowledgement_loss_cannot_interrupt_a_successor() {
 }
 
 #[tokio::test]
+async fn finalization_uses_the_deadline_confirmed_by_a_slow_renewal() {
+    // Arrange
+    let (store, mut acquired) = GatedStore::fixture(PauseAt::RenewalAndCompletion).await;
+    let deadline = Arc::clone(&acquired.guard.deadline);
+    let original_deadline = *deadline.lock().expect("confirmed deadline");
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(100)).await;
+    tokio::time::resume();
+    store.entered.notified().await;
+    let started = Arc::new(Notify::new());
+    let ready = Arc::clone(&started);
+    let task = tokio::spawn(async move {
+        ready.notify_one();
+        let result = acquired
+            .guard
+            .complete(&[ModelMessage::Assistant("answer".into())], Some("native"))
+            .await;
+
+        (result, acquired)
+    });
+    started.notified().await;
+
+    // Act
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(150)).await;
+    tokio::time::resume();
+    store.release.notify_one();
+    store.entered.notified().await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(75)).await;
+    tokio::time::resume();
+    let completion_time = tokio::time::Instant::now();
+    store.release.notify_one();
+    let (result, acquired) = task.await.expect("finalization");
+    let loaded = store.load_session("session").await.expect("session");
+
+    // Assert
+    assert!(completion_time > original_deadline);
+    assert!(completion_time < *deadline.lock().expect("renewed deadline"));
+    result.expect("completion uses the renewed deadline");
+    assert!(!acquired.guard.armed);
+    assert_eq!(store.renewals.load(Ordering::SeqCst), 1);
+    assert_eq!(loaded.provider_session_id.as_deref(), Some("native"));
+    assert_eq!(loaded.turns.len(), 1);
+}
+
+#[tokio::test]
 async fn finalization_waiting_for_renewal_stops_at_the_confirmed_deadline() {
     // Arrange
     let (store, mut acquired) = GatedStore::fixture(PauseAt::Renewal).await;

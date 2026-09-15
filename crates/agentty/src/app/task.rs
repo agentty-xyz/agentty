@@ -29,6 +29,7 @@ use crate::app::{AppEvent, UpdateStatus, at_mention_task};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::session::SessionId;
+use crate::infra::review_deadline::ReviewDeadlineClient;
 use crate::infra::{file_index, version};
 
 /// Delay applied before a fresh `@`-mention filesystem walk starts.
@@ -515,7 +516,7 @@ impl TaskService {
         FOCUSED_REVIEW_PERSISTENCE_RETRY_BASE_DELAY.saturating_mul(1_u32 << exponent)
     }
 
-    /// Spawns review assist generation through the provided one-shot boundary.
+    /// Spawns review assist generation through the provided worker boundary.
     pub(super) fn spawn_review_assist_task_with_client(
         input: ReviewAssistTaskInput,
         run_client: Arc<dyn RunClient>,
@@ -535,12 +536,17 @@ impl TaskService {
         tokio::spawn(async move {
             let review_result = Self::review_assist_text_with_client(
                 &session_folder,
-                review_selection,
-                reasoning_level,
-                speed_mode,
+                (review_selection, reasoning_level, speed_mode),
                 &review_diff,
                 session_chat_history.as_deref(),
                 run_client.as_ref(),
+                |progress| {
+                    let _ = app_event_tx.send(AppEvent::ReviewProgressUpdated {
+                        diff_hash,
+                        progress,
+                        session_id: session_id.clone(),
+                    });
+                },
             )
             .await;
 
@@ -563,18 +569,19 @@ impl TaskService {
     }
 
     /// Generates review assist text through a provider-enforced read-only
-    /// one-shot boundary so review generation cannot modify the worktree.
+    /// worker boundary so review generation cannot modify the worktree.
     async fn review_assist_text_with_client(
         session_folder: &Path,
-        review_selection: AgentSelection,
-        reasoning_level: ReasoningLevel,
-        speed_mode: crate::domain::agent::SpeedMode,
+        review_agent: crate::app::review::ReviewAgent,
         review_diff: &str,
         session_chat_history: Option<&str>,
         run_client: &dyn RunClient,
+        progress: impl Fn(crate::app::review::ReviewProgress) + Sync,
     ) -> Result<String, AppError> {
+        let (review_selection, reasoning_level, speed_mode) = review_agent;
+        let client = ReviewDeadlineClient::new(run_client, Duration::from_mins(15));
         let review = crate::app::review_prompt::submit(
-            run_client,
+            &client,
             agent::OneShotRequest {
                 provider_call_budget: None,
                 harness: (review_selection.kind()).to_string(),
@@ -593,6 +600,7 @@ impl TaskService {
                 Self::review_assist_prompt(diff, Some(history))
                     .map_err(|error| agent::OneShotError::new(error.to_string()))
             },
+            progress,
         )
         .await?;
         Ok(review)

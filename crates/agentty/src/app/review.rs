@@ -23,6 +23,8 @@ pub(crate) enum ReviewCacheEntry {
         diff_hash: u64,
         /// Normalized agent profile selected for this review generation.
         review_agent: ReviewAgent,
+        /// Latest phase and batch count for this generation.
+        progress: Option<ReviewProgress>,
     },
     /// Review text was successfully generated.
     Ready {
@@ -145,6 +147,36 @@ const REVIEW_LOADING_MESSAGE: &str = "Reviewing changes";
 /// Agent selection, reasoning effort, and response speed used for focused
 /// review generation.
 pub(crate) type ReviewAgent = (AgentSelection, ReasoningLevel, SpeedMode);
+
+/// Live progress within one focused-review generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReviewProgress {
+    /// Reducing saved conversation context before inspecting changes.
+    SummarizingHistory,
+    /// Completed original-diff batches and the current total, including queued
+    /// fragments. Provider size rejection can increase the total.
+    Batches { completed: usize, total: usize },
+    /// Checking interactions after every original-diff batch finished.
+    CrossFile,
+}
+
+/// Formats the stable review profile together with its latest phase.
+pub(crate) fn review_progress_message(
+    review_agent: ReviewAgent,
+    progress: Option<ReviewProgress>,
+) -> String {
+    let message = review_loading_message(review_agent);
+    let detail = match progress {
+        None => return message,
+        Some(ReviewProgress::SummarizingHistory) => "Summarizing session history".to_string(),
+        Some(ReviewProgress::Batches { completed, total }) => {
+            format!("{completed}/{total} batches complete")
+        }
+        Some(ReviewProgress::CrossFile) => "Checking cross-file interactions".to_string(),
+    };
+
+    format!("{message}\n{detail}")
+}
 
 /// Stable manual-review result shown when the session has no diff changes.
 pub(crate) const REVIEW_NO_DIFF_MESSAGE: &str = "No diff changes found for review.";
@@ -297,9 +329,13 @@ fn hydrate_session_review_transient(
         return;
     };
     let (anchor, body) = match cache_entry {
-        ReviewCacheEntry::Loading { review_agent, .. } => (
+        ReviewCacheEntry::Loading {
+            review_agent,
+            progress,
+            ..
+        } => (
             TransientMessageAnchor::Tail,
-            TransientMessageBody::Loading(review_loading_message(*review_agent)),
+            TransientMessageBody::Loading(review_progress_message(*review_agent, *progress)),
         ),
         ReviewCacheEntry::Ready { text, .. } => (
             focused_review_result_anchor(session),
