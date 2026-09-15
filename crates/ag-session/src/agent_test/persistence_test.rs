@@ -1,6 +1,4 @@
-use crate::model::agent::{
-    AgentKind, AgentModel, AgentSelection, parse_persisted_session_agent_model,
-};
+use crate::agent::{AgentKind, AgentModel, AgentSelection, parse_persisted_session_agent_model};
 
 #[test]
 /// Ensures the retirement registry maps retired ids to replacements and
@@ -204,4 +202,32 @@ fn test_parse_persisted_session_agent_model_resolves_legacy_gemini_rows() {
         loaded_flash_lite,
         AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite)
     );
+}
+
+#[test]
+fn test_legacy_missing_and_invalid_agent_values_have_deterministic_fallbacks() {
+    // Arrange
+    let cases = [
+        (None, "gpt-5.5", AgentKind::Codex, AgentModel::Gpt56Sol),
+        (
+            Some("unknown"),
+            "unknown-model",
+            AgentKind::Gemini,
+            AgentModel::Gemini31Pro,
+        ),
+        (
+            Some(" "),
+            "claude-sonnet-5",
+            AgentKind::Claude,
+            AgentModel::ClaudeSonnet5,
+        ),
+    ];
+
+    // Act / Assert
+    for (agent, model, expected_agent, expected_model) in cases {
+        assert_eq!(
+            parse_persisted_session_agent_model(agent, model),
+            AgentSelection::new(expected_agent, expected_model)
+        );
+    }
 }

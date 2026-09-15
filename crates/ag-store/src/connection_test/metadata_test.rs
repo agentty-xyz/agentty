@@ -1,4 +1,4 @@
-use ag_agent::{AgentModel, SessionDiffState, SessionStats};
+use ag_session::{AgentModel, SessionDiffState, SessionStats};
 
 use super::support::insert_session_fixture;
 use crate::SessionTurnMetadata;

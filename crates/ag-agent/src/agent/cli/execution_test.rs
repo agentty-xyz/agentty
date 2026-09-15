@@ -14,8 +14,9 @@ use tokio::io::{AsyncRead, ReadBuf};
 
 use crate::agent::backend::{AgentBackendError, BuildCommandRequest, MockAgentBackend};
 use crate::agent::cli::execution::{
-    CliExecutionError, CliExecutionObserver, CliExitStatus, CollectingCliObserver, capture_stderr,
-    capture_stdout, execute_cli_command, finish_cli_execution, require_pipe,
+    CliExecutionError, CliExecutionObserver, CliExitStatus, CollectingCliObserver,
+    ProcessGroupGuard, capture_stderr, capture_stdout, execute_cli_command, finish_cli_execution,
+    require_pipe,
 };
 use crate::channel::AgentRequestKind;
 use crate::model::agent::{AgentKind, ReasoningLevel};
@@ -229,6 +230,62 @@ async fn test_execute_cli_command_collects_output_and_streams_lines() {
 }
 
 #[tokio::test]
+async fn test_parent_exit_terminates_descendants_before_draining_output() {
+    for (status, expected_status) in [
+        (0, CliExitStatus::Success),
+        (7, CliExitStatus::NonZero(Some(7))),
+    ] {
+        // Arrange: the background child inherits both output pipes and outlives
+        // the non-exec parent unless the executor terminates its process group.
+        let folder = tempdir().expect("temporary folder should be created");
+        let request_kind = AgentRequestKind::UtilityPrompt;
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().once().returning(move |_| {
+            Ok(shell_command(&format!(
+                "sleep 60 & printf 'first\\nlast'; printf 'warning' >&2; exit {status}"
+            )))
+        });
+        let observer = RecordingObserver::new();
+
+        // Act: no execution deadline; the outer timeout only bounds this test.
+        let output = tokio::time::timeout(
+            Duration::from_secs(5),
+            execute_cli_command(
+                &backend,
+                AgentKind::Codex,
+                build_request(&[], folder.path(), "prompt", &request_kind),
+                &observer,
+                None,
+            ),
+        )
+        .await
+        .expect("parent exit must release descendant-held pipes promptly")
+        .expect("process output should be collected");
+
+        // Assert: preserve parent status and buffered output, including a final
+        // stdout line without a newline, despite terminating its descendants.
+        assert_eq!(output.exit_status, expected_status);
+        assert_eq!(output.stdout, "first\nlast");
+        assert_eq!(output.stderr, "warning");
+        assert_eq!(
+            *observer
+                .lines
+                .lock()
+                .expect("line lock should be available"),
+            ["first", "last"]
+        );
+        assert_eq!(
+            observer
+                .pid_updates
+                .lock()
+                .expect("PID lock should be available")
+                .last(),
+            Some(&None)
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_execute_cli_command_disables_optional_git_locks_for_tools() {
     // Arrange
     let folder = tempdir().expect("temporary folder should be created");
@@ -388,4 +445,17 @@ async fn test_capture_stderr_returns_read_error() {
 
     // Assert
     assert!(matches!(error, CliExecutionError::StderrRead(_)));
+}
+
+#[test]
+fn cleanup_without_process_group_ownership_does_not_signal_the_host() {
+    // Arrange
+    let guard = ProcessGroupGuard(None);
+    let host = std::process::id();
+
+    // Act
+    drop(guard);
+
+    // Assert: reaching this point proves no signal was sent to the host group.
+    assert_eq!(std::process::id(), host);
 }

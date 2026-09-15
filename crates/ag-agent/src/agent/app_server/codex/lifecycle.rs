@@ -18,6 +18,7 @@ use crate::app_server_transport::{self, extract_json_error_message, response_id_
 use crate::model::agent::{AgentKind, ReasoningLevel};
 use crate::model::permission::PermissionMode;
 use crate::model::session::SpeedMode;
+use crate::model::{reasoning, session};
 
 /// Mutable runtime state required while a Codex app-server process is active.
 pub(super) struct CodexRuntimeState {
@@ -314,7 +315,7 @@ pub(super) fn build_thread_start_payload(
         "id": thread_start_id,
         "params": {
             "model": model,
-            "serviceTier": speed_mode.codex_service_tier(),
+            "serviceTier": session::codex_service_tier(speed_mode),
             "cwd": folder.to_string_lossy(),
             "approvalPolicy": policy::approval_policy(permission_mode),
             "sandbox": policy::thread_sandbox_mode(permission_mode),
@@ -340,7 +341,7 @@ pub(super) fn build_thread_resume_payload(
         "params": {
             "threadId": thread_id,
             "model": model,
-            "serviceTier": speed_mode.codex_service_tier(),
+            "serviceTier": session::codex_service_tier(speed_mode),
             "approvalPolicy": policy::approval_policy(permission_mode),
             "sandbox": policy::thread_sandbox_mode(permission_mode),
             "config": policy::thread_config(permission_mode, reasoning_level),
@@ -786,8 +787,8 @@ pub(super) fn build_turn_start_payload(input: &CodexTurnStartPayloadInput<'_>) -
             "approvalPolicy": policy::approval_policy(input.permission_mode),
             "sandboxPolicy": policy::turn_sandbox_policy(input.permission_mode),
             "model": input.model,
-            "serviceTier": input.speed_mode.codex_service_tier(),
-            "effort": input.reasoning_level.codex(),
+            "serviceTier": session::codex_service_tier(input.speed_mode),
+            "effort": reasoning::codex(input.reasoning_level),
             "summary": Value::Null,
             "personality": Value::Null,
             "outputSchema": protocol_output_schema(

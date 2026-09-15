@@ -534,10 +534,10 @@ impl RealSyncAssistClient {
         let _ = one_shot_client
             .submit(agent::OneShotRequest {
                 provider_call_budget: None,
-                agent_kind: session_agent.kind(),
+                harness: (session_agent.kind()).to_string(),
                 child_pid: None,
                 folder,
-                model: session_agent.model(),
+                model: (session_agent.model()).as_str().to_string(),
                 permission_mode: ag_agent::PermissionMode::AutoEdit,
                 prompt,
                 request_kind: ag_agent::AgentRequestKind::UtilityPrompt,

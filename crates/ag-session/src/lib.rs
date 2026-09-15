@@ -1,10 +1,11 @@
-//! Frontend-neutral session management API and shared session models.
+//! Frontend-neutral session management, selection catalog, and session models.
 //!
 //! Host applications implement [`SessionBackend`] to connect the stable
 //! programmatic API to their persistence, agent, Git, and forge workflows.
 //! Callers such as future orchestrator sessions use [`SessionService`] without
 //! depending on terminal UI state.
 
+mod agent;
 mod error;
 mod message;
 mod model;
@@ -17,6 +18,13 @@ mod service;
 mod setting;
 mod transcript_notice;
 
+pub use ag_runtime::{ReasoningLevel, SessionDiffState, SessionStats};
+pub use agent::{
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata,
+    parse_persisted_session_agent_model, resolve_agent_kind_for_model,
+    resolve_agent_selection_for_model, resolve_model_for_available_agent_kinds,
+    resolve_prompt_model_agent_kind, selectable_models_for_agent_kinds,
+};
 pub use error::SessionError;
 pub use message::{
     SessionMessage, SessionMessageKind, SessionMessageKindParseError, SessionTranscript,

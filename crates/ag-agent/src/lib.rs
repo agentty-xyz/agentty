@@ -1,12 +1,10 @@
-//! Agent backend transports and provider-neutral contracts.
+//! External-agent adapters implementing the `ag-runtime` execution contracts.
 //!
-//! This crate owns the agent execution boundary used by Agentty: provider
-//! model metadata, turn prompt payloads, CLI/app-server transports, and
-//! channel contracts. [`OneShotClient`] presents isolated structured prompts
-//! as one injectable operation, while [`TurnContinuation`] keeps transport
-//! recovery state out of [`TurnRequest`]. The crate intentionally avoids
-//! depending on the `agentty` application crate so provider-specific
-//! dependencies compile in a leaf workspace member.
+//! This crate owns provider discovery, prompt translation, CLI/app-server
+//! transports, retries, and resource cleanup. Shared execution contracts are
+//! re-exported from `ag-runtime`; the built-in selection catalog lives in
+//! `ag-session`. Hosts inject [`AgentChannel`] and [`OneShotClient`] without
+//! depending on the concrete transports.
 
 mod agent;
 mod app_server;

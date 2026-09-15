@@ -1694,9 +1694,9 @@ async fn test_real_sync_assist_client_submits_utility_prompt() {
         .expect_submit()
         .times(1)
         .returning(move |request| {
-            assert_eq!(request.agent_kind, AgentKind::Claude);
+            assert_eq!(request.harness, (AgentKind::Claude).to_string());
             assert_eq!(request.folder, expected_folder);
-            assert_eq!(request.model, AgentModel::ClaudeSonnet5);
+            assert_eq!(request.model, AgentModel::ClaudeSonnet5.as_str());
             assert_eq!(request.prompt, "Resolve sync conflicts");
             assert_eq!(
                 request.request_kind,

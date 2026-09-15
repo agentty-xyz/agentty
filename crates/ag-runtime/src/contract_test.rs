@@ -1,6 +1,6 @@
 use ag_protocol::ProtocolRequestProfile;
 
-use crate::channel::contract::{
+use crate::contract::{
     AgentRequestKind, PersonalityPrompt, PersonalityPromptUpdate, TurnContinuation,
 };
 

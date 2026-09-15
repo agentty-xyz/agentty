@@ -72,3 +72,20 @@ fn test_agent_backend_error_setup_and_command_build_are_distinct() {
     // Act / Assert
     assert_ne!(setup_error, build_error);
 }
+
+#[test]
+fn test_backend_errors_preserve_diagnostics_at_runtime_boundary() {
+    // Arrange
+    let errors = [
+        AgentBackendError::Setup("setup failed".to_string()),
+        AgentBackendError::CommandBuild("template failed".to_string()),
+    ];
+
+    // Act / Assert
+    for error in errors {
+        let message = error.to_string();
+        assert!(
+            matches!(ag_runtime::AgentError::from(error), ag_runtime::AgentError::Backend(actual) if actual == message)
+        );
+    }
+}

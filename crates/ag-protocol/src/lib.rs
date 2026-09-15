@@ -7,6 +7,7 @@
 //! pulling in TUI state.
 
 mod envelope;
+mod fence;
 mod model;
 mod parse;
 mod prompt;
@@ -20,6 +21,7 @@ pub use envelope::{
     ProtocolSchemaInstructionMode, build_protocol_repair_prompt, prepend_protocol_instructions,
     prepend_protocol_refresh_reminder,
 };
+pub use fence::diff_fence;
 pub use model::{
     AgentResponse, AgentResponseParseError, ProtocolRequestProfile, ReviewCommentOutcome,
     ReviewCommentResolution,

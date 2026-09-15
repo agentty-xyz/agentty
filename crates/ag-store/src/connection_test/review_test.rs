@@ -1,4 +1,4 @@
-use ag_agent::{ReasoningLevel, SpeedMode};
+use ag_session::{ReasoningLevel, SpeedMode};
 use tempfile::tempdir;
 
 use super::support::assert_review_request_row;
@@ -364,7 +364,7 @@ async fn test_defer_session_focused_review_requires_eligible_existing_session() 
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
-            response_style: ag_agent::ResponseStyle::default(),
+            response_style: ag_session::ResponseStyle::default(),
             role: Some("Orchestrator"),
             speed_mode: SpeedMode::Normal,
             status: "Review",

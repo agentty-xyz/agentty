@@ -1,4 +1,4 @@
-use ag_agent::{SessionDiffState, SessionStats};
+use ag_session::{SessionDiffState, SessionStats};
 
 use super::support::insert_session_fixture;
 use crate::connection::Database;

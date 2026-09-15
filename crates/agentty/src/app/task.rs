@@ -584,10 +584,10 @@ impl TaskService {
             one_shot_client,
             agent::OneShotRequest {
                 provider_call_budget: None,
-                agent_kind: review_selection.kind(),
+                harness: (review_selection.kind()).to_string(),
                 child_pid: None,
                 folder: session_folder.to_path_buf(),
-                model: review_selection.model(),
+                model: (review_selection.model()).as_str().to_string(),
                 permission_mode: ag_agent::PermissionMode::ReadOnly,
                 prompt: String::new(),
                 request_kind: ag_agent::AgentRequestKind::FocusedReview,

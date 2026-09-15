@@ -7,6 +7,7 @@ use crate::agent::backend::{AgentBackend, AgentBackendError, BuildCommandRequest
 use crate::agent::prompt::{CliPromptAccessRootMode, cli_prompt_access_directories};
 use crate::channel::AgentRequestKind;
 use crate::model::agent::{AgentModel, ReasoningLevel};
+use crate::model::reasoning;
 
 fn session_start_request_kind() -> AgentRequestKind {
     AgentRequestKind::SessionStart
@@ -74,7 +75,7 @@ fn test_antigravity_build_command_uses_stream_input_mode_with_sandbox() {
             "--model".to_string(),
             requested_model.to_string(),
             "--effort".to_string(),
-            ReasoningLevel::default().antigravity().to_string(),
+            reasoning::antigravity(ReasoningLevel::default()).to_string(),
             "--input-format".to_string(),
             "stream-json".to_string(),
             "--output-format".to_string(),
@@ -170,7 +171,10 @@ fn test_antigravity_build_command_passes_supported_effort() {
             .expect("--effort flag should be present");
 
         // Assert
-        assert_eq!(args[effort_position + 1], reasoning_level.antigravity());
+        assert_eq!(
+            args[effort_position + 1],
+            reasoning::antigravity(reasoning_level)
+        );
     }
 }
 

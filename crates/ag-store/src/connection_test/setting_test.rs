@@ -1,5 +1,4 @@
-use ag_agent::{AgentModel, ReasoningLevel, SpeedMode};
-use ag_session::SettingName;
+use ag_session::{AgentModel, ReasoningLevel, SettingName, SpeedMode};
 
 use crate::connection::Database;
 

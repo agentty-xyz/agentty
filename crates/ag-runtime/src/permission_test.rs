@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::model::permission::PermissionMode;
+use crate::permission::PermissionMode;
 
 #[test]
 fn test_from_str_accepts_supported_modes() {

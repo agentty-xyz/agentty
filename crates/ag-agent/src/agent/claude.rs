@@ -7,6 +7,7 @@ use super::backend::{
     AgentBackend, AgentBackendError, BuildCommandRequest, MAX_CONCURRENT_SUBAGENTS,
 };
 use super::prompt::{CliPromptAccessRootMode, append_cli_prompt_access_directories};
+use crate::model::{reasoning, session};
 
 /// Lists the Claude tools Agentty enables for unattended sessions.
 ///
@@ -85,7 +86,9 @@ impl AgentBackend for ClaudeBackend {
         command.arg("--input-format").arg("text");
         command.arg("--strict-mcp-config");
         command.arg("--verbose");
-        command.arg("--effort").arg(reasoning_level.claude());
+        command
+            .arg("--effort")
+            .arg(reasoning::claude(reasoning_level));
         command.arg("--output-format").arg("stream-json");
         command.arg("--json-schema").arg(
             protocol_output_schema(
@@ -151,7 +154,7 @@ fn append_claude_workspace_settings(
         sandbox["allowUnsandboxedCommands"] = serde_json::json!(false);
     }
     let settings = serde_json::json!({
-        "fastMode": speed_mode.claude_fast_mode(),
+        "fastMode": session::claude_fast_mode(speed_mode),
         "permissions": {
             "deny": deny_rules,
         },

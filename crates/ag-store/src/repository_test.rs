@@ -1,11 +1,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use ag_agent::{SessionDiffState, SessionStats};
-use ag_session::SessionMessageKind;
+use ag_session::{SessionDiffState, SessionMessageKind, SessionStats};
+use ag_worker::MockOperationRepository;
 
 use crate::connection::open_in_memory_pool;
-use crate::operation::MockOperationRepository;
 use crate::repository::AppRepositories;
 use crate::timestamp::TimestampSource;
 
@@ -201,7 +200,7 @@ async fn repository_parts_support_focused_adapter_injection() {
         .await
         .expect("failed to open in-memory db");
     let baseline = AppRepositories::from_pool(pool);
-    let mut operation = MockOperationRepository::new();
+    let mut operation = MockOperationRepository::<crate::DbError>::new();
     operation
         .expect_is_cancel_requested_for_operation()
         .withf(|operation_id| operation_id == "operation-a")

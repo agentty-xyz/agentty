@@ -5,6 +5,7 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::process::ExitStatus;
 use std::time::Duration;
 
+use rustix::process::{self, Pid, Signal};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _};
 
 use super::stdin;
@@ -117,9 +118,16 @@ pub(crate) async fn execute_cli_command(
         })
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .process_group(0)
         .kill_on_drop(true);
 
     let mut child = tokio_command.spawn().map_err(CliExecutionError::Spawn)?;
+    let process_group = ProcessGroupGuard(
+        child
+            .id()
+            .and_then(|pid| i32::try_from(pid).ok())
+            .and_then(Pid::from_raw),
+    );
     let _pid_guard = ChildPidObserverGuard::new(observer, child.id());
     let stdout = require_pipe(child.stdout.take(), "stdout")?;
     let stderr = require_pipe(child.stderr.take(), "stderr")?;
@@ -130,8 +138,22 @@ pub(crate) async fn execute_cli_command(
         CliExecutionError::StdinWrite,
     );
 
+    let _stdin_guard = StdinAbortGuard(
+        stdin_write_task
+            .as_ref()
+            .map(tokio::task::JoinHandle::abort_handle),
+    );
+
     let execution = async {
-        let wait = async { child.wait().await.map_err(CliExecutionError::Wait) };
+        let wait = async {
+            let exit_status = child.wait().await.map_err(CliExecutionError::Wait);
+            // Descendants can keep stdout/stderr open after the parent exits.
+            // Terminate them before waiting for stream EOFs, then drain the
+            // pipes.
+            drop(process_group);
+
+            exit_status
+        };
         let stdout_capture = capture_stdout(tokio::io::BufReader::new(stdout), observer);
         let stderr_capture = capture_stderr(stderr);
         let (exit_status, stdout, stderr) = tokio::try_join!(wait, stdout_capture, stderr_capture)?;
@@ -158,6 +180,30 @@ pub(crate) async fn execute_cli_command(
         stderr,
         stdout,
     })
+}
+
+/// Owns the isolated process group, including tool descendants after parent
+/// exit. Cancellation, timeout, errors, and normal completion all terminate
+/// stragglers.
+struct ProcessGroupGuard(Option<Pid>);
+
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        if let Some(group) = self.0 {
+            let _ = process::kill_process_group(group, Signal::KILL);
+        }
+    }
+}
+
+/// Prevents a dropped execution future from detaching a blocked stdin writer.
+struct StdinAbortGuard(Option<tokio::task::AbortHandle>);
+
+impl Drop for StdinAbortGuard {
+    fn drop(&mut self) {
+        if let Some(writer) = &self.0 {
+            writer.abort();
+        }
+    }
 }
 
 /// Finalizes stdin delivery without leaving its task detached after failure.

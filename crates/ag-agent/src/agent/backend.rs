@@ -101,6 +101,12 @@ impl fmt::Display for AgentBackendError {
 
 impl Error for AgentBackendError {}
 
+impl From<AgentBackendError> for ag_runtime::AgentError {
+    fn from(error: AgentBackendError) -> Self {
+        Self::Backend(error.to_string())
+    }
+}
+
 /// Builds and configures external agent CLI commands.
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 pub trait AgentBackend: Send + Sync {

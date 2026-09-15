@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::model::permission::PermissionMode;
+use crate::model::reasoning;
 
 /// Canonical wire-level policy mapping for one [`PermissionMode`].
 ///
@@ -161,7 +162,7 @@ pub(super) fn thread_config(
 ) -> Value {
     serde_json::json!({
         "web_search": web_search_mode(permission_mode),
-        "model_reasoning_effort": reasoning_level.codex(),
+        "model_reasoning_effort": reasoning::codex(reasoning_level),
     })
 }
 

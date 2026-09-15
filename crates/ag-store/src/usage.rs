@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use ag_agent::SessionStats;
+use ag_session::SessionStats;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 

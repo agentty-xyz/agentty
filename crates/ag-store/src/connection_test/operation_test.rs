@@ -1,4 +1,4 @@
-use ag_agent::{AgentModel, SessionStats};
+use ag_session::{AgentModel, SessionStats};
 use tempfile::tempdir;
 
 use super::support::{insert_session_fixture, load_session_row};

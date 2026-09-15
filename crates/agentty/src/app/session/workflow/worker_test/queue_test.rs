@@ -337,12 +337,12 @@ async fn test_next_scheduled_work_pauses_queued_work_for_question() {
     )]);
 
     // Act
-    let paused_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+    let paused_work = ag_worker::next_work(&context, &mut pending_commands);
     pending_commands.push_back(ScheduledSessionCommand::queued(
         resume_command("question-answer"),
         2,
     ));
-    let answer_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+    let answer_work = ag_worker::next_work(&context, &mut pending_commands);
 
     // Assert
     assert!(paused_work.is_none());
@@ -446,5 +446,30 @@ async fn test_queued_saved_child_reserves_stack_until_worker_rejects_acceptance(
             .await
             .expect("messages"),
         []
+    );
+}
+
+#[tokio::test]
+async fn test_clear_queued_messages_tolerates_a_poisoned_queue() {
+    // Arrange
+    let queue = Arc::new(Mutex::new(VecDeque::from([queued_message(1, "pending")])));
+    let context = queue_helper_context(Arc::clone(&queue)).await;
+    let poisoned = std::panic::catch_unwind(|| {
+        let _guard = queue.lock().expect("queue lock");
+        std::panic::resume_unwind(Box::new("poison queue"));
+    });
+    assert!(poisoned.is_err());
+
+    // Act
+    context.clear_queued_messages();
+
+    // Assert
+    assert_eq!(
+        queue
+            .lock()
+            .expect_err("queue stays poisoned")
+            .get_ref()
+            .len(),
+        1
     );
 }

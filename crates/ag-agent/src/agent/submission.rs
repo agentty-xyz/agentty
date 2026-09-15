@@ -5,98 +5,25 @@
 //! transport so one-shot callers enforce the same schema contract as normal
 //! session turns.
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, build_protocol_repair_prompt,
     format_protocol_parse_debug_details, parse_protocol_response_strict,
 };
+#[cfg(any(test, feature = "test-utils"))]
+pub use ag_runtime::MockOneShotClient;
+use ag_runtime::PermissionMode;
+pub use ag_runtime::{OneShotClient, OneShotError, OneShotRequest, OneShotSubmission};
 use async_trait::async_trait;
 
 use super::backend::{AgentBackend, BuildCommandRequest};
 use super::cli::error;
 use super::cli::execution::{self, CliExecutionError, CliExecutionObserver, CliExitStatus};
-use super::{
-    ParsedResponse, create_app_server_client, create_backend, parse_response, transport_mode,
-};
+use super::{ParsedResponse, create_app_server_client, create_backend, parse_response};
 use crate::app_server::{AppServerClient, AppServerTurnRequest};
-use crate::channel::AgentRequestKind;
-use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
-use crate::model::permission::PermissionMode;
-use crate::model::session::{SessionDiffState, SessionStats, SpeedMode};
-
-/// Input payload for one isolated prompt that prefers structured protocol
-/// output.
-#[derive(Clone, Debug)]
-pub struct OneShotRequest {
-    /// Provider backend used for command construction, stdin shaping, and
-    /// response parsing.
-    pub agent_kind: AgentKind,
-    /// Optional PID slot used by cancel/stop flows to terminate the spawned
-    /// subprocess while a one-shot prompt is running.
-    pub child_pid: Option<Arc<Mutex<Option<u32>>>>,
-    /// Working directory where the prompt command runs.
-    pub folder: PathBuf,
-    /// Provider-specific model used for command construction and parsing.
-    pub model: AgentModel,
-    /// Filesystem and command permission policy for this isolated prompt.
-    pub permission_mode: PermissionMode,
-    /// Prompt text submitted to the agent.
-    pub prompt: String,
-    /// Optional shared limit, charged for every provider turn including
-    /// repairs.
-    pub provider_call_budget: Option<crate::ProviderCallBudget>,
-    /// Reasoning effort preference for the one-shot prompt.
-    pub reasoning_level: ReasoningLevel,
-    /// Canonical request kind for this isolated prompt.
-    pub request_kind: AgentRequestKind,
-    /// Response-speed preference for the one-shot prompt.
-    pub speed_mode: SpeedMode,
-}
-
-/// Parsed result returned by one isolated prompt execution.
-#[derive(Clone, Debug, PartialEq)]
-pub struct OneShotSubmission {
-    /// Structured protocol response parsed from the final successful attempt.
-    pub response: AgentResponse,
-    /// Aggregated token usage for the one-shot prompt execution.
-    pub stats: SessionStats,
-}
-
-/// Typed failure returned by [`OneShotClient`] submissions.
-///
-/// The concrete transport, protocol-repair, and provider diagnostics remain
-/// available through [`std::fmt::Display`] without exposing transport-specific
-/// variants to callers.
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("{message}")]
-pub struct OneShotError {
-    message: String,
-}
-
-impl OneShotError {
-    /// Creates an error from one already formatted submission diagnostic.
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-/// Provider-neutral boundary for isolated structured agent prompts.
-///
-/// Implementations own transport selection, protocol repair, temporary
-/// app-server lifecycle, and usage aggregation so callers submit one request
-/// without selecting a CLI or app-server execution helper.
-#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
-#[async_trait]
-pub trait OneShotClient: Send + Sync {
-    /// Executes one isolated prompt and returns its parsed response and usage.
-    /// Implementations must enforce `provider_call_budget` for every underlying
-    /// provider attempt, including protocol repairs and transport retries.
-    async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError>;
-}
+use crate::model::agent::AgentKind;
+use crate::model::session::{SessionDiffState, SessionStats};
 
 /// Production [`OneShotClient`] that routes through the selected provider.
 pub struct RealOneShotClient {
@@ -137,21 +64,14 @@ async fn submit_one_shot_with_stats_and_app_server_client(
     request: OneShotRequest,
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
 ) -> Result<OneShotSubmission, String> {
-    let backend = create_backend(request.agent_kind);
-
-    if transport_mode(request.agent_kind).uses_app_server() {
-        let app_server_client =
-            create_app_server_client(request.agent_kind, app_server_client_override).ok_or_else(
-                || {
-                    format!(
-                        "{} provider did not provide an app-server client",
-                        request.agent_kind
-                    )
-                },
-            )?;
-
+    let agent_kind = request.harness.parse::<AgentKind>()?;
+    if let Some(app_server_client) =
+        create_app_server_client(agent_kind, app_server_client_override)
+    {
         return submit_one_shot_with_app_server_client(app_server_client.as_ref(), request).await;
     }
+
+    let backend = create_backend(agent_kind);
 
     submit_one_shot_with_backend(backend.as_ref(), request).await
 }
@@ -179,7 +99,7 @@ async fn submit_one_shot_with_app_server_client(
         folder: request.folder.clone(),
         live_transcript: None,
         main_checkout_root: None,
-        model: request.model.provider_model_str().to_string(),
+        model: request.model.clone(),
         permission_mode: request.permission_mode,
         personality: crate::channel::PersonalityPrompt::default(),
         prompt: ag_protocol::TurnPrompt::from_agent_data(request.prompt.clone()),
@@ -345,7 +265,7 @@ async fn attempt_one_shot_app_server_repair(
         folder: request.folder,
         live_transcript: None,
         main_checkout_root: None,
-        model: request.model.provider_model_str().to_string(),
+        model: request.model.clone(),
         permission_mode: request.permission_mode,
         personality: crate::channel::PersonalityPrompt::default(),
         prompt: ag_protocol::TurnPrompt::from_agent_data(repair_prompt),
@@ -395,12 +315,13 @@ async fn execute_one_shot_command(
         budget.consume().map_err(|error| error.to_string())?;
     }
     let prompt_payload = ag_protocol::TurnPrompt::from_agent_data(prompt.to_string());
+    let agent_kind = request.harness.parse::<AgentKind>()?;
     let build_request = BuildCommandRequest {
         attachments: &prompt_payload.attachments,
         folder: &request.folder,
         main_checkout_root: None,
         replay_transcript: None,
-        model: request.model.provider_model_str(),
+        model: &request.model,
         permission_mode: request.permission_mode,
         personality_prompt: None,
         prompt,
@@ -412,7 +333,7 @@ async fn execute_one_shot_command(
         child_pid: request.child_pid,
     };
     let output =
-        execution::execute_cli_command(backend, request.agent_kind, build_request, &observer, None)
+        execution::execute_cli_command(backend, agent_kind, build_request, &observer, None)
             .await
             .map_err(format_one_shot_execution_error)?;
 
@@ -422,7 +343,7 @@ async fn execute_one_shot_command(
         }
         CliExitStatus::NonZero(exit_code) => {
             return Err(format_one_shot_exit_error(
-                request.agent_kind,
+                agent_kind,
                 exit_code,
                 &output.stdout,
                 &output.stderr,
@@ -431,7 +352,7 @@ async fn execute_one_shot_command(
         CliExitStatus::Success => {}
     }
 
-    let parsed_response = parse_response(request.agent_kind, &output.stdout, &output.stderr);
+    let parsed_response = parse_response(agent_kind, &output.stdout, &output.stderr);
 
     Ok(parsed_response)
 }
@@ -476,7 +397,7 @@ fn clear_child_pid_slot(child_pid: Option<&Mutex<Option<u32>>>) {
     }
 }
 
-/// Bridges shared CLI PID observations into the one-shot cancellation slot.
+/// Bridges shared CLI PID observations into the one-shot accounting slot.
 struct OneShotCliObserver {
     child_pid: Option<Arc<Mutex<Option<u32>>>>,
 }

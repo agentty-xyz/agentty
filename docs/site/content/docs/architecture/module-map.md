@@ -18,10 +18,15 @@ For file-level detail, read the module docstrings directly.
   file-list, and RGBA image read surface used by prompt image capture. Platform backends
   own macOS pasteboard access, X11 selection reads, Wayland `wl-paste` reads, and
   unsupported-backend reporting.
-- `crates/ag-agent/`: Shared agent backend library crate with provider model metadata,
-  prompt templates, provider-neutral channel contracts, the injectable `OneShotClient`
-  submission boundary, provider availability probes, and crate-private
-  CLI/managed-runtime transport wiring.
+- `crates/ag-runtime/`: Transport-independent session and one-shot execution contracts,
+  continuation state, settings, usage, events, and errors. It has no dependency on
+  provider implementations, persistence, or a frontend.
+- `crates/ag-worker/`: Headless serial scheduling, cancellation, heartbeat coordination,
+  operation completion, and restart recovery. Hosts supply queue policy and ordered
+  workflow effects; storage implements worker-owned operation contracts.
+- `crates/ag-agent/`: External-agent adapters, prompt templates, provider discovery, and
+  CLI/app-server transport ownership. It implements `ag-runtime` contracts and owns
+  cancellation of provider resources.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
   review-request and comment-thread types, GitHub/GitLab remote detection, thread
   reply/resolution, and the `gh`/`glab` adapters behind the `ReviewRequestClient` and
@@ -53,11 +58,12 @@ For file-level detail, read the module docstrings directly.
   prompt envelopes, repair prompts, review-comment outcomes, and turn prompt payload
   helpers.
 - `crates/ag-session/`: Frontend-neutral session library with stable identity,
-  lifecycle, orchestration, project, personality, review-link, setting, clarification,
-  and transcript models; complete session aggregates; pure policy and parsing helpers;
-  and the object-safe `SessionBackend` port exposed through the owned, cloneable
-  `SessionService` for creation, lookup, messaging, structured question answers, durable
-  coordinator submissions, cancellation, merge, and review-request workflows.
+  lifecycle, built-in agent/model catalog, orchestration, project, personality,
+  review-link, setting, clarification, and transcript models; complete session
+  aggregates; pure policy and parsing helpers; and the object-safe `SessionBackend` port
+  exposed through the owned, cloneable `SessionService` for creation, lookup, messaging,
+  structured question answers, durable coordinator submissions, cancellation, merge, and
+  review-request workflows.
 - `crates/ag-store/`: Reusable persistence library with narrow repository contracts,
   SQLite adapters, WAL/foreign-key connection setup, offline SQLx query metadata, and
   embedded migrations. Host applications may inject a `TimestampSource` while the
@@ -96,8 +102,8 @@ For file-level detail, read the module docstrings directly.
   attachments to exact placeholder occurrences and history states, session
   action-eligibility and list-ordering policies, and fuzzy file-entry ranking shared by
   runtime selection and UI suggestions. Thin compatibility modules re-export `ag-agent`
-  provider models, `ag-session` session and session-adjacent models, and shared protocol
-  turn prompt payloads. No I/O.
+  provider metadata, `ag-session` agent/model selections and session models, and shared
+  protocol turn prompt payloads. No I/O.
 - `infra/`: External integrations behind traits — Agentty data-root resolution and
   `ag-store` composition, git (`GitClient`, backed by `ag-git`), filesystem
   (`FsClient`), the session-worktree-only personality catalog, tmux, clipboard images,
@@ -159,9 +165,10 @@ for session chat.
   returned navigation and composer effects. `app/` must not inspect or mutate `AppMode`.
 - Frontend-neutral session entities, enums, and policies live in `ag-session`; keep only
   Agentty-specific entities and interaction state in `domain/`.
-- Persistence contracts, SQLite repositories, offline query metadata, and migrations
-  live in `ag-store`; Agentty's `infra/db.rs` owns only application-specific database
-  location and timestamp-source composition.
+- SQLite repositories, offline query metadata, and migrations live in `ag-store`.
+  Operation contracts belong to `ag-worker`; other persistence contracts stay in
+  `ag-store`. Agentty's `infra/db.rs` owns application-specific database location and
+  timestamp-source composition.
 - External side effects live in `infra/` behind mockable traits; see
   [Testability Boundaries](@/docs/architecture/testability-boundaries.md).
 - `module.rs` files paired with a `module/` directory stay router-only.

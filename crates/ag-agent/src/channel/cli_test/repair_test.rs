@@ -157,6 +157,7 @@ async fn test_run_turn_recovers_wrapped_structured_output_for_claude() {
         Ok(command)
     });
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };
@@ -195,6 +196,7 @@ async fn test_run_turn_returns_error_for_invalid_structured_output_for_claude() 
             Ok(command)
         });
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };
@@ -290,6 +292,7 @@ async fn test_run_turn_recovers_valid_output_via_protocol_repair_for_claude() {
         }
     });
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };

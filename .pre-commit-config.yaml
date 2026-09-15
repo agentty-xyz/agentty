@@ -157,6 +157,22 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: test-ag-runtime-src
+        name: cargo nextest ag-runtime src
+        description: Source tests for the provider-independent execution contracts.
+        entry: cargo nextest run --locked --profile ci -p ag-runtime --lib
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
+      - id: test-ag-worker
+        name: cargo nextest ag-worker
+        description: Worker source tests and the public headless execution contract.
+        entry: cargo nextest run --locked --profile ci -p ag-worker
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: test-ag-session-src
         name: cargo nextest ag-session src
         description: Source tests for `crates/ag-session/src`.

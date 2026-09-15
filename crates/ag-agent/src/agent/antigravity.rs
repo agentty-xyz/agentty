@@ -7,6 +7,7 @@ use ag_protocol::{SchemaRequiredPolicy, protocol_output_schema};
 use super::availability;
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 use super::prompt::{self as shared_prompt, CliPromptAccessRootMode};
+use crate::model::reasoning;
 
 /// Wall-clock limit passed to Antigravity headless mode for one Agentty turn.
 ///
@@ -82,7 +83,7 @@ impl AgentBackend for AntigravityBackend {
             .arg("--model")
             .arg(model)
             .arg("--effort")
-            .arg(reasoning_level.antigravity())
+            .arg(reasoning::antigravity(reasoning_level))
             .arg("--input-format")
             .arg("stream-json")
             .arg("--output-format")

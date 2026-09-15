@@ -1,0 +1,27 @@
+[package]
+name = "ag-worker"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Headless agent run scheduling and lifecycle coordination"
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ag-runtime.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+mockall = { workspace = true, optional = true }
+
+[dev-dependencies]
+ag-protocol.workspace = true
+ag-runtime = { workspace = true, features = ["test-utils"] }
+mockall.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[features]
+test-utils = ["dep:mockall"]

@@ -1,0 +1,24 @@
+[package]
+name = "ag-runtime"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Transport-independent agent execution contracts"
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ag-protocol.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+mockall = { workspace = true, optional = true }
+
+[dev-dependencies]
+mockall.workspace = true
+
+[features]
+test-utils = ["dep:mockall"]

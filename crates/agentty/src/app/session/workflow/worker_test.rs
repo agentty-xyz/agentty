@@ -29,3 +29,6 @@ mod synchronization;
 
 #[path = "worker_test/transition_test.rs"]
 mod transition;
+
+#[path = "worker_test/shutdown_test.rs"]
+mod shutdown;

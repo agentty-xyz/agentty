@@ -30,7 +30,9 @@ these constraints:
 | ------------------------- | -------------------------------------------------------------------- |
 | `crates/ag-forge/`        | Shared forge review-request library (`gh`/`glab` adapters).          |
 | `crates/ag-git/`          | Shared git, worktree, sync, rebase, and merge library.               |
-| `crates/ag-agent/`        | Shared agent provider models plus channel and transport boundaries.  |
+| `crates/ag-runtime/`      | Shared execution contracts and transport-neutral turn settings.      |
+| `crates/ag-worker/`       | Headless scheduling, cancellation, heartbeat, and recovery.          |
+| `crates/ag-agent/`        | External-agent discovery and transport implementations.              |
 | `crates/ag-protocol/`     | Shared structured response protocol and turn prompt payload library. |
 | `crates/ag-session/`      | Shared session models, policies, and frontend-neutral lifecycle API. |
 | `crates/ag-store/`        | Shared persistence contracts, SQLite adapters, and migrations.       |
@@ -641,10 +643,9 @@ flowchart TD
   client_trait --> antigravity_client
 ```
 
-<a id="architecture-key-types"></a> Key types
-(`crates/ag-agent/src/channel/contract.rs`, re-exported by the `ag-agent` crate root,
-with prompt payloads owned by `ag-protocol` and re-exported through
-`domain/turn_prompt.rs`):
+<a id="architecture-key-types"></a> Key types (`crates/ag-runtime/src/contract.rs`,
+re-exported by the `ag-agent` crate root, with prompt payloads owned by `ag-protocol`
+and re-exported through `domain/turn_prompt.rs`):
 
 | Type               | Purpose                                                  |
 | ------------------ | -------------------------------------------------------- |
@@ -1062,3 +1063,25 @@ Private `ag-harness` supervision runs independently of its caller on a host-owne
 runtime. Retained control observes bounded cleanup, including after cancellation or
 partial preparation. The host keeps the runtime running until cleanup settles. This path
 has no Agentty runtime integration.
+
+## Headless execution ownership
+
+`ag-runtime` owns `AgentChannel` and `OneShotClient`. A one-shot request identifies its
+harness and model independently; external adapters resolve those identifiers.
+`ag-worker` serializes commands and chat messages using their shared submission order.
+Agentty supplies question-mode policy, preparation gates, UI events, and ordered Git and
+forge workflows through the host boundary. Closing the mailbox drains runnable work; the
+host explicitly cancels remaining paused commands and removes queued messages before
+shutdown, notifying waiting callers and updating operation records.
+
+Cancellation drops the turn future without polling it again, then gives the channel
+owner five seconds to shut down. CLI adapters isolate each execution in a process group
+and kill remaining group members on cleanup, including tool subprocesses. When the CLI
+parent exits, group cleanup happens before draining buffered output so inherited pipes
+cannot keep the turn open. Resource accounting PIDs do not authorize cancellation.
+
+Started operations receive a heartbeat every thirty seconds while their workflow runs.
+Storage updates only running rows. Tracking failures are reported without abandoning
+work. Operation completion includes ordered post-processing and is separate from model
+turn completion. Restart recovery reconciles host state before failing abandoned
+operations; it requires exclusive ownership of the application root.

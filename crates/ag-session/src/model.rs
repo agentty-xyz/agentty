@@ -7,15 +7,15 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use ag_agent::{AgentSelection, ReasoningLevel};
-pub use ag_agent::{PermissionMode, ResponseStyle, SpeedMode};
 pub use ag_forge::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
 use ag_protocol::QuestionItem;
+pub use ag_runtime::{PermissionMode, ResponseStyle, SpeedMode};
 use serde::de::{self, Deserializer};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
 use crate::message::SessionMessage;
+use crate::{AgentSelection, ReasoningLevel};
 
 /// Returns the default worktree branch name for a session.
 pub fn session_branch(session_id: &str) -> String {

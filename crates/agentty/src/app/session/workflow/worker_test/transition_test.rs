@@ -17,7 +17,7 @@ use tracing::instrument::WithSubscriber;
 
 use super::super::super::post_turn::{TurnPersonalityPersistence, build_assistant_message_content};
 use super::super::super::turn::{
-    resolve_turn_personality, run_channel_turn, run_turn_with_cancellation, terminate_child_process,
+    resolve_turn_personality, run_channel_turn, run_turn_with_cancellation,
 };
 use super::super::{
     REBASE_OPERATION_KIND, ScheduledSessionCommand, ScheduledSessionWork, SessionCommand,
@@ -1601,9 +1601,9 @@ async fn test_next_scheduled_work_follows_shared_submission_order() {
     )]);
 
     // Act
-    let first_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
-    let second_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
-    let third_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+    let first_work = ag_worker::next_work(&context, &mut pending_commands);
+    let second_work = ag_worker::next_work(&context, &mut pending_commands);
+    let third_work = ag_worker::next_work(&context, &mut pending_commands);
     queue_handle
         .lock()
         .expect("queue lock")
@@ -1615,12 +1615,12 @@ async fn test_next_scheduled_work_follows_shared_submission_order() {
         },
         3,
     ));
-    let fourth_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+    let fourth_work = ag_worker::next_work(&context, &mut pending_commands);
     pending_commands.push_front(ScheduledSessionCommand::immediate(resume_command(
         "immediate-reply",
     )));
-    let fifth_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
-    let sixth_work = SessionWorkerService::next_scheduled_work(&context, &mut pending_commands);
+    let fifth_work = ag_worker::next_work(&context, &mut pending_commands);
+    let sixth_work = ag_worker::next_work(&context, &mut pending_commands);
 
     // Assert
     assert!(matches!(
@@ -1751,98 +1751,5 @@ async fn test_resolve_turn_personality_defaults_when_session_state_is_unavailabl
     assert_eq!(
         query_failure.persistence,
         TurnPersonalityPersistence::default()
-    );
-}
-
-#[tokio::test]
-/// Verifies that `terminate_child_process` sends `SIGTERM` to the
-/// child process tracked in the context's PID slot, killing it.
-async fn test_terminate_child_process_sends_sigterm_to_active_child() {
-    // Arrange — spawn a long-running child and store its PID in the
-    // context.
-    let mut child = tokio::process::Command::new("sleep")
-        .arg("60")
-        .spawn()
-        .expect("failed to spawn sleep");
-    let child_pid = child.id().expect("child has no pid");
-
-    let context = SessionWorkerContext {
-        app_event_tx: mpsc::unbounded_channel().0,
-        branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
-        cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(MockAgentChannel::new()),
-        child_pid: Arc::new(Mutex::new(Some(child_pid))),
-        clock: Arc::new(crate::infra::clock::RealClock),
-        db: AppRepositories::in_memory().await.expect("db should open"),
-        folder: std::env::temp_dir(),
-        fs_client: Arc::new(fs::MockFsClient::new()),
-        git_client: Arc::new(MockGitClient::new()),
-        transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
-        queued_messages: Arc::new(Mutex::new(VecDeque::new())),
-        review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
-
-        session_update_versions: Arc::default(),
-        session_id: "sess-term".into(),
-        session_agent: AgentSelection::new(
-            crate::domain::agent::AgentKind::Claude,
-            AgentModel::ClaudeHaiku4520251001,
-        ),
-        status: Arc::new(Mutex::new(Status::InProgress)),
-    };
-
-    // Act
-    terminate_child_process(&context.child_pid, context.session_agent.kind());
-
-    // Assert — the child should have been terminated by SIGTERM.
-    let exit_status = child.wait().await.expect("failed to wait on child");
-    assert!(
-        !exit_status.success(),
-        "child should have been killed by SIGTERM"
-    );
-    // PID slot should be cleared after termination.
-    assert!(
-        context.child_pid.lock().expect("child_pid lock").is_none(),
-        "PID slot should be cleared after termination"
-    );
-}
-
-#[tokio::test]
-/// Verifies that `terminate_child_process` is a no-op when no child
-/// PID is stored for a CLI channel.
-async fn test_terminate_child_process_noop_when_no_pid() {
-    // Arrange
-    let context = SessionWorkerContext {
-        app_event_tx: mpsc::unbounded_channel().0,
-        branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
-        cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(MockAgentChannel::new()),
-        child_pid: Arc::new(Mutex::new(None)),
-        clock: Arc::new(crate::infra::clock::RealClock),
-        db: AppRepositories::in_memory().await.expect("db should open"),
-        folder: std::env::temp_dir(),
-        fs_client: Arc::new(fs::MockFsClient::new()),
-        git_client: Arc::new(MockGitClient::new()),
-        transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
-        queued_messages: Arc::new(Mutex::new(VecDeque::new())),
-        review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
-
-        session_update_versions: Arc::default(),
-        session_id: "sess-nopid".into(),
-        session_agent: AgentSelection::new(
-            crate::domain::agent::AgentKind::Claude,
-            AgentModel::ClaudeHaiku4520251001,
-        ),
-        status: Arc::new(Mutex::new(Status::InProgress)),
-    };
-
-    // Act — should not panic or error.
-    terminate_child_process(&context.child_pid, context.session_agent.kind());
-
-    // Assert — PID slot remains None.
-    assert!(
-        context.child_pid.lock().expect("child_pid lock").is_none(),
-        "PID slot should still be None"
     );
 }
