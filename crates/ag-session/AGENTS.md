@@ -12,3 +12,16 @@ Frontend-neutral session models and programmatic lifecycle API.
   managers.
 - `SessionStatus::can_transition_to()` is the canonical lifecycle graph. Update it and
   its tests instead of duplicating transitions in callers or prose.
+
+## Integration
+
+- Hosts implement `SessionBackend` and construct `SessionService` from a shared backend
+  handle. Consumers use the service without borrowing application state.
+- Submit coordinator-owned turns through the durable coordinator API rather than the
+  live-chat queue. Preserve complete session lookup and complete question-set answers.
+- Consult `crates/ag-session/src/service.rs` for request and lifecycle contracts.
+
+## Documentation
+
+Keep `docs/site/content/docs/architecture/runtime-flow.md` aligned with host/service
+wiring and `docs/site/content/docs/usage/workflow.md` aligned with lifecycle behavior.

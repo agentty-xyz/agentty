@@ -6,15 +6,25 @@ Reusable persistence contracts, SQLite adapters, and embedded migrations.
 
 - Keep Agentty filesystem layout, TUI state, Git workflows, and rendering out of this
   crate.
-- Depend on shared models through `ag-session` and provider metadata through `ag-agent`;
-  never depend on `agentty`.
+- Use shared models from `ag-session` and transport-independent settings from
+  `ag-runtime`. Implement the worker-owned `OperationRepository` contract from
+  `ag-worker`; keep `ag-agent` provider transports and `agentty` out of persistence.
 - Expose repository mocks through `test-utils` when dependents need deterministic
   persistence tests.
 
+## Integration
+
+- Hosts choose database paths and open `Database`, which applies embedded migrations and
+  exposes `AppRepositories`. Inject narrow repository traits into workflows.
+- Inject `TimestampSource` when the host controls time. Use in-memory SQLite and
+  injected timestamps for deterministic repository tests.
+- Consult `crates/ag-store/src/connection.rs` for initialization and
+  `crates/ag-store/tests/repository.rs` for consumer examples.
+
 ## SQLite Invariants
 
-- Use SQLx directly, without an ORM, and prefer checked query macros. Keep `.sqlx/`
-  metadata current for offline builds.
+- Use SQLx directly, without an ORM, and prefer checked query macros. Keep
+  `crates/ag-store/.sqlx/` metadata current for offline builds.
 - Keep migrations embedded and connection setup configured for foreign keys and WAL.
 - Never edit an existing migration. Add a numbered
   `crates/ag-store/migrations/NNN_description.sql` file and run the migration check.
@@ -22,4 +32,9 @@ Reusable persistence contracts, SQLite adapters, and embedded migrations.
   `<table>_id`, booleans use `is_` or `has_`, and timestamps end in `_at`.
 - Translate `sqlx::Error` into the crate's typed error surface.
 
-Use in-memory SQLite and injected timestamp sources for deterministic repository tests.
+## Documentation
+
+Follow `CONTRIBUTING.md` for offline-query metadata regeneration and
+`docs/site/content/docs/architecture/change-recipes.md` for schema changes. Update
+`docs/site/content/docs/architecture/testability-boundaries.md` when repository or clock
+contracts change.
