@@ -1057,3 +1057,8 @@ identity. A host-validated comparison OID stays fixed throughout execution; work
 one-shot execution uses the same engine without opening SQLite. These are library
 boundaries for the planned Agentty adapters, not a replacement for the current Agentty
 runtime.
+
+Private `ag-harness` supervision runs independently of its caller on a host-owned
+runtime. Retained control observes bounded cleanup, including after cancellation or
+partial preparation. The host keeps the runtime running until cleanup settles. This path
+has no Agentty runtime integration.

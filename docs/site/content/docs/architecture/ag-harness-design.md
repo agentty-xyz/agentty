@@ -68,11 +68,17 @@ workspace-write, external-read, environment, and host-information grants, and de
 networking. Git metadata remains read-only, including linked-worktree administration. A
 shared stdout/stderr byte budget and monotonic deadline bound the execution contract;
 retained cancellation and cleanup control survives a dropped execution future. Results
-keep the main exit, termination reason, output truncation, and cleanup failure separate.
-Applied writes are not rolled back; aggregate memory, process-count, and disk quotas are
-excluded. These contracts have no production executor or public entry point. Future
-backends must enforce the policy against hostile commands, descendants, and repository
-contents before launching anything.
+keep the main exit, execution error, termination reason, output truncation, and cleanup
+failure separate. Applied writes are not rolled back; aggregate memory, process-count,
+and disk quotas are excluded. These contracts have no production executor or public
+entry point. Future backends must enforce the policy against hostile commands,
+descendants, and repository contents before launching anything.
+
+Private platform-independent supervision uses injected backends to bound execution,
+output, and cleanup. Cancellation and deadlines apply throughout the lifecycle, and
+retained control survives dropped callers. Completion includes descendant cleanup;
+cleanup failures remain separate from execution results. Production backends remain
+unavailable.
 
 ## Repository comparisons
 

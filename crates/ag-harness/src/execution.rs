@@ -1,4 +1,5 @@
-// Preparatory contracts have no production caller until isolation is
-// implemented.
-#[allow(dead_code)]
+// Preparatory execution remains private until isolation backends are complete.
+#![allow(dead_code)]
+
 mod contract;
+mod supervisor;
