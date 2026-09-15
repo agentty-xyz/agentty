@@ -1,9 +1,10 @@
-use crate::model::agent::{
+use ag_runtime::SpeedMode;
+
+use crate::agent::{
     AgentKind, AgentModel, AgentSelection, resolve_agent_selection_for_model,
     resolve_model_for_available_agent_kinds, resolve_prompt_model_agent_kind,
     selectable_models_for_agent_kinds,
 };
-use crate::model::session::SpeedMode;
 
 #[test]
 /// Ensures Fast compatibility is exact and selects required fallback
@@ -211,4 +212,20 @@ fn test_resolve_prompt_model_agent_kind_uses_first_available_agent() {
 
     // Assert
     assert_eq!(resolved_agent_kind, Some(AgentKind::Antigravity));
+}
+
+#[test]
+fn test_available_selected_model_is_preserved() {
+    // Arrange
+    let selected = AgentModel::Gpt6Astra;
+
+    // Act
+    let resolved = resolve_model_for_available_agent_kinds(
+        selected,
+        &[AgentKind::Codex],
+        AgentModel::Gpt56Sol,
+    );
+
+    // Assert
+    assert_eq!(resolved, selected);
 }

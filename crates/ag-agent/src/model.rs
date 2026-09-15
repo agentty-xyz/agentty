@@ -2,4 +2,5 @@
 
 pub(crate) mod agent;
 pub(crate) mod permission;
+pub(crate) mod reasoning;
 pub(crate) mod session;

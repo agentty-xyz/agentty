@@ -119,7 +119,7 @@ impl AgentChannel for AppServerAgentChannel {
                 req.request_kind.protocol_profile(),
                 req.response_style,
             )
-            .map_err(|error| AgentError::Backend(error.to_string()))?;
+            .map_err(AgentError::from)?;
             let continuation = req.continuation.into_parts();
             let request = AppServerTurnRequest {
                 provider_call_budget: None,
@@ -171,7 +171,7 @@ impl AgentChannel for AppServerAgentChannel {
                         provider_conversation_id: parsed.provider_conversation_id,
                     })
                 }
-                Err(error) => Err(AgentError::AppServer(error)),
+                Err(error) => Err(AgentError::Runtime(error.to_string())),
             }
         };
 

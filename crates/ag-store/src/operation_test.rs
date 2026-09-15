@@ -83,3 +83,79 @@ async fn recovery_failure_reports_semantic_operation_context() {
         }
     ));
 }
+
+#[tokio::test]
+async fn heartbeat_updates_running_operations_without_reviving_terminal_rows() {
+    // Arrange
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("database");
+    let project = database
+        .projects()
+        .upsert_project("/tmp/heartbeat-project", Some("main".into()))
+        .await
+        .expect("project");
+    database
+        .sessions()
+        .insert_session("session", "gpt-5.6-sol", "main", "Review", project)
+        .await
+        .expect("session");
+    database
+        .operations()
+        .insert_session_operation("run", "session", "reply")
+        .await
+        .expect("operation");
+    // Act
+    database
+        .operations()
+        .heartbeat("run")
+        .await
+        .expect("queued heartbeat");
+    let queued = database
+        .operations()
+        .load_unfinished_session_operations()
+        .await
+        .expect("queued");
+    database
+        .operations()
+        .mark_session_operation_running("run")
+        .await
+        .expect("start");
+    sqlx::query("UPDATE session_operation SET heartbeat_at = 0 WHERE id = 'run'")
+        .execute(&pool)
+        .await
+        .expect("old heartbeat");
+    database
+        .operations()
+        .heartbeat("run")
+        .await
+        .expect("running heartbeat");
+    let running = database
+        .operations()
+        .load_unfinished_session_operations()
+        .await
+        .expect("running");
+    database
+        .operations()
+        .mark_session_operation_done("run")
+        .await
+        .expect("done");
+    sqlx::query("UPDATE session_operation SET heartbeat_at = 0 WHERE id = 'run'")
+        .execute(&pool)
+        .await
+        .expect("terminal heartbeat");
+    database
+        .operations()
+        .heartbeat("run")
+        .await
+        .expect("terminal heartbeat ignored");
+    let terminal: (String, i64) =
+        sqlx::query_as("SELECT status, heartbeat_at FROM session_operation WHERE id = 'run'")
+            .fetch_one(&pool)
+            .await
+            .expect("terminal row");
+    // Assert
+    assert_eq!(queued[0].heartbeat_at, None);
+    assert!(running[0].heartbeat_at.is_some_and(|value| value > 0));
+    assert_eq!(terminal, ("done".into(), 0));
+}

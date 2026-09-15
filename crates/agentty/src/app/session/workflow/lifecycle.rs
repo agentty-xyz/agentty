@@ -3121,10 +3121,10 @@ impl SessionManager {
             let result = one_shot_client
                 .submit(agent::OneShotRequest {
                     provider_call_budget: None,
-                    agent_kind: session_agent.kind(),
+                    harness: (session_agent.kind()).to_string(),
                     child_pid: None,
                     folder: folder.to_path_buf(),
-                    model: session_agent.model(),
+                    model: (session_agent.model()).as_str().to_string(),
                     permission_mode: ag_agent::PermissionMode::ReadOnly,
                     prompt: prompt.to_string(),
                     request_kind: AgentRequestKind::UtilityPrompt,

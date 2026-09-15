@@ -1,4 +1,4 @@
-use crate::model::agent::ReasoningLevel;
+use crate::ReasoningLevel;
 
 #[test]
 /// Ensures reasoning-level parsing accepts all supported persisted values.
@@ -30,41 +30,6 @@ fn test_reasoning_level_from_str_rejects_unknown_values() {
 
     // Assert
     assert!(parse_result.is_err());
-}
-
-#[test]
-/// Ensures `ReasoningLevel::claude()` maps all levels to the correct
-/// Claude `--effort` values, including the highest generic levels.
-fn test_reasoning_level_claude_maps_all_levels() {
-    // Arrange / Act / Assert
-    assert_eq!(ReasoningLevel::Low.claude(), "low");
-    assert_eq!(ReasoningLevel::Medium.claude(), "medium");
-    assert_eq!(ReasoningLevel::High.claude(), "high");
-    assert_eq!(ReasoningLevel::XHigh.claude(), "max");
-    assert_eq!(ReasoningLevel::Max.claude(), "max");
-}
-
-#[test]
-/// Ensures Antigravity reasoning values stay within the CLI's accepted
-/// `low`, `medium`, and `high` effort levels.
-fn test_reasoning_level_antigravity_maps_all_levels() {
-    // Arrange / Act / Assert
-    assert_eq!(ReasoningLevel::Low.antigravity(), "low");
-    assert_eq!(ReasoningLevel::Medium.antigravity(), "medium");
-    assert_eq!(ReasoningLevel::High.antigravity(), "high");
-    assert_eq!(ReasoningLevel::XHigh.antigravity(), "high");
-    assert_eq!(ReasoningLevel::Max.antigravity(), "high");
-}
-
-#[test]
-/// Ensures Codex reasoning values include the distinct `max` effort.
-fn test_reasoning_level_codex_maps_all_levels() {
-    // Arrange / Act / Assert
-    assert_eq!(ReasoningLevel::Low.codex(), "low");
-    assert_eq!(ReasoningLevel::Medium.codex(), "medium");
-    assert_eq!(ReasoningLevel::High.codex(), "high");
-    assert_eq!(ReasoningLevel::XHigh.codex(), "xhigh");
-    assert_eq!(ReasoningLevel::Max.codex(), "max");
 }
 
 #[test]

@@ -100,6 +100,7 @@ async fn test_run_turn_spawn_failure_returns_err_without_delta() {
         .expect_build_command()
         .returning(|_| Ok(std::process::Command::new("/no-such-binary-agentty-test")));
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };
@@ -137,6 +138,7 @@ async fn test_run_turn_kill_signal_returns_err_without_stopped_delta() {
         Ok(cmd)
     });
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };
@@ -180,6 +182,7 @@ async fn test_run_turn_clean_exit_returns_ok_result_without_context_reset() {
         Ok(command)
     });
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };
@@ -211,6 +214,7 @@ async fn test_run_turn_writes_large_stdin_concurrently_for_claude() {
         Ok(command)
     });
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };
@@ -247,6 +251,7 @@ async fn test_run_turn_writes_prompt_to_stdin_for_claude() {
         move |_| Ok(stdin_capture_command(&capture_path))
     });
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };
@@ -290,6 +295,7 @@ async fn test_run_turn_preserves_child_error_after_broken_pipe() {
         Ok(command)
     });
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };
@@ -351,6 +357,7 @@ async fn test_run_turn_returns_claude_auth_guidance_for_expired_token() {
         Ok(command)
     });
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };
@@ -386,6 +393,7 @@ async fn test_run_turn_returns_exit_error_for_non_zero_status() {
         Ok(command)
     });
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };
@@ -422,6 +430,7 @@ async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider
         Ok(command)
     });
     let channel = CliAgentChannel {
+        active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
     };

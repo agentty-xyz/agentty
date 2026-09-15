@@ -33,8 +33,7 @@ printf '%s\n' "$GIT_OPTIONAL_LOCKS" > "$AGENTTY_TEST_EVIDENCE/optional-locks"
 case "$prompt" in
   *"Generate the canonical session commit message"*)
     if [ "$AGENTTY_TEST_RELEASE_LOCK" = "1" ]; then
-      lock_path=$(cat "$AGENTTY_TEST_EVIDENCE/lock-path") || exit 93
-      (sleep 2; rm "$lock_path") </dev/null >/dev/null 2>&1 &
+      printf 'release requested\n' > "$AGENTTY_TEST_EVIDENCE/release-lock"
     fi
     ;;
   *"Review the Git diff for display in a terminal UI."*)
@@ -602,9 +601,25 @@ async fn test_session_commit_index_lock() -> E2eResult {
 async fn test_session_commit_index_lock_recovers() -> E2eResult {
     // Arrange
     let evidence = tempfile::tempdir()?;
+    // Model an independent writer owned by the test, outside the provider's
+    // process group. A provider descendant must not survive turn completion.
+    let release_evidence = evidence.path().to_path_buf();
+    let release_lock = async move {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !release_evidence.join("release-lock").exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await?;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let lock_path = std::fs::read_to_string(release_evidence.join("lock-path"))?;
+        std::fs::remove_file(lock_path.trim())?;
+
+        Ok(())
+    };
 
     // Act / Assert
-    FeatureTest::new("session_commit_index_lock_recovers")
+    let scenario = FeatureTest::new("session_commit_index_lock_recovers")
         .with_git()
         .with_terminal_size(100, 40)
         .env("AGENTTY_TEST_EVIDENCE", evidence.path().to_string_lossy())
@@ -652,8 +667,9 @@ async fn test_session_commit_index_lock_recovers() -> E2eResult {
                     assert_eq!(committed.stdout, b"pending change\n");
                 })
             },
-        )
-        .await?;
+        );
+    // Joining keeps lock release scoped to this test, including failures.
+    tokio::try_join!(scenario, release_lock)?;
 
     Ok(())
 }

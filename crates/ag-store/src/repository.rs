@@ -11,7 +11,7 @@ use crate::{activity, operation, orchestration, project, review, session, settin
 #[derive(Clone)]
 pub struct AppRepositories {
     activity: Arc<dyn activity::ActivityRepository>,
-    operation: Arc<dyn operation::OperationRepository>,
+    operation: Arc<dyn operation::OperationRepository<crate::DbError>>,
     orchestration: Arc<dyn orchestration::OrchestrationRepository>,
     project: Arc<dyn project::ProjectRepository>,
     review: Arc<dyn review::ReviewRepository>,
@@ -27,7 +27,7 @@ impl AppRepositories {
     }
 
     /// Returns the session-operation repository.
-    pub fn operations(&self) -> &dyn operation::OperationRepository {
+    pub fn operations(&self) -> &dyn operation::OperationRepository<crate::DbError> {
         self.operation.as_ref()
     }
 

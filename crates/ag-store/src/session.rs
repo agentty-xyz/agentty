@@ -2,11 +2,10 @@
 
 use std::sync::Arc;
 
-use ag_agent::{
-    self as agent, AgentKind, PermissionMode, ReasoningLevel, ResponseStyle, SessionStats,
-    SpeedMode,
+use ag_session::{
+    AgentKind, FocusedReviewStatus, PermissionMode, ReasoningLevel, ResponseStyle,
+    SessionMessageKind, SessionStats, SpeedMode,
 };
-use ag_session::{FocusedReviewStatus, SessionMessageKind};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 use tracing::warn;
@@ -2643,7 +2642,7 @@ impl SessionInstructionStateRow {
     /// Converts the optional stored provider conversation id into one
     /// normalized bootstrap conversation id when present and non-empty.
     fn into_instruction_conversation_id(self) -> Option<String> {
-        agent::normalize_instruction_conversation_id(
+        ag_runtime::normalize_instruction_conversation_id(
             self.app_server_instruction_provider_conversation_id
                 .as_deref(),
         )

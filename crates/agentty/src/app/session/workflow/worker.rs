@@ -4,16 +4,16 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
 
 use ag_agent as agent;
-use ag_agent::{
-    AgentChannel, AgentError, AgentRequestKind, OneShotClient, TurnContinuation, TurnEvent,
-    TurnRequest, TurnResult, create_agent_channel,
-};
+use ag_agent::create_agent_channel;
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_protocol::AgentResponse;
+use ag_runtime::{
+    AgentChannel, AgentError, AgentRequestKind, OneShotClient, TurnContinuation, TurnEvent,
+    TurnRequest, TurnResult,
+};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -164,7 +164,7 @@ impl SessionCommand {
 
 /// Worker command paired with its shared queue order when it was submitted
 /// behind active work.
-struct ScheduledSessionCommand {
+pub(super) struct ScheduledSessionCommand {
     command: SessionCommand,
     /// Reserves stack branch work until this command is dropped or finishes.
     preparation_reservation: Option<Arc<()>>,
@@ -201,6 +201,16 @@ impl ScheduledSessionCommand {
     }
 }
 
+impl ag_worker::ScheduledCommand for ScheduledSessionCommand {
+    fn order(&self) -> Option<u64> {
+        self.queued_order
+    }
+
+    fn can_run_while_paused(&self) -> bool {
+        self.can_run_while_question()
+    }
+}
+
 /// Sender and shared ordering source owned by one active session worker.
 #[derive(Clone)]
 struct SessionWorkerHandle {
@@ -223,10 +233,7 @@ impl SessionWorkerHandle {
 }
 
 /// Next unit selected from the combined action and chat queues.
-enum ScheduledSessionWork {
-    Command(Box<ScheduledSessionCommand>),
-    Message(QueuedMessage),
-}
+type ScheduledSessionWork = ag_worker::ScheduledWork<ScheduledSessionCommand, QueuedMessage>;
 
 /// Returns whether the session has a queued or running rebase operation.
 pub(super) fn has_unfinished_rebase_operation(
@@ -253,6 +260,96 @@ pub(super) fn has_unfinished_branch_operation(
     })
 }
 
+struct SessionWorkerHost {
+    context: SessionWorkerContext,
+    one_shot_client: Arc<dyn OneShotClient>,
+}
+
+impl ag_worker::WorkQueue for SessionWorkerHost {
+    type Command = ScheduledSessionCommand;
+    type Message = QueuedMessage;
+
+    fn paused(&self) -> bool {
+        ag_worker::WorkQueue::paused(&self.context)
+    }
+
+    fn message_order(&self) -> Option<u64> {
+        self.context.next_queued_message_order()
+    }
+
+    fn pop_message(&self) -> Option<QueuedMessage> {
+        self.context.pop_queued_message()
+    }
+}
+
+#[async_trait::async_trait]
+impl ag_worker::WorkerHost for SessionWorkerHost {
+    async fn execute(&self, work: ScheduledSessionWork) {
+        let result = match work {
+            ScheduledSessionWork::Command(mut command) => {
+                let _reservation = command.preparation_reservation.take();
+                if let Some(ready_rx) = command.ready_rx.take()
+                    && ready_rx.await.is_err()
+                {
+                    return;
+                }
+                SessionWorkerService::process_session_command(
+                    &self.context,
+                    &self.one_shot_client,
+                    command.command,
+                )
+                .await
+            }
+            ScheduledSessionWork::Message(message) => {
+                SessionWorkerService::process_queued_message(
+                    &self.context,
+                    &self.one_shot_client,
+                    message,
+                )
+                .await
+            }
+        };
+        SessionWorkerService::clear_queued_messages_after_stop(&self.context, result.as_ref());
+    }
+
+    async fn abandon(&self, work: ScheduledSessionWork) {
+        match work {
+            ScheduledSessionWork::Command(command) => {
+                if let Err(error) = self
+                    .context
+                    .db
+                    .operations()
+                    .mark_session_operation_canceled(
+                        command.command.operation_id(),
+                        "Session worker closed before execution",
+                    )
+                    .await
+                {
+                    tracing::warn!(%error, "Failed to record abandoned worker command");
+                }
+                SessionWorkerService::complete_skipped_session_command(
+                    &self.context,
+                    &command.command,
+                );
+            }
+            ScheduledSessionWork::Message(_) => {
+                SessionWorkerService::emit_queue_session_updated(&self.context);
+            }
+        }
+    }
+
+    async fn shutdown(&self) {
+        let _ = self
+            .context
+            .channel
+            .shutdown_session(self.context.session_id.to_string())
+            .await;
+        if let Ok(mut guard) = self.context.child_pid.lock() {
+            *guard = None;
+        }
+    }
+}
+
 /// Shared state threaded through all worker turn executions.
 pub(super) struct SessionWorkerContext {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -265,7 +362,8 @@ pub(super) struct SessionWorkerContext {
     pub(super) cancel_token: Arc<Mutex<CancellationToken>>,
     /// Provider-agnostic agent channel for this session's worker.
     pub(super) channel: Arc<dyn AgentChannel>,
-    /// Runtime accounting root; only CLI transports may use it for signaling.
+    /// Runtime accounting root; adapters retain their own cancellation
+    /// ownership.
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) db: AppRepositories,
@@ -339,6 +437,23 @@ impl SessionWorkerContext {
         // Sync critical section (single read, no `.await`); `std::sync::Mutex`
         // is the correct choice per CLAUDE.md §"Mutex Selection".
         self.status.lock().map_or(Status::Review, |guard| *guard)
+    }
+}
+
+impl ag_worker::WorkQueue for SessionWorkerContext {
+    type Command = ScheduledSessionCommand;
+    type Message = QueuedMessage;
+
+    fn paused(&self) -> bool {
+        self.current_status() == Status::Question
+    }
+
+    fn message_order(&self) -> Option<u64> {
+        self.next_queued_message_order()
+    }
+
+    fn pop_message(&self) -> Option<QueuedMessage> {
+        self.pop_queued_message()
     }
 }
 
@@ -472,35 +587,20 @@ impl SessionWorkerRebaseAssistClient {
         req: TurnRequest,
         event_tx: mpsc::UnboundedSender<TurnEvent>,
     ) -> Result<TurnResult, AgentError> {
-        if cancel_token.is_cancelled() {
-            turn::terminate_child_process(&self.child_pid, self.session_agent.kind());
-            let _ = self
-                .channel
-                .shutdown_session(self.session_id.to_string())
-                .await;
-
-            return Err(AgentError::InterruptedByUser(
-                "[Stopped] Session interrupted by user.".to_string(),
-            ));
+        let result = ag_worker::run_turn(
+            self.channel.as_ref(),
+            self.session_id.to_string(),
+            req,
+            event_tx,
+            cancel_token,
+        )
+        .await;
+        if matches!(result, Err(AgentError::InterruptedByUser(_)))
+            && let Ok(mut pid) = self.child_pid.lock()
+        {
+            *pid = None;
         }
-
-        let turn_future = self
-            .channel
-            .run_turn(self.session_id.to_string(), req, event_tx);
-        tokio::pin!(turn_future);
-
-        tokio::select! {
-            result = &mut turn_future => result,
-            () = cancel_token.cancelled() => {
-                turn::terminate_child_process(&self.child_pid, self.session_agent.kind());
-                let _ = self.channel.shutdown_session(self.session_id.to_string()).await;
-                let _ = tokio::time::timeout(Duration::from_secs(5), &mut turn_future).await;
-
-                Err(AgentError::InterruptedByUser(
-                    "[Stopped] Session interrupted by user.".to_string(),
-                ))
-            }
-        }
+        result
     }
 
     /// Appends the utility prompt answer to the session transcript.
@@ -687,52 +787,54 @@ impl SessionWorkerService {
         git_client: Arc<dyn GitClient>,
         timestamp_seconds: i64,
     ) -> Result<(), SessionError> {
-        let unfinished_operations = db.operations().load_unfinished_session_operations().await?;
-        Self::abort_rebase_operations_from_previous_run(
-            base_path,
-            git_client.as_ref(),
-            &unfinished_operations,
-        )
-        .await?;
-
-        let interrupted_session_ids: HashSet<&str> = unfinished_operations
-            .iter()
-            .map(|operation| operation.session_id.as_str())
-            .collect();
-
-        for session_id in interrupted_session_ids {
-            let unstarted_first_prompt = unfinished_operations
-                .iter()
-                .filter(|operation| operation.session_id == session_id)
-                .all(|operation| {
-                    operation.id == format!("workspace:{session_id}")
-                        && operation.kind == "start_prompt"
-                        && operation.started_at.is_none()
-                })
-                && db
-                    .sessions()
-                    .load_session_preparation(session_id)
-                    .await?
-                    .is_some_and(|preparation| preparation.prompt.is_some());
-            let recovered_status = if unstarted_first_prompt {
-                Status::Draft
-            } else {
-                Status::Review
-            };
-            db.sessions()
-                .update_session_status_with_timing_at(
-                    session_id,
-                    &recovered_status.to_string(),
-                    timestamp_seconds,
+        ag_worker::recover(
+            db.operations(),
+            RESTART_FAILURE_REASON,
+            |unfinished_operations| async move {
+                Self::abort_rebase_operations_from_previous_run(
+                    base_path,
+                    git_client.as_ref(),
+                    &unfinished_operations,
                 )
                 .await?;
-        }
 
-        db.operations()
-            .fail_unfinished_session_operations(RESTART_FAILURE_REASON)
-            .await?;
+                let interrupted_session_ids: HashSet<&str> = unfinished_operations
+                    .iter()
+                    .map(|operation| operation.session_id.as_str())
+                    .collect();
 
-        Ok(())
+                for session_id in interrupted_session_ids {
+                    let unstarted_first_prompt = unfinished_operations
+                        .iter()
+                        .filter(|operation| operation.session_id == session_id)
+                        .all(|operation| {
+                            operation.id == format!("workspace:{session_id}")
+                                && operation.kind == "start_prompt"
+                                && operation.started_at.is_none()
+                        })
+                        && db
+                            .sessions()
+                            .load_session_preparation(session_id)
+                            .await?
+                            .is_some_and(|preparation| preparation.prompt.is_some());
+                    let recovered_status = if unstarted_first_prompt {
+                        Status::Draft
+                    } else {
+                        Status::Review
+                    };
+                    db.sessions()
+                        .update_session_status_with_timing_at(
+                            session_id,
+                            &recovered_status.to_string(),
+                            timestamp_seconds,
+                        )
+                        .await?;
+                }
+
+                Ok(())
+            },
+        )
+        .await
     }
 
     /// Aborts stale git rebase state left by interrupted worker operations.
@@ -1002,7 +1104,7 @@ impl SessionWorkerService {
     /// Sends one command whose operation row has already been persisted.
     async fn send_persisted_command(
         &mut self,
-        operations: &dyn OperationRepository,
+        operations: &dyn OperationRepository<crate::infra::db::DbError>,
         session_id: &SessionId,
         sender: mpsc::UnboundedSender<ScheduledSessionCommand>,
         scheduled_command: ScheduledSessionCommand,
@@ -1035,101 +1137,16 @@ impl SessionWorkerService {
         context: SessionWorkerContext,
         one_shot_client: Arc<dyn OneShotClient>,
         wakeup: Arc<Notify>,
-        mut receiver: mpsc::UnboundedReceiver<ScheduledSessionCommand>,
+        receiver: mpsc::UnboundedReceiver<ScheduledSessionCommand>,
     ) {
-        tokio::spawn(async move {
-            let mut pending_commands = VecDeque::new();
-            loop {
-                while let Ok(command) = receiver.try_recv() {
-                    pending_commands.push_back(command);
-                }
-
-                let Some(work) = Self::next_scheduled_work(&context, &mut pending_commands) else {
-                    tokio::select! {
-                        command = receiver.recv() => {
-                            let Some(command) = command else {
-                                break;
-                            };
-                            pending_commands.push_back(command);
-                        }
-                        () = wakeup.notified() => {}
-                    }
-
-                    continue;
-                };
-                let result = match work {
-                    ScheduledSessionWork::Command(mut command) => {
-                        let _reservation = command.preparation_reservation.take();
-                        if let Some(ready_rx) = command.ready_rx.take()
-                            && ready_rx.await.is_err()
-                        {
-                            continue;
-                        }
-                        Self::process_session_command(&context, &one_shot_client, command.command)
-                            .await
-                    }
-                    ScheduledSessionWork::Message(message) => {
-                        Self::process_queued_message(&context, &one_shot_client, message).await
-                    }
-                };
-                Self::clear_queued_messages_after_stop(&context, result.as_ref());
-            }
-
-            // Best-effort: session transport may already be torn down.
-            let _ = context
-                .channel
-                .shutdown_session(context.session_id.to_string())
-                .await;
-            // Sync critical section (single assignment, no `.await`);
-            // `std::sync::Mutex` is the correct choice per CLAUDE.md
-            // §"Mutex Selection".
-            if let Ok(mut guard) = context.child_pid.lock() {
-                *guard = None;
-            }
-        });
-    }
-
-    /// Selects the oldest runnable work across workflow and chat queues.
-    fn next_scheduled_work(
-        context: &SessionWorkerContext,
-        pending_commands: &mut VecDeque<ScheduledSessionCommand>,
-    ) -> Option<ScheduledSessionWork> {
-        if matches!(context.current_status(), Status::Question) {
-            let runnable_index = pending_commands
-                .iter()
-                .position(ScheduledSessionCommand::can_run_while_question)?;
-
-            return pending_commands
-                .remove(runnable_index)
-                .map(Box::new)
-                .map(ScheduledSessionWork::Command);
-        }
-        if pending_commands
-            .front()
-            .is_some_and(|command| command.queued_order.is_none())
-        {
-            return pending_commands
-                .pop_front()
-                .map(Box::new)
-                .map(ScheduledSessionWork::Command);
-        }
-
-        let command_order = pending_commands
-            .front()
-            .and_then(|command| command.queued_order);
-        let message_order = context.next_queued_message_order();
-        if command_order.is_some_and(|command_order| {
-            message_order.is_none_or(|message_order| command_order <= message_order)
-        }) {
-            return pending_commands
-                .pop_front()
-                .map(Box::new)
-                .map(ScheduledSessionWork::Command);
-        }
-
-        context
-            .pop_queued_message()
-            .map(ScheduledSessionWork::Message)
+        tokio::spawn(ag_worker::run(
+            SessionWorkerHost {
+                context,
+                one_shot_client,
+            },
+            wakeup,
+            receiver,
+        ));
     }
 
     /// Clears pending chat messages when the work just stopped by user action.
@@ -1204,25 +1221,14 @@ impl SessionWorkerService {
             });
         }
 
-        let result = Self::execute_session_command(context, one_shot_client, command).await;
-        match &result {
-            Ok(()) => {
-                // Best-effort: operation tracking metadata is non-critical.
-                let _ = context
-                    .db
-                    .operations()
-                    .mark_session_operation_done(&operation_id)
-                    .await;
-            }
-            Err(error) => {
-                // Best-effort: operation tracking metadata is non-critical.
-                let _ = context
-                    .db
-                    .operations()
-                    .mark_session_operation_failed(&operation_id, &error.to_string())
-                    .await;
-            }
-        }
+        let result = ag_worker::execute(
+            context.db.operations(),
+            &ag_worker::HeartbeatClock,
+            &operation_id,
+            Self::execute_session_command(context, one_shot_client, command),
+            |error| tracing::warn!(%error, "Worker operation tracking failed"),
+        )
+        .await;
 
         Some(result)
     }

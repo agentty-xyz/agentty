@@ -13,6 +13,8 @@ name = "ag-agent"
 version = "0.15.15"
 dependencies = [
  "ag-protocol",
+ "ag-runtime",
+ "ag-session",
  "agent-client-protocol",
  "askama",
  "async-trait",
@@ -135,12 +137,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ag-runtime"
+version = "0.15.15"
+dependencies = [
+ "ag-protocol",
+ "async-trait",
+ "mockall",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "ag-session"
 version = "0.15.15"
 dependencies = [
- "ag-agent",
  "ag-forge",
  "ag-protocol",
+ "ag-runtime",
  "async-trait",
  "rustc-hash",
  "serde",
@@ -153,8 +166,9 @@ dependencies = [
 name = "ag-store"
 version = "0.15.15"
 dependencies = [
- "ag-agent",
+ "ag-runtime",
  "ag-session",
+ "ag-worker",
  "async-trait",
  "mockall",
  "sqlx",
@@ -171,6 +185,18 @@ dependencies = [
  "ratatui",
  "rustc-hash",
  "unicode-width",
+]
+
+[[package]]
+name = "ag-worker"
+version = "0.15.15"
+dependencies = [
+ "ag-protocol",
+ "ag-runtime",
+ "async-trait",
+ "mockall",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -244,9 +270,11 @@ dependencies = [
  "ag-git",
  "ag-orchestration",
  "ag-protocol",
+ "ag-runtime",
  "ag-session",
  "ag-store",
  "ag-tui-text",
+ "ag-worker",
  "askama",
  "assert_cmd",
  "async-trait",
@@ -258,7 +286,6 @@ dependencies = [
  "mockall",
  "ratatui",
  "rustc-hash",
- "rustix",
  "semver",
  "serde",
  "serde_json",

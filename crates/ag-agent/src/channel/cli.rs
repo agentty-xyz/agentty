@@ -3,10 +3,12 @@
 //! Spawns a provider CLI process per turn, streams stdout line-by-line as
 //! [`TurnEvent`]s, and parses the final process output when the process exits.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use ag_protocol::{AgentResponse, TurnPrompt, build_protocol_repair_prompt};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::agent::cli::error;
 use crate::agent::cli::execution::{
@@ -27,6 +29,8 @@ use crate::model::agent::AgentKind;
 /// turn to a failed state with a `[Stopped]` banner. A spawn failure is
 /// surfaced through [`AgentError`].
 pub(crate) struct CliAgentChannel {
+    /// Active turns whose provider resources belong to this adapter.
+    active: Arc<Mutex<HashMap<String, CancellationToken>>>,
     /// Provider-specific command builder.
     backend: Arc<dyn AgentBackend>,
     /// Provider family used for stream and response parsing.
@@ -41,7 +45,46 @@ impl CliAgentChannel {
     /// inject a [`MockAgentBackend`] that controls command construction and
     /// process spawning without relying on a real provider binary.
     pub(crate) fn with_backend(backend: Arc<dyn agent::AgentBackend>, kind: AgentKind) -> Self {
-        Self { backend, kind }
+        Self {
+            active: Arc::default(),
+            backend,
+            kind,
+        }
+    }
+}
+
+/// Retains cancellation ownership until the execution future is dropped.
+struct CliTurnLease {
+    active: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    session_id: String,
+}
+
+impl CliTurnLease {
+    fn acquire(
+        active: Arc<Mutex<HashMap<String, CancellationToken>>>,
+        session_id: String,
+        cancellation: CancellationToken,
+    ) -> Result<Self, AgentError> {
+        {
+            let mut turns = active
+                .lock()
+                .map_err(|error| AgentError::Runtime(error.to_string()))?;
+            if turns.contains_key(&session_id) {
+                return Err(AgentError::Runtime(
+                    "Session already has an active turn".to_string(),
+                ));
+            }
+            turns.insert(session_id.clone(), cancellation);
+        }
+        Ok(Self { active, session_id })
+    }
+}
+
+impl Drop for CliTurnLease {
+    fn drop(&mut self) {
+        if let Ok(mut turns) = self.active.lock() {
+            turns.remove(&self.session_id);
+        }
     }
 }
 
@@ -122,79 +165,99 @@ impl AgentChannel for CliAgentChannel {
     /// cannot be spawned, or the process is killed by a signal.
     fn run_turn(
         &self,
-        _session_id: String,
+        session_id: String,
         req: TurnRequest,
         events: mpsc::UnboundedSender<TurnEvent>,
     ) -> AgentFuture<Result<TurnResult, AgentError>> {
         let kind = self.kind;
         let backend = Arc::clone(&self.backend);
+        let active = Arc::clone(&self.active);
 
         Box::pin(async move {
-            let mut req = req;
-            req.prompt = agent::apply_response_style_prompt(
-                req.prompt,
-                req.request_kind.protocol_profile(),
-                req.response_style,
-            )
-            .map_err(|error| AgentError::Backend(error.to_string()))?;
-            let prompt_text = req.prompt.agent_text();
-            let replay = agent::replay::ReplayContext::prepare(
-                req.folder.clone(),
-                req.continuation.replay_transcript().map(str::to_owned),
-            )
-            .await
-            .map_err(|error| AgentError::Backend(error.to_string()))?;
-            let mut build_request = build_command_request(&req, &prompt_text);
-            build_request.replay_transcript = replay.text.as_deref();
-            let observer = CliTurnObserver {
-                events: events.clone(),
-                kind,
+            let cancellation = CancellationToken::new();
+            let lease = CliTurnLease::acquire(active, session_id, cancellation.clone())?;
+            let execution = async {
+                let mut req = req;
+                req.prompt = agent::apply_response_style_prompt(
+                    req.prompt,
+                    req.request_kind.protocol_profile(),
+                    req.response_style,
+                )
+                .map_err(AgentError::from)?;
+                let prompt_text = req.prompt.agent_text();
+                let replay = agent::replay::ReplayContext::prepare(
+                    req.folder.clone(),
+                    req.continuation.replay_transcript().map(str::to_owned),
+                )
+                .await
+                .map_err(|error| AgentError::Backend(error.to_string()))?;
+                let mut build_request = build_command_request(&req, &prompt_text);
+                build_request.replay_transcript = replay.text.as_deref();
+                let observer = CliTurnObserver {
+                    events: events.clone(),
+                    kind,
+                };
+                let output = execution::execute_cli_command(
+                    backend.as_ref(),
+                    kind,
+                    build_request,
+                    &observer,
+                    None,
+                )
+                .await
+                .map_err(map_cli_turn_execution_error)?;
+
+                match output.exit_status {
+                    CliExitStatus::Signaled(_) => {
+                        return Err(AgentError::Backend(
+                            "[Stopped] Agent interrupted by user.".to_string(),
+                        ));
+                    }
+                    CliExitStatus::NonZero(exit_code) => {
+                        return Err(format_cli_turn_exit_error(
+                            kind,
+                            exit_code,
+                            &output.stdout,
+                            &output.stderr,
+                        ));
+                    }
+                    CliExitStatus::Success => {}
+                }
+
+                let parsed = agent::parse_response(kind, &output.stdout, &output.stderr);
+                let assistant_message =
+                    parse_or_repair_cli_response(kind, &parsed.content, &req, &backend, &events)
+                        .await?;
+
+                Ok(TurnResult {
+                    assistant_message,
+                    context_reset: false,
+                    input_tokens: parsed.stats.input_tokens,
+                    output_tokens: parsed.stats.output_tokens,
+                    provider_conversation_id: None,
+                })
             };
-            let output = execution::execute_cli_command(
-                backend.as_ref(),
-                kind,
-                build_request,
-                &observer,
-                None,
-            )
-            .await
-            .map_err(map_cli_turn_execution_error)?;
-
-            match output.exit_status {
-                CliExitStatus::Signaled(_) => {
-                    return Err(AgentError::Backend(
-                        "[Stopped] Agent interrupted by user.".to_string(),
-                    ));
-                }
-                CliExitStatus::NonZero(exit_code) => {
-                    return Err(format_cli_turn_exit_error(
-                        kind,
-                        exit_code,
-                        &output.stdout,
-                        &output.stderr,
-                    ));
-                }
-                CliExitStatus::Success => {}
-            }
-
-            let parsed = agent::parse_response(kind, &output.stdout, &output.stderr);
-            let assistant_message =
-                parse_or_repair_cli_response(kind, &parsed.content, &req, &backend, &events)
-                    .await?;
-
-            Ok(TurnResult {
-                assistant_message,
-                context_reset: false,
-                input_tokens: parsed.stats.input_tokens,
-                output_tokens: parsed.stats.output_tokens,
-                provider_conversation_id: None,
-            })
+            let result = tokio::select! {
+                result = execution => result,
+                () = cancellation.cancelled() => Err(AgentError::InterruptedByUser("[Stopped] Session interrupted by user.".to_string())),
+            };
+            drop(lease);
+            result
         })
     }
 
-    /// No-op; CLI sessions are stateless and require no teardown.
-    fn shutdown_session(&self, _session_id: String) -> AgentFuture<Result<(), AgentError>> {
-        Box::pin(async { Ok(()) })
+    /// Cancels the owned execution; subprocess cleanup follows future drop.
+    fn shutdown_session(&self, session_id: String) -> AgentFuture<Result<(), AgentError>> {
+        let active = Arc::clone(&self.active);
+        Box::pin(async move {
+            let turns = active
+                .lock()
+                .map_err(|error| AgentError::Runtime(error.to_string()))?;
+            if let Some(cancellation) = turns.get(&session_id) {
+                cancellation.cancel();
+            }
+            Ok(())
+        })
     }
 }
 

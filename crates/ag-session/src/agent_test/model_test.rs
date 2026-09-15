@@ -1,4 +1,4 @@
-use crate::model::agent::{AgentKind, AgentModel, AgentSelectionMetadata};
+use crate::agent::{AgentKind, AgentModel, AgentSelectionMetadata};
 
 #[test]
 /// Ensures model parsing is constrained to the selected provider.
@@ -258,4 +258,28 @@ fn test_antigravity_provider_model_str_returns_raw_gemini_model() {
     // Assert
     assert_eq!(persisted_model, "gemini-3.5-flash-lite");
     assert_eq!(provider_model, "gemini-3.5-flash-lite");
+}
+
+#[test]
+fn test_model_strings_respect_provider_ownership() {
+    // Arrange
+    let model = AgentModel::ClaudeOpus5;
+
+    // Act / Assert
+    assert_eq!(AgentKind::Claude.model_str(model), Some("claude-opus-5"));
+    assert_eq!(AgentKind::Codex.model_str(model), None);
+    assert!("custom-harness".parse::<AgentKind>().is_err());
+}
+
+#[test]
+fn test_reasoning_metadata_matches_runtime_preferences() {
+    // Arrange
+    let level = ag_runtime::ReasoningLevel::High;
+
+    // Act / Assert
+    assert_eq!(AgentSelectionMetadata::name(&level), level.as_str());
+    assert_eq!(
+        AgentSelectionMetadata::description(&level),
+        level.description()
+    );
 }

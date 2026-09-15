@@ -620,9 +620,9 @@ async fn test_run_title_generation_command_returns_answer_text() {
         .expect_submit()
         .times(1)
         .returning(move |request| {
-            assert_eq!(request.agent_kind, AgentKind::Claude);
+            assert_eq!(request.harness, (AgentKind::Claude).to_string());
             assert_eq!(request.folder, expected_folder);
-            assert_eq!(request.model, AgentModel::ClaudeSonnet5);
+            assert_eq!(request.model, AgentModel::ClaudeSonnet5.as_str());
             assert_eq!(request.permission_mode, ag_agent::PermissionMode::ReadOnly);
             assert_eq!(request.prompt, "Generate a title");
             assert_eq!(request.reasoning_level, ReasoningLevel::Low);

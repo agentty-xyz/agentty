@@ -1,7 +1,6 @@
 //! Setting-scoped persistence adapters and query helpers.
 
-use ag_agent::{ReasoningLevel, ResponseStyle, SpeedMode};
-use ag_session::SettingName;
+use ag_session::{ReasoningLevel, ResponseStyle, SettingName, SpeedMode};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 

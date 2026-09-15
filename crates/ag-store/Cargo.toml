@@ -9,8 +9,9 @@ repository.workspace = true
 include = ["/.sqlx/**", "/migrations/**", "/src/**"]
 
 [dependencies]
-ag-agent.workspace = true
+ag-runtime.workspace = true
 ag-session.workspace = true
+ag-worker.workspace = true
 async-trait.workspace = true
 mockall = { workspace = true, optional = true }
 sqlx.workspace = true
@@ -19,6 +20,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+ag-worker = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true
 tempfile.workspace = true
 

@@ -1,17 +1,8 @@
 //! Provider-managed instruction bootstrap planning for app-server sessions.
 
-use crate::channel::AgentRequestKind;
+pub use ag_runtime::normalize_instruction_conversation_id;
 
-/// Normalizes one provider-native conversation id for persisted bootstrap
-/// reuse tracking.
-pub fn normalize_instruction_conversation_id(
-    provider_conversation_id: Option<&str>,
-) -> Option<String> {
-    provider_conversation_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
+use crate::channel::AgentRequestKind;
 
 /// Prompt-shaping mode used for one app-server turn attempt.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

@@ -1,4 +1,4 @@
-use ag_agent::{AgentKind, ReasoningLevel, SpeedMode};
+use ag_session::{AgentKind, ReasoningLevel, SpeedMode};
 use sqlx::SqlitePool;
 
 use crate::orchestration::PersistedOrchestrationTask;
@@ -29,11 +29,11 @@ pub(super) async fn controller_fixture_with_pool() -> (AppRepositories, SqlitePo
             model: AgentKind::Codex.default_model().as_str(),
             orchestration_task_id: None,
             parent_session_id: None,
-            permission_mode: ag_agent::PermissionMode::AutoEdit,
+            permission_mode: ag_session::PermissionMode::AutoEdit,
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
-            response_style: ag_agent::ResponseStyle::default(),
+            response_style: ag_session::ResponseStyle::default(),
             role: Some("Orchestrator"),
             speed_mode: SpeedMode::Normal,
             status: "Review",
@@ -78,11 +78,11 @@ pub(super) async fn insert_orchestration_child(
             model: AgentKind::Codex.default_model().as_str(),
             orchestration_task_id: Some(task_id),
             parent_session_id: None,
-            permission_mode: ag_agent::PermissionMode::AutoEdit,
+            permission_mode: ag_session::PermissionMode::AutoEdit,
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
-            response_style: ag_agent::ResponseStyle::default(),
+            response_style: ag_session::ResponseStyle::default(),
             role: Some("OrchestrationWorker"),
             speed_mode: SpeedMode::Normal,
             status: "Review",

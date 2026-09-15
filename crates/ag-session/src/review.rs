@@ -46,7 +46,7 @@ impl FromStr for FocusedReviewStatus {
 /// correct and relevant.
 pub fn build_apply_review_prompt(suggestions: &str) -> TurnPrompt {
     let suggestions = suggestions.trim();
-    let fence = ag_agent::diff_fence(suggestions);
+    let fence = ag_protocol::diff_fence(suggestions);
     let fenced_suggestions = format!("{fence}text\n{suggestions}\n{fence}");
     let prompt = APPLY_REVIEW_PROMPT_TEMPLATE
         .trim_end()

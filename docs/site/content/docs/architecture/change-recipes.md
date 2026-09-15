@@ -41,7 +41,7 @@ through the correct modules without crossing layer boundaries.
 
 ## Add a New Agent Backend or Model
 
-1. Update provider model declarations in `crates/ag-agent/src/model/agent.rs`.
+1. Update provider model declarations in `crates/ag-session/src/agent.rs`.
 1. Add backend behavior in `crates/ag-agent/src/agent/` and register it in
    `crates/ag-agent/src/agent/provider.rs`.
 1. If app-server-based, wire the provider client through
@@ -121,8 +121,17 @@ through the correct modules without crossing layer boundaries.
    inputs, and make line-count/layout helpers reuse the same cached derived data as the
    final paint path.
 1. When changing `TurnRequest`/`TurnContinuation`/`TurnEvent`/`TurnResult` shapes in
-   `crates/ag-agent/src/channel/contract.rs` (re-exported by the `ag-agent` crate root),
+   `crates/ag-runtime/src/contract.rs` (re-exported by the `ag-agent` crate root),
    update the key-types table in `docs/site/content/docs/architecture/runtime-flow.md`.
 1. When adding/removing `#[cfg_attr(test, mockall::automock)]` external-boundary traits,
    update `docs/site/content/docs/architecture/testability-boundaries.md`.
 1. Run quality gates from `AGENTS.md` before opening a PR.
+
+## Change run execution
+
+1. Update shared lifecycle contracts in `ag-runtime` and provider behavior in
+   `ag-agent`.
+1. Keep scheduling, cancellation coordination, and recovery in `ag-worker`; implement
+   product-specific question, Git, forge, and UI policy in the host adapter.
+1. Extend headless contract tests and the affected Agentty workflow tests. Changes to
+   operation persistence also need `ag-store` adapter tests.

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session_operation SET heartbeat_at = ? WHERE id = ? AND status = 'running'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7560df81e59447fa422ed20cb2e807f549ffe38cc2d2f59c7a81e722d429899f"
+}

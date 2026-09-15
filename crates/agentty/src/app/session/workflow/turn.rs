@@ -2,9 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use ag_agent as agent;
 use ag_agent::{
     AgentError, AgentRequestKind, LiveTranscript, OneShotClient, PersonalityPrompt,
     TurnContinuation, TurnEvent, TurnRequest, TurnResult,
@@ -26,7 +24,6 @@ use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
 use crate::infra::db::AppRepositories;
-use crate::infra::process;
 
 /// Maximum ready turn events folded into one progress app-event emission.
 ///
@@ -517,77 +514,27 @@ async fn prepare_session_turn(context: &SessionWorkerContext, request_kind: &Age
     let _ = status_transition.apply(Status::InProgress).await;
 }
 
-/// Runs one agent turn with cancellation support.
-///
-/// Races `run_turn` against the per-turn [`CancellationToken`]. When the
-/// token is cancelled (`Ctrl+c`), `SIGTERM` is sent only to a CLI child
-/// process (if any) via [`terminate_child_process`], the channel is shut
-/// down gracefully through `shutdown_session`, and the function waits for
-/// the `run_turn` future to resolve (with a timeout) so the subprocess is
-/// not orphaned. App-server PIDs are accounting metadata, never signal
-/// targets: their runtime owners handle cancellation through
-/// `shutdown_session`, including when a retained PID has been recycled.
-///
-/// Each turn receives its own fresh token, created at the start of
-/// [`run_channel_turn`]. This eliminates the stale-permit problem that
-/// required the previous `Notify` + `AtomicBool` flag-check pattern.
+/// Runs one turn through the headless worker's cancellation boundary.
 pub(super) async fn run_turn_with_cancellation(
     context: &SessionWorkerContext,
     cancel_token: CancellationToken,
     req: TurnRequest,
     event_tx: mpsc::UnboundedSender<TurnEvent>,
 ) -> Result<TurnResult, AgentError> {
-    // Honour a cancel that arrived during pre-turn setup, before the
-    // select had a chance to observe it. The token was freshly created
-    // at the top of `run_channel_turn`, so a cancelled state here is a
-    // real `Ctrl+c`, not a stale leftover.
-    if cancel_token.is_cancelled() {
-        terminate_child_process(&context.child_pid, context.session_agent.kind());
-        let _ = context
-            .channel
-            .shutdown_session(context.session_id.to_string())
-            .await;
-
-        return Err(AgentError::InterruptedByUser(
-            "[Stopped] Session interrupted by user.".to_string(),
-        ));
+    let result = ag_worker::run_turn(
+        context.channel.as_ref(),
+        context.session_id.to_string(),
+        req,
+        event_tx,
+        cancel_token,
+    )
+    .await;
+    if matches!(result, Err(AgentError::InterruptedByUser(_)))
+        && let Ok(mut pid) = context.child_pid.lock()
+    {
+        *pid = None;
     }
-
-    let turn_future = context
-        .channel
-        .run_turn(context.session_id.to_string(), req, event_tx);
-    tokio::pin!(turn_future);
-
-    tokio::select! {
-        result = &mut turn_future => result,
-        () = cancel_token.cancelled() => {
-            // Only CLI PIDs are signal targets. App-server runtimes are
-            // stopped by their owner below, never through sampled PIDs.
-            terminate_child_process(&context.child_pid, context.session_agent.kind());
-
-            // Graceful shutdown: close stdin, wait for exit, kill if
-            // needed.
-            let _ = context
-                .channel
-                .shutdown_session(context.session_id.to_string())
-                .await;
-
-            // Wait for the turn future to resolve so the subprocess is
-            // not orphaned. CLI channels return a signal-killed error
-            // once the child exits; app-server channels complete once
-            // their runtime stops. A timeout guards against indefinite
-            // blocking if the channel does not shut down promptly.
-            let _ = tokio::time::timeout(
-                Duration::from_secs(5),
-                &mut turn_future,
-            )
-            .await;
-
-            Err(AgentError::InterruptedByUser(
-                "[Stopped] Session interrupted by user.".to_string(),
-            ))
-        }
-    }
+    result
 }
 
 /// Converts channel-layer turn failures into session workflow errors.
@@ -767,27 +714,6 @@ async fn add_main_checkout_warning(
         }
         Ok(None) => Ok(result),
         Err(error) => Err(AgentError::Backend(error.to_string())),
-    }
-}
-
-/// Clears tracked accounting and sends `SIGTERM` only for a CLI transport.
-/// App-server PIDs may outlive a turn and must never authorize a signal.
-///
-/// Best-effort: the PID slot may be `None` before a runtime starts, or the
-/// process may have already exited. Both cases are silently ignored.
-pub(super) fn terminate_child_process(child_pid: &Mutex<Option<u32>>, kind: AgentKind) {
-    // Sync critical section (the guard is dropped at the end of the chain
-    // expression, before any `.await`); `std::sync::Mutex` is the correct
-    // choice per CLAUDE.md §"Mutex Selection".
-    let active_pid = child_pid
-        .lock()
-        .ok()
-        .and_then(|mut child_pid| child_pid.take());
-
-    if !agent::transport_mode(kind).uses_app_server()
-        && let Some(pid) = active_pid
-    {
-        process::send_terminate_signal(pid);
     }
 }
 

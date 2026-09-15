@@ -1,4 +1,4 @@
-use ag_agent::ResponseStyle;
+use ag_session::ResponseStyle;
 
 use crate::{AppRepositories, DbError};
 

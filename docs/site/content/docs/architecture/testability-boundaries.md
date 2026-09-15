@@ -31,8 +31,8 @@ application ports:
 | -------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GitClient`                | `crates/ag-git/src/client.rs`                | Git and worktree operations (hook readiness and execution, merge, merge-conflict probes, rebase, diff, bounded preview-file reads, push, status, ahead/behind).                                                                                                                                                                                                                                                                    |
 | `FsClient`                 | `infra/fs.rs`                                | Async filesystem operations and path probes.                                                                                                                                                                                                                                                                                                                                                                                       |
-| `AgentChannel`             | `crates/ag-agent/src/channel.rs`             | Provider-agnostic turn execution.                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `OneShotClient`            | `crates/ag-agent/src/agent/submission.rs`    | Isolated structured prompts, including transport routing, protocol repair, runtime cleanup, and usage aggregation.                                                                                                                                                                                                                                                                                                                 |
+| `AgentChannel`             | `crates/ag-runtime/src/contract.rs`          | Provider-agnostic turn execution.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `OneShotClient`            | `crates/ag-runtime/src/one_shot.rs`          | Isolated structured prompts, including transport routing, protocol repair, runtime cleanup, and usage aggregation.                                                                                                                                                                                                                                                                                                                 |
 | `AgentBackend`             | `crates/ag-agent/src/agent/backend.rs`       | Per-provider setup and transport command construction.                                                                                                                                                                                                                                                                                                                                                                             |
 | `AppServerClient`          | `crates/ag-agent/src/app_server/contract.rs` | Provider-managed runtime execution and session lifecycle, including app-server RPC and persistent NDJSON processes.                                                                                                                                                                                                                                                                                                                |
 | `ReviewRequestClient`      | `crates/ag-forge/src/client.rs`              | Review-request orchestration, comment loading, and thread reply/resolution through `gh`/`glab`.                                                                                                                                                                                                                                                                                                                                    |
@@ -119,10 +119,10 @@ repair policy stay in the owning adapter.
 
 <a id="architecture-typed-error-enums"></a> Each infra boundary exposes a typed error
 enum (`DbError`, `GitError`, `AppServerError`, `AgentError`, `OneShotError`,
-`ClipboardError`, and so on) instead of opaque `String` errors. The private app-server
-transport error is wrapped by `AppServerError::Transport`, then by
-`AgentError::AppServer`, allowing `?`-propagation through the transport, provider, and
-channel layers without collapsing causal context into formatted strings.
+`ClipboardError`, and so on). Within `ag-agent`, `AppServerError::Transport` retains
+transport-specific causes. The channel adapter maps app-server diagnostics into
+`ag-runtime`'s `AgentError::Runtime` category, keeping worker and host contracts
+independent of concrete transport error types.
 
 <a id="architecture-app-layer-typed-errors"></a> The app layer propagates infra errors
 through `SessionError` (`app/session/error.rs`) and `AppError` (`app/error.rs`), both of
@@ -178,3 +178,14 @@ surface.
 Agentty feature runs pin the wall clock, UTC offset, agent executables, and rendered
 version label before the PTY frame is captured. Hash redactions then normalize generated
 worktree names and the pinned version label without relying on their runtime width.
+
+## Headless worker boundaries
+
+`ag-worker` tests scheduling with injected `WorkQueue` and `WorkerHost` implementations.
+`OperationRepository` is generic over the storage error type and has no SQLite
+requirement. An injected `Clock` drives heartbeat tests. Runtime tests use `ag-runtime`
+mocks to cover cancellation before the first turn poll. CLI adapter tests use a real
+parent and long-lived child to verify process-group cleanup, including parent exit with
+inherited output pipes still open. Closed-mailbox tests cover paused work, operation
+settlement, and caller notifications. Session models and storage depend on contracts
+without pulling in provider transports.

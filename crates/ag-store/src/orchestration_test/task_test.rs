@@ -1,6 +1,6 @@
-use ag_agent::{AgentKind, ReasoningLevel, SpeedMode};
 use ag_session::{
-    OrchestrationStatus, OrchestrationTaskKind, OrchestrationTaskStatus, SessionMessageKind,
+    AgentKind, OrchestrationStatus, OrchestrationTaskKind, OrchestrationTaskStatus, ReasoningLevel,
+    SessionMessageKind, SpeedMode,
 };
 
 use super::support::{
@@ -143,11 +143,11 @@ async fn research_task_round_trips_report_and_latest_child_answer_without_scope(
             model: AgentKind::Codex.default_model().as_str(),
             orchestration_task_id: Some(task_id),
             parent_session_id: None,
-            permission_mode: ag_agent::PermissionMode::AutoEdit,
+            permission_mode: ag_session::PermissionMode::AutoEdit,
             personality_id: None,
             project_id: 1,
             reasoning_level: ReasoningLevel::default(),
-            response_style: ag_agent::ResponseStyle::default(),
+            response_style: ag_session::ResponseStyle::default(),
             role: Some("OrchestrationResearcher"),
             speed_mode: SpeedMode::Normal,
             status: "Review",

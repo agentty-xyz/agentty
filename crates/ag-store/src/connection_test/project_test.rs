@@ -1,4 +1,4 @@
-use ag_agent::{AgentModel, SessionDiffState, SessionStats};
+use ag_session::{AgentModel, SessionDiffState, SessionStats};
 
 use crate::SessionTurnMetadata;
 use crate::connection::Database;

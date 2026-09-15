@@ -749,7 +749,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
         .expect_submit()
         .times(1)
         .returning(|request| {
-            assert_eq!(request.agent_kind, AgentKind::Gemini);
+            assert_eq!(request.harness, (AgentKind::Gemini).to_string());
             assert_eq!(request.permission_mode, ag_agent::PermissionMode::ReadOnly);
             assert!(matches!(
                 request.request_kind,
@@ -864,8 +864,8 @@ async fn review_assist_text_with_client_preserves_review_selection_provider() {
     let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
     let mut one_shot_client = agent::MockOneShotClient::new();
     one_shot_client.expect_submit().returning(|request| {
-        assert_eq!(request.agent_kind, AgentKind::Antigravity);
-        assert_eq!(request.model, AgentModel::Gemini38Flash);
+        assert_eq!(request.harness, (AgentKind::Antigravity).to_string());
+        assert_eq!(request.model, AgentModel::Gemini38Flash.as_str());
         assert_eq!(
             request.request_kind,
             ag_agent::AgentRequestKind::FocusedReview

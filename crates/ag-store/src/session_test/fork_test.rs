@@ -1,6 +1,5 @@
-use ag_agent as agent;
-use ag_agent::{PermissionMode, ResponseStyle, SessionStats};
-use ag_session::FocusedReviewStatus;
+use ag_session as agent;
+use ag_session::{FocusedReviewStatus, PermissionMode, ResponseStyle, SessionStats};
 use sqlx::SqlitePool;
 
 use crate::AppRepositories;

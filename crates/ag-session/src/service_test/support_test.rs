@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use ag_agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use ag_forge::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
 use async_trait::async_trait;
 
@@ -13,6 +12,7 @@ use crate::model::{
 use crate::service::{
     AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionRequest, SessionBackend,
 };
+use crate::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 
 #[derive(Default)]
 pub(super) struct FakeBackend {

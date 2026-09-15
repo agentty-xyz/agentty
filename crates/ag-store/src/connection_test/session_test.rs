@@ -1,5 +1,4 @@
-use ag_agent::{SessionDiffState, SessionStats};
-use ag_session::ReviewRequest;
+use ag_session::{ReviewRequest, SessionDiffState, SessionStats};
 
 use super::support::{assert_review_request_row, insert_session_fixture, load_session_row};
 use crate::connection::Database;

@@ -1,4 +1,4 @@
-use ag_agent::{PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode};
+use ag_session::{PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode};
 
 use crate::AppRepositories;
 use crate::session::PersistedSessionCreation;

@@ -661,3 +661,60 @@ async fn test_queued_review_request_waits_for_full_rebase_finalization() {
         Some("parent-tip")
     );
 }
+
+#[tokio::test]
+async fn test_operation_tracking_failure_preserves_workflow_error() {
+    // Arrange
+    let mut context = queue_helper_context(Arc::new(Mutex::new(VecDeque::new()))).await;
+    let (db, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("database");
+    context.db = db;
+    context.session_id = "sess1".into();
+    insert_in_progress_test_session(&context.db).await;
+    context
+        .db
+        .operations()
+        .insert_session_operation("rebase", "sess1", REBASE_OPERATION_KIND)
+        .await
+        .expect("operation");
+    sqlx::query(
+        "CREATE TRIGGER reject_completion BEFORE UPDATE OF status ON session_operation WHEN \
+         NEW.status = 'failed' BEGIN SELECT RAISE(ABORT, 'tracking unavailable'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("failure injection");
+    let mut fs_client = fs::MockFsClient::new();
+    fs_client.expect_is_dir().once().return_const(false);
+    context.fs_client = Arc::new(fs_client);
+
+    // Act
+    let result = SessionWorkerService::process_session_command(
+        &context,
+        &auto_commit_one_shot_client(),
+        SessionCommand::Rebase {
+            base_branch: "main".to_string(),
+            operation_id: "rebase".to_string(),
+        },
+    )
+    .await
+    .expect("command ran");
+
+    // Assert
+    assert!(
+        result
+            .expect_err("isolation error")
+            .to_string()
+            .contains("Session isolation violation")
+    );
+    assert!(
+        context
+            .db
+            .operations()
+            .is_session_operation_unfinished("rebase")
+            .await
+            .expect("unfinished tracking")
+    );
+    assert!(transcript_text(&context.transcript).contains("[Sync Error]"));
+}

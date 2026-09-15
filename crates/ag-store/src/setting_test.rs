@@ -1,5 +1,4 @@
-use ag_agent::{AgentModel, ResponseStyle};
-use ag_session::SettingName;
+use ag_session::{AgentModel, ResponseStyle, SettingName};
 
 use crate::AppRepositories;
 

@@ -12,10 +12,10 @@ use crate::app::diff_prompt::{MAX_PROVIDER_CALLS, PROMPT_BUDGET};
 
 fn request() -> OneShotRequest {
     OneShotRequest {
-        agent_kind: AgentKind::Claude,
+        harness: (AgentKind::Claude).to_string(),
         child_pid: None,
         folder: PathBuf::from("."),
-        model: AgentModel::ClaudeSonnet5,
+        model: AgentModel::ClaudeSonnet5.as_str().to_string(),
         permission_mode: PermissionMode::ReadOnly,
         prompt: String::new(),
         provider_call_budget: None,
@@ -57,7 +57,7 @@ async fn batches_original_unicode_diff_then_checks_cross_file_interactions() {
             .consume()?;
         assert_eq!(request.request_kind, AgentRequestKind::FocusedReview);
         assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
-        assert_eq!(request.model, AgentModel::ClaudeSonnet5);
+        assert_eq!(request.model, AgentModel::ClaudeSonnet5.as_str());
         assert!(request.prompt.len() <= PROMPT_BUDGET);
         assert!(request.prompt.contains("Accepted decision"));
         prompts.lock().expect("prompts").push(request.prompt);
