@@ -10,10 +10,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use ag_agent::{self as agent, OneShotClient};
+use ag_agent::{self as agent};
 use ag_forge::{ForgeRemote, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewRequestClient};
 use ag_git::GitClient;
 use ag_protocol::focused_review_json_schema_json;
+use ag_worker::RunClient;
 use askama::Template;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -478,14 +479,6 @@ impl TaskService {
         update_completed
     }
 
-    /// Spawns one background review assist generation task and emits
-    /// an event with either final review text or a failure description.
-    pub(super) fn spawn_review_assist_task(input: ReviewAssistTaskInput) {
-        let one_shot_client: Arc<dyn OneShotClient> = Arc::new(agent::RealOneShotClient::new(None));
-
-        Self::spawn_review_assist_task_with_client(input, one_shot_client);
-    }
-
     /// Requeues one failed focused-review persistence write after a bounded
     /// delay so transient database errors cannot strand orchestration review.
     pub(crate) fn spawn_focused_review_persistence_retry(
@@ -523,9 +516,9 @@ impl TaskService {
     }
 
     /// Spawns review assist generation through the provided one-shot boundary.
-    fn spawn_review_assist_task_with_client(
+    pub(super) fn spawn_review_assist_task_with_client(
         input: ReviewAssistTaskInput,
-        one_shot_client: Arc<dyn OneShotClient>,
+        run_client: Arc<dyn RunClient>,
     ) {
         let ReviewAssistTaskInput {
             app_event_tx,
@@ -547,7 +540,7 @@ impl TaskService {
                 speed_mode,
                 &review_diff,
                 session_chat_history.as_deref(),
-                one_shot_client.as_ref(),
+                run_client.as_ref(),
             )
             .await;
 
@@ -578,10 +571,10 @@ impl TaskService {
         speed_mode: crate::domain::agent::SpeedMode,
         review_diff: &str,
         session_chat_history: Option<&str>,
-        one_shot_client: &dyn OneShotClient,
+        run_client: &dyn RunClient,
     ) -> Result<String, AppError> {
         let review = crate::app::review_prompt::submit(
-            one_shot_client,
+            run_client,
             agent::OneShotRequest {
                 provider_call_budget: None,
                 harness: (review_selection.kind()).to_string(),

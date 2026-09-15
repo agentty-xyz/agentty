@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::OneShotClient;
 use ag_forge as forge;
 use ag_git::GitClient;
+use ag_worker::RunClient;
 use tokio::sync::{OwnedMutexGuard, mpsc};
 use uuid::Uuid;
 
@@ -48,7 +48,7 @@ pub(super) struct PublishedBranchAutoPushStartInput {
     /// Git boundary used for the remote push operation.
     pub(super) git_client: Arc<dyn GitClient>,
     /// Provider-neutral one-shot boundary used for metadata reconciliation.
-    pub(super) one_shot_client: Arc<dyn OneShotClient>,
+    pub(super) run_client: Arc<dyn RunClient>,
     /// Published upstream reference that provides the remote branch target.
     pub(super) published_upstream_ref: String,
     /// Forge boundary used for optional linked PR/MR metadata refresh.
@@ -77,7 +77,7 @@ pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushSta
                 clock: Arc::clone(&input.clock),
                 commit_message: Some(commit_message),
                 evaluation: ReviewRequestMetadataEvaluationInput {
-                    one_shot_client: Arc::clone(&input.one_shot_client),
+                    run_client: Arc::clone(&input.run_client),
                     session_agent: input.session_agent,
                 },
                 review_request_client: Arc::clone(&input.review_request_client),
@@ -152,7 +152,7 @@ pub(super) struct ReviewRequestMetadataSyncInput {
 /// All-or-nothing inputs for semantic review-request metadata reconciliation.
 pub(super) struct ReviewRequestMetadataEvaluationInput {
     /// Provider-neutral one-shot boundary used for semantic reconciliation.
-    pub(super) one_shot_client: Arc<dyn OneShotClient>,
+    pub(super) run_client: Arc<dyn RunClient>,
     /// Agent/model selection used for semantic reconciliation.
     pub(super) session_agent: AgentSelection,
 }
@@ -940,7 +940,7 @@ async fn sync_review_request_metadata(
         &input.folder,
         generated_metadata.body.as_deref().unwrap_or_default(),
         &generated_metadata.title,
-        evaluation.one_shot_client.as_ref(),
+        evaluation.run_client.as_ref(),
         evaluation.session_agent,
     )
     .await?;

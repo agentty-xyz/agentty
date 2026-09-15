@@ -18,11 +18,11 @@ use super::super::{
 };
 use super::support::{
     apply_worker_turn_result, assert_later_push_skips_review_operations,
-    auto_commit_git_client_with_push_failure, auto_commit_one_shot_client,
-    dirty_auto_commit_git_client, empty_transcript, expect_safe_auto_push_state,
-    fixed_review_turn_result, insert_in_progress_session_with_review_request,
-    push_descendant_that_reverted_fix, queue_test_context, queued_message,
-    review_resolution_client, review_resolution_git_client, successful_turn_result,
+    auto_commit_git_client_with_push_failure, auto_commit_run_client, dirty_auto_commit_git_client,
+    empty_transcript, expect_safe_auto_push_state, fixed_review_turn_result,
+    insert_in_progress_session_with_review_request, push_descendant_that_reverted_fix,
+    queue_test_context, queued_message, review_resolution_client, review_resolution_git_client,
+    successful_turn_result,
 };
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
@@ -97,12 +97,12 @@ async fn test_process_queued_message_auto_pushes_after_last_published_branch_fol
     context.git_client = Arc::new(mock_git_client);
 
     // Act
-    let one_shot_client = auto_commit_one_shot_client();
+    let run_client = auto_commit_run_client();
     let message = context
         .pop_queued_message()
         .expect("queued message should be available");
     let turn_result =
-        SessionWorkerService::process_queued_message(&context, &one_shot_client, message).await;
+        SessionWorkerService::process_queued_message(&context, &run_client, message).await;
     let (turn_started_session_id, sync_events) =
         tokio::time::timeout(Duration::from_secs(1), async {
             let mut sync_events = Vec::new();
@@ -645,12 +645,9 @@ async fn test_skipped_review_request_command_answers_programmatic_caller() {
     };
 
     // Act
-    let command_result = SessionWorkerService::process_session_command(
-        &context,
-        &auto_commit_one_shot_client(),
-        command,
-    )
-    .await;
+    let command_result =
+        SessionWorkerService::process_session_command(&context, &auto_commit_run_client(), command)
+            .await;
     let response = response_rx
         .await
         .expect("skipped review-request response should be delivered");
@@ -869,12 +866,9 @@ async fn test_create_review_request_command_waits_for_live_review_status() {
     };
 
     // Act
-    let result = SessionWorkerService::execute_session_command(
-        &context,
-        &auto_commit_one_shot_client(),
-        command,
-    )
-    .await;
+    let result =
+        SessionWorkerService::execute_session_command(&context, &auto_commit_run_client(), command)
+            .await;
     let response = response_rx
         .await
         .expect("review-request response should be delivered");

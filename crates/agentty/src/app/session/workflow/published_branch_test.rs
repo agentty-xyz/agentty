@@ -77,8 +77,8 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
                 })
             })
         });
-    let mut one_shot_client = ag_agent::MockOneShotClient::new();
-    one_shot_client.expect_submit().once().returning(|request| {
+    let mut run_client = ag_worker::MockRunClient::new();
+    run_client.expect_submit().once().returning(|request| {
             assert!(request.prompt.contains("https://example.com/issues/42"));
 
             Ok(ag_agent::OneShotSubmission {
@@ -93,7 +93,7 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
         clock: Arc::new(crate::infra::clock::RealClock),
         commit_message: Some("Generated title\n\nNew body.".to_string()),
         evaluation: ReviewRequestMetadataEvaluationInput {
-            one_shot_client: Arc::new(one_shot_client),
+            run_client: Arc::new(run_client),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Codex,
                 crate::domain::agent::AgentModel::Gpt56Sol,
@@ -1092,7 +1092,7 @@ fn metadata_sync_input(
         clock: Arc::new(crate::infra::clock::RealClock),
         commit_message: commit_message.map(str::to_string),
         evaluation: ReviewRequestMetadataEvaluationInput {
-            one_shot_client: Arc::new(ag_agent::MockOneShotClient::new()),
+            run_client: Arc::new(ag_worker::MockRunClient::new()),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Codex,
                 crate::domain::agent::AgentModel::Gpt56Sol,

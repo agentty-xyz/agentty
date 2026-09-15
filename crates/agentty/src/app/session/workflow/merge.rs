@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{self as agent, OneShotClient};
+use ag_agent::{self as agent};
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
+use ag_worker::RunClient;
 use askama::Template;
 use tokio::sync::{OwnedMutexGuard, mpsc};
 use tracing::warn;
@@ -165,7 +166,7 @@ struct MergeTaskInput {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     id: SessionId,
-    one_shot_client: Arc<dyn OneShotClient>,
+    run_client: Arc<dyn RunClient>,
     repo_root: PathBuf,
     session_agent: AgentSelection,
     session_update_versions: SessionUpdateVersionMap,
@@ -204,7 +205,7 @@ struct RebaseAssistInput {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     id: SessionId,
-    one_shot_client: Arc<dyn OneShotClient>,
+    run_client: Arc<dyn RunClient>,
     rebase_plan: RebasePlan,
     session_agent: AgentSelection,
     session_update_versions: SessionUpdateVersionMap,
@@ -237,7 +238,7 @@ pub(super) struct RebaseCommandInput {
     /// Session identifier receiving transcript/status updates.
     pub(super) id: SessionId,
     /// Provider-neutral boundary used by pre-rebase auto-commit prompts.
-    pub(super) one_shot_client: Arc<dyn OneShotClient>,
+    pub(super) run_client: Arc<dyn RunClient>,
     /// Forge boundary used for optional linked PR/MR metadata refresh after
     /// post-rebase auto-push.
     pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
@@ -262,7 +263,7 @@ struct FinalizeRebaseInput<'a> {
     folder: &'a Path,
     git_client: &'a Arc<dyn GitClient>,
     id: &'a str,
-    one_shot_client: &'a Arc<dyn OneShotClient>,
+    run_client: &'a Arc<dyn RunClient>,
     rebase_result: Result<String, SessionError>,
     review_request_client: &'a Arc<dyn forge::ReviewRequestClient>,
     session_agent: AgentSelection,
@@ -281,7 +282,7 @@ struct RebaseAutoPushInput<'a> {
     db: &'a AppRepositories,
     folder: &'a Path,
     git_client: &'a Arc<dyn GitClient>,
-    one_shot_client: &'a Arc<dyn OneShotClient>,
+    run_client: &'a Arc<dyn RunClient>,
     review_request_client: &'a Arc<dyn forge::ReviewRequestClient>,
     session_agent: AgentSelection,
     session_id: &'a str,
@@ -508,15 +509,13 @@ trait SyncAssistClient: Send + Sync {
 
 /// Production sync-assistance executor backed by real agent commands.
 struct RealSyncAssistClient {
-    one_shot_client: Arc<dyn OneShotClient>,
+    run_client: Arc<dyn RunClient>,
 }
 
 impl RealSyncAssistClient {
     /// Creates the production sync-assistance executor.
-    fn new() -> Self {
-        Self {
-            one_shot_client: Arc::new(agent::RealOneShotClient::new(None)),
-        }
+    fn new(run_client: Arc<dyn RunClient>) -> Self {
+        Self { run_client }
     }
 
     /// Runs one sync conflict assistance command through the shared one-shot
@@ -525,13 +524,13 @@ impl RealSyncAssistClient {
     /// # Errors
     /// Returns an error when the one-shot agent command fails.
     async fn run_assist_command(
-        one_shot_client: &dyn OneShotClient,
+        run_client: &dyn RunClient,
         folder: PathBuf,
         prompt: String,
         session_agent: AgentSelection,
     ) -> Result<(), SessionError> {
         // Success payload unused; run for side effects only.
-        let _ = one_shot_client
+        let _ = run_client
             .submit(agent::OneShotRequest {
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
@@ -557,10 +556,10 @@ impl SyncAssistClient for RealSyncAssistClient {
         prompt: String,
         session_agent: AgentSelection,
     ) -> SyncAssistFuture<Result<(), SessionError>> {
-        let one_shot_client = Arc::clone(&self.one_shot_client);
+        let run_client = Arc::clone(&self.run_client);
 
         Box::pin(async move {
-            Self::run_assist_command(one_shot_client.as_ref(), folder, prompt, session_agent).await
+            Self::run_assist_command(run_client.as_ref(), folder, prompt, session_agent).await
         })
     }
 }
@@ -746,7 +745,7 @@ impl SessionMergeService {
             fs_client,
             git_client,
             id: id.clone(),
-            one_shot_client: services.one_shot_client(),
+            run_client: services.session_run_client(&id),
             repo_root,
             session_agent,
             session_update_versions,
@@ -1439,7 +1438,7 @@ impl SessionManager {
             fs_client: Arc::clone(&input.fs_client),
             git_client: Arc::clone(&input.git_client),
             id: input.id.clone(),
-            one_shot_client: Arc::clone(&input.one_shot_client),
+            run_client: Arc::clone(&input.run_client),
             rebase_plan: RebasePlan::target(input.base_branch.clone()),
             session_agent: input.session_agent,
             session_update_versions: input.session_update_versions.clone(),
@@ -1629,9 +1628,11 @@ impl SessionManager {
         event_context: Option<SyncMainEventContext>,
         git_client: Arc<dyn GitClient>,
         session_model: AgentModel,
+        run_client: Arc<dyn RunClient>,
     ) -> Result<SyncMainOutcome, SyncSessionStartError> {
         let fs_client: Arc<dyn FsClient> = Arc::new(fs::RealFsClient);
-        let sync_assist_client: Arc<dyn SyncAssistClient> = Arc::new(RealSyncAssistClient::new());
+        let sync_assist_client: Arc<dyn SyncAssistClient> =
+            Arc::new(RealSyncAssistClient::new(run_client));
         let session_agent = crate::domain::agent::resolve_agent_selection_for_model(
             session_model,
             AgentKind::Antigravity,
@@ -1858,7 +1859,7 @@ impl SessionManager {
             fs_client,
             git_client,
             id,
-            one_shot_client,
+            run_client,
             review_request_client,
             session_agent,
             session_update_versions,
@@ -1900,7 +1901,7 @@ impl SessionManager {
                 fs_client: Arc::clone(&fs_client),
                 git_client: Arc::clone(&git_client),
                 id: id.clone(),
-                one_shot_client: Arc::clone(&one_shot_client),
+                run_client: Arc::clone(&run_client),
                 rebase_plan,
                 session_agent,
                 session_update_versions: session_update_versions.clone(),
@@ -1920,7 +1921,7 @@ impl SessionManager {
             folder: &folder,
             git_client: &git_client,
             id: &id,
-            one_shot_client: &one_shot_client,
+            run_client: &run_client,
             rebase_result,
             review_request_client: &review_request_client,
             session_agent,
@@ -2050,7 +2051,7 @@ impl SessionManager {
                 auto_commit_reasoning_level,
                 auto_commit_speed_mode,
             ),
-            input.one_shot_client.as_ref(),
+            input.run_client.as_ref(),
             include_coauthored_by_agentty,
             input.transcript.as_ref(),
         )
@@ -2168,7 +2169,7 @@ impl SessionManager {
             folder,
             git_client,
             id,
-            one_shot_client,
+            run_client,
             rebase_result,
             review_request_client,
             session_agent,
@@ -2199,7 +2200,7 @@ impl SessionManager {
                     db,
                     folder,
                     git_client,
-                    one_shot_client,
+                    run_client,
                     review_request_client,
                     session_agent,
                     session_id: id,
@@ -2247,7 +2248,7 @@ impl SessionManager {
             db,
             folder,
             git_client,
-            one_shot_client,
+            run_client,
             review_request_client,
             session_agent,
             session_id,
@@ -2287,7 +2288,7 @@ impl SessionManager {
             clock: Arc::clone(clock),
             commit_message: None,
             evaluation: published_branch::ReviewRequestMetadataEvaluationInput {
-                one_shot_client: Arc::clone(one_shot_client),
+                run_client: Arc::clone(run_client),
                 session_agent,
             },
             review_request_client: Arc::clone(review_request_client),
@@ -2937,7 +2938,7 @@ impl SessionManager {
             folder: input.folder.clone(),
             git_client: Arc::clone(&input.git_client),
             id: input.id.to_string(),
-            one_shot_client: Arc::clone(&input.one_shot_client),
+            run_client: Arc::clone(&input.run_client),
             session_agent: input.session_agent,
             session_update_versions: input.session_update_versions.clone(),
             transcript: Arc::clone(&input.transcript),

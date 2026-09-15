@@ -924,13 +924,13 @@ their triggers:
   as the old base.
 
 Title generation, focused review, commit-message generation, and conflict assistance
-submit owned `OneShotRequest` values through `OneShotClient`. Its production
-implementation owns provider routing, CLI/app-server selection, protocol repair, runtime
-cleanup, and usage aggregation; app workflow tests inject `MockOneShotClient` without
-constructing provider commands. Codex app-server turns ignore `commentary` assistant
-items when selecting completed output and prefer a nonblank terminal agent message
-carried by the matching `turn/completed` payload. A blank completion fallback cannot
-replace valid final output received earlier in the turn.
+submit owned `OneShotRequest` values through the worker `RunClient`. The worker owns run
+lifecycle; its injected `OneShotClient` owns provider routing, transport selection,
+protocol repair, cleanup, and usage aggregation. Workflow tests inject `MockRunClient`.
+Codex app-server turns ignore `commentary` assistant items when selecting completed
+output and prefer a nonblank terminal agent message carried by the matching
+`turn/completed` payload. A blank completion fallback cannot replace valid final output
+received earlier in the turn.
 
 ## Sync, Merge, and Rebase Flows
 
@@ -989,16 +989,16 @@ orchestration paths:
   non-modal sync completion status for retry. A failed sync or a successful sync of
   another branch leaves the merged stack unchanged. Cleanup-critical git subprocesses
   are cancellable and bounded to 30 seconds; confirmed shutdown shares a five-second
-  grace period across all tracked cleanup tasks before canceling unfinished work.
-  Session view also loads comments on demand for its linked review request:
-  `AppMode::DiffLoading` renders a cancelable page while the full diff loads, then
-  `AppMode::Diff` renders its Files and Comments sidebar immediately with a
-  comment-loading state. The loading surface uses an explicit Files placeholder instead
-  of parsing its status text as an empty diff. A failed interactive load restores its
-  source mode with a transient workflow notice; completed file and inline comment drafts
-  move into a per-session app-state cache when Diff mode closes, move back into
-  `AppMode::Diff` when it reopens, and are discarded when that session starts a new
-  turn. A queued comment batch remains cached until its worker dequeues it, so
+  grace period across the run worker, creation tasks, and tracked cleanup tasks before
+  forcing unfinished work to stop. Session view also loads comments on demand for its
+  linked review request: `AppMode::DiffLoading` renders a cancelable page while the full
+  diff loads, then `AppMode::Diff` renders its Files and Comments sidebar immediately
+  with a comment-loading state. The loading surface uses an explicit Files placeholder
+  instead of parsing its status text as an empty diff. A failed interactive load
+  restores its source mode with a transient workflow notice; completed file and inline
+  comment drafts move into a per-session app-state cache when Diff mode closes, move
+  back into `AppMode::Diff` when it reopens, and are discarded when that session starts
+  a new turn. A queued comment batch remains cached until its worker dequeues it, so
   retracting the queued message with `Ctrl+C` preserves the comments; during managed
   merge cleanup, `TaskService` falls back from a repository-unavailable live diff to the
   archived diff already persisted for that session. Other Git failures remain visible
@@ -1087,3 +1087,25 @@ turn completion. Terminal storage updates atomically honor persisted cancellatio
 requests, even when the workflow returns success or an ordinary error. Restart recovery
 reconciles host state before failing abandoned operations; it requires exclusive
 ownership of the application root.
+
+## Utility run supervision
+
+All utility prompts enter `ag-worker::RunWorker` through `RunClient`. The application
+composition root injects the runtime and run repository. Session post-processing awaits
+child utilities without re-entering its serial queue; independent background utilities
+share bounded execution capacity. Caller drop and inherited cancellation stop execution,
+and application shutdown closes admission and waits for terminal bookkeeping. Nested
+scopes preserve all parent cancellation sources. App-server utilities signal shutdown
+and keep polling the provider turn until its runtime is released; the worker then
+records the terminal state, including failure when runtime polling panics. Session
+shutdown is also awaited when an initial or repair provider turn panics. Application
+shutdown uses one five-second deadline for worker, creation, and cleanup tasks; expiry
+forces detached adapter tasks to drop their owned runtimes. Unfinished durable records
+are left for startup recovery rather than extending terminal shutdown indefinitely.
+Session deletion waits for this cleanup before removing resources; terminal cancellation
+schedules the same wait in its background resource cleanup. Completed session trackers
+are evicted. Canceled trackers are evicted only after the run repository durably closes
+session admission, so detached submissions cannot restart model work. Startup recovery
+fails abandoned utility runs without replay.
+
+See [Execution](@/docs/core-components/execution.md) for the execution contract.

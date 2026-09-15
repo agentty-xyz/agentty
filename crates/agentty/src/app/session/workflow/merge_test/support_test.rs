@@ -2,10 +2,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_agent as agent;
-use ag_agent::{MockOneShotClient, OneShotClient};
 use ag_forge as forge;
 use ag_git as git;
 use ag_git::GitClient;
+use ag_worker::{MockRunClient, RunClient};
 use tempfile::{TempDir, tempdir};
 use tokio::sync::mpsc;
 
@@ -68,9 +68,9 @@ pub(super) fn test_fs_client() -> Arc<dyn FsClient> {
 }
 
 /// Builds a deterministic one-shot boundary for pre-rebase auto-commit.
-pub(super) fn test_one_shot_client() -> Arc<dyn OneShotClient> {
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client.expect_submit().times(0..).returning(|_| {
+pub(super) fn test_run_client() -> Arc<dyn RunClient> {
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(0..).returning(|_| {
         Ok(agent::OneShotSubmission {
             response: ag_protocol::AgentResponse::plain("Existing session commit"),
             stats: agent::SessionStats {
@@ -83,7 +83,7 @@ pub(super) fn test_one_shot_client() -> Arc<dyn OneShotClient> {
         })
     });
 
-    Arc::new(one_shot_client)
+    Arc::new(run_client)
 }
 
 /// Returns the agent selection used by rebase workflow tests.
@@ -136,7 +136,7 @@ pub(super) async fn build_rebase_assist_input_for_test(
             fs_client: test_fs_client(),
             git_client,
             id: "session-123".into(),
-            one_shot_client: test_one_shot_client(),
+            run_client: test_run_client(),
             transcript: empty_transcript(),
             rebase_plan: RebasePlan::target("main".to_string()),
             session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
@@ -169,7 +169,7 @@ pub(super) async fn build_merge_task_input_for_test(
             fs_client: test_fs_client(),
             git_client,
             id: "session-123".into(),
-            one_shot_client: test_one_shot_client(),
+            run_client: test_run_client(),
             transcript: empty_transcript(),
             repo_root,
             session_update_versions: Arc::default(),
@@ -502,9 +502,9 @@ pub(super) fn metadata_sync_review_request_client(
 }
 
 /// Returns one semantic metadata evaluator for post-rebase sync.
-pub(super) fn metadata_sync_one_shot_client() -> Arc<dyn OneShotClient> {
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client.expect_submit().once().returning(|_| {
+pub(super) fn metadata_sync_run_client() -> Arc<dyn RunClient> {
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().once().returning(|_| {
             Ok(agent::OneShotSubmission {
                 response: ag_protocol::AgentResponse::plain(
                     r#"{"title":"Old title","description":"Old details.\n\n- Preserve sync details.","is_title_change_significant":false}"#,
@@ -513,7 +513,7 @@ pub(super) fn metadata_sync_one_shot_client() -> Arc<dyn OneShotClient> {
             })
         });
 
-    Arc::new(one_shot_client)
+    Arc::new(run_client)
 }
 
 /// Collects the in-progress and terminal published-branch sync states.

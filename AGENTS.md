@@ -26,6 +26,16 @@ Agentty is a Rust workspace for an agent-management TUI and reusable support cra
   clarification only when product versus checkout scope remains ambiguous and would
   change the action; continue independent work while awaiting the answer.
 
+## Model Execution Boundary
+
+Every Agentty-managed action requiring model reasoning or generation must follow **Run
+Worker → Agent Runtime → Harness → LLM**, including background and utility work. This
+applies to every harness. Application workflows must not invoke harnesses or model APIs
+directly, including for retries or nested calls.
+
+Follow `docs/site/content/docs/core-components/execution.md` for the execution contract
+and `crates/agentty/src/app/AGENTS.md` for workflow integration rules.
+
 ## Non-Negotiable Gates
 
 - Preserve unrelated user changes.

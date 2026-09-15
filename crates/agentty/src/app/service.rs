@@ -1,14 +1,16 @@
 //! Shared app dependency container for managers and background workflows.
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent::{AppServerClient, OneShotClient, RealOneShotClient};
+use ag_agent::{AppServerClient, RealOneShotClient};
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
 use ag_orchestration::{OrchestrationEvent, OrchestrationEventSink};
+use ag_worker::{RunClient, RunWorker};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant};
@@ -37,10 +39,11 @@ pub struct AppServices {
     event_tx: mpsc::UnboundedSender<AppEvent>,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
-    one_shot_client: Arc<dyn OneShotClient>,
     personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
     repositories: AppRepositories,
     review_request_client: Arc<dyn ReviewRequestClient>,
+    run_client: Arc<dyn RunClient>,
+    run_worker: Arc<RunWorker>,
     session_update_versions: SessionUpdateVersionMap,
 }
 
@@ -60,7 +63,7 @@ impl AppServices {
             clipboard_image_client_override,
             fs_client,
             git_client,
-            one_shot_client_override,
+            run_client_override,
             personality_catalog_client_override,
             repositories,
             review_request_client,
@@ -71,11 +74,15 @@ impl AppServices {
                 Arc::clone(&fs_client),
             ))
         });
-        let one_shot_client = one_shot_client_override.unwrap_or_else(|| {
+        let run_worker = Arc::new(RunWorker::new(
             Arc::new(RealOneShotClient::new(
                 app_server_client_override.as_ref().map(Arc::clone),
-            ))
-        });
+            )),
+            repositories.runs(),
+            Arc::new(ag_worker::HeartbeatClock),
+            NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
+        ));
+        let run_client = run_client_override.unwrap_or_else(|| run_worker.clone());
         let personality_catalog_client = personality_catalog_client_override
             .unwrap_or_else(|| Arc::new(RealPersonalityCatalogClient));
 
@@ -91,7 +98,8 @@ impl AppServices {
             event_tx,
             fs_client,
             git_client,
-            one_shot_client,
+            run_client,
+            run_worker,
             personality_catalog_client,
             repositories,
             review_request_client,
@@ -140,9 +148,40 @@ impl AppServices {
         Arc::clone(&self.clipboard_image_client)
     }
 
-    /// Returns the shared client for isolated structured agent prompts.
-    pub(crate) fn one_shot_client(&self) -> Arc<dyn OneShotClient> {
-        Arc::clone(&self.one_shot_client)
+    /// Composes a session runtime for execution exclusively by the worker.
+    pub(crate) fn agent_channel(&self, kind: AgentKind) -> Arc<dyn ag_runtime::AgentChannel> {
+        ag_agent::create_agent_channel(kind, self.app_server_client_override())
+    }
+
+    /// Stops detached and nested utility runs owned by a canceled session.
+    pub(crate) fn cancel_agent_runs(&self, session_id: &str) {
+        self.run_worker.cancel_session(session_id);
+        let worker = Arc::clone(&self.run_worker);
+        let session_id = session_id.to_string();
+        self.track_cleanup_task(tokio::spawn(async move {
+            worker.cancel_session_and_wait(&session_id).await;
+        }));
+    }
+
+    /// Waits for a deleted session's utility cleanup before removing resources.
+    pub(crate) async fn finish_session_agent_runs(&self, session_id: &str) {
+        self.run_worker.cancel_session_and_wait(session_id).await;
+    }
+
+    /// Returns the worker submission handle for isolated agent runs.
+    pub(crate) fn run_client(&self) -> Arc<dyn RunClient> {
+        Arc::clone(&self.run_client)
+    }
+
+    /// Captures session ownership before handing work to a background task.
+    pub(crate) fn session_run_client(&self, session_id: &str) -> Arc<dyn RunClient> {
+        ag_worker::scoped_client(
+            self.run_client(),
+            ag_worker::RunScope {
+                session_id: Some(session_id.to_string()),
+                ..ag_worker::RunScope::default()
+            },
+        )
     }
 
     /// Returns the workspace personality discovery client.
@@ -212,7 +251,8 @@ impl AppServices {
         }
     }
 
-    /// Settles worktree creation, then waits for tracked cleanup tasks.
+    /// Settles worker execution, worktree creation, and tracked cleanup tasks
+    /// within one deadline. Escalates worker shutdown when grace expires.
     ///
     /// The task list is drained before awaiting so the synchronous mutex guard
     /// is never held across an `.await`. The loop repeats in case a cleanup
@@ -220,6 +260,14 @@ impl AppServices {
     /// share one shutdown deadline; unfinished tasks are canceled after it
     /// expires.
     pub(crate) async fn wait_for_cleanup_tasks(&self) {
+        let deadline = Instant::from_std(self.clock.now_instant()) + CLEANUP_TASK_SHUTDOWN_TIMEOUT;
+        if time::timeout_at(deadline, self.run_worker.shutdown())
+            .await
+            .is_err()
+        {
+            self.run_worker.force_shutdown();
+            warn!("agent run worker exceeded the shutdown deadline; forcing runtime shutdown");
+        }
         let creation_tasks = self
             .creation_task_handles
             .lock()
@@ -227,18 +275,9 @@ impl AppServices {
             .drain()
             .map(|(_, task)| task)
             .collect::<Vec<_>>();
-        for task in creation_tasks {
-            if let Err(error) = task.await {
-                warn!(error = %error, "session creation task failed during shutdown");
-            }
-        }
+        Self::wait_for_cleanup_task_handles(&Mutex::new(creation_tasks), deadline).await;
 
-        Self::wait_for_cleanup_task_handles(
-            self.cleanup_task_handles.as_ref(),
-            self.clock.as_ref(),
-            CLEANUP_TASK_SHUTDOWN_TIMEOUT,
-        )
-        .await;
+        Self::wait_for_cleanup_task_handles(self.cleanup_task_handles.as_ref(), deadline).await;
     }
 
     /// Returns a clone of the app event sender.
@@ -331,11 +370,8 @@ impl AppServices {
     /// every unfinished task so terminal shutdown can continue.
     async fn wait_for_cleanup_task_handles(
         cleanup_task_handles: &Mutex<Vec<JoinHandle<()>>>,
-        clock: &dyn Clock,
-        timeout: Duration,
+        deadline: Instant,
     ) {
-        let deadline = Instant::from_std(clock.now_instant()) + timeout;
-
         loop {
             let task_handles = cleanup_task_handles
                 .lock()
@@ -357,9 +393,7 @@ impl AppServices {
                     }
                     Err(_) => {
                         task_handle.abort();
-                        let timeout_seconds = timeout.as_secs();
                         warn!(
-                            timeout_seconds,
                             "background cleanup task exceeded the shutdown deadline and was \
                              canceled"
                         );
@@ -415,7 +449,7 @@ pub(crate) struct AppServiceDeps {
     pub(crate) git_client: Arc<dyn GitClient>,
     /// Optional isolated-prompt client override used by tests and injected
     /// environments.
-    pub(crate) one_shot_client_override: Option<Arc<dyn OneShotClient>>,
+    pub(crate) run_client_override: Option<Arc<dyn RunClient>>,
     /// Optional workspace personality catalog override used by tests.
     pub(crate) personality_catalog_client_override: Option<Arc<dyn PersonalityCatalogClient>>,
     /// Shared repository bundle used by app workflows.

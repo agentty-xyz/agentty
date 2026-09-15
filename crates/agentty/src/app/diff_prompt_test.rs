@@ -2,11 +2,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_agent::{
-    AgentKind, AgentModel, AgentRequestKind, MockOneShotClient, OneShotError, OneShotRequest,
-    OneShotSubmission, PermissionMode, ReasoningLevel, SessionStats, SpeedMode, diff_fence,
-    is_input_size_error,
+    AgentKind, AgentModel, AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission,
+    PermissionMode, ReasoningLevel, SessionStats, SpeedMode, diff_fence, is_input_size_error,
 };
 use ag_protocol::AgentResponse;
+use ag_worker::MockRunClient;
 
 use super::{
     MAX_PROVIDER_CALLS, PROMPT_BUDGET, SUMMARY_CHUNK_BYTES, chunks, submit, summarize,
@@ -42,7 +42,7 @@ fn render(diff: &str, context: &str) -> String {
 #[tokio::test]
 async fn small_diff_preserves_input_and_settings() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().once().returning(|request| {
         request
             .provider_call_budget
@@ -80,7 +80,7 @@ async fn budgets_huge_unicode_diff_history_and_fences_before_submission() {
     );
     let seen = Arc::new(Mutex::new(Vec::new()));
     let seen_calls = Arc::clone(&seen);
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(move |request| {
         request
             .provider_call_budget
@@ -130,7 +130,7 @@ async fn exact_size_rejection_retries_only_smaller_prompts() {
     // Arrange
     let lengths = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::clone(&lengths);
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(move |request| {
         request
             .provider_call_budget
@@ -173,7 +173,7 @@ async fn summary_rejection_splits_chunks_without_losing_the_tail() {
     // Arrange
     let prompts = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&prompts);
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(move |request| {
         request
             .provider_call_budget
@@ -214,7 +214,7 @@ async fn summary_rejection_splits_chunks_without_losing_the_tail() {
 async fn stops_on_unreducible_input_or_non_size_errors() {
     // Arrange
     for diagnostic in ["network timeout", "context_window_exceeded"] {
-        let mut client = MockOneShotClient::new();
+        let mut client = MockRunClient::new();
         client
             .expect_submit()
             .once()
@@ -241,7 +241,7 @@ async fn summary_failure_and_invalid_summary_stop_generation() {
         Err("network timeout".to_string()),
         Err("context window exceeded".to_string()),
     ] {
-        let mut client = MockOneShotClient::new();
+        let mut client = MockRunClient::new();
         client.expect_submit().returning(move |_| match &output {
             Ok(text) => Ok(answer(text)),
             Err(error) => Err(OneShotError::new(error)),
@@ -274,7 +274,7 @@ async fn invalid_summary_is_repaired_from_original_input_with_byte_feedback() {
         ("🦀".repeat(200), "800 UTF-8 bytes"),
     ] {
         let mut attempts = 0;
-        let mut client = MockOneShotClient::new();
+        let mut client = MockRunClient::new();
         client.expect_submit().times(2).returning(move |request| {
             request
                 .provider_call_budget
@@ -316,7 +316,7 @@ async fn failed_summary_repair_splits_original_input_without_losing_tail() {
     let mut attempts = 0;
     let seen = Arc::new(Mutex::new(Vec::new()));
     let prompts = Arc::clone(&seen);
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(move |request| {
         request
             .provider_call_budget
@@ -351,7 +351,7 @@ async fn failed_summary_repair_splits_original_input_without_losing_tail() {
 #[tokio::test]
 async fn small_tail_is_retained_verbatim_without_a_tiny_summary_request() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client
         .expect_submit()
         .once()
@@ -376,7 +376,7 @@ async fn small_tail_is_retained_verbatim_without_a_tiny_summary_request() {
 #[tokio::test]
 async fn provider_splitting_still_summarizes_fragments_below_the_output_limit() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(|request| {
         request
             .provider_call_budget
@@ -417,7 +417,7 @@ async fn summary_repair_respects_prompt_and_shared_call_budgets() {
         request.prompt = "x".repeat(prompt_size);
         let budget = ag_agent::ProviderCallBudget::new(budget_size);
         request.provider_call_budget = Some(budget.clone());
-        let mut client = MockOneShotClient::new();
+        let mut client = MockRunClient::new();
         client.expect_submit().once().returning(|request| {
             request
                 .provider_call_budget
@@ -444,7 +444,7 @@ async fn persistent_invalid_summary_reports_distinct_terminal_diagnostics() {
         (String::new(), "summary was empty"),
         ("🦀".repeat(200), "800 UTF-8 bytes, exceeding 127"),
     ] {
-        let mut client = MockOneShotClient::new();
+        let mut client = MockRunClient::new();
         client
             .expect_submit()
             .times(2)
@@ -474,7 +474,7 @@ async fn persistent_invalid_summary_reports_distinct_terminal_diagnostics() {
 #[tokio::test]
 async fn rejects_unbudgetable_template_and_render_failure() {
     // Arrange
-    let client = MockOneShotClient::new();
+    let client = MockRunClient::new();
 
     // Act
     let oversized = submit(&client, request(), "", "", |_, _| {
@@ -497,7 +497,7 @@ async fn rejects_unbudgetable_template_and_render_failure() {
 #[tokio::test]
 async fn rejects_reduction_without_progress() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client
         .expect_submit()
         .returning(|_| Ok(answer("123456789012")));
@@ -558,7 +558,7 @@ async fn fencing_overhead_triggers_reduction_below_nominal_content_allowances() 
     // Arrange
     let diff = "`".repeat(19_000);
     let history = "h".repeat(7_000);
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(|request| {
         request
             .provider_call_budget
@@ -586,7 +586,7 @@ async fn repeated_size_rejections_have_a_bounded_retry_count() {
     // Arrange
     let attempts = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&attempts);
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(move |request| {
         request
             .provider_call_budget
@@ -628,7 +628,7 @@ async fn repeated_size_rejections_have_a_bounded_retry_count() {
 #[tokio::test]
 async fn render_failure_after_summarization_propagates() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client
         .expect_submit()
         .returning(|_| Ok(answer("short summary")));
@@ -674,7 +674,7 @@ async fn mebibyte_diff_uses_large_chunks_and_bounded_recursive_reduction() {
     // Arrange
     let prompts = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&prompts);
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(move |request| {
         request
             .provider_call_budget
@@ -726,7 +726,7 @@ async fn provider_call_budget_is_shared_by_all_reduction_stages_and_final_submis
         (MAX_PROVIDER_CALLS - 1, 2, false), // Session context.
         (MAX_PROVIDER_CALLS, 0, false),     // Final submission.
     ] {
-        let mut client = MockOneShotClient::new();
+        let mut client = MockRunClient::new();
         client
             .expect_submit()
             .times(MAX_PROVIDER_CALLS)
@@ -764,7 +764,7 @@ async fn provider_call_budget_is_shared_by_all_reduction_stages_and_final_submis
 #[tokio::test]
 async fn provider_size_rejections_consume_the_shared_call_budget() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client
         .expect_submit()
         .times(MAX_PROVIDER_CALLS)
@@ -802,7 +802,7 @@ async fn provider_size_rejections_consume_the_shared_call_budget() {
 #[tokio::test]
 async fn hidden_repair_turns_reduce_the_number_of_allowed_submissions() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client
         .expect_submit()
         .times(MAX_PROVIDER_CALLS / 2)

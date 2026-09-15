@@ -3,9 +3,14 @@ use std::future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_agent::{MockAppServerClient, RealOneShotClient};
 use ag_orchestration::{OrchestrationEvent, OrchestrationEventSink};
+use ag_runtime::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_worker::{HeartbeatClock, RunWorker};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument::WithSubscriber;
 
 use crate::app::branch_publish::BranchPublishTaskFailure;
@@ -14,6 +19,7 @@ use crate::app::session::{SyncSessionStartError, TurnAppliedState};
 use crate::app::sync::{ProjectSyncContext, SyncMainCompletion};
 use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, SessionStats};
+use crate::infra::clock::Clock;
 use crate::test_support::{FixedClock, TestSubscriber};
 
 /// Exercises failure while cancellation drops a task-owned resource.
@@ -376,6 +382,122 @@ async fn shutdown_observes_canceled_creation_task() {
 }
 
 #[tokio::test]
+async fn shutdown_deadline_forces_stuck_harnesses_and_all_background_tasks() {
+    for stuck_shutdown in [false, true] {
+        // Arrange
+        let (mut app, directory) = crate::test_support::new_test_app().await;
+        let started = CancellationToken::new();
+        let stopping = CancellationToken::new();
+        let released = CancellationToken::new();
+        let cleanup_released = CancellationToken::new();
+        let creation_released = CancellationToken::new();
+        let mut provider = MockAppServerClient::new();
+        provider.expect_run_turn().once().returning({
+            let started = started.clone();
+            let released = released.clone();
+            move |_, _| {
+                let started = started.clone();
+                let guard = released.clone().drop_guard();
+                Box::pin(async move {
+                    let _guard = guard;
+                    started.cancel();
+                    future::pending().await
+                })
+            }
+        });
+        provider.expect_shutdown_session().once().returning({
+            let stopping = stopping.clone();
+            move |_| {
+                let stopping = stopping.clone();
+                Box::pin(async move {
+                    stopping.cancel();
+                    if stuck_shutdown {
+                        future::pending::<()>().await;
+                    }
+                })
+            }
+        });
+        let db = crate::infra::db::Database::open_in_memory()
+            .await
+            .expect("database");
+        app.services.run_worker = Arc::new(RunWorker::new(
+            Arc::new(RealOneShotClient::new(Some(Arc::new(provider)))),
+            db.runs(),
+            Arc::new(HeartbeatClock),
+            std::num::NonZeroUsize::MIN,
+        ));
+        app.services.run_client = app.services.run_worker.clone();
+        let client = app.services.run_client();
+        let request = OneShotRequest {
+            child_pid: None,
+            folder: directory.path().into(),
+            harness: "codex".into(),
+            model: "model".into(),
+            permission_mode: PermissionMode::AutoEdit,
+            prompt: "utility".into(),
+            provider_call_budget: None,
+            reasoning_level: ReasoningLevel::default(),
+            request_kind: AgentRequestKind::UtilityPrompt,
+            speed_mode: SpeedMode::default(),
+        };
+        let late = request.clone();
+        let caller = tokio::spawn(async move { client.submit(request).await });
+        started.cancelled().await;
+        // Begin normal cancellation and observe the harness's shutdown path
+        // before simulating expiry of the shared host deadline.
+        caller.abort();
+        stopping.cancelled().await;
+        app.services
+            .track_cleanup_task(pending_cleanup_task(&cleanup_released));
+        app.services.track_session_creation_task(
+            "pending".into(),
+            pending_cleanup_task(&creation_released),
+        );
+        app.services.clock = Arc::new(FixedClock::new(
+            time::Instant::now()
+                .into_std()
+                .checked_sub(Duration::from_secs(6))
+                .expect("expired deadline"),
+            std::time::SystemTime::UNIX_EPOCH,
+        ));
+        // Act
+        time::timeout(
+            Duration::from_secs(2),
+            app.services.wait_for_cleanup_tasks(),
+        )
+        .await
+        .expect("worker, creation, and cleanup must share the deadline");
+        // Assert
+        time::timeout(Duration::from_secs(1), released.cancelled())
+            .await
+            .expect("detached provider task must be dropped");
+        assert!(cleanup_released.is_cancelled());
+        assert!(creation_released.is_cancelled());
+        caller.await.expect_err("aborted caller");
+        assert!(app.services.run_client().submit(late).await.is_err());
+        let status: String = sqlx::query_scalar("SELECT status FROM agent_run")
+            .fetch_one(db.pool())
+            .await
+            .expect("unfinished run");
+        assert_eq!(status, "running");
+        db.runs().recover().await.expect("restart recovery");
+        let status: String = sqlx::query_scalar("SELECT status FROM agent_run")
+            .fetch_one(db.pool())
+            .await
+            .expect("recovered run");
+        assert_eq!(status, "failed");
+    }
+}
+
+fn pending_cleanup_task(released: &CancellationToken) -> JoinHandle<()> {
+    let guard = released.clone().drop_guard();
+    tokio::spawn(async move {
+        let _guard = guard;
+        future::pending::<()>().await;
+    })
+}
+
+#[tokio::test]
 async fn cleanup_task_wait_cancels_work_after_shared_deadline() {
     // Arrange
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
@@ -398,8 +520,7 @@ async fn cleanup_task_wait_cancels_work_after_shared_deadline() {
         Duration::from_secs(1),
         AppServices::wait_for_cleanup_task_handles(
             &cleanup_task_handles,
-            &clock,
-            Duration::from_secs(1),
+            time::Instant::from_std(clock.now_instant()) + Duration::from_secs(1),
         ),
     )
     .with_subscriber(TestSubscriber)
@@ -428,7 +549,11 @@ async fn cleanup_wait_settles_successful_and_failed_tasks() {
     let clock = FixedClock::unix_epoch();
 
     // Act
-    AppServices::wait_for_cleanup_task_handles(&handles, &clock, Duration::from_secs(1)).await;
+    AppServices::wait_for_cleanup_task_handles(
+        &handles,
+        time::Instant::from_std(clock.now_instant()) + Duration::from_secs(1),
+    )
+    .await;
 
     // Assert
     assert!(handles.lock().expect("cleanup handles").is_empty());
@@ -456,7 +581,11 @@ async fn cleanup_wait_observes_resource_failure_during_cancellation() {
     );
 
     // Act
-    AppServices::wait_for_cleanup_task_handles(&handles, &clock, Duration::ZERO).await;
+    AppServices::wait_for_cleanup_task_handles(
+        &handles,
+        time::Instant::from_std(clock.now_instant()),
+    )
+    .await;
 
     // Assert
     assert!(handles.lock().expect("cleanup handles").is_empty());

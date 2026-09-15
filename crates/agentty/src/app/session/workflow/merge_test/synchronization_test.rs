@@ -2,11 +2,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_agent as agent;
-use ag_agent::MockOneShotClient;
 use ag_forge as forge;
 use ag_git as git;
 use ag_git::{GitClient, GitError};
 use ag_session::SessionRole;
+use ag_worker::MockRunClient;
 use mockall::Sequence;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -24,9 +24,9 @@ use super::support::{
     collect_published_branch_sync_statuses, create_passthrough_mock_fs_client,
     empty_review_request_client, empty_transcript,
     insert_published_rebase_session_with_review_request, linked_github_review_request,
-    metadata_sync_git_client, metadata_sync_one_shot_client, metadata_sync_review_request_client,
+    metadata_sync_git_client, metadata_sync_review_request_client, metadata_sync_run_client,
     session_operation_row, successful_sync_conflict_git_client, successful_sync_conflict_outcome,
-    test_fs_client, test_one_shot_client, test_session_agent,
+    test_fs_client, test_run_client, test_session_agent,
 };
 use crate::app::session::workflow::merge::SyncAssistClient;
 use crate::app::session::{Clock, SessionError};
@@ -284,7 +284,7 @@ async fn test_rebase_assist_input_clone() {
         fs_client: test_fs_client(),
         git_client: Arc::new(git::RealGitClient),
         id: "session-123".into(),
-        one_shot_client: test_one_shot_client(),
+        run_client: test_run_client(),
         transcript: empty_transcript(),
         rebase_plan: RebasePlan::target("origin/main".to_string()),
         session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
@@ -402,7 +402,7 @@ async fn test_finalize_rebase_task_triggers_auto_push_for_published_branch() {
         folder: &folder,
         git_client: &git_client,
         id: "sess-rebase",
-        one_shot_client: &test_one_shot_client(),
+        run_client: &test_run_client(),
         rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
         review_request_client: &review_request_client,
         session_agent: test_session_agent(),
@@ -491,7 +491,7 @@ async fn test_finalize_rebase_task_syncs_review_request_metadata_after_auto_push
         folder: &folder,
         git_client: &git_client,
         id: "sess-rebase",
-        one_shot_client: &metadata_sync_one_shot_client(),
+        run_client: &metadata_sync_run_client(),
         rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
         review_request_client: &review_request_client,
         session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
@@ -577,7 +577,7 @@ async fn test_finalize_rebase_task_warns_when_commit_message_lookup_fails() {
         folder: &folder,
         git_client: &git_client,
         id: "sess-rebase",
-        one_shot_client: &test_one_shot_client(),
+        run_client: &test_run_client(),
         rebase_result: Ok("Successfully synced wt/sess-rebase onto main".to_string()),
         review_request_client: &review_request_client,
         session_agent: test_session_agent(),
@@ -655,7 +655,7 @@ async fn test_finalize_rebase_task_skips_auto_push_without_published_branch() {
         folder: &folder,
         git_client: &git_client,
         id: "sess-no-push",
-        one_shot_client: &test_one_shot_client(),
+        run_client: &test_run_client(),
         rebase_result: Ok("Successfully synced wt/sess-no-push onto main".to_string()),
         review_request_client: &review_request_client,
         session_agent: test_session_agent(),
@@ -1676,12 +1676,12 @@ async fn test_merge_session_rejects_orchestrator_before_workflow_start() {
 }
 
 #[test]
-fn test_real_sync_assist_client_new_owns_one_shot_client() {
+fn test_real_sync_assist_client_new_owns_run_client() {
     // Arrange / Act
-    let sync_assist_client = RealSyncAssistClient::new();
+    let sync_assist_client = RealSyncAssistClient::new(Arc::new(ag_worker::MockRunClient::new()));
 
     // Assert
-    assert_eq!(Arc::strong_count(&sync_assist_client.one_shot_client), 1);
+    assert_eq!(Arc::strong_count(&sync_assist_client.run_client), 1);
 }
 
 #[tokio::test]
@@ -1689,8 +1689,8 @@ async fn test_real_sync_assist_client_submits_utility_prompt() {
     // Arrange
     let folder = PathBuf::from("/tmp/sync-assist");
     let expected_folder = folder.clone();
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
+    let mut run_client = MockRunClient::new();
+    run_client
         .expect_submit()
         .times(1)
         .returning(move |request| {
@@ -1715,7 +1715,7 @@ async fn test_real_sync_assist_client_submits_utility_prompt() {
             })
         });
     let sync_assist_client = RealSyncAssistClient {
-        one_shot_client: Arc::new(one_shot_client),
+        run_client: Arc::new(run_client),
     };
 
     // Act

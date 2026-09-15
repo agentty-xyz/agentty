@@ -2,10 +2,10 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::MockOneShotClient;
 use ag_forge as forge;
 use ag_git::{GitError, MockGitClient};
 use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
+use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 use tracing::instrument::WithSubscriber;
 
@@ -86,7 +86,7 @@ fn review_operation_test_context(
         db,
         folder: PathBuf::from("/tmp/project"),
         git_client: Arc::new(git_client),
-        one_shot_client: Arc::new(MockOneShotClient::new()),
+        run_client: Arc::new(MockRunClient::new()),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
@@ -352,12 +352,12 @@ async fn ordinary_commit_failures_do_not_emit_review_comment_warnings() {
         .once()
         .returning(|_| Box::pin(async { Err(GitError::OutputParse("commit failed".to_string())) }));
     let mut context = review_operation_test_context(db, git_client);
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
+    let mut run_client = MockRunClient::new();
+    run_client
         .expect_submit()
         .once()
         .returning(|_| Err(ag_agent::OneShotError::new("commit failed")));
-    context.one_shot_client = Arc::new(one_shot_client);
+    context.run_client = Arc::new(run_client);
     let session_agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol);
 
     // Act
@@ -392,7 +392,7 @@ async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() 
         db,
         folder: PathBuf::new(),
         git_client: Arc::new(MockGitClient::new()),
-        one_shot_client: Arc::new(MockOneShotClient::new()),
+        run_client: Arc::new(MockRunClient::new()),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
@@ -635,7 +635,7 @@ async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
         db: db.clone(),
         folder: PathBuf::new(),
         git_client: Arc::new(mock_git_client),
-        one_shot_client: Arc::new(MockOneShotClient::new()),
+        run_client: Arc::new(MockRunClient::new()),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ag_agent::OneShotClient;
+use ag_worker::RunClient;
 use tokio::sync::{Notify, mpsc};
 
 use super::support::{DelayedTitleClient, provisional_title_database, title_generation_task_input};
@@ -79,15 +79,11 @@ async fn test_title_generation_handles_persistence_failure() {
     let (database, pool) = provisional_title_database("Background context only.").await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let one_shot_client: Arc<dyn OneShotClient> = Arc::new(DelayedTitleClient {
+    let run_client: Arc<dyn RunClient> = Arc::new(DelayedTitleClient {
         release: Arc::clone(&release),
     });
-    let input = title_generation_task_input(
-        app_event_tx,
-        database,
-        one_shot_client,
-        "review the project",
-    );
+    let input =
+        title_generation_task_input(app_event_tx, database, run_client, "review the project");
     let title_generation_task = SessionManager::spawn_session_title_generation_task(input)
         .await
         .expect("title generation should start");

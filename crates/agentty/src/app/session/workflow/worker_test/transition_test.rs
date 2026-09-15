@@ -24,12 +24,12 @@ use super::super::{
     SessionWorkerContext, SessionWorkerRebaseAssistClient, SessionWorkerService, TurnMetadata,
 };
 use super::support::{
-    apply_worker_turn_result, auto_commit_one_shot_client, cancel_token_after_short_delay,
+    apply_worker_turn_result, auto_commit_run_client, cancel_token_after_short_delay,
     default_turn_metadata, empty_transcript, expect_clean_main_checkout_snapshot,
     expect_safe_auto_push_state, insert_in_progress_research_session,
     insert_in_progress_test_session, mock_fs_client_with_existing_directories,
     mock_git_client_detecting_main_repo, persist_test_personality_state, queue_test_context,
-    queued_message, research_title_one_shot_client, resume_command, seed_recovery_test_operation,
+    queued_message, research_title_run_client, resume_command, seed_recovery_test_operation,
     successful_turn_result, transcript_text, turn_prompt_with_attachment,
 };
 use crate::app::AppEvent;
@@ -537,7 +537,7 @@ async fn test_run_channel_turn_finalizes_invalid_permission_setup_failure() {
     // Act
     let result = run_channel_turn(
         &context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         default_turn_metadata(),
         AgentRequestKind::SessionResume,
         None,
@@ -632,7 +632,7 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
     // Act
     let result = run_channel_turn(
         &context,
-        research_title_one_shot_client(),
+        research_title_run_client(),
         default_turn_metadata(),
         AgentRequestKind::SessionStart,
         None,
@@ -770,7 +770,7 @@ async fn test_run_channel_turn_proceeds_read_only_after_previous_cancellation() 
     // `run_channel_turn` swaps in a fresh token.
     let result = run_channel_turn(
         &context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         default_turn_metadata(),
         AgentRequestKind::SessionStart,
         None,
@@ -872,7 +872,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_is_clean_after_t
     // Act
     let result = run_channel_turn(
         &context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         default_turn_metadata(),
         AgentRequestKind::SessionStart,
         None,
@@ -962,7 +962,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_stays_dirty() {
     // Act
     let result = run_channel_turn(
         &context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         default_turn_metadata(),
         AgentRequestKind::SessionStart,
         None,
@@ -1058,7 +1058,7 @@ async fn test_run_channel_turn_skips_main_checkout_snapshot_for_bare_repo() {
     // Act
     let result = run_channel_turn(
         &context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         default_turn_metadata(),
         AgentRequestKind::SessionStart,
         None,
@@ -1462,7 +1462,7 @@ async fn test_worker_waits_for_foreground_gate_and_skips_abandoned_command() {
         .expect("following command");
     SessionWorkerService::spawn_session_worker(
         context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         Arc::default(),
         command_rx,
     );

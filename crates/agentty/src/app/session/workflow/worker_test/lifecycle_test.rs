@@ -6,7 +6,7 @@ use super::super::super::post_turn::TurnPersonalityPersistence;
 use super::super::super::turn::resolve_turn_personality;
 use super::super::{SessionCommand, SessionWorkerService, TurnMetadata};
 use super::support::{
-    assert_fork_history_replayed, auto_commit_one_shot_client, capture_prepared_fork_reply,
+    assert_fork_history_replayed, auto_commit_run_client, capture_prepared_fork_reply,
     inject_handoff_failure, persist_test_personality_state, preparation_test_worker_context,
     prepare_fork_with_saved_reply, queue_test_context,
 };
@@ -118,7 +118,7 @@ async fn test_cancel_after_preparation_marker_skips_start_and_fork_reply() {
         let skip = SessionWorkerService::should_skip_worker_command(&context, &operation_id).await;
         let result = SessionWorkerService::process_session_command(
             &context,
-            &auto_commit_one_shot_client(),
+            &auto_commit_run_client(),
             command,
         )
         .await;

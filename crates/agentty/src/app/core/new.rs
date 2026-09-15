@@ -106,6 +106,7 @@ impl App {
             &clients,
         )
         .await?;
+        repositories.runs().recover().await?;
         Self::recover_startup_operations(
             repositories.clone(),
             base_path,
@@ -392,7 +393,7 @@ impl App {
                 clipboard_image_client_override: None,
                 fs_client: Arc::clone(&clients.fs_client),
                 git_client: Arc::clone(&clients.git_client),
-                one_shot_client_override: None,
+                run_client_override: None,
                 personality_catalog_client_override: Some(Arc::clone(
                     &clients.personality_catalog_client,
                 )),

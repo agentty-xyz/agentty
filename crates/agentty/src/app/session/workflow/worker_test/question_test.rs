@@ -12,7 +12,7 @@ use super::super::super::turn::run_channel_turn;
 use super::super::{
     ScheduledSessionCommand, SessionCommand, SessionWorkerHandle, SessionWorkerService,
 };
-use super::support::{auto_commit_one_shot_client, default_turn_metadata, queue_test_context};
+use super::support::{auto_commit_run_client, default_turn_metadata, queue_test_context};
 use crate::app::AppEvent;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{SessionId, Status};
@@ -111,7 +111,7 @@ async fn test_worker_wakeup_resumes_buffered_action_after_question_cancel() {
     );
     SessionWorkerService::spawn_session_worker(
         context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         Arc::clone(&wakeup),
         command_rx,
     );
@@ -164,7 +164,7 @@ async fn test_non_session_turn_keeps_questions_and_status_before_provider_work()
     // Act
     let turn = run_channel_turn(
         &context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         default_turn_metadata(),
         AgentRequestKind::FocusedReview,
         None,

@@ -25,7 +25,7 @@ use crate::domain::file_entry::FileEntry;
 #[tokio::test]
 async fn oversized_review_batches_original_diff_and_discloses_summarized_history() {
     // Arrange
-    let mut client = agent::MockOneShotClient::new();
+    let mut client = ag_worker::MockRunClient::new();
     client.expect_submit().returning(|request| {
         assert_eq!(request.permission_mode, agent::PermissionMode::ReadOnly);
         assert!(request.prompt.len() <= 60_000);
@@ -744,32 +744,29 @@ fn version_availability_event_ignores_current_version_tag() {
 async fn spawn_review_assist_task_with_client_emits_completed_review() {
     // Arrange
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let mut one_shot_client = agent::MockOneShotClient::new();
-    one_shot_client
-        .expect_submit()
-        .times(1)
-        .returning(|request| {
-            assert_eq!(request.harness, (AgentKind::Gemini).to_string());
-            assert_eq!(request.permission_mode, ag_agent::PermissionMode::ReadOnly);
-            assert!(matches!(
-                request.request_kind,
-                ag_agent::AgentRequestKind::FocusedReview
-            ));
-            assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
-            assert_eq!(request.speed_mode, crate::domain::agent::SpeedMode::Fast);
-            assert!(
-                request
-                    .prompt
-                    .contains("diff --git a/src/lib.rs b/src/lib.rs")
-            );
+    let mut run_client = ag_worker::MockRunClient::new();
+    run_client.expect_submit().times(1).returning(|request| {
+        assert_eq!(request.harness, (AgentKind::Gemini).to_string());
+        assert_eq!(request.permission_mode, ag_agent::PermissionMode::ReadOnly);
+        assert!(matches!(
+            request.request_kind,
+            ag_agent::AgentRequestKind::FocusedReview
+        ));
+        assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
+        assert_eq!(request.speed_mode, crate::domain::agent::SpeedMode::Fast);
+        assert!(
+            request
+                .prompt
+                .contains("diff --git a/src/lib.rs b/src/lib.rs")
+        );
 
-            Ok(agent::OneShotSubmission {
-                response: AgentResponse::plain(
-                    r#"{"project_impact":["Review completed."],"suggestions":[]}"#,
-                ),
-                stats: agent::SessionStats::default(),
-            })
-        });
+        Ok(agent::OneShotSubmission {
+            response: AgentResponse::plain(
+                r#"{"project_impact":["Review completed."],"suggestions":[]}"#,
+            ),
+            stats: agent::SessionStats::default(),
+        })
+    });
     let input = ReviewAssistTaskInput {
         app_event_tx,
         diff_hash: 42,
@@ -783,7 +780,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
     };
 
     // Act
-    TaskService::spawn_review_assist_task_with_client(input, Arc::new(one_shot_client));
+    TaskService::spawn_review_assist_task_with_client(input, Arc::new(run_client));
     let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
         .await
         .expect("timed out waiting for review-assist event")
@@ -827,8 +824,8 @@ async fn review_assist_text_with_client_returns_one_shot_error_on_submit_failure
     let session_folder = Path::new("/tmp/review-assist-submit-error");
     let review_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
     let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
-    let mut one_shot_client = agent::MockOneShotClient::new();
-    one_shot_client
+    let mut run_client = ag_worker::MockRunClient::new();
+    run_client
         .expect_submit()
         .returning(|_| Err(agent::OneShotError::new("submit failed")));
 
@@ -840,7 +837,7 @@ async fn review_assist_text_with_client_returns_one_shot_error_on_submit_failure
         crate::domain::agent::SpeedMode::Normal,
         review_diff,
         None,
-        &one_shot_client,
+        &run_client,
     )
     .await;
 
@@ -862,8 +859,8 @@ async fn review_assist_text_with_client_preserves_review_selection_provider() {
     let session_folder = Path::new("/tmp/review-assist-provider");
     let review_selection = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash);
     let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
-    let mut one_shot_client = agent::MockOneShotClient::new();
-    one_shot_client.expect_submit().returning(|request| {
+    let mut run_client = ag_worker::MockRunClient::new();
+    run_client.expect_submit().returning(|request| {
         assert_eq!(request.harness, (AgentKind::Antigravity).to_string());
         assert_eq!(request.model, AgentModel::Gemini38Flash.as_str());
         assert_eq!(
@@ -888,7 +885,7 @@ async fn review_assist_text_with_client_preserves_review_selection_provider() {
         crate::domain::agent::SpeedMode::Fast,
         review_diff,
         None,
-        &one_shot_client,
+        &run_client,
     )
     .await;
 

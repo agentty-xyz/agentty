@@ -5,9 +5,10 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{self as agent, OneShotClient};
+use ag_agent::{self as agent};
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
+use ag_worker::RunClient;
 use askama::Template;
 use serde::Deserialize;
 use tokio::sync::mpsc;
@@ -198,7 +199,7 @@ pub(crate) struct RunAgentAssistTaskInput {
     /// Session identifier for persisted updates.
     pub(crate) id: String,
     /// Provider-neutral boundary for the isolated assist prompt.
-    pub(crate) one_shot_client: Arc<dyn OneShotClient>,
+    pub(crate) run_client: Arc<dyn RunClient>,
     /// One-shot assist prompt submitted to the agent.
     pub(crate) prompt: String,
     /// Session agent/model selection used for agent metadata and parsing.
@@ -614,7 +615,7 @@ impl SessionTaskService {
         folder: &Path,
         generated_description: &str,
         generated_title: &str,
-        one_shot_client: &dyn OneShotClient,
+        run_client: &dyn RunClient,
         session_agent: AgentSelection,
     ) -> Result<forge::ReviewRequestMetadata, SessionError> {
         let prompt = Self::review_request_metadata_prompt(
@@ -622,7 +623,7 @@ impl SessionTaskService {
             generated_description,
             generated_title,
         );
-        let submission = one_shot_client
+        let submission = run_client
             .submit(agent::OneShotRequest {
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
@@ -751,7 +752,7 @@ impl SessionTaskService {
                 auto_commit_reasoning_level,
                 auto_commit_speed_mode,
             ),
-            context.one_shot_client.as_ref(),
+            context.run_client.as_ref(),
             Self::load_include_coauthored_by_agentty_setting(&context.db, &context.id).await,
             context.transcript.as_ref(),
         )
@@ -943,7 +944,7 @@ impl SessionTaskService {
             ReasoningLevel,
             crate::domain::agent::SpeedMode,
         ),
-        one_shot_client: &dyn OneShotClient,
+        run_client: &dyn RunClient,
         include_coauthored_by_agentty: bool,
         transcript: &Mutex<SessionTranscript>,
     ) -> Result<SessionCommitOutcome, SessionError> {
@@ -977,7 +978,7 @@ impl SessionTaskService {
             (session_agent, reasoning_level, speed_mode),
             diff.as_str(),
             current_commit_message.as_deref(),
-            one_shot_client,
+            run_client,
             include_coauthored_by_agentty,
             false,
         )
@@ -1016,7 +1017,7 @@ impl SessionTaskService {
                     (session_agent, reasoning_level, speed_mode),
                     &fallback_context,
                     current_commit_message.as_deref(),
-                    one_shot_client,
+                    run_client,
                     include_coauthored_by_agentty,
                     true,
                 )
@@ -1058,13 +1059,13 @@ impl SessionTaskService {
         ),
         diff: &str,
         current_commit_message: Option<&str>,
-        one_shot_client: &dyn OneShotClient,
+        run_client: &dyn RunClient,
         include_coauthored_by_agentty: bool,
         fallback: bool,
     ) -> Result<String, SessionError> {
         let (session_agent, reasoning_level, speed_mode) = agent_settings;
         let (submission, _) = crate::app::diff_prompt::submit(
-            one_shot_client,
+            run_client,
             agent::OneShotRequest {
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
@@ -1115,17 +1116,25 @@ impl SessionTaskService {
             db,
             folder,
             id,
-            one_shot_client,
+            run_client,
             prompt,
             session_agent,
             session_update_versions,
             transcript,
         } = input;
+        let run_client = ag_worker::scoped_client(
+            run_client,
+            ag_worker::RunScope {
+                session_id: Some(id.clone()),
+                purpose: Some("agent assistance".to_string()),
+                ..ag_worker::RunScope::default()
+            },
+        );
         // App-server utilities own a separate temporary runtime. Their PID
         // cleanup must not clear the retained chat runtime's accounting root.
         let assist_child_pid =
             (!agent::transport_mode(session_agent.kind()).uses_app_server()).then_some(child_pid);
-        let assist_submission = one_shot_client
+        let assist_submission = run_client
             .submit(agent::OneShotRequest {
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),

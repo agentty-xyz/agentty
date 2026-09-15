@@ -6,8 +6,8 @@ use tokio::sync::{Notify, mpsc, oneshot};
 
 use super::super::{ScheduledSessionCommand, SessionCommand, SessionWorkerHost};
 use super::support::{
-    auto_commit_one_shot_client, insert_in_progress_test_session, queue_test_context,
-    queued_message, queued_review_request_command,
+    auto_commit_run_client, insert_in_progress_test_session, queue_test_context, queued_message,
+    queued_review_request_command,
 };
 use crate::app::AppEvent;
 use crate::domain::session::Status;
@@ -60,7 +60,7 @@ async fn closed_worker_settles_paused_operations_and_notifies_callers() {
         context.app_event_tx = event_tx;
         let host = SessionWorkerHost {
             context,
-            one_shot_client: auto_commit_one_shot_client(),
+            run_client: auto_commit_run_client(),
         };
         let (sender, receiver) = mpsc::unbounded_channel();
         assert!(

@@ -3,10 +3,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{self as agent, AgentRequestKind, OneShotClient};
+use ag_agent::{self as agent, AgentRequestKind};
 use ag_forge as forge;
 use ag_git as git;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
+use ag_worker::RunClient;
 use askama::Template;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -300,7 +301,7 @@ struct ClaimedSessionTitleGenerationTaskInput {
     db: db::AppRepositories,
     folder: PathBuf,
     latest_request: String,
-    one_shot_client: Arc<dyn OneShotClient>,
+    run_client: Arc<dyn RunClient>,
     reasoning_level: ReasoningLevel,
     session_agent: AgentSelection,
     session_id: SessionId,
@@ -328,7 +329,7 @@ pub(super) struct SessionTitleGenerationTaskInput {
     /// Latest request that may establish or clarify the durable session goal.
     pub(super) latest_request: String,
     /// Provider-neutral boundary for the isolated title prompt.
-    pub(super) one_shot_client: Arc<dyn OneShotClient>,
+    pub(super) run_client: Arc<dyn RunClient>,
     /// Reasoning effort paired with the title-generation model.
     pub(super) reasoning_level: ReasoningLevel,
     /// Whether title generation should run only while the visible title is
@@ -1355,7 +1356,7 @@ impl SessionManager {
                 db: services.db().clone(),
                 folder: title_generation_context.folder,
                 latest_request: title_generation_prompt,
-                one_shot_client: services.one_shot_client(),
+                run_client: services.run_client(),
                 requires_provisional_title: false,
                 reasoning_level: title_generation_context.reasoning_level,
                 session_agent: title_generation_context.agent,
@@ -2278,6 +2279,7 @@ impl SessionManager {
             }
             return None;
         }
+        services.finish_session_agent_runs(&session_id).await;
         let session = self.remove_session_at(selected_index)?;
         self.state.remove_handle(&session.id);
         self.remove_session_worktree_availability(&session.id);
@@ -2902,7 +2904,7 @@ impl SessionManager {
             db,
             folder,
             latest_request,
-            one_shot_client,
+            run_client,
             requires_provisional_title,
             reasoning_level,
             session_agent,
@@ -2945,6 +2947,14 @@ impl SessionManager {
             }
         };
 
+        let run_client = ag_worker::scoped_client(
+            run_client,
+            ag_worker::RunScope {
+                session_id: Some(persisted_session_id.to_string()),
+                purpose: Some("session title".to_string()),
+                ..ag_worker::RunScope::default()
+            },
+        );
         Some(tokio::spawn(
             Self::run_claimed_session_title_generation_task(
                 ClaimedSessionTitleGenerationTaskInput {
@@ -2952,7 +2962,7 @@ impl SessionManager {
                     db,
                     folder,
                     latest_request,
-                    one_shot_client,
+                    run_client,
                     reasoning_level,
                     session_agent,
                     session_id: persisted_session_id,
@@ -2974,7 +2984,7 @@ impl SessionManager {
             db,
             folder,
             latest_request,
-            one_shot_client,
+            run_client,
             reasoning_level,
             session_agent,
             session_id: persisted_session_id,
@@ -2999,7 +3009,7 @@ impl SessionManager {
             reasoning_level,
             &persisted_session_id,
             speed_mode,
-            one_shot_client.as_ref(),
+            run_client.as_ref(),
         )
         .await
         else {
@@ -3115,10 +3125,10 @@ impl SessionManager {
         reasoning_level: ReasoningLevel,
         session_id: &str,
         speed_mode: SpeedMode,
-        one_shot_client: &dyn OneShotClient,
+        run_client: &dyn RunClient,
     ) -> Option<String> {
         for attempt in 1..=SESSION_TITLE_GENERATION_MAX_ATTEMPTS {
-            let result = one_shot_client
+            let result = run_client
                 .submit(agent::OneShotRequest {
                     provider_call_budget: None,
                     harness: (session_agent.kind()).to_string(),
@@ -3614,6 +3624,7 @@ impl SessionManager {
 
         // Queued work and preparation handoffs can own execution before the
         // foreground status reflects it. Terminal cancellation stops them too.
+        services.cancel_agent_runs(session_id);
         Self::signal_session_cancellation(services, handles, session_id).await;
 
         let status_updated = status_transition.apply(Status::Canceled).await;
@@ -3715,7 +3726,8 @@ impl SessionManager {
     /// removal.
     ///
     /// The background task resolves the shared repository root only when a
-    /// worktree exists, removes git worktree/branch resources, then clears the
+    /// worktree exists, waits for utility runtime cleanup, removes git
+    /// worktree/branch resources, then clears the
     /// session-scoped prompt temp directory. Cleanup remains best-effort and
     /// reports failures through debug-visible warnings.
     pub(super) fn spawn_canceled_session_cleanup(
@@ -3727,7 +3739,11 @@ impl SessionManager {
     ) {
         let fs_client = services.fs_client();
         let git_client = services.git_client();
+        let cleanup_services = services.clone();
         let cleanup_task_handle = tokio::spawn(async move {
+            cleanup_services
+                .finish_session_agent_runs(&session_id)
+                .await;
             if has_worktree {
                 let repo_root = git_client.main_repo_root(folder.clone()).await.ok();
                 let cleanup_errors = Self::cleanup_session_worktree_resources(

@@ -3,10 +3,11 @@
 use std::collections::VecDeque;
 
 use ag_agent::{
-    AgentRequestKind, OneShotClient, OneShotError, OneShotRequest, PermissionMode,
-    ProviderCallBudget, is_input_size_error,
+    AgentRequestKind, OneShotError, OneShotRequest, PermissionMode, ProviderCallBudget,
+    is_input_size_error,
 };
 use ag_protocol::{AgentResponse, FocusedReview, FocusedReviewSeverity};
+use ag_worker::RunClient;
 
 use super::diff_prompt::{self, MAX_PROVIDER_CALLS, MIN_CHUNK_BYTES, PROMPT_BUDGET};
 
@@ -15,7 +16,7 @@ use super::diff_prompt::{self, MAX_PROVIDER_CALLS, MIN_CHUNK_BYTES, PROMPT_BUDGE
 /// one provider budget. A failed later pass preserves earlier findings and
 /// explicitly identifies incomplete coverage.
 pub(super) async fn submit(
-    client: &dyn OneShotClient,
+    client: &dyn RunClient,
     mut request: OneShotRequest,
     diff: &str,
     context: &str,
@@ -126,7 +127,7 @@ pub(super) fn parse_response(response: &AgentResponse) -> Result<FocusedReview, 
 /// original diff. Failures return to the batch loop so earlier findings
 /// survive.
 async fn review_fragment(
-    client: &dyn OneShotClient,
+    client: &dyn RunClient,
     request: &OneShotRequest,
     fragment: &str,
     context: &mut String,
@@ -159,7 +160,7 @@ async fn review_fragment(
 
 /// Checks the rendered prompt before spending a provider turn.
 async fn submit_review(
-    client: &dyn OneShotClient,
+    client: &dyn RunClient,
     request: &OneShotRequest,
     budget: &ProviderCallBudget,
 ) -> Result<FocusedReview, OneShotError> {
@@ -197,7 +198,7 @@ fn merge(review: &mut FocusedReview, additional: FocusedReview) {
 /// Requests additional cross-file findings using a bounded map of reviewed
 /// changes. Original batch findings remain authoritative and are kept intact.
 async fn cross_file_review(
-    client: &dyn OneShotClient,
+    client: &dyn RunClient,
     request: &OneShotRequest,
     review: &FocusedReview,
     diff: &str,

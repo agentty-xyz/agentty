@@ -76,6 +76,7 @@ fn sync_context_fixture(
     review_request_sync_targets: Vec<ReviewRequestSyncTarget>,
 ) -> SyncContext {
     SyncContext {
+        run_client: Arc::new(ag_worker::MockRunClient::new()),
         generation,
         git_client: Arc::new(MockGitClient::new()),
         project_branch_name: Some("main".to_string()),

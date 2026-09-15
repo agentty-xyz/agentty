@@ -6,14 +6,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use ag_agent as agent;
-use ag_agent::create_agent_channel;
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_protocol::AgentResponse;
 use ag_runtime::{
-    AgentChannel, AgentError, AgentRequestKind, OneShotClient, TurnContinuation, TurnEvent,
-    TurnRequest, TurnResult,
+    AgentChannel, AgentError, AgentRequestKind, TurnContinuation, TurnEvent, TurnRequest,
+    TurnResult,
 };
+use ag_worker::RunClient;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -262,7 +262,7 @@ pub(super) fn has_unfinished_branch_operation(
 
 struct SessionWorkerHost {
     context: SessionWorkerContext,
-    one_shot_client: Arc<dyn OneShotClient>,
+    run_client: Arc<dyn RunClient>,
 }
 
 impl ag_worker::WorkQueue for SessionWorkerHost {
@@ -295,7 +295,7 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
                 }
                 SessionWorkerService::process_session_command(
                     &self.context,
-                    &self.one_shot_client,
+                    &self.run_client,
                     command.command,
                 )
                 .await
@@ -303,7 +303,7 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
             ScheduledSessionWork::Message(message) => {
                 SessionWorkerService::process_queued_message(
                     &self.context,
-                    &self.one_shot_client,
+                    &self.run_client,
                     message,
                 )
                 .await
@@ -510,7 +510,7 @@ impl SessionWorkerRebaseAssistClient {
     /// Returns an error when the provider turn fails or conversation metadata
     /// cannot be persisted.
     async fn run_assist_turn(&self, prompt: String) -> Result<(), SessionError> {
-        let turn_cancel_token = self.fresh_turn_cancel_token()?;
+        let turn_cancel_token = self.turn_cancel_token()?;
         let reasoning_level = turn::load_session_reasoning_level(&self.db, &self.session_id).await;
         let speed_mode = turn::load_session_speed_mode(&self.db, &self.session_id).await;
         let provider_conversation_id = self
@@ -566,16 +566,12 @@ impl SessionWorkerRebaseAssistClient {
         Ok(())
     }
 
-    /// Replaces the shared cancellation token for one rebase-assist turn.
-    fn fresh_turn_cancel_token(&self) -> Result<CancellationToken, SessionError> {
-        // Sync critical section (assignment + clone, no `.await`);
-        // `std::sync::Mutex` is the correct choice per CLAUDE.md
-        // §"Mutex Selection".
-        let mut guard = self
+    /// Reuses the enclosing rebase operation's token across every child turn.
+    fn turn_cancel_token(&self) -> Result<CancellationToken, SessionError> {
+        let guard = self
             .cancel_token
             .lock()
             .map_err(|_| SessionError::Workflow("cancel token lock poisoned".to_string()))?;
-        *guard = CancellationToken::new();
 
         Ok(guard.clone())
     }
@@ -1036,12 +1032,7 @@ impl SessionWorkerService {
         let channel = self
             .test_agent_channels
             .remove(&runtime.session_id)
-            .unwrap_or_else(|| {
-                create_agent_channel(
-                    runtime.session_agent.kind(),
-                    services.app_server_client_override(),
-                )
-            });
+            .unwrap_or_else(|| services.agent_channel(runtime.session_agent.kind()));
 
         let context = SessionWorkerContext {
             app_event_tx: services.event_sender(),
@@ -1072,7 +1063,12 @@ impl SessionWorkerService {
         };
         self.workers
             .insert(runtime.session_id.clone(), worker.clone());
-        Self::spawn_session_worker(context, services.one_shot_client(), wakeup, receiver);
+        Self::spawn_session_worker(
+            context,
+            services.session_run_client(&runtime.session_id),
+            wakeup,
+            receiver,
+        );
 
         worker
     }
@@ -1135,14 +1131,14 @@ impl SessionWorkerService {
     /// not silently leak into the next session activity.
     fn spawn_session_worker(
         context: SessionWorkerContext,
-        one_shot_client: Arc<dyn OneShotClient>,
+        run_client: Arc<dyn RunClient>,
         wakeup: Arc<Notify>,
         receiver: mpsc::UnboundedReceiver<ScheduledSessionCommand>,
     ) {
         tokio::spawn(ag_worker::run(
             SessionWorkerHost {
                 context,
-                one_shot_client,
+                run_client,
             },
             wakeup,
             receiver,
@@ -1166,7 +1162,7 @@ impl SessionWorkerService {
     /// turn ran.
     async fn process_session_command(
         context: &SessionWorkerContext,
-        one_shot_client: &Arc<dyn OneShotClient>,
+        run_client: &Arc<dyn RunClient>,
         command: SessionCommand,
     ) -> Option<Result<(), SessionError>> {
         let operation_id = command.operation_id().to_string();
@@ -1225,7 +1221,14 @@ impl SessionWorkerService {
             context.db.operations(),
             &ag_worker::HeartbeatClock,
             &operation_id,
-            Self::execute_session_command(context, one_shot_client, command),
+            ag_worker::in_scope(
+                ag_worker::RunScope {
+                    parent_id: Some(operation_id.clone()),
+                    session_id: Some(context.session_id.to_string()),
+                    ..ag_worker::RunScope::default()
+                },
+                Box::pin(Self::execute_session_command(context, run_client, command)),
+            ),
             |error| matches!(error, SessionError::StoppedByUser(_)),
             |error| tracing::warn!(%error, "Worker operation tracking failed"),
         )
@@ -1344,7 +1347,7 @@ impl SessionWorkerService {
     /// same as a normal reply.
     async fn process_queued_message(
         context: &SessionWorkerContext,
-        one_shot_client: &Arc<dyn OneShotClient>,
+        run_client: &Arc<dyn RunClient>,
         message: QueuedMessage,
     ) -> Option<Result<(), SessionError>> {
         let prompt = message.into_prompt();
@@ -1375,7 +1378,7 @@ impl SessionWorkerService {
             },
         };
 
-        Self::process_session_command(context, one_shot_client, command).await
+        Self::process_session_command(context, run_client, command).await
     }
 
     /// Emits a targeted [`AppEvent::SessionUpdated`] for the worker's session
@@ -1395,7 +1398,7 @@ impl SessionWorkerService {
     /// Executes the queued command through the session's agent channel.
     async fn execute_session_command(
         context: &SessionWorkerContext,
-        one_shot_client: &Arc<dyn OneShotClient>,
+        run_client: &Arc<dyn RunClient>,
         command: SessionCommand,
     ) -> Result<(), SessionError> {
         match command {
@@ -1414,7 +1417,7 @@ impl SessionWorkerService {
                 .await
             }
             SessionCommand::Rebase { base_branch, .. } => {
-                Self::run_rebase_command(context, Arc::clone(one_shot_client), base_branch).await
+                Self::run_rebase_command(context, Arc::clone(run_client), base_branch).await
             }
             SessionCommand::Run {
                 request_kind,
@@ -1425,7 +1428,7 @@ impl SessionWorkerService {
             } => {
                 turn::run_channel_turn(
                     context,
-                    Arc::clone(one_shot_client),
+                    Arc::clone(run_client),
                     turn_metadata,
                     request_kind,
                     replay_transcript,
@@ -1498,9 +1501,17 @@ impl SessionWorkerService {
     /// user-visible rebase outcome.
     async fn run_rebase_command(
         context: &SessionWorkerContext,
-        one_shot_client: Arc<dyn OneShotClient>,
+        run_client: Arc<dyn RunClient>,
         base_branch: String,
     ) -> Result<(), SessionError> {
+        let cancellation = turn::fresh_turn_cancel_token(context)?;
+        let run_client = ag_worker::scoped_client(
+            run_client,
+            ag_worker::RunScope {
+                cancellation: Some(cancellation),
+                ..ag_worker::RunScope::default()
+            },
+        );
         let validation = match isolation::validate_session_worktree(
             context.fs_client.as_ref(),
             context.git_client.as_ref(),
@@ -1532,7 +1543,7 @@ impl SessionWorkerService {
             fs_client: Arc::clone(&context.fs_client),
             git_client: Arc::clone(&context.git_client),
             id: context.session_id.clone(),
-            one_shot_client,
+            run_client,
             review_request_client: Arc::clone(&context.review_request_client),
             session_agent: context.session_agent,
             session_update_versions: context.session_update_versions.clone(),

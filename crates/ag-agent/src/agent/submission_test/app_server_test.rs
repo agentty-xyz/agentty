@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use tempfile::tempdir;
+use tokio_util::sync::CancellationToken;
 
 use crate::agent::submission::{
     OneShotRequest, attempt_one_shot_app_server_repair, submit_one_shot_with_app_server_client,
@@ -49,7 +50,7 @@ async fn test_submit_one_shot_with_app_server_client_returns_protocol_response()
 
     // Act
     let response = submit_one_shot_with_app_server_client(
-        &app_server_client,
+        Arc::new(app_server_client),
         OneShotRequest {
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -62,6 +63,8 @@ async fn test_submit_one_shot_with_app_server_client_returns_protocol_response()
             reasoning_level: ReasoningLevel::default(),
             speed_mode: SpeedMode::Fast,
         },
+        CancellationToken::new(),
+        CancellationToken::new(),
     )
     .await
     .expect("one-shot prompt should succeed");
@@ -100,7 +103,7 @@ async fn test_submit_one_shot_with_app_server_client_clears_pid_after_turn_failu
 
     // Act
     let error = submit_one_shot_with_app_server_client(
-        &app_server_client,
+        Arc::new(app_server_client),
         OneShotRequest {
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -113,6 +116,8 @@ async fn test_submit_one_shot_with_app_server_client_clears_pid_after_turn_failu
             reasoning_level: ReasoningLevel::default(),
             speed_mode: SpeedMode::Normal,
         },
+        CancellationToken::new(),
+        CancellationToken::new(),
     )
     .await
     .expect_err("app-server turn failure should surface");
@@ -218,7 +223,7 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_utility_
 
     // Act
     let error = submit_one_shot_with_app_server_client(
-        &app_server_client,
+        Arc::new(app_server_client),
         OneShotRequest {
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -231,6 +236,8 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_utility_
             reasoning_level: ReasoningLevel::default(),
             speed_mode: SpeedMode::Fast,
         },
+        CancellationToken::new(),
+        CancellationToken::new(),
     )
     .await
     .expect_err("plain-text utility output should fail");
@@ -276,7 +283,7 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_non_util
 
     // Act
     let error = submit_one_shot_with_app_server_client(
-        &app_server_client,
+        Arc::new(app_server_client),
         OneShotRequest {
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -289,6 +296,8 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_non_util
             reasoning_level: ReasoningLevel::default(),
             speed_mode: SpeedMode::Normal,
         },
+        CancellationToken::new(),
+        CancellationToken::new(),
     )
     .await
     .expect_err("invalid non-utility output should fail");

@@ -3,9 +3,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use tokio::sync::mpsc;
-
-use super::core::AppEvent;
 use super::task;
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, SpeedMode};
@@ -352,7 +349,7 @@ pub(crate) fn review_cache_from_rows(
 
 /// Spawns one focused review-assist task for the provided session diff.
 pub(crate) fn start_review_assist(
-    app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    services: &crate::app::AppServices,
     review_agent: ReviewAgent,
     session_id: &str,
     session_folder: &Path,
@@ -362,17 +359,28 @@ pub(crate) fn start_review_assist(
 ) {
     let (review_selection, reasoning_level, speed_mode) = normalize_review_agent(review_agent);
 
-    task::TaskService::spawn_review_assist_task(task::ReviewAssistTaskInput {
-        app_event_tx,
-        diff_hash,
-        reasoning_level,
-        review_diff: review_diff.to_string(),
-        review_selection,
-        session_chat_history: session_chat_history.map(str::to_string),
-        session_folder: session_folder.to_path_buf(),
-        session_id: SessionId::from(session_id),
-        speed_mode,
-    });
+    let run_client = ag_worker::scoped_client(
+        services.run_client(),
+        ag_worker::RunScope {
+            session_id: Some(session_id.to_string()),
+            purpose: Some("focused review".to_string()),
+            ..ag_worker::RunScope::default()
+        },
+    );
+    task::TaskService::spawn_review_assist_task_with_client(
+        task::ReviewAssistTaskInput {
+            app_event_tx: services.event_sender(),
+            diff_hash,
+            reasoning_level,
+            review_diff: review_diff.to_string(),
+            review_selection,
+            session_chat_history: session_chat_history.map(str::to_string),
+            session_folder: session_folder.to_path_buf(),
+            session_id: SessionId::from(session_id),
+            speed_mode,
+        },
+        run_client,
+    );
 }
 
 pub(crate) fn normalize_review_agent(review_agent: ReviewAgent) -> ReviewAgent {
