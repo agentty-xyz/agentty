@@ -95,8 +95,10 @@ async fn budgets_huge_unicode_diff_history_and_fences_before_submission() {
             .expect("operation should succeed")
             .push(request.prompt.clone());
         if request.prompt.starts_with("FINAL") {
+            assert_eq!(request.reasoning_level, ReasoningLevel::Medium);
             return Ok(answer("result"));
         }
+        assert_eq!(request.reasoning_level, ReasoningLevel::Low);
         assert_eq!(request.request_kind, AgentRequestKind::UtilityPrompt);
         Ok(answer("Preserve each file change and accepted decisions."))
     });

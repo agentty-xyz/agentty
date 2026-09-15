@@ -20,6 +20,8 @@ pub(crate) mod process_identity;
 pub mod project_discovery;
 /// Host process-accounting boundary.
 pub(crate) mod resource;
+/// Total provider-call deadline for focused reviews.
+pub(crate) mod review_deadline;
 /// Tmux process boundary used by app orchestration.
 pub mod tmux;
 pub mod version;

@@ -174,6 +174,7 @@ async fn one_shot_app_server_repair_preserves_permissions_and_conversation() {
             request,
             "one-shot-session",
             Some("native-session"),
+            false,
         )
         .await
         .expect("repair succeeds");

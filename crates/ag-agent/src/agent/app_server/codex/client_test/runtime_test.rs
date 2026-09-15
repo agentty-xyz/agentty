@@ -12,9 +12,11 @@ use super::support::{
     expect_user_input_request_turn, remember_request_id,
 };
 use crate::agent::app_server::client::{RuntimeClientProvider, RuntimeClientRuntime};
-use crate::agent::app_server::codex::client::CodexRuntimeProvider;
+use crate::agent::app_server::codex::client::{CodexRuntimeProvider, CodexSessionRuntime};
 use crate::agent::app_server::codex::{lifecycle, stream_parser, usage};
-use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport as MockCodexRuntimeTransport;
+use crate::agent::app_server::stdio_transport::{
+    AppServerStdioTransport, MockAppServerRuntimeTransport as MockCodexRuntimeTransport,
+};
 use crate::app_server::{AppServerError, AppServerTurnRequest};
 use crate::app_server_transport;
 use crate::model::agent::{AgentModel, ReasoningLevel};
@@ -24,23 +26,7 @@ use crate::model::session::SpeedMode;
 async fn runtime_reuse_requires_matching_permission_mode() {
     // Arrange
     let mut runtime = build_stopped_session_runtime("thread-permission");
-    let mut request = AppServerTurnRequest {
-        provider_call_budget: None,
-        folder: runtime.state.folder.clone(),
-        live_transcript: None,
-        main_checkout_root: None,
-        model: runtime.state.model.clone(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        persisted_instruction_conversation_id: None,
-        personality: crate::channel::PersonalityPrompt::default(),
-        prompt: TurnPrompt::from("Continue"),
-        provider_conversation_id: Some("thread-permission".to_string()),
-        reasoning_level: ReasoningLevel::default(),
-        replay_transcript: None,
-        request_kind: crate::channel::AgentRequestKind::SessionResume,
-        session_id: "session-1".to_string(),
-        speed_mode: SpeedMode::default(),
-    };
+    let mut request = runtime_request(&runtime);
 
     // Act
     let auto_edit_matches = runtime.matches_request(&request);
@@ -359,4 +345,59 @@ fn parse_turn_completed_returns_success_for_completed_turn() {
 
     // Assert
     assert_eq!(turn_result, Some(Ok(())));
+}
+
+fn runtime_request(runtime: &CodexSessionRuntime) -> AppServerTurnRequest {
+    AppServerTurnRequest {
+        provider_call_budget: None,
+        folder: runtime.state.folder.clone(),
+        live_transcript: None,
+        main_checkout_root: None,
+        model: runtime.state.model.clone(),
+        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+        persisted_instruction_conversation_id: None,
+        personality: crate::channel::PersonalityPrompt::default(),
+        prompt: TurnPrompt::from("Continue"),
+        provider_conversation_id: Some("thread-permission".to_string()),
+        reasoning_level: ReasoningLevel::default(),
+        replay_transcript: None,
+        request_kind: crate::channel::AgentRequestKind::SessionResume,
+        session_id: "session-1".to_string(),
+        speed_mode: SpeedMode::default(),
+    }
+}
+
+#[tokio::test]
+async fn isolated_context_reset_keeps_process_and_discards_previous_conversation() {
+    // Arrange
+    let mut runtime = build_stopped_session_runtime("old-thread");
+    let request = runtime_request(&runtime);
+    let failed = CodexRuntimeProvider::reset_context(&mut runtime, &request).await;
+    assert!(failed.is_err());
+    runtime.shutdown_runtime().await;
+    let script = r#"while IFS= read -r request; do
+        request_id=$(printf '%s' "$request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+        printf '{"id":"%s","result":{"thread":{"id":"fresh-context"}}}\n' "$request_id"
+    done"#;
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg(script);
+    let (child, stdin, stdout) =
+        app_server_transport::spawn_runtime_command(command, "fixture").expect("runtime");
+    runtime.child = child;
+    runtime.transport = AppServerStdioTransport::new(stdin, stdout, "stdin", "stdout");
+    runtime.state.restored_context = true;
+    runtime.state.latest_input_tokens = 90_000;
+
+    let pid = runtime.pid();
+    // Act
+    let reset = CodexRuntimeProvider::reset_context(&mut runtime, &request)
+        .await
+        .expect("fresh context");
+    // Assert
+    assert!(reset);
+    assert_eq!(runtime.pid(), pid);
+    assert_eq!(runtime.state.thread_id, "fresh-context");
+    assert!(!runtime.state.restored_context);
+    assert_eq!(runtime.state.latest_input_tokens, 0);
+    runtime.shutdown_runtime().await;
 }

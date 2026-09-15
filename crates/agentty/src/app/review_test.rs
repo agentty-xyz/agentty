@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use super::{
     FocusedReviewPersistence, FocusedReviewPersistenceRetry, ReviewAgent, ReviewCacheEntry,
-    ReviewUpdate, apply_review_updates, hydrate_review_transient, hydrate_review_transients,
-    normalize_review_agent, prune_review_cache, review_agent_kind_label, review_cache_from_rows,
-    review_loading_message, review_reasoning_label, review_view_text,
+    ReviewProgress, ReviewUpdate, apply_review_updates, hydrate_review_transient,
+    hydrate_review_transients, normalize_review_agent, prune_review_cache, review_agent_kind_label,
+    review_cache_from_rows, review_loading_message, review_progress_message,
+    review_reasoning_label, review_view_text,
 };
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
@@ -43,6 +44,58 @@ fn test_review_agent() -> ReviewAgent {
     )
 }
 
+#[test]
+fn progress_formats_each_phase_and_survives_transient_hydration() {
+    // Arrange
+    let id = SessionId::from("progress");
+    let mut cache = loading_review_cache(&id, 42);
+    let mut state = session_state_with_stale_review(&id);
+
+    // Act / Assert
+    for (progress, expected) in [
+        (None, "Reviewing changes"),
+        (
+            Some(ReviewProgress::SummarizingHistory),
+            "Summarizing session history",
+        ),
+        (
+            Some(ReviewProgress::Batches {
+                completed: 3,
+                total: 8,
+            }),
+            "3/8 batches complete",
+        ),
+        (
+            Some(ReviewProgress::CrossFile),
+            "Checking cross-file interactions",
+        ),
+    ] {
+        let text = review_progress_message(test_review_agent(), progress);
+        assert!(text.contains(expected));
+        if let Some(ReviewCacheEntry::Loading {
+            progress: current, ..
+        }) = cache.get_mut(&id)
+        {
+            *current = progress;
+        }
+        hydrate_review_transients(&cache, &mut state);
+        let session = state
+            .sessions()
+            .iter()
+            .find(|session| session.id == id)
+            .expect("session");
+        assert_eq!(
+            session
+                .transient_messages
+                .get(TransientMessageSlot::Review)
+                .expect("review progress")
+                .body
+                .text(),
+            text
+        );
+    }
+}
+
 /// Builds a single loading review cache entry for one session.
 fn loading_review_cache(
     session_id: &SessionId,
@@ -51,6 +104,7 @@ fn loading_review_cache(
     HashMap::from([(
         session_id.clone(),
         ReviewCacheEntry::Loading {
+            progress: None,
             diff_hash,
             review_agent: test_review_agent(),
         },
@@ -200,6 +254,7 @@ fn review_view_text_hides_cached_review_generation() {
     review_cache.insert(
         "session-id".into(),
         ReviewCacheEntry::Loading {
+            progress: None,
             diff_hash: 7,
             review_agent: test_review_agent(),
         },
@@ -235,6 +290,7 @@ fn review_cache_matches_only_current_persistence_state() {
         text: None,
     };
     let loading = ReviewCacheEntry::Loading {
+        progress: None,
         diff_hash: 42,
         review_agent: test_review_agent(),
     };
@@ -455,6 +511,7 @@ fn prune_review_cache_retains_active_loading_and_pending_entries() {
         (
             loading_session_id.clone(),
             ReviewCacheEntry::Loading {
+                progress: None,
                 diff_hash: 4,
                 review_agent: test_review_agent(),
             },

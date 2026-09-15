@@ -25,6 +25,75 @@ use crate::presentation::app_mode::{
 use crate::presentation::review_comment as review_comment_selection;
 
 #[tokio::test]
+async fn review_progress_updates_only_the_loading_generation_and_never_replaces_results() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let id = SessionId::from("progress-generation");
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id(id.as_str())
+            .build(),
+    );
+    app.review_cache.insert(
+        id.clone(),
+        app::review::ReviewCacheEntry::Loading {
+            diff_hash: 42,
+            review_agent: app.review_agent(),
+            progress: None,
+        },
+    );
+    let progress = app::review::ReviewProgress::Batches {
+        completed: 2,
+        total: 6,
+    };
+
+    // Act
+    app.apply_app_events(AppEvent::ReviewProgressUpdated {
+        diff_hash: 42,
+        progress,
+        session_id: id.clone(),
+    })
+    .await;
+
+    // Assert
+    assert!(
+        app.review_view_state(id.as_str())
+            .0
+            .expect("loading")
+            .contains("2/6 batches complete")
+    );
+    app.apply_app_events(AppEvent::ReviewProgressUpdated {
+        diff_hash: 41,
+        progress: app::review::ReviewProgress::CrossFile,
+        session_id: id.clone(),
+    })
+    .await;
+    assert!(
+        app.review_view_state(id.as_str())
+            .0
+            .expect("loading")
+            .contains("2/6 batches complete")
+    );
+    app.review_cache.insert(
+        id.clone(),
+        app::review::ReviewCacheEntry::Ready {
+            diff_hash: 42,
+            text: "completed".into(),
+        },
+    );
+    app.apply_app_events(AppEvent::ReviewProgressUpdated {
+        diff_hash: 42,
+        progress,
+        session_id: id.clone(),
+    })
+    .await;
+    assert_eq!(
+        app.review_view_state(id.as_str()),
+        (None, Some("completed"))
+    );
+}
+
+#[tokio::test]
 async fn merged_branch_eligibility_rejects_incomplete_session_context() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
@@ -621,20 +690,21 @@ async fn completed_turn_starts_auto_review_when_project_is_inactive() {
     assert!(app.deferred_auto_review_session_ids.is_empty());
     assert!(app.pending_session_diff_requests.is_empty());
     assert!(matches!(
-        app.review_cache.get(&session_id),
-        Some(app::review::ReviewCacheEntry::Loading {
-            diff_hash,
-            review_agent,
-        }) if *diff_hash == expected_hash
-            && *review_agent == (
-                crate::domain::agent::AgentSelection::new(
-                    crate::domain::agent::AgentKind::Claude,
-                    crate::domain::agent::AgentModel::ClaudeOpus5,
-                ),
-                crate::domain::agent::ReasoningLevel::Low,
-                crate::domain::agent::SpeedMode::Fast,
-            )
-    ));
+            app.review_cache.get(&session_id),
+            Some(app::review::ReviewCacheEntry::Loading {
+    progress: None,
+                diff_hash,
+                review_agent,
+            }) if *diff_hash == expected_hash
+                && *review_agent == (
+                    crate::domain::agent::AgentSelection::new(
+                        crate::domain::agent::AgentKind::Claude,
+                        crate::domain::agent::AgentModel::ClaudeOpus5,
+                    ),
+                    crate::domain::agent::ReasoningLevel::Low,
+                    crate::domain::agent::SpeedMode::Fast,
+                )
+        ));
     assert_eq!(
         app.services
             .db()
@@ -755,6 +825,7 @@ async fn completed_focused_review_persists_for_inactive_project() {
     app.review_cache.insert(
         session_id.clone(),
         app::review::ReviewCacheEntry::Loading {
+            progress: None,
             diff_hash: 42,
             review_agent,
         },

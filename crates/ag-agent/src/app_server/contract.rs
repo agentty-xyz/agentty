@@ -127,6 +127,34 @@ pub trait AppServerClient: Send + Sync {
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> AppServerFuture<Result<AppServerTurnResponse, AppServerError>>;
 
+    /// Runs with fresh conversation context, reusing the process when the
+    /// provider supports resetting context. The fallback restarts the runtime.
+    /// It waits for shutdown to finish before invoking `run_turn`, borrowing
+    /// the client until the returned future completes or is dropped.
+    /// Callers must omit provider conversation IDs and replay context.
+    fn run_isolated_turn<'client>(
+        &'client self,
+        request: AppServerTurnRequest,
+        stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    ) -> Pin<Box<dyn Future<Output = Result<AppServerTurnResponse, AppServerError>> + Send + 'client>>
+    {
+        Box::pin(async move {
+            self.shutdown_session(request.session_id.clone()).await;
+            self.run_turn(request, stream_tx).await
+        })
+    }
+
+    /// Continues the current conversation and retains a successful runtime
+    /// for later pooled submissions. Clients without pooling support fall
+    /// back to their ordinary turn lifecycle.
+    fn run_retained_turn(
+        &self,
+        request: AppServerTurnRequest,
+        stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    ) -> AppServerFuture<Result<AppServerTurnResponse, AppServerError>> {
+        self.run_turn(request, stream_tx)
+    }
+
     /// Stops and forgets a session runtime, if one exists.
     fn shutdown_session(&self, session_id: String) -> AppServerFuture<()>;
 }

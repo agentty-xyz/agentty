@@ -481,7 +481,8 @@ impl TaskService {
     /// Spawns one background review assist generation task and emits
     /// an event with either final review text or a failure description.
     pub(super) fn spawn_review_assist_task(input: ReviewAssistTaskInput) {
-        let one_shot_client: Arc<dyn OneShotClient> = Arc::new(agent::RealOneShotClient::new(None));
+        let one_shot_client: Arc<dyn OneShotClient> =
+            Arc::new(agent::RealOneShotClient::pooled(None));
 
         Self::spawn_review_assist_task_with_client(input, one_shot_client);
     }
@@ -542,14 +543,20 @@ impl TaskService {
         tokio::spawn(async move {
             let review_result = Self::review_assist_text_with_client(
                 &session_folder,
-                review_selection,
-                reasoning_level,
-                speed_mode,
+                (review_selection, reasoning_level, speed_mode),
                 &review_diff,
                 session_chat_history.as_deref(),
                 one_shot_client.as_ref(),
+                |progress| {
+                    let _ = app_event_tx.send(AppEvent::ReviewProgressUpdated {
+                        diff_hash,
+                        progress,
+                        session_id: session_id.clone(),
+                    });
+                },
             )
             .await;
+            one_shot_client.close().await;
 
             let app_event = Self::review_app_event(diff_hash, review_result, session_id);
             // Fire-and-forget: receiver may be dropped during shutdown.
@@ -573,15 +580,19 @@ impl TaskService {
     /// one-shot boundary so review generation cannot modify the worktree.
     async fn review_assist_text_with_client(
         session_folder: &Path,
-        review_selection: AgentSelection,
-        reasoning_level: ReasoningLevel,
-        speed_mode: crate::domain::agent::SpeedMode,
+        review_agent: crate::app::review::ReviewAgent,
         review_diff: &str,
         session_chat_history: Option<&str>,
         one_shot_client: &dyn OneShotClient,
+        progress: impl Fn(crate::app::review::ReviewProgress) + Sync,
     ) -> Result<String, AppError> {
-        let review = crate::app::review_prompt::submit(
+        let (review_selection, reasoning_level, speed_mode) = review_agent;
+        let client = crate::infra::review_deadline::ReviewDeadlineClient::new(
             one_shot_client,
+            Duration::from_mins(15),
+        );
+        let review = crate::app::review_prompt::submit(
+            &client,
             agent::OneShotRequest {
                 provider_call_budget: None,
                 harness: (review_selection.kind()).to_string(),
@@ -600,6 +611,7 @@ impl TaskService {
                 Self::review_assist_prompt(diff, Some(history))
                     .map_err(|error| agent::OneShotError::new(error.to_string()))
             },
+            progress,
         )
         .await?;
         Ok(review)

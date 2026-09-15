@@ -36,6 +36,27 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
         true
     }
 
+    fn reset_context<'scope>(
+        runtime: &'scope mut Self::Runtime,
+        request: &'scope AppServerTurnRequest,
+    ) -> BorrowedAppServerFuture<'scope, Result<bool, AppServerError>> {
+        Box::pin(async move {
+            runtime.state.thread_id = lifecycle::start_thread(
+                &mut runtime.transport,
+                &request.folder,
+                &request.model,
+                request.permission_mode,
+                request.reasoning_level,
+                request.speed_mode,
+            )
+            .await?;
+            runtime.state.latest_input_tokens = 0;
+            runtime.state.restored_context = false;
+
+            Ok(true)
+        })
+    }
+
     fn start_runtime(
         request: AppServerTurnRequest,
     ) -> AppServerFuture<Result<Self::Runtime, AppServerError>> {
