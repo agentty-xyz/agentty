@@ -661,11 +661,18 @@ async fn concurrent_session_creation_and_resume_share_one_database_pool() {
         .await
         .expect("session should resume");
     drop(harness);
-    first.database.pool().close().await;
+    first
+        .harness
+        .database
+        .get()
+        .expect("initialized pool")
+        .pool()
+        .close()
+        .await;
 
     // Assert
-    assert!(second.database.pool().is_closed());
-    assert!(resumed.database.pool().is_closed());
+    assert!(second.writes().await.is_err());
+    assert!(resumed.writes().await.is_err());
     assert!(
         database
             .get()
@@ -701,7 +708,12 @@ async fn database_initialization_retries_after_failure_and_resets_on_reconfigura
         .await
         .expect("retry task")
         .expect("initialization should retry");
-    let original = session.database.clone();
+    let original = session
+        .harness
+        .database
+        .get()
+        .expect("initialized pool")
+        .clone();
     let harness = harness.database(directory.path().join("other.db"));
     let missing = harness.resume("first").await.err();
     let new_session = harness
@@ -719,9 +731,9 @@ async fn database_initialization_retries_after_failure_and_resets_on_reconfigura
     // Assert
     assert!(matches!(error, Some(SessionError::Io(_))));
     assert!(matches!(missing, Some(SessionError::NotFound { .. })));
-    assert!(session.database.pool().is_closed());
-    assert!(pending.database.pool().is_closed());
-    assert!(!new_session.database.pool().is_closed());
+    assert!(session.writes().await.is_err());
+    assert!(pending.writes().await.is_err());
+    assert!(new_session.writes().await.is_ok());
 }
 
 #[tokio::test]
@@ -753,7 +765,10 @@ async fn completion_persistence_failure_interrupts_the_session_turn() {
         .await
         .expect("session should be created");
     drop(session);
-    let database = harness.open_database().await.expect("database should open");
+    let database = harness
+        .database
+        .get()
+        .expect("database should be initialized");
     sqlx::query(
         r"
 CREATE TRIGGER reject_turn_completion
@@ -837,7 +852,14 @@ BEGIN
 END
 ",
     )
-    .execute(session.database.pool())
+    .execute(
+        session
+            .harness
+            .database
+            .get()
+            .expect("initialized pool")
+            .pool(),
+    )
     .await
     .expect("failure trigger should be created");
 

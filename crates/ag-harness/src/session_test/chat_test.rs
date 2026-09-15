@@ -9,6 +9,7 @@ use super::support::{TurnStatusRow, metadata_model, model, schema};
 use crate::harness::Harness;
 use crate::model::{ModelCompletion, ModelError, ModelMessage, ModelMetadata, ModelResponse};
 use crate::session::{Database, NewSession, SessionError, SessionInfo};
+use crate::store::SessionStore as _;
 
 #[tokio::test]
 async fn session_info_loads_model_identity_and_reports_missing_sessions() {

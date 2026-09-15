@@ -8,6 +8,7 @@ use super::support::{
 };
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{Database, EncodedMessage, NewSession, SessionError, TimestampSource};
+use crate::store::SessionStore as _;
 
 #[test]
 fn session_config_exposes_values_and_system_prompt() {

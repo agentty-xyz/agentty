@@ -107,8 +107,11 @@ async fn session_inspection_reports_storage_failure() {
         .create()
         .await
         .expect("session");
+    let database = crate::session::Database::open(&directory.path().join("harness.db"))
+        .await
+        .expect("database");
     sqlx::query("DROP TABLE session_write")
-        .execute(session.database.pool())
+        .execute(database.pool())
         .await
         .expect("remove journal");
 

@@ -10,10 +10,11 @@ use sqlx::{SqlSafeStr as _, SqlitePool};
 use crate::model::{MockModel, ModelMessage, ModelMetadata};
 use crate::schema_contract::OutputSchema;
 use crate::session::{
-    Database, DatabaseIdentity, DbResultExt as _, EncodedMessage, NewSession, ReservationObserver,
-    SessionError, TimestampSource, TurnOwner, connect_options, next_turn_position,
+    Database, DbResultExt as _, EncodedMessage, NewSession, ReservationObserver, SessionError,
+    StoreIdentity, TimestampSource, TurnOwner, connect_options, next_turn_position,
     shared_abandoned_turn_registry, system_timestamp_source,
 };
+use crate::store::SessionStore as _;
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 
 pub(super) struct SessionTimestampsRow {
@@ -86,13 +87,18 @@ pub(super) fn turn(prompt: &str, answer: &str) -> Vec<ModelMessage> {
 
 pub(super) async fn complete_native_turn(database: &Database, provider_session_id: &str) {
     let mut acquired = database
-        .begin_turn("session-a", "first", &turn_options())
+        .begin_turn(
+            Arc::new(database.clone()),
+            "session-a",
+            "first",
+            &turn_options(),
+        )
         .await
         .expect("turn should begin");
     database
         .complete_turn(
             "session-a",
-            acquired.turn_position,
+            acquired.guard.owner.turn_position,
             &turn("first", "first")[1..],
             Some(provider_session_id),
         )
@@ -236,6 +242,27 @@ impl NewSession {
 }
 
 impl Database {
+    pub(crate) async fn complete_turn(
+        &self,
+        session_id: &str,
+        turn_position: i64,
+        messages: &[ModelMessage],
+        continuation: Option<&str>,
+    ) -> Result<(), SessionError> {
+        let owner = active_turn_owner(self, session_id, turn_position).await;
+        crate::store::SessionStore::complete_turn(self, &owner, messages, continuation).await
+    }
+
+    pub(crate) async fn fail_turn(
+        &self,
+        session_id: &str,
+        turn_position: i64,
+        error: &crate::TurnError,
+    ) -> Result<(), SessionError> {
+        let owner = active_turn_owner(self, session_id, turn_position).await;
+        crate::store::SessionStore::fail_turn(self, &owner, error).await
+    }
+
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }
@@ -270,7 +297,7 @@ impl Database {
 
         Ok(Self {
             abandoned_turns: shared_abandoned_turn_registry(),
-            identity: DatabaseIdentity::temporary(),
+            identity: StoreIdentity::temporary(),
             pool,
             reservation_observer: Arc::new(()),
             timestamp_source,

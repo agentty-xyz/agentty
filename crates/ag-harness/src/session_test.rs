@@ -12,3 +12,6 @@ mod storage;
 mod support;
 #[path = "write_journal_test.rs"]
 mod write_journal;
+
+#[path = "session_test/store_test.rs"]
+mod store;

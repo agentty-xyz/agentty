@@ -22,6 +22,7 @@ use crate::session::{
     Database, NewSession, SessionError, TURN_LEASE_RENEWAL_INTERVAL_SECONDS, TURN_LEASE_SECONDS,
     TimestampSource,
 };
+use crate::store::SessionStore as _;
 use crate::tool::Tool;
 
 #[tokio::test(flavor = "current_thread")]
@@ -176,7 +177,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         started_first: Arc::clone(&first_started),
     });
     let mut first = Session {
-        database: database.clone(),
+        database: Arc::new(database.clone()),
         harness: harness.snapshot(),
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
@@ -185,7 +186,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         system_prompt: None,
     };
     let mut second = Session {
-        database,
+        database: Arc::new(database.clone()),
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
@@ -198,7 +199,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
     let (first_result, second_result) = tokio::join!(first.send("first"), async {
         wait_for_fixture(&first_started, "the long model request").await;
         tokio::task::yield_now().await;
-        let original_expiry = stored_lease_expiry(&second.database).await;
+        let original_expiry = stored_lease_expiry(&database).await;
         let lease_duration = Duration::from_secs(
             u64::try_from(TURN_LEASE_SECONDS).expect("turn lease duration should be positive"),
         );
@@ -209,8 +210,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         tokio::time::resume();
         let renewal_timestamp = elapsed_timestamp(timestamp_origin, clock_origin);
         assert!(renewal_timestamp < original_expiry);
-        let first_renewed_expiry =
-            wait_for_lease_extension(&second.database, original_expiry).await;
+        let first_renewed_expiry = wait_for_lease_extension(&database, original_expiry).await;
         let first_renewed_expiry =
             first_renewed_expiry.expect("active turn should renew its lease before expiry");
         tokio::time::pause();
@@ -218,8 +218,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         tokio::time::resume();
         let next_renewal_timestamp = elapsed_timestamp(timestamp_origin, clock_origin);
         assert!(next_renewal_timestamp < first_renewed_expiry);
-        let next_renewed_expiry =
-            wait_for_lease_extension(&second.database, first_renewed_expiry).await;
+        let next_renewed_expiry = wait_for_lease_extension(&database, first_renewed_expiry).await;
         let next_renewed_expiry = next_renewed_expiry
             .expect("active turn should keep renewing its lease during a long request");
         let current_timestamp = elapsed_timestamp(timestamp_origin, clock_origin);
@@ -276,7 +275,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
         started: Arc::clone(&first_started),
     });
     let mut first = Session {
-        database: database.clone(),
+        database: Arc::new(database.clone()),
         harness: harness.snapshot(),
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
@@ -285,7 +284,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
         system_prompt: None,
     };
     let mut second = Session {
-        database,
+        database: Arc::new(database.clone()),
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
@@ -302,7 +301,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
     // Act
     let (first_result, second_result) = tokio::join!(first.send("interrupted"), async {
         wait_for_fixture(&first_started, "the original model request").await;
-        let original_expiry = stored_lease_expiry(&second.database).await;
+        let original_expiry = stored_lease_expiry(&database).await;
         now.store(original_expiry.saturating_add(1), Ordering::SeqCst);
         let result = second.send("retry").await;
         tokio::time::pause();
@@ -359,7 +358,7 @@ END
         started_first: Arc::clone(&request_started),
     });
     let mut session = Session {
-        database: database.clone(),
+        database: Arc::new(database.clone()),
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),

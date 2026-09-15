@@ -16,6 +16,7 @@ use crate::policy::ToolPolicy;
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
 use crate::session::{AcquiredTurn, Database, LoadedSession, NewSession, SessionError};
+use crate::store::SessionStore;
 use crate::tool::Tool;
 use crate::turn::{TurnError, TurnLimits, TurnOptions, TurnOutcome};
 use crate::write_journal::WriteRecord;
@@ -27,7 +28,7 @@ const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
 /// Owns its runtime resources and captured defaults, so it can outlive the
 /// creating harness and move into a spawned task.
 pub struct Session {
-    database: Database,
+    database: Arc<dyn SessionStore>,
     harness: Harness,
     history: SessionHistory,
     id: String,
@@ -118,9 +119,11 @@ impl Session {
         let AcquiredTurn {
             mut guard,
             provider_session_id,
-            turn_position,
             turns,
-        } = self.database.begin_turn(&self.id, &prompt, options).await?;
+        } = self
+            .database
+            .begin_turn(Arc::clone(&self.database), &self.id, &prompt, options)
+            .await?;
         self.history.replace(turns);
         self.provider_session_id = provider_session_id;
         let mut messages = self.history.messages();
@@ -145,10 +148,7 @@ impl Session {
             Ok(result) => result,
             Err(error) => {
                 self.provider_session_id = None;
-                let persistence = self
-                    .database
-                    .fail_turn(&self.id, turn_position, &error)
-                    .await;
+                let persistence = guard.fail(&error).await;
                 if let Err(persistence) = persistence {
                     guard.mark_interrupted();
 
@@ -157,27 +157,19 @@ impl Session {
                         persistence: Box::new(persistence),
                     });
                 }
-                guard.disarm();
 
                 return Err(error.into());
             }
         };
         let turn = messages.split_off(retained_messages);
-        let persistence = self
-            .database
-            .complete_turn(
-                &self.id,
-                turn_position,
-                &turn[1..],
-                provider_session_id.as_deref(),
-            )
+        let persistence = guard
+            .complete(&turn[1..], provider_session_id.as_deref())
             .await;
         if let Err(error) = persistence {
             guard.mark_interrupted();
 
             return Err(error);
         }
-        guard.disarm();
         self.provider_session_id = provider_session_id;
         self.history.push(turn);
 
@@ -501,7 +493,7 @@ impl Harness {
         }
     }
 
-    async fn open_database(&self) -> Result<Database, SessionError> {
+    async fn open_database(&self) -> Result<Arc<dyn SessionStore>, SessionError> {
         let path = self
             .database_path
             .as_deref()
@@ -510,7 +502,7 @@ impl Harness {
         self.database
             .get_or_try_init(|| Database::open(path))
             .await
-            .cloned()
+            .map(|database| Arc::new(database.clone()) as Arc<dyn SessionStore>)
     }
 
     fn validate_session_model(&self, id: &str, loaded: &LoadedSession) -> Result<(), SessionError> {

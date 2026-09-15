@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_turn\nSET status = 'failed', error_type = ?, lease_expires_at = NULL, updated_at = ?\nWHERE session_id = ? AND turn_position = ? AND status = 'running'\n  AND owner_token = ? AND lease_expires_at > ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "3e84d31cfc1dbe819c53b12511619deedef593d724680539a85267213f97cbb0"
+}
