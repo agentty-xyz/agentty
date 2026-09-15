@@ -1226,6 +1226,7 @@ impl SessionWorkerService {
             &ag_worker::HeartbeatClock,
             &operation_id,
             Self::execute_session_command(context, one_shot_client, command),
+            |error| matches!(error, SessionError::StoppedByUser(_)),
             |error| tracing::warn!(%error, "Worker operation tracking failed"),
         )
         .await;

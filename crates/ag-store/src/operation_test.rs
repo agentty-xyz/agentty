@@ -1,6 +1,105 @@
 use crate::{AppRepositories, DbError};
 
 #[tokio::test]
+async fn terminal_updates_atomically_honor_prior_cancellation_requests() {
+    // Arrange
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("database");
+    let project = database
+        .projects()
+        .upsert_project("operation-project", None)
+        .await
+        .expect("project");
+    database
+        .sessions()
+        .insert_session("session", "gpt-5.6-sol", "main", "Review", project)
+        .await
+        .expect("session");
+
+    for requested in [false, true] {
+        for failed in [false, true] {
+            let id = format!("operation-{requested}-{failed}");
+            database
+                .operations()
+                .insert_session_operation(&id, "session", "rebase")
+                .await
+                .expect("queue");
+            database
+                .operations()
+                .mark_session_operation_running(&id)
+                .await
+                .expect("start");
+
+            // Act
+            if requested {
+                database
+                    .operations()
+                    .request_cancel_for_session_operations("session")
+                    .await
+                    .expect("cancel");
+            }
+            if failed {
+                database
+                    .operations()
+                    .mark_session_operation_failed(&id, "workflow failed")
+                    .await
+                    .expect("settle failure");
+            } else {
+                database
+                    .operations()
+                    .mark_session_operation_done(&id)
+                    .await
+                    .expect("settle success");
+            }
+            // A request that arrives after settlement must not change its
+            // result.
+            database
+                .operations()
+                .request_cancel_for_session_operations("session")
+                .await
+                .expect("late cancel");
+            let row: (String, Option<String>, bool, Option<i64>, Option<i64>) = sqlx::query_as(
+                "SELECT status, last_error, cancel_requested, finished_at, heartbeat_at FROM \
+                 session_operation WHERE id = ?",
+            )
+            .bind(&id)
+            .fetch_one(&pool)
+            .await
+            .expect("terminal row");
+
+            // Assert
+            let status = if requested {
+                "canceled"
+            } else if failed {
+                "failed"
+            } else {
+                "done"
+            };
+            let reason = if failed {
+                Some("workflow failed")
+            } else if requested {
+                Some("Canceled by user")
+            } else {
+                None
+            };
+            assert_eq!(row.0, status);
+            assert_eq!(row.1.as_deref(), reason);
+            assert_eq!(row.2, requested);
+            assert!(row.3.is_some());
+            assert_eq!(row.3, row.4);
+            assert!(
+                !database
+                    .operations()
+                    .is_session_operation_unfinished(&id)
+                    .await
+                    .expect("finished")
+            );
+        }
+    }
+}
+
+#[tokio::test]
 /// Claims new and failed idempotent operations while leaving accepted
 /// operations untouched.
 async fn test_claim_session_operation_recovers_only_terminal_failures() {

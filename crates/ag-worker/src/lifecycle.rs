@@ -28,6 +28,10 @@ impl Clock for HeartbeatClock {
 /// without dropping in-flight work. A heartbeat cannot resurrect terminal rows.
 /// The operation includes host post-processing, so its result is distinct from
 /// the runtime's model-turn completion event.
+/// `is_canceled` identifies host cancellation errors so they are persisted as
+/// canceled rather than failed, while preserving the original result.
+/// Repository terminal updates also honor persisted cancellation requests,
+/// including operations that return success or an ordinary error after a stop.
 ///
 /// # Errors
 /// Returns the operation's own failure, preserving its original error type.
@@ -36,6 +40,7 @@ pub async fn execute<E, F>(
     clock: &dyn Clock,
     operation_id: &str,
     operation: impl Future<Output = Result<(), F>>,
+    is_canceled: impl Fn(&F) -> bool,
     on_store_error: impl Fn(E),
 ) -> Result<(), F>
 where
@@ -58,6 +63,11 @@ where
     };
     let recorded = match &result {
         Ok(()) => store.mark_session_operation_done(operation_id).await,
+        Err(error) if is_canceled(error) => {
+            store
+                .mark_session_operation_canceled(operation_id, &error.to_string())
+                .await
+        }
         Err(error) => {
             store
                 .mark_session_operation_failed(operation_id, &error.to_string())

@@ -50,9 +50,15 @@ pub trait OperationRepository<E: Send + Sync + 'static>: Send + Sync {
     ) -> Result<(), E>;
 
     /// Marks an operation as completed successfully.
+    ///
+    /// Atomically settles as canceled instead when cancellation was requested
+    /// before this update. Requests after completion must leave it unchanged.
     async fn mark_session_operation_done(&self, operation_id: &str) -> Result<(), E>;
 
     /// Marks an operation as failed with an error message.
+    ///
+    /// Atomically settles as canceled instead when cancellation was requested
+    /// before this update, retaining the error for diagnostics.
     async fn mark_session_operation_failed(&self, operation_id: &str, error: &str)
     -> Result<(), E>;
 
