@@ -43,7 +43,7 @@ pub enum WriteStatus {
 }
 
 pub(crate) fn content_hash(content: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(content))
+    hex::encode(Sha256::digest(content))
 }
 
 fn serialize_repository_root<S: serde::Serializer>(
