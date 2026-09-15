@@ -91,7 +91,7 @@ impl StoredTurnOptions {
             options.sort_all_objects();
         }
 
-        format!("{:x}", Sha256::digest(options.to_string()))
+        hex::encode(Sha256::digest(options.to_string()))
     }
 }
 

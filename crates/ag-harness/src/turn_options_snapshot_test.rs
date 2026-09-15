@@ -176,7 +176,7 @@ fn version_two_fingerprints_retain_legacy_serialization() {
         "tool_policy": ToolPolicy::default(),
         "version": 2,
     });
-    let fingerprint = format!("{:x}", Sha256::digest(legacy.to_string()));
+    let fingerprint = hex::encode(Sha256::digest(legacy.to_string()));
     legacy["fingerprint"] = json!(fingerprint);
 
     // Act

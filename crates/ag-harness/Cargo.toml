@@ -35,6 +35,7 @@ harness = false
 
 [dependencies]
 async-trait.workspace = true
+hex.workspace = true
 jsonschema.workspace = true
 opentelemetry.workspace = true
 reqwest.workspace = true

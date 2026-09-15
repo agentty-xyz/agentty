@@ -46,6 +46,21 @@ fn arguments() -> WriteArguments {
         .expect("write arguments")
 }
 
+#[test]
+fn content_hash_preserves_lowercase_zero_padded_sha256() {
+    // Arrange
+    let content = b"abc";
+
+    // Act
+    let hash = content_hash(content);
+
+    // Assert
+    assert_eq!(
+        hash,
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+}
+
 #[tokio::test]
 async fn applied_and_failed_outcomes_survive_failed_turns() {
     // Arrange

@@ -185,7 +185,7 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
         "tool_policy": options.tool_policy(),
         "version": 2,
     });
-    let fingerprint = format!("{:x}", Sha256::digest(legacy.to_string()));
+    let fingerprint = hex::encode(Sha256::digest(legacy.to_string()));
     legacy["fingerprint"] = json!(fingerprint);
     let directory = tempdir().expect("temporary directory");
     let database_path = directory.path().join("history.db");
