@@ -46,6 +46,7 @@ rmdir "$count_file.lock"
 prompt=$(cat)
 if [ "$count" -eq 2 ]; then printf 'batch temporarily unavailable\n' >&2; exit 1; fi
 case "$prompt" in
+  *"Reduce review:"*) impact='Original batch reviewed.\",\"Cross-file check completed.' ;;
   *"Cross-file review:"*) impact='Cross-file check completed.' ;;
   *) impact='Original batch reviewed.' ;;
 esac
@@ -1109,6 +1110,57 @@ async fn test_focused_review_progress() -> E2eResult {
                         "Cross-file check completed.",
                         &Region::full(frame.cols(), frame.rows()),
                     );
+                    assertion::assert_not_visible(frame, "Partial review:");
+                })
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// The final review replaces batch candidates after a visible reduction phase.
+#[tokio::test]
+async fn test_focused_review_reduction() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("focused_review_reduction")
+        .with_git()
+        .setup(|env| Box::pin(async move {
+            seed_focused_review_progress(env).await?;
+            let path = env.stub_bin.join("claude");
+            let script = std::fs::read_to_string(&path)?.replace(
+                "printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\"}'",
+                r#"case "$prompt" in
+  *"Reduce review:"*) result='{\"project_impact\":[\"Consolidated review completed.\"],\"suggestions\":[{\"details\":\"Reconciled final finding.\",\"severity\":\"medium\"}]}' ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init"}'"#,
+            );
+            std::fs::write(path, script)?;
+            Ok(())
+        }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .press_key("f")
+                    .wait_for_text("Consolidating review findings", 30000)
+                    .capture_labeled("reduction_progress", "Reconciling all review findings")
+                    .wait_for_text("Consolidated review completed.", 30000)
+                    .capture_labeled("final_review", "Final review replaces batch candidates")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let reducing = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_text_in_region(
+                        &reducing, "Consolidating review findings",
+                        &Region::full(reducing.cols(), reducing.rows()),
+                    );
+                    assertion::assert_text_in_region(
+                        frame, "Reconciled final finding.", &Region::full(frame.cols(), frame.rows()),
+                    );
+                    assertion::assert_not_visible(frame, "Preserved batch finding.");
+                    assertion::assert_not_visible(frame, "Original batch reviewed.");
                     assertion::assert_not_visible(frame, "Partial review:");
                 })
             },
