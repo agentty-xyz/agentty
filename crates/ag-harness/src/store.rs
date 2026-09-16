@@ -83,6 +83,8 @@ pub trait SessionStore: Send + Sync {
 
     /// An existing intent can settle after expiry or terminal transition.
     /// Validate its original owner even after a successor starts.
+    /// Atomically accept only pending records or retries with the same outcome;
+    /// reject conflicting settlements without changing the retained record.
     async fn finish_write(
         &self,
         owner: &TurnOwner,

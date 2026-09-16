@@ -1,0 +1,419 @@
+//! Process-local session storage with atomic lifecycle and journal mutations.
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use tokio::time::Instant;
+
+use crate::session::TURN_LEASE_SECONDS;
+use crate::write_journal::content_hash;
+use crate::{
+    AcquiredTurn, LoadedSession, ModelMessage, ModelMetadata, NewSession, SessionError,
+    SessionStore, StoreIdentity, StoredTurnOptions, TurnError, TurnOptions, TurnOwner, WriteRecord,
+    WriteStatus,
+};
+
+/// In-memory session history and write journals, with no restart durability.
+///
+/// Clones share backing state and identity. Independently constructed stores
+/// are isolated, even when their session identifiers match. Inject with
+/// [`crate::Harness::store`]; one-shot turns never access this store.
+/// Canonical records remain in memory for the backing state's lifetime; the
+/// history budget limits replay, not total memory consumption.
+#[derive(Clone)]
+pub struct MemoryStore {
+    identity: StoreIdentity,
+    state: Arc<Mutex<State>>,
+}
+
+impl MemoryStore {
+    /// Creates an empty store with a unique process-local backing identity.
+    pub fn new() -> Self {
+        Self {
+            identity: StoreIdentity::unique(),
+            state: Arc::default(),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, State> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn validate_identity(&self, owner: &TurnOwner) -> Result<(), SessionError> {
+        if owner.store_identity() != &self.identity {
+            return Err(lost(owner));
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for MemoryStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl SessionStore for MemoryStore {
+    fn identity(&self) -> &StoreIdentity {
+        &self.identity
+    }
+
+    async fn create_session(
+        &self,
+        config: &NewSession,
+        metadata: Option<ModelMetadata>,
+        max_history_bytes: usize,
+    ) -> Result<(), SessionError> {
+        if config.id().trim().is_empty() {
+            return Err(SessionError::InvalidData {
+                reason: "session identifier must not be empty".to_string(),
+            });
+        }
+        let mut state = self.lock();
+        if state.sessions.contains_key(config.id()) {
+            return Err(SessionError::AlreadyExists {
+                id: config.id().to_string(),
+            });
+        }
+        state.sessions.insert(
+            config.id().to_string(),
+            Record {
+                configuration: LoadedSession {
+                    max_history_bytes,
+                    model: metadata.as_ref().map(|value| value.model().to_string()),
+                    provider: metadata.as_ref().map(|value| value.provider().to_string()),
+                    provider_session_id: None,
+                    schema: config.schema().clone(),
+                    system_prompt: config.system_prompt().map(str::to_string),
+                    turns: Vec::new(),
+                },
+                next_turn: 0,
+                turns: Vec::new(),
+                writes: Vec::new(),
+            },
+        );
+
+        Ok(())
+    }
+
+    async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError> {
+        let mut state = self.lock();
+        let session = state
+            .sessions
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
+        session.recover();
+        let mut loaded = session.configuration.clone();
+        loaded.turns = session.history();
+
+        Ok(loaded)
+    }
+
+    async fn begin_turn(
+        &self,
+        store: Arc<dyn SessionStore>,
+        session_id: &str,
+        prompt: &str,
+        options: &TurnOptions,
+    ) -> Result<AcquiredTurn, SessionError> {
+        if store.identity() != self.identity() {
+            return Err(SessionError::InvalidData {
+                reason: "acquisition store has a different backing identity".to_string(),
+            });
+        }
+        let mut state = self.lock();
+        let session = state
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| SessionError::NotFound {
+                id: session_id.to_string(),
+            })?;
+        session.recover();
+        if session
+            .turns
+            .last()
+            .is_some_and(|turn| turn.status == Status::Running)
+        {
+            return Err(SessionError::Busy {
+                id: session_id.to_string(),
+            });
+        }
+        let previous = session
+            .turns
+            .iter()
+            .rev()
+            .find(|turn| turn.status == Status::Completed);
+        let compatible = previous
+            .map(|turn| StoredTurnOptions::decode(&turn.options))
+            .transpose()?
+            .is_some_and(|snapshot| snapshot.continuation_compatible(options));
+        let continuation = session
+            .configuration
+            .provider_session_id
+            .clone()
+            .filter(|_| compatible);
+        let position = session.next_turn;
+        let next_position = position
+            .checked_add(1)
+            .ok_or_else(|| SessionError::InvalidData {
+                reason: "session turn position exceeds integer range".to_string(),
+            })?;
+        let owner = TurnOwner::new(
+            self.identity.clone(),
+            session_id.to_string(),
+            position,
+            position.to_le_bytes().to_vec(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(TURN_LEASE_SECONDS.unsigned_abs());
+        let acquired = AcquiredTurn::new(
+            store,
+            owner.clone(),
+            deadline,
+            session.history(),
+            continuation.clone(),
+        )?;
+        session.turns.push(TurnRecord {
+            deadline,
+            error_type: None,
+            messages: vec![ModelMessage::User(prompt.to_string())],
+            options: StoredTurnOptions::encode(options),
+            owner,
+            status: Status::Running,
+        });
+        session.next_turn = next_position;
+        session.configuration.provider_session_id = continuation;
+        drop(state);
+
+        acquired.activate()
+    }
+
+    async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        let turn = state.owned_session(owner)?.live_turn(owner)?;
+        turn.deadline = Instant::now() + Duration::from_secs(TURN_LEASE_SECONDS.unsigned_abs());
+
+        Ok(turn.deadline)
+    }
+
+    async fn complete_turn(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+        provider_session_id: Option<&str>,
+    ) -> Result<(), SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        let session = state.owned_session(owner)?;
+        let turn = session.live_turn(owner)?;
+        turn.messages.extend_from_slice(messages);
+        turn.status = Status::Completed;
+        session.configuration.provider_session_id = provider_session_id.map(str::to_string);
+
+        Ok(())
+    }
+
+    async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        let session = state.owned_session(owner)?;
+        let turn = session.live_turn(owner)?;
+        turn.status = Status::Failed;
+        turn.error_type = Some(format!("{:?}", error.error_type()));
+        session.configuration.provider_session_id = None;
+
+        Ok(())
+    }
+
+    async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        if let Some(session) = state.sessions.get_mut(owner.session_id())
+            && let Some(turn) = session.turns.last_mut()
+            && turn.owner == *owner
+            && turn.status == Status::Running
+        {
+            turn.status = Status::Interrupted;
+            turn.error_type = Some(owner.interruption_error_type().to_string());
+            session.configuration.provider_session_id = None;
+        }
+
+        Ok(())
+    }
+
+    async fn load_writes(&self, session_id: &str) -> Result<Vec<WriteRecord>, SessionError> {
+        Ok(self
+            .lock()
+            .sessions
+            .get(session_id)
+            .map_or_else(Vec::new, |session| session.writes.clone()))
+    }
+
+    async fn write_intent(
+        &self,
+        owner: &TurnOwner,
+        call_id: &str,
+        root: &Path,
+        path: &str,
+        expected: Option<&[u8]>,
+        resulting: &[u8],
+    ) -> Result<i64, SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        let id = state
+            .next_write
+            .checked_add(1)
+            .ok_or_else(|| SessionError::InvalidData {
+                reason: "write identifier exceeds integer range".to_string(),
+            })?;
+        let session = state.owned_session(owner)?;
+        session.live_turn(owner)?;
+        session.writes.push(WriteRecord {
+            call_id: call_id.to_string(),
+            expected_hash: expected.map(content_hash),
+            id,
+            path: path.to_string(),
+            repository_root: root.to_path_buf(),
+            resulting_hash: content_hash(resulting),
+            status: WriteStatus::Pending,
+            turn_position: owner.turn_position(),
+        });
+        state.next_write = id;
+
+        Ok(id)
+    }
+
+    async fn finish_write(
+        &self,
+        owner: &TurnOwner,
+        id: i64,
+        applied: bool,
+    ) -> Result<(), SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        let session = state.owned_session(owner)?;
+        if !session.turns.iter().any(|turn| turn.owner == *owner) {
+            return Err(lost(owner));
+        }
+        let status = if applied {
+            WriteStatus::Applied
+        } else {
+            WriteStatus::Failed
+        };
+        let record = session
+            .writes
+            .iter_mut()
+            .find(|record| {
+                record.id == id
+                    && record.turn_position == owner.turn_position()
+                    && (record.status == WriteStatus::Pending || record.status == status)
+            })
+            .ok_or_else(|| lost(owner))?;
+        record.status = status;
+
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct State {
+    next_write: i64,
+    sessions: HashMap<String, Record>,
+}
+
+impl State {
+    fn owned_session(&mut self, owner: &TurnOwner) -> Result<&mut Record, SessionError> {
+        self.sessions
+            .get_mut(owner.session_id())
+            .ok_or_else(|| lost(owner))
+    }
+}
+
+struct Record {
+    configuration: LoadedSession,
+    next_turn: i64,
+    turns: Vec<TurnRecord>,
+    writes: Vec<WriteRecord>,
+}
+
+impl Record {
+    fn recover(&mut self) {
+        if let Some(turn) = self.turns.last_mut()
+            && turn.status == Status::Running
+            && turn.deadline <= Instant::now()
+        {
+            turn.status = Status::Interrupted;
+            turn.error_type = Some("interrupted".to_string());
+            self.configuration.provider_session_id = None;
+        }
+    }
+
+    fn history(&self) -> Vec<Vec<ModelMessage>> {
+        let mut remaining = self.configuration.max_history_bytes;
+        let mut turns = Vec::new();
+        for turn in self
+            .turns
+            .iter()
+            .rev()
+            .filter(|turn| turn.status == Status::Completed)
+        {
+            let bytes = turn.messages.iter().fold(0_usize, |bytes, message| {
+                bytes.saturating_add(message.retained_bytes())
+            });
+            if bytes > remaining {
+                break;
+            }
+            remaining -= bytes;
+            turns.push(turn.messages.clone());
+        }
+        turns.reverse();
+
+        turns
+    }
+
+    fn live_turn(&mut self, owner: &TurnOwner) -> Result<&mut TurnRecord, SessionError> {
+        self.turns
+            .last_mut()
+            .filter(|turn| {
+                turn.owner == *owner
+                    && turn.status == Status::Running
+                    && turn.deadline > Instant::now()
+            })
+            .ok_or_else(|| lost(owner))
+    }
+}
+
+struct TurnRecord {
+    deadline: Instant,
+    error_type: Option<String>,
+    messages: Vec<ModelMessage>,
+    options: String,
+    owner: TurnOwner,
+    status: Status,
+}
+
+#[derive(Eq, PartialEq)]
+enum Status {
+    Running,
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+fn lost(owner: &TurnOwner) -> SessionError {
+    SessionError::OwnershipLost {
+        id: owner.session_id().to_string(),
+        turn_position: owner.turn_position(),
+    }
+}
+
+#[cfg(test)]
+#[path = "memory_store_test.rs"]
+mod tests;

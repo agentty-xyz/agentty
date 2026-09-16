@@ -7,7 +7,8 @@ weight = 6
 # `ag-harness`
 
 `ag-harness` is a Rust library for structured model turns. Applications select a model,
-per-turn output schemas and tool permissions, and a session store for durable sessions.
+per-turn output schemas and tool permissions, and a session store for multi-turn
+history.
 
 ```mermaid
 flowchart LR
@@ -96,7 +97,11 @@ fail before a model call. A new invocation resolves its explicit selection again
 
 ## Session lifecycle
 
-The selected store is canonical; SQLite remains the default implementation.
+The selected store is canonical; SQLite remains the default implementation. Built-in
+`MemoryStore` provides process-local sessions through the same injection API. Its clones
+share identity and state; independently constructed stores are isolated. It retains
+canonical turns and write journals for the shared state's lifetime, with no restart
+durability. The history budget bounds replay rather than total retained memory.
 Provider-native continuation is an optional optimization, never the only copy of
 conversation state. Durable execution uses a public object-safe `SessionStore` contract
 for atomic acquisition, ownership, terminal transitions, bounded history, and write
@@ -199,7 +204,9 @@ fails. Dropping either operation emits cancellation once.
 
 1. **Stores and recovery**
 
-   Add a production memory store and host turn IDs for idempotent recovery.
+   Add separately observable turn cancellation and persistence settlement, then host
+   turn IDs for idempotent recovery across SQLite and memory stores. Managed filesystem
+   effect settlement remains separate from persistence settlement.
 
 1. **Model switching**
 

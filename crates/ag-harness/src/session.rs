@@ -889,6 +889,7 @@ RETURNING id AS "id!"
             r"
 UPDATE session_write SET status = ?
 WHERE id = ? AND session_id = ? AND turn_position = ?
+  AND (status = 'pending' OR status = ?)
   AND EXISTS (
     SELECT 1 FROM session_turn
     WHERE session_id = ? AND turn_position = ? AND owner_token = ?
@@ -898,6 +899,7 @@ WHERE id = ? AND session_id = ? AND turn_position = ?
             id,
             owner.session_id,
             owner.turn_position,
+            status,
             owner.session_id,
             owner.turn_position,
             owner.token

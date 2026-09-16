@@ -1,7 +1,7 @@
 # `ag-harness`
 
 `ag-harness` runs structured LLM turns with explicit repository permissions and durable
-SQLite sessions or host-provided session stores.
+SQLite sessions, process-local memory sessions, or host-provided session stores.
 
 ## Durable sessions
 
@@ -100,6 +100,23 @@ use ag_harness::{Harness, SessionStore, SqliteStore};
 let store: Arc<dyn SessionStore> = Arc::new(SqliteStore::open(Path::new("harness.db")).await?);
 let harness = Harness::new(model).store(store);
 ```
+
+Use the built-in `MemoryStore` for resumable sessions within one process:
+
+```rust
+use std::sync::Arc;
+use ag_harness::{Harness, MemoryStore};
+
+let store = MemoryStore::new();
+let harness = Harness::new(model).store(Arc::new(store.clone()));
+let mut session = harness.session("scratch", output_schema).create().await?;
+let result = session.send("Summarize the task").await?;
+```
+
+Clones share state and identity; separately constructed stores are independent. Memory
+storage retains turn history and write journals only while its shared state lives and
+provides no restart durability. Its history budget bounds replay, not total retained
+memory. Filesystem changes made by tools outlive the memory journal.
 
 The latest `store` or `database` selection applies to new handles; existing builders and
 sessions retain their captured store. One-shot execution never accesses storage.
