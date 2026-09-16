@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use tokio::sync::OnceCell;
 
+use crate::cancellation::{ControlledTurn, TurnControl};
 use crate::engine::Engine;
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::{
@@ -89,10 +90,54 @@ impl Session {
         prompt: impl Into<String>,
         options: TurnOptions,
     ) -> Result<TurnOutcome, SessionError> {
+        self.send_observed(prompt.into(), options, None).await
+    }
+
+    /// Prepares a turn with explicit options and a retained cancellation
+    /// control.
+    ///
+    /// The returned future starts execution when polled. Its control observes
+    /// persistence settlement even if the future is dropped. Cancellation may
+    /// race a successful terminal commit; inspect stored history after
+    /// settlement.
+    ///
+    /// # Errors
+    /// The future returns [`SessionError`] for execution or persistence
+    /// failure, including [`TurnError::Cancelled`] when cancellation stops
+    /// its waiter.
+    pub fn send_controlled(
+        &mut self,
+        prompt: impl Into<String>,
+        options: TurnOptions,
+    ) -> ControlledTurn<'_, SessionError> {
+        let prompt = prompt.into();
+        let mut session = Self {
+            database: Arc::clone(&self.database),
+            harness: self.harness.snapshot(),
+            history: SessionHistory::new(self.history.max_bytes),
+            id: self.id.clone(),
+            provider_session_id: None,
+            schema: self.schema.clone(),
+            system_prompt: self.system_prompt.clone(),
+        };
+
+        ControlledTurn::new(move |control| async move {
+            session.send_observed(prompt, options, Some(control)).await
+        })
+    }
+
+    async fn send_observed(
+        &mut self,
+        prompt: String,
+        options: TurnOptions,
+        control: Option<TurnControl>,
+    ) -> Result<TurnOutcome, SessionError> {
         let started_at = Instant::now();
         let turn = self.harness.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
-        let mut result = self.send_turn(prompt.into(), &options, turn_id).await;
+        let mut result = self
+            .send_turn(prompt, &options, turn_id, control.as_ref())
+            .await;
         if let Ok(outcome) = &mut result {
             outcome.set_duration(started_at.elapsed());
         }
@@ -116,18 +161,24 @@ impl Session {
         prompt: String,
         options: &TurnOptions,
         turn_id: Option<LifecycleId>,
+        control: Option<&TurnControl>,
     ) -> Result<TurnOutcome, SessionError> {
-        let AcquiredTurn {
-            mut guard,
-            provider_session_id,
-            turns,
-        } = store_coordinator::acquire(
+        let acquisition = store_coordinator::acquire(
             Arc::clone(&self.database),
             self.id.clone(),
             prompt.clone(),
             options.clone(),
-        )
-        .await?;
+            control.map(|control| control.settlement.clone()),
+        );
+        let AcquiredTurn {
+            mut guard,
+            provider_session_id,
+            turns,
+        } = tokio::select! {
+            biased;
+            () = cancelled(control) => return Err(TurnError::Cancelled.into()),
+            result = acquisition => result?,
+        };
         self.history.replace(turns);
         self.provider_session_id = provider_session_id;
         let mut messages = self.history.messages();
@@ -141,6 +192,7 @@ impl Session {
         let engine = self.harness.engine(options);
         let result = tokio::select! {
             biased;
+            () = cancelled(control) => return Err(TurnError::Cancelled.into()),
             error = guard.ownership_failure() => {
                 guard.mark_interrupted();
 
@@ -456,6 +508,31 @@ impl Harness {
         result.map(|(outcome, _, _)| outcome)
     }
 
+    /// Prepares a storage-free turn with separately retained cancellation.
+    ///
+    /// Dropping the returned future requests cancellation. Settlement observes
+    /// local execution, not detached filesystem effects or remote provider
+    /// work.
+    ///
+    /// # Errors
+    /// The future returns [`TurnError`], including [`TurnError::Cancelled`].
+    pub fn run_once_controlled(
+        &self,
+        prompt: impl Into<String>,
+        options: TurnOptions,
+    ) -> ControlledTurn<'_, TurnError> {
+        let harness = self.snapshot();
+        let prompt = prompt.into();
+
+        ControlledTurn::new(move |control| async move {
+            tokio::select! {
+                biased;
+                () = control.cancelled() => Err(TurnError::Cancelled),
+                result = harness.run_once_with_options(prompt, options) => result,
+            }
+        })
+    }
+
     /// Builds a durable session with `schema` as its default output contract.
     ///
     /// Explicit turn options may select a different schema without changing
@@ -576,6 +653,13 @@ impl Harness {
             options,
             repository: self.repository.as_ref(),
         }
+    }
+}
+
+async fn cancelled(control: Option<&TurnControl>) {
+    match control {
+        Some(control) => control.cancelled().await,
+        None => std::future::pending().await,
     }
 }
 

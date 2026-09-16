@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use tokio::time::Instant;
 
+use crate::cancellation::{Settlement, SettlementLease};
 use crate::session::{
     AcquiredTurn, LoadedSession, NewSession, StoreIdentity, TurnOwner, recover_abandoned,
 };
@@ -22,12 +23,15 @@ pub(crate) async fn acquire(
     session_id: String,
     prompt: String,
     options: TurnOptions,
+    settlement: Option<Settlement>,
 ) -> Result<AcquiredTurn, SessionError> {
     recover_abandoned(&store, &session_id).await?;
     let admission = admission(store.identity(), &session_id)?;
     let store: Arc<dyn SessionStore> = Arc::new(AdmittedStore {
         store,
         admission: Mutex::new(Some(admission)),
+        lease: Mutex::new(settlement.as_ref().map(Settlement::retain)),
+        settlement,
     });
     // The backend finishes acquisition even when the caller disappears. Its
     // returned guard then interrupts the abandoned owner without running a
@@ -70,16 +74,26 @@ fn admission(
 // delayed commit acknowledgment, dropped callers, and failed cleanup.
 struct AdmittedStore {
     admission: Mutex<Option<OwnedMutexGuard<()>>>,
+    lease: Mutex<Option<SettlementLease>>,
+    settlement: Option<Settlement>,
     store: Arc<dyn SessionStore>,
 }
 
 impl AdmittedStore {
     fn settled(&self, result: Result<(), SessionError>) -> Result<(), SessionError> {
+        let mut lease = self
+            .lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if result.is_ok() {
+            if let Some(settlement) = &self.settlement {
+                settlement.recovered();
+            }
             self.admission
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
+            lease.take();
         }
 
         result
@@ -137,7 +151,20 @@ impl SessionStore for AdmittedStore {
     }
 
     async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError> {
-        self.settled(self.store.interrupt(owner).await)
+        let result = self.store.interrupt(owner).await;
+        if let Err(error) = &result {
+            let lease = self
+                .lease
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if lease.is_some()
+                && let Some(settlement) = &self.settlement
+            {
+                settlement.failed(owner, error);
+            }
+        }
+
+        self.settled(result)
     }
 
     async fn load_writes(&self, id: &str) -> Result<Vec<WriteRecord>, SessionError> {

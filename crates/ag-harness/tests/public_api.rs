@@ -1,12 +1,16 @@
 //! External-consumer coverage for the `ag-harness` model traits.
 
 #[cfg(test)]
+#[path = "support/cancellation.rs"]
+mod cancellation;
+
+#[cfg(test)]
 #[path = "support/repository.rs"]
-mod repository;
+mod repository_fixture;
 
 #[cfg(test)]
 #[path = "support/store_conformance.rs"]
-mod store_conformance;
+mod store_conformance_test;
 
 use std::error::Error;
 use std::ffi::OsString;
@@ -157,7 +161,7 @@ async fn external_model_reads_tool_results_and_retains_chat_history() -> Result<
             requests: Arc::clone(&requests),
         };
         let directory = tempfile::tempdir()?;
-        let repository = repository::repository_with_host_git(directory.path());
+        let repository = repository_fixture::repository_with_host_git(directory.path());
         let harness = Harness::new(model)
             .database(directory.path().join("harness.db"))
             .repository(repository)
@@ -719,7 +723,7 @@ async fn applied_write_survives_model_failure_and_session_reopen() -> Result<(),
         native_root: native_root.clone(),
         physical_root: root.clone(),
     };
-    let repository = repository::repository_with_host_git(&root);
+    let repository = repository_fixture::repository_with_host_git(&root);
     let harness = Harness::new(FailingAfterWriteModel)
         .database(directory.path().join("harness.db"))
         .repository(repository)
@@ -774,7 +778,9 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     let directory = tempfile::tempdir()?;
     let harness = Harness::new(model)
         .database(directory.path().join("options.db"))
-        .repository(repository::repository_with_host_git(directory.path()))
+        .repository(repository_fixture::repository_with_host_git(
+            directory.path(),
+        ))
         .file_system(NameFileSystem);
     let schema = request()?.schema().clone();
     let policy = ToolPolicy::default().allow(Tool::Read);
@@ -848,7 +854,8 @@ impl Model for ExternalComparisonModel {
 async fn host_comparison_api_supports_both_entry_points_and_nested_scope()
 -> Result<(), Box<dyn Error>> {
     // Arrange
-    let repository = repository::repository_with_host_git(Path::new(env!("CARGO_MANIFEST_DIR")));
+    let repository =
+        repository_fixture::repository_with_host_git(Path::new(env!("CARGO_MANIFEST_DIR")));
     let base = ComparisonBase::resolve(&repository, "HEAD").await?;
     let validated = ComparisonBase::validate(&repository, base.oid()).await?;
     let directory = tempfile::tempdir()?;

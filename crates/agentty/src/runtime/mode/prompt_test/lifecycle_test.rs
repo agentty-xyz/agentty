@@ -510,7 +510,7 @@ async fn test_handle_prompt_cancel_key_resets_existing_session_draft_attachments
 #[tokio::test]
 async fn test_deleting_original_duplicate_placeholder_does_not_submit_image() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+    let (mut app, _base_dir) = new_test_draft_prompt_app("", None).await;
     app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
     handle_paste(&mut app, "[Image #1]").await;
     if let AppMode::Prompt { input, .. } = &mut app.mode {

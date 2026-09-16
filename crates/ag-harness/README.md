@@ -55,6 +55,39 @@ The library does not choose a database location. Configure it once with
 `Harness::database()`. The companion CLI defaults to `~/.ag-harness/db/harness.db`;
 override that with `AG_HARNESS_ROOT` or `--database`.
 
+## Cancellation and settlement
+
+Use `Session::send_controlled` or the storage-free `Harness::run_once_controlled` with
+explicit `TurnOptions`. The returned `ControlledTurn` starts when polled. Retain its
+`TurnControl` independently to cancel or observe settlement after dropping the future:
+
+```rust
+let turn = session.send_controlled("Review the changes", options);
+let control = turn.control();
+tokio::pin!(turn);
+let result = tokio::select! {
+    result = &mut turn => Some(result),
+    () = shutdown_signal => {
+        control.cancel();
+        None
+    }
+};
+control.settled().await?;
+```
+
+Cancellation stops the waiter promptly; an in-progress terminal commit can still
+succeed. Keep the Tokio runtime running until `settled()` acknowledges execution and
+persistence cleanup. Failed cleanup returns a bounded `SettlementError` and retains
+local admission; after fixing storage, `retry_settlement()` retries only that turn's
+owner, then `settled()` observes the result. Repeated cancellation and stale controls
+cannot stop a successor turn. Acquisition abandoned before acknowledgment never starts
+model or tool execution.
+
+Persistence settlement does not prove an already-started filesystem replacement or
+remote provider operation has finished. Inspect durable history and write records after
+cancellation; pending write outcomes remain uncertain. This API provides no rollback or
+filesystem-effect settlement.
+
 ## Custom session stores
 
 Implement `SessionStore` and pass a shared instance to `Harness::store`. SQLite remains
