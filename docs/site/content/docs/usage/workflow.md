@@ -507,10 +507,13 @@ local base branch. In **InProgress**, the sync request is queued behind the runn
 before the session enters **Rebasing**. If the rebase stops on conflicts, Agentty asks
 the existing agent session to resolve only the conflicted files, then stages the edits
 and runs the repository's effective `pre-commit` hook before continuing the rebase
-itself. A hook failure aborts the rebase, records a `[Sync Error]`, and prevents the
-post-rebase auto-push. Repositories without an installed hook retain Git's normal
-no-hook behavior. The completed conversation remains in place while the rebase or merge
-status animates below it.
+itself. If the hook fails, Agentty keeps the rebase paused and asks the agent to repair
+the reported issues, then stages the repairs and reruns the hook. It allows up to three
+repair attempts before aborting, recording a `[Sync Error]`, and preventing the
+post-rebase auto-push. Failed assistance or staging also stops the operation.
+Repositories without an installed hook retain Git's normal no-hook behavior. The
+completed conversation remains in place while the rebase or merge status animates below
+it.
 
 During normal turns, the agent prompt names the session worktree as the only writable
 root. After a turn, if Agentty detects that the main checkout's tracked-file status

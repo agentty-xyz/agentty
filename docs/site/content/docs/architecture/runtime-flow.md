@@ -965,8 +965,11 @@ orchestration paths:
   published upstream's remote base ref (published). Rebase-conflict prompts run through
   the existing session channel so the provider keeps conversation context while Agentty
   owns staging, invokes the effective `pre-commit` hook against the resolved index, and
-  runs `git rebase --continue`. Hook rejection enters the existing assisted-rebase abort
-  path before any post-rebase auto-push can start.
+  runs `git rebase --continue`. Hook rejection keeps the rebase paused while the same
+  worker-owned assistance path repairs the reported failures. Agentty restages and
+  reruns the hook after each repair, allowing three attempts. Exhausted repairs or
+  assistance/staging errors enter the assisted-rebase abort path before any post-rebase
+  auto-push can start.
 - Review-request publish: push with `--force-with-lease`, then create or refresh the
   forge review request through `ReviewRequestClient`; a first publish to a custom branch
   rejects a currently existing remote ref. When the ref is absent, the push supplies an

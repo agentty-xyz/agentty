@@ -731,7 +731,7 @@ async fn test_run_rebase_assist_loop_core_aborts_on_early_error() {
 }
 
 #[tokio::test]
-async fn test_run_rebase_assist_loop_core_aborts_when_pre_commit_hook_fails() {
+async fn test_run_rebase_assist_loop_core_aborts_after_pre_commit_repairs_are_exhausted() {
     // Arrange
     let mut mock_git_client = git::MockGitClient::new();
     let mut sequence = Sequence::new();
@@ -747,8 +747,7 @@ async fn test_run_rebase_assist_loop_core_aborts_when_pre_commit_hook_fails() {
         .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
     mock_git_client
         .expect_run_pre_commit_hook()
-        .times(1)
-        .in_sequence(&mut sequence)
+        .times(REBASE_ASSIST_POLICY.max_attempts + 1)
         .returning(|_| {
             Box::pin(async {
                 Err(GitError::CommandFailed {
@@ -757,6 +756,10 @@ async fn test_run_rebase_assist_loop_core_aborts_when_pre_commit_hook_fails() {
                 })
             })
         });
+    mock_git_client
+        .expect_stage_all()
+        .times(REBASE_ASSIST_POLICY.max_attempts)
+        .returning(|_| Box::pin(async { Ok(()) }));
     mock_git_client.expect_rebase_continue().times(0);
     mock_git_client
         .expect_abort_rebase()

@@ -11,3 +11,6 @@ mod synchronization;
 
 #[path = "merge_test/transition_test.rs"]
 mod transition;
+
+#[path = "merge_test/hook_repair_test.rs"]
+mod hook_repair;
