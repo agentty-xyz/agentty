@@ -21,7 +21,13 @@ runs:
 
     - name: Generate and check coverage report
       shell: bash
-      run: prek run coverage --all-files --hook-stage manual
+      env:
+        AGENTTY_MERGE_GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
+        AGENTTY_COVERAGE_BASE_BRANCH: ${{ github.base_ref || github.event.repository.default_branch }}
+      run: |
+        coverage_base_ref="${AGENTTY_MERGE_GROUP_BASE_REF:-refs/heads/$AGENTTY_COVERAGE_BASE_BRANCH}"
+        export AGENTTY_COVERAGE_BASE="origin/${coverage_base_ref#refs/heads/}"
+        prek run coverage --all-files --hook-stage manual
 
     - name: SonarQube Scan
       if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
