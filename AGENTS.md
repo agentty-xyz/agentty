@@ -65,10 +65,8 @@ hook implementations elsewhere.
 - For cross-cutting changes or uncertain impact, run `prek run --all-files`, then
   `prek run test-workspace --all-files --hook-stage manual`.
 - Run mutating fixers one at a time and inspect their diffs before continuing.
-- Run affected Agentty E2E tests locally using the focused workflow in
-  `skills/feature-test/SKILL.md`. CI runs the complete suite through
-  `prek run test-agentty-e2e --all-files --hook-stage manual`. Run that hook locally
-  when requested or when focused tests cannot cover the impact.
+- If any Rust code is added, modified, or deleted during a turn, run the full E2E suite
+  before ending the turn: `prek run test-agentty-e2e --all-files --hook-stage manual`.
 - Kill and report any test that produces no output for five minutes. After three failed
   repair attempts, stop and report the test, output, and attempted fixes; never skip,
   ignore, or delete the test.
