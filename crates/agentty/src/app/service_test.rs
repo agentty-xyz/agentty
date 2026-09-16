@@ -661,6 +661,11 @@ fn session_event_labels_preserve_variant_identity() {
             })),
             session_id: session_id.clone(),
         },
+        AppEvent::ReviewProgressUpdated {
+            diff_hash: 1,
+            progress: crate::app::review::ReviewProgress::CrossFile,
+            session_id: session_id.clone(),
+        },
         AppEvent::ReviewPrepared {
             diff_hash: 1,
             review_text: "Review".to_string(),

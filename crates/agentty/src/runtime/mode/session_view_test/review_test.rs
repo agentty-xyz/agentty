@@ -741,6 +741,7 @@ async fn test_open_review_output_mode_shows_loading_for_cache_loading_entry() {
     app.review_cache.insert(
         session_id.clone().into(),
         ReviewCacheEntry::Loading {
+            progress: None,
             diff_hash: 456,
             review_agent,
         },

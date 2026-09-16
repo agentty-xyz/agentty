@@ -35,6 +35,23 @@ impl RuntimeClientProvider for GeminiRuntimeProvider {
         false
     }
 
+    fn reset_context<'scope>(
+        runtime: &'scope mut Self::Runtime,
+        request: &'scope AppServerTurnRequest,
+    ) -> BorrowedAppServerFuture<'scope, Result<bool, AppServerError>> {
+        Box::pin(async move {
+            runtime.state.session_id = lifecycle::start_session(
+                &mut runtime.transport,
+                &request.folder,
+                app_server_transport::STARTUP_TIMEOUT,
+            )
+            .await?;
+            runtime.state.restored_context = false;
+
+            Ok(true)
+        })
+    }
+
     fn start_runtime(
         request: AppServerTurnRequest,
     ) -> AppServerFuture<Result<Self::Runtime, AppServerError>> {

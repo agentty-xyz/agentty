@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use super::backend::{AgentBackend, BuildCommandRequest};
 use super::cli::error;
 use super::cli::execution::{self, CliExecutionError, CliExecutionObserver, CliExitStatus};
+use super::submission_pool::{SubmissionLease, SubmissionPool};
 use super::{ParsedResponse, create_app_server_client, create_backend, parse_response};
 use crate::app_server::{AppServerClient, AppServerTurnRequest};
 use crate::model::agent::AgentKind;
@@ -33,6 +34,7 @@ use crate::model::session::{SessionDiffState, SessionStats};
 pub struct RealOneShotClient {
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
     force_shutdown: CancellationToken,
+    pool: Mutex<Option<SubmissionPool>>,
 }
 
 impl RealOneShotClient {
@@ -44,6 +46,18 @@ impl RealOneShotClient {
         Self {
             app_server_client_override,
             force_shutdown: CancellationToken::new(),
+            pool: Mutex::new(None),
+        }
+    }
+
+    /// Creates a scoped client that reuses idle app-server processes while
+    /// starting fresh conversation context for every submission. Call
+    /// [`OneShotClient::close`] after submissions and their cleanup finish.
+    pub fn pooled(app_server_client_override: Option<Arc<dyn AppServerClient>>) -> Self {
+        Self {
+            app_server_client_override,
+            force_shutdown: CancellationToken::new(),
+            pool: Mutex::new(Some(SubmissionPool::default())),
         }
     }
 }
@@ -52,6 +66,12 @@ impl RealOneShotClient {
 impl OneShotClient for RealOneShotClient {
     fn force_shutdown(&self) {
         self.force_shutdown.cancel();
+        // Release idle registries immediately; active cleanup tasks keep their
+        // leases until the forced-shutdown signal drops their provider work.
+        self.pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
     }
 
     async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
@@ -68,6 +88,23 @@ impl OneShotClient for RealOneShotClient {
             .harness
             .parse::<AgentKind>()
             .map_err(OneShotError::new)?;
+        let lease = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|pool| pool.acquire(agent_kind, self.app_server_client_override.clone()));
+        if let Some(lease) = lease {
+            return submit_app_server_session(
+                Arc::clone(&lease.0.client),
+                request,
+                cancellation,
+                self.force_shutdown.clone(),
+                Some(lease),
+            )
+            .await
+            .map_err(OneShotError::new);
+        }
         let client = create_app_server_client(agent_kind, self.app_server_client_override.clone());
         if let Some(client) = client {
             return submit_one_shot_with_app_server_client(
@@ -87,6 +124,17 @@ impl OneShotClient for RealOneShotClient {
             result = submit_one_shot_with_backend(backend.as_ref(), request) => result.map_err(OneShotError::new),
         }
     }
+
+    async fn close(&self) {
+        let pool = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(pool) = pool {
+            pool.close().await;
+        }
+    }
 }
 
 /// Executes an isolated app-server prompt in an owned cleanup task.
@@ -98,14 +146,38 @@ async fn submit_one_shot_with_app_server_client(
     cancellation: CancellationToken,
     force_shutdown: CancellationToken,
 ) -> Result<OneShotSubmission, String> {
+    submit_app_server_session(
+        app_server_client,
+        request,
+        cancellation,
+        force_shutdown,
+        None,
+    )
+    .await
+}
+
+/// Holds a pooled lease until the owned turn and asynchronous cleanup settle.
+async fn submit_app_server_session(
+    app_server_client: Arc<dyn AppServerClient>,
+    request: OneShotRequest,
+    cancellation: CancellationToken,
+    force_shutdown: CancellationToken,
+    lease: Option<SubmissionLease>,
+) -> Result<OneShotSubmission, String> {
     let cancellation = cancellation.child_token();
     let _cancel_on_drop = cancellation.clone().drop_guard();
     tokio::spawn(async move {
+        let session_id = lease.as_ref().map_or_else(
+            || format!("one-shot-{}", uuid::Uuid::new_v4()),
+            |lease| lease.0.session_id.clone(),
+        );
+        let pooled = lease.is_some();
+        let _lease = lease;
         let child_pid = request.child_pid.clone();
         let result = tokio::select! {
             biased;
             () = force_shutdown.cancelled() => Err("[Stopped] Agent runtime forced to shut down".to_string()),
-            result = finish_one_shot_app_server_submission(app_server_client, request, cancellation) => result,
+            result = finish_one_shot_app_server_submission(app_server_client, request, cancellation, session_id, pooled) => result,
         };
         clear_child_pid_slot(child_pid.as_deref());
         result
@@ -119,14 +191,16 @@ async fn finish_one_shot_app_server_submission(
     app_server_client: Arc<dyn AppServerClient>,
     request: OneShotRequest,
     cancellation: CancellationToken,
+    session_id: String,
+    pooled: bool,
 ) -> Result<OneShotSubmission, String> {
     clear_child_pid_slot(request.child_pid.as_deref());
-    let session_id = format!("one-shot-{}", uuid::Uuid::new_v4());
     let work = execute_one_shot_app_server_turns(
         app_server_client.as_ref(),
         request,
         &session_id,
         &cancellation,
+        pooled,
     );
     tokio::pin!(work);
     let work = poll_fn(|context| {
@@ -137,7 +211,9 @@ async fn finish_one_shot_app_server_submission(
     tokio::select! {
         biased;
         result = &mut work => {
-            app_server_client.shutdown_session(session_id.clone()).await;
+            if !pooled || result.is_err() || cancellation.is_cancelled() {
+                app_server_client.shutdown_session(session_id.clone()).await;
+            }
             result
         }
         () = cancellation.cancelled() => {
@@ -155,6 +231,7 @@ async fn execute_one_shot_app_server_turns(
     request: OneShotRequest,
     session_id: &str,
     cancellation: &CancellationToken,
+    pooled: bool,
 ) -> Result<OneShotSubmission, String> {
     if cancellation.is_cancelled() {
         return Err("[Stopped] Agent run canceled".to_string());
@@ -179,10 +256,13 @@ async fn execute_one_shot_app_server_turns(
         speed_mode: request.speed_mode,
     };
 
-    let turn_result = app_server_client
-        .run_turn(turn_request, stream_tx)
-        .await
-        .map_err(|error| format!("Failed to execute one-shot app-server turn: {error}"))?;
+    let turn_result = if pooled {
+        app_server_client.run_isolated_turn(turn_request, stream_tx)
+    } else {
+        app_server_client.run_turn(turn_request, stream_tx)
+    }
+    .await
+    .map_err(|error| format!("Failed to execute one-shot app-server turn: {error}"))?;
     if cancellation.is_cancelled() {
         return Err("[Stopped] Agent run canceled".to_string());
     }
@@ -198,6 +278,7 @@ async fn execute_one_shot_app_server_turns(
                     request,
                     session_id,
                     turn_result.provider_conversation_id.as_deref(),
+                    pooled,
                 )
                 .await
             }
@@ -298,6 +379,7 @@ fn parse_one_shot_response(
 /// agent retains the original conversation context. The initial turn's
 /// `provider_conversation_id` is threaded through so providers that depend
 /// on conversation state can continue the same thread.
+/// Pooled repairs retain the runtime without resetting that context.
 ///
 /// Returns the parsed response together with the repair turn's token usage
 /// so the caller can aggregate stats across both attempts.
@@ -311,6 +393,7 @@ async fn attempt_one_shot_app_server_repair(
     request: OneShotRequest,
     session_id: &str,
     provider_conversation_id: Option<&str>,
+    pooled: bool,
 ) -> Result<(AgentResponse, u64, u64), String> {
     let protocol_profile = request.request_kind.protocol_profile();
     let repair_prompt = build_protocol_repair_prompt(parse_error, malformed_response)?;
@@ -333,10 +416,13 @@ async fn attempt_one_shot_app_server_repair(
         session_id: session_id.to_string(),
         speed_mode: request.speed_mode,
     };
-    let repair_result = app_server_client
-        .run_turn(repair_turn_request, repair_stream_tx)
-        .await
-        .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
+    let repair_result = if pooled {
+        app_server_client.run_retained_turn(repair_turn_request, repair_stream_tx)
+    } else {
+        app_server_client.run_turn(repair_turn_request, repair_stream_tx)
+    }
+    .await
+    .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
 
     let response = parse_one_shot_response(&repair_result.assistant_message, protocol_profile)
         .map_err(|error| {

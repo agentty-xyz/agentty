@@ -18,6 +18,7 @@ use crate::{TurnError, TurnOptions, WriteRecord};
 pub(super) enum PauseAt {
     Renewal,
     RenewalAcknowledgement,
+    RenewalAndCompletion,
     Completion,
     CompletionAcknowledgement,
     Failure,
@@ -65,7 +66,10 @@ impl GatedStore {
     }
 
     async fn pause(&self, phase: PauseAt) {
-        if self.pause_at == phase {
+        if self.pause_at == phase
+            || (self.pause_at == PauseAt::RenewalAndCompletion
+                && matches!(phase, PauseAt::RenewalAcknowledgement | PauseAt::Completion))
+        {
             self.entered.notify_one();
             self.release.notified().await;
         }

@@ -1,6 +1,7 @@
 //! Bounded reviews of original diff fragments, retaining completed findings.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ag_agent::{
     AgentRequestKind, OneShotError, OneShotRequest, PermissionMode, ProviderCallBudget,
@@ -10,17 +11,30 @@ use ag_protocol::{AgentResponse, FocusedReview, FocusedReviewSeverity};
 use ag_worker::RunClient;
 
 use super::diff_prompt::{self, MAX_PROVIDER_CALLS, MIN_CHUNK_BYTES, PROMPT_BUDGET};
+use super::review::ReviewProgress;
+
+/// Bounds simultaneous provider work within one focused review.
+const REVIEW_CONCURRENCY: usize = 3;
+
+/// One original fragment's result and any provider-required history reduction.
+struct FragmentReview {
+    context: String,
+    fragment: String,
+    position: Vec<usize>,
+    result: Result<FocusedReview, OneShotError>,
+}
 
 /// Reviews original diff text in bounded fragments. History alone may be
 /// summarized. All fragments, history repairs, and the cross-file pass share
-/// one provider budget. A failed later pass preserves earlier findings and
-/// explicitly identifies incomplete coverage.
+/// one provider budget. Concurrent batches merge in input order; failures drain
+/// their running peers before reporting incomplete coverage and stop new work.
 pub(super) async fn submit(
     client: &dyn RunClient,
     mut request: OneShotRequest,
     diff: &str,
     context: &str,
-    render: impl Fn(&str, &str) -> Result<String, OneShotError>,
+    render: impl Fn(&str, &str) -> Result<String, OneShotError> + Sync,
+    progress: impl Fn(ReviewProgress) + Sync,
 ) -> Result<String, OneShotError> {
     let budget = ProviderCallBudget::new(MAX_PROVIDER_CALLS);
     request.provider_call_budget = Some(budget.clone());
@@ -28,61 +42,88 @@ pub(super) async fn submit(
     request.request_kind = AgentRequestKind::FocusedReview;
     let mut context = context.to_string();
     if render(diff, &context)?.len() > PROMPT_BUDGET {
+        if context.len() > 7_500 {
+            progress(ReviewProgress::SummarizingHistory);
+        }
         context = diff_prompt::summarize(client, &request, &context, 7_500, &budget).await?;
     }
-    let mut pending = VecDeque::from([diff.to_string()]);
+    let mut pending = VecDeque::from([(Vec::new(), diff.to_string())]);
+    let mut completed_reviews = BTreeMap::new();
     let mut review = FocusedReview {
         project_impact: Vec::new(),
         suggestions: Vec::new(),
     };
     let mut completed = 0;
     let mut coverage = String::new();
-    while let Some(fragment) = pending.pop_front() {
-        let result =
-            review_fragment(client, &request, &fragment, &mut context, &render, &budget).await;
-        match result {
-            Ok(result) => {
-                merge(&mut review, result);
-                completed += 1;
+    while !pending.is_empty() {
+        let finished = AtomicUsize::new(completed);
+        let total = completed + pending.len();
+        progress(ReviewProgress::Batches { completed, total });
+        let batch_completed = || {
+            progress(ReviewProgress::Batches {
+                completed: finished.fetch_add(1, Ordering::Relaxed) + 1,
+                total,
+            });
+        };
+        let results = review_batch(
+            client,
+            &request,
+            &mut pending,
+            &context,
+            &render,
+            &budget,
+            &batch_completed,
+        )
+        .await;
+        let mut retry = VecDeque::new();
+        let mut failure = None;
+        for FragmentReview {
+            context: fragment_context,
+            fragment,
+            position,
+            result,
+        } in results.into_iter().flatten()
+        {
+            // Reuse the smallest accepted history for later batches and the
+            // cross-file pass without sharing mutable context across requests.
+            if fragment_context.len() < context.len() {
+                context = fragment_context;
             }
-            Err(error)
-                if is_input_size_error(&error.to_string())
-                    && fragment.len() > MIN_CHUNK_BYTES
-                    && budget.ensure_available().is_ok() =>
-            {
-                // Fill useful batches for very large inputs, leaving room
-                // for bounded history and the focused-review schema.
-                let chunk_limit = (fragment.len() / 2).min(PROMPT_BUDGET - 12_000);
-                for chunk in diff_prompt::chunks(&fragment, chunk_limit)
-                    .into_iter()
-                    .rev()
+            match result {
+                Ok(result) => {
+                    completed_reviews.insert(position, result);
+                    completed += 1;
+                }
+                Err(error)
+                    if is_input_size_error(&error.to_string())
+                        && fragment.len() > MIN_CHUNK_BYTES
+                        && budget.ensure_available().is_ok() =>
                 {
-                    pending.push_front(chunk);
+                    retry.extend(split_fragment(&fragment, &position));
                 }
-            }
-            Err(error) => {
-                if completed == 0 {
-                    return Err(error);
+                Err(error) => {
+                    failure.get_or_insert(error);
+                    retry.push_back((position, fragment));
                 }
-                pending.push_front(fragment);
-                coverage = format!(
-                    "Partial review: {completed} batches completed; {} fragments remain \
-                     unreviewed. {error}\n\nUnreviewed diff headers:\n{}\n\nPress `f` to retry \
-                     the review.",
-                    pending.len(),
-                    file_headers(
-                        &pending
-                            .iter()
-                            .map(String::as_str)
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    )
-                );
-                break;
             }
         }
+        retry.append(&mut pending);
+        pending = retry;
+        if let Some(error) = failure {
+            if completed == 0 {
+                return Err(error);
+            }
+            coverage = partial_coverage(&pending, completed, &error);
+            break;
+        }
+    }
+    // Hierarchical positions keep retry subdivisions ahead of later source
+    // fragments, including when only part of the review completes.
+    for result in completed_reviews.into_values() {
+        merge(&mut review, result);
     }
     if completed > 1 && coverage.is_empty() {
+        progress(ReviewProgress::CrossFile);
         let cross_file =
             cross_file_review(client, &request, &review, diff, &context, &render, &budget).await;
         match cross_file {
@@ -95,18 +136,7 @@ pub(super) async fn submit(
             }
         }
     }
-    if context.contains("[Summarized input;") {
-        coverage.push_str(
-            "\nReview coverage is limited: session history was summarized; accepted decisions may \
-             require checking against the original conversation.",
-        );
-    }
-    let text = review.to_markdown();
-    if coverage.is_empty() {
-        return Ok(text);
-    }
-
-    Ok(format!("{text}\n\n### Coverage\n\n{}", coverage.trim()))
+    Ok(render_review(&review, &context, coverage))
 }
 
 /// Parses the transport-normalized focused-review response.
@@ -121,6 +151,55 @@ pub(super) fn parse_response(response: &AgentResponse) -> Result<FocusedReview, 
             "Review assist returned invalid structured output: {error}"
         ))
     })
+}
+
+/// Runs one bounded wave and retains every outcome, even when a peer fails.
+/// Joining borrowed futures avoids detached tasks and preserves input order.
+async fn review_batch(
+    client: &dyn RunClient,
+    request: &OneShotRequest,
+    pending: &mut VecDeque<(Vec<usize>, String)>,
+    context: &str,
+    render: &(impl Fn(&str, &str) -> Result<String, OneShotError> + Sync),
+    budget: &ProviderCallBudget,
+    completed: &(impl Fn() + Sync),
+) -> [Option<FragmentReview>; REVIEW_CONCURRENCY] {
+    let fragments: [_; REVIEW_CONCURRENCY] = std::array::from_fn(|_| pending.pop_front());
+    let [first, second, third] = fragments.map(|fragment| async move {
+        let (position, fragment) = fragment?;
+        let mut context = context.to_string();
+        let result =
+            review_fragment(client, request, &fragment, &mut context, render, budget).await;
+        if result.is_ok() {
+            completed();
+        }
+
+        Some(FragmentReview {
+            context,
+            fragment,
+            position,
+            result,
+        })
+    });
+    let (first, second, third) = tokio::join!(first, second, third);
+
+    [first, second, third]
+}
+
+/// Subdivides one source position, leaving room for history and the schema.
+fn split_fragment(fragment: &str, position: &[usize]) -> VecDeque<(Vec<usize>, String)> {
+    let chunk_limit = (fragment.len() / 2).min(PROMPT_BUDGET - 12_000);
+
+    diff_prompt::chunks(fragment, chunk_limit)
+        .into_iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            let mut position = position.to_vec();
+            position.push(index);
+
+            (position, chunk)
+        })
+        .collect()
 }
 
 /// Adapts history to a provider's smaller input limit before splitting the
@@ -233,6 +312,43 @@ fn file_headers(diff: &str) -> String {
     }
 
     headers.join("\n")
+}
+
+/// Identifies unfinished source fragments without discarding completed
+/// findings.
+fn partial_coverage(
+    pending: &VecDeque<(Vec<usize>, String)>,
+    completed: usize,
+    error: &OneShotError,
+) -> String {
+    format!(
+        "Partial review: {completed} batches completed; {} fragments remain unreviewed. \
+         {error}\n\nUnreviewed diff headers:\n{}\n\nPress `f` to retry the review.",
+        pending.len(),
+        file_headers(
+            &pending
+                .iter()
+                .map(|(_, fragment)| fragment.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    )
+}
+
+/// Appends explicit coverage limits to the merged review output.
+fn render_review(review: &FocusedReview, context: &str, mut coverage: String) -> String {
+    if context.contains("[Summarized input;") {
+        coverage.push_str(
+            "\nReview coverage is limited: session history was summarized; accepted decisions may \
+             require checking against the original conversation.",
+        );
+    }
+    let text = review.to_markdown();
+    if coverage.is_empty() {
+        return text;
+    }
+
+    format!("{text}\n\n### Coverage\n\n{}", coverage.trim())
 }
 
 #[cfg(test)]

@@ -200,6 +200,12 @@ pub(crate) enum AppEvent {
         review_text: String,
         session_id: SessionId,
     },
+    /// Reports progress only for the still-loading review generation.
+    ReviewProgressUpdated {
+        diff_hash: u64,
+        progress: app::review::ReviewProgress,
+        session_id: SessionId,
+    },
     /// Indicates review assist failed for a session.
     ReviewPreparationFailed {
         diff_hash: u64,
@@ -350,6 +356,7 @@ pub(super) struct AppEventBatch {
     pub(super) git_status_update: Option<GitStatusBatchUpdate>,
     pub(super) latest_available_version_update: Option<LatestAvailableVersionUpdate>,
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
+    pub(super) review_progress_updates: HashMap<SessionId, (u64, app::review::ReviewProgress)>,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
     pub(super) review_updates: HashMap<SessionId, ReviewUpdate>,
     pub(super) session_creations: Vec<(String, Result<String, String>)>,
@@ -421,6 +428,7 @@ impl AppEventBatch {
             || !self.published_branch_sync_updates.is_empty()
             || !self.review_request_status_updates.is_empty()
             || !self.review_updates.is_empty()
+            || !self.review_progress_updates.is_empty()
             || !self.session_model_updates.is_empty()
             || !self.session_orchestration_progress_updates.is_empty()
             || !self.session_personality_updates.is_empty()
@@ -470,6 +478,14 @@ impl AppEventBatch {
     /// tick preserves cumulative usage from multiple completed turns.
     pub(super) fn collect_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::ReviewProgressUpdated {
+                diff_hash,
+                progress,
+                session_id,
+            } => {
+                self.review_progress_updates
+                    .insert(session_id, (diff_hash, progress));
+            }
             AppEvent::SessionOrchestrationProgressUpdated {
                 progress,
                 session_id,
@@ -618,7 +634,8 @@ impl AppEventBatch {
             | AppEvent::SessionWorkflowNoticeUpdated { .. }
             | AppEvent::PublishedBranchSyncUpdated { .. }
             | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_workflow_event(event),
-            AppEvent::SessionOrchestrationProgressUpdated { .. }
+            AppEvent::ReviewProgressUpdated { .. }
+            | AppEvent::SessionOrchestrationProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
             | AppEvent::GitStatusUpdated { .. }
             | AppEvent::VersionAvailabilityUpdated { .. }
@@ -722,7 +739,8 @@ impl AppEventBatch {
                 result,
                 session_id,
             } => self.collect_review_request_status_updated(generation, result, session_id),
-            AppEvent::SessionOrchestrationProgressUpdated { .. }
+            AppEvent::ReviewProgressUpdated { .. }
+            | AppEvent::SessionOrchestrationProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
             | AppEvent::AtMentionEntriesLoaded { .. }
             | AppEvent::DiffPreviewLoaded { .. }
@@ -1450,6 +1468,20 @@ impl App {
 
         for diff_preview_update in std::mem::take(&mut event_batch.diff_preview_updates) {
             self.apply_diff_preview_update(&diff_preview_update);
+        }
+        for (session_id, (diff_hash, progress)) in
+            std::mem::take(&mut event_batch.review_progress_updates)
+        {
+            if let Some(app::review::ReviewCacheEntry::Loading {
+                diff_hash: active_hash,
+                progress: current,
+                ..
+            }) = self.review_cache.get_mut(&session_id)
+                && *active_hash == diff_hash
+            {
+                *current = Some(progress);
+                self.restore_review_output(&session_id);
+            }
         }
 
         self.apply_status_bar_updates(

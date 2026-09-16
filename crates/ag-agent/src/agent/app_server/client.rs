@@ -26,6 +26,15 @@ pub(crate) trait RuntimeClientProvider: Send + Sync + 'static {
     /// Returns whether successful runtimes remain alive between turns.
     fn retain_runtime_after_turn() -> bool;
 
+    /// Creates fresh conversation context on a compatible idle process.
+    /// Returns false when the provider requires a process restart instead.
+    fn reset_context<'scope>(
+        _runtime: &'scope mut Self::Runtime,
+        _request: &'scope AppServerTurnRequest,
+    ) -> BorrowedAppServerFuture<'scope, Result<bool, AppServerError>> {
+        Box::pin(async { Ok(false) })
+    }
+
     /// Starts and bootstraps one provider runtime for a request.
     fn start_runtime(
         request: AppServerTurnRequest,
@@ -80,6 +89,7 @@ impl<Provider: RuntimeClientProvider> ProviderRuntimeClient<Provider> {
         sessions: &AppServerSessionRegistry<Provider::Runtime>,
         request: AppServerTurnRequest,
         stream_tx: &mpsc::UnboundedSender<AppServerStreamEvent>,
+        retain_runtime: bool,
     ) -> Result<AppServerTurnResponse, AppServerError> {
         let stream_tx = stream_tx.clone();
         let shutdown_stream_tx = stream_tx.clone();
@@ -94,7 +104,7 @@ impl<Provider: RuntimeClientProvider> ProviderRuntimeClient<Provider> {
                 matches_request: Self::matches_request,
                 pid: Self::pid,
                 provider_conversation_id: Self::provider_conversation_id,
-                retain_runtime_after_turn: Provider::retain_runtime_after_turn(),
+                retain_runtime_after_turn: retain_runtime || Provider::retain_runtime_after_turn(),
                 restored_context: Self::restored_context,
             },
             Provider::schema_instruction_mode(),
@@ -119,6 +129,35 @@ impl<Provider: RuntimeClientProvider> ProviderRuntimeClient<Provider> {
             move |runtime| Self::shutdown_runtime(runtime, &shutdown_stream_tx),
         )
         .await
+    }
+
+    /// Resets an idle process before an isolated request; failed resets discard
+    /// the process so stale conversation state can never reach the next turn.
+    async fn prepare_isolated_runtime(
+        sessions: &AppServerSessionRegistry<Provider::Runtime>,
+        request: &AppServerTurnRequest,
+    ) -> Result<(), AppServerError> {
+        let Some(mut runtime) = sessions.take_session(&request.session_id)? else {
+            return Ok(());
+        };
+        let reset = if runtime.matches_request(request) {
+            Provider::reset_context(&mut runtime, request).await
+        } else {
+            Ok(false)
+        };
+        match reset {
+            Ok(true) => {
+                if let Err((error, mut runtime)) =
+                    sessions.store_session_or_recover(request.session_id.clone(), runtime)
+                {
+                    runtime.shutdown_runtime().await;
+                    return Err(error);
+                }
+            }
+            Ok(false) | Err(_) => runtime.shutdown_runtime().await,
+        }
+
+        Ok(())
     }
 
     /// Returns whether the runtime can serve one incoming request.
@@ -167,7 +206,32 @@ impl<Provider: RuntimeClientProvider> AppServerClient for ProviderRuntimeClient<
     ) -> AppServerFuture<Result<AppServerTurnResponse, AppServerError>> {
         let sessions = self.sessions.clone();
 
-        Box::pin(async move { Self::run_turn_internal(&sessions, request, &stream_tx).await })
+        Box::pin(
+            async move { Self::run_turn_internal(&sessions, request, &stream_tx, false).await },
+        )
+    }
+
+    fn run_isolated_turn(
+        &self,
+        request: AppServerTurnRequest,
+        stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    ) -> AppServerFuture<Result<AppServerTurnResponse, AppServerError>> {
+        let sessions = self.sessions.clone();
+
+        Box::pin(async move {
+            Self::prepare_isolated_runtime(&sessions, &request).await?;
+            Self::run_turn_internal(&sessions, request, &stream_tx, true).await
+        })
+    }
+
+    fn run_retained_turn(
+        &self,
+        request: AppServerTurnRequest,
+        stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    ) -> AppServerFuture<Result<AppServerTurnResponse, AppServerError>> {
+        let sessions = self.sessions.clone();
+
+        Box::pin(async move { Self::run_turn_internal(&sessions, request, &stream_tx, true).await })
     }
 
     fn shutdown_session(&self, session_id: String) -> AppServerFuture<()> {

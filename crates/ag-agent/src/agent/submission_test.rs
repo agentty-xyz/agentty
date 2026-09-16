@@ -2,6 +2,8 @@
 mod app_server;
 #[path = "submission_test/cli_test.rs"]
 mod cli;
+#[path = "submission_test/pool_test.rs"]
+mod pool;
 #[path = "submission_test/repair_test.rs"]
 mod repair;
 #[path = "submission_test/support_test.rs"]

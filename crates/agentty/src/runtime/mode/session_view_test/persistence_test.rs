@@ -11,6 +11,7 @@ async fn test_open_or_regenerate_skips_when_loading_in_progress() {
     app.review_cache.insert(
         session_id.clone().into(),
         ReviewCacheEntry::Loading {
+            progress: None,
             diff_hash: 42,
             review_agent,
         },
