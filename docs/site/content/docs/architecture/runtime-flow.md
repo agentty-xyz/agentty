@@ -1083,5 +1083,7 @@ cannot keep the turn open. Resource accounting PIDs do not authorize cancellatio
 Started operations receive a heartbeat every thirty seconds while their workflow runs.
 Storage updates only running rows. Tracking failures are reported without abandoning
 work. Operation completion includes ordered post-processing and is separate from model
-turn completion. Restart recovery reconciles host state before failing abandoned
-operations; it requires exclusive ownership of the application root.
+turn completion. Terminal storage updates atomically honor persisted cancellation
+requests, even when the workflow returns success or an ordinary error. Restart recovery
+reconciles host state before failing abandoned operations; it requires exclusive
+ownership of the application root.

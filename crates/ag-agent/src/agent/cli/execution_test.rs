@@ -9,6 +9,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use ag_protocol::TurnPromptAttachment;
+use rustix::process::{self, Pid, WaitId, WaitIdOptions};
 use tempfile::tempdir;
 use tokio::io::{AsyncRead, ReadBuf};
 
@@ -447,15 +448,100 @@ async fn test_capture_stderr_returns_read_error() {
     assert!(matches!(error, CliExecutionError::StderrRead(_)));
 }
 
-#[test]
-fn cleanup_without_process_group_ownership_does_not_signal_the_host() {
+#[tokio::test]
+async fn cleanup_without_process_group_ownership_does_not_signal_the_host() {
     // Arrange
-    let guard = ProcessGroupGuard(None);
+    let mut guard = ProcessGroupGuard(None);
     let host = std::process::id();
 
     // Act
+    guard.wait_for_exit().await.expect("no leader to wait for");
     drop(guard);
 
     // Assert: reaching this point proves no signal was sent to the host group.
     assert_eq!(std::process::id(), host);
+}
+
+#[tokio::test]
+async fn group_cleanup_retains_the_exited_leader_until_reaping() {
+    // Arrange
+    let mut child = tokio::process::Command::from(shell_command("exit 7"))
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn leader");
+    let leader = Pid::from_raw(i32::try_from(child.id().expect("child PID")).expect("valid PID"))
+        .expect("nonzero PID");
+    let mut guard = ProcessGroupGuard(Some(leader));
+
+    // Act
+    tokio::time::timeout(Duration::from_secs(5), guard.wait_for_exit())
+        .await
+        .expect("leader exits promptly")
+        .expect("observe exit");
+    drop(guard);
+    let retained = process::waitid(
+        WaitId::Pid(leader),
+        WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG,
+    )
+    .expect("leader still belongs to this executor");
+    let status = child.wait().await.expect("reap leader");
+
+    // Assert
+    assert!(retained.is_some(), "cleanup must leave the leader unreaped");
+    assert_eq!(status.code(), Some(7));
+}
+
+#[tokio::test]
+async fn canceling_exit_observation_still_terminates_the_owned_group() {
+    // Arrange
+    let mut child = tokio::process::Command::from(shell_command("while :; do :; done"))
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn leader");
+    let leader = Pid::from_raw(i32::try_from(child.id().expect("child PID")).expect("valid PID"))
+        .expect("nonzero PID");
+    let mut guard = ProcessGroupGuard(Some(leader));
+
+    // Act
+    let observation = tokio::time::timeout(Duration::from_millis(20), guard.wait_for_exit()).await;
+    drop(guard);
+    let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+        .await
+        .expect("cleanup terminates the leader")
+        .expect("reap leader");
+
+    // Assert
+    assert!(observation.is_err());
+    assert!(!status.success());
+}
+
+#[tokio::test]
+async fn lost_leader_ownership_disarms_group_cleanup() {
+    // Arrange
+    let mut child = tokio::process::Command::from(shell_command("exit 0"))
+        .process_group(0)
+        .spawn()
+        .expect("spawn leader");
+    let leader = Pid::from_raw(i32::try_from(child.id().expect("child PID")).expect("valid PID"))
+        .expect("nonzero PID");
+    let mut guard = ProcessGroupGuard(Some(leader));
+    child.wait().await.expect("simulate another waiter reaping");
+
+    // Act
+    let error = guard
+        .wait_for_exit()
+        .await
+        .expect_err("leader was already reaped");
+
+    // Assert
+    assert_eq!(
+        error.raw_os_error(),
+        Some(rustix::io::Errno::CHILD.raw_os_error())
+    );
+    assert!(
+        guard.0.is_none(),
+        "never signal a reusable process group ID"
+    );
 }

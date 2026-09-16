@@ -148,10 +148,10 @@ WHERE id = ?
         sqlx::query!(
             r"
 UPDATE session_operation
-SET status = 'done',
+SET status = CASE WHEN cancel_requested = 1 THEN 'canceled' ELSE 'done' END,
     finished_at = ?,
     heartbeat_at = ?,
-    last_error = NULL
+    last_error = CASE WHEN cancel_requested = 1 THEN 'Canceled by user' ELSE NULL END
 WHERE id = ?
 ",
             now,
@@ -174,7 +174,7 @@ WHERE id = ?
         sqlx::query!(
             r"
 UPDATE session_operation
-SET status = 'failed',
+SET status = CASE WHEN cancel_requested = 1 THEN 'canceled' ELSE 'failed' END,
     finished_at = ?,
     heartbeat_at = ?,
     last_error = ?

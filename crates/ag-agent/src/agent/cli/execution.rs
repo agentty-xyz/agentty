@@ -5,7 +5,7 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::process::ExitStatus;
 use std::time::Duration;
 
-use rustix::process::{self, Pid, Signal};
+use rustix::process::{self, Pid, Signal, WaitId, WaitIdOptions};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _};
 
 use super::stdin;
@@ -122,7 +122,7 @@ pub(crate) async fn execute_cli_command(
         .kill_on_drop(true);
 
     let mut child = tokio_command.spawn().map_err(CliExecutionError::Spawn)?;
-    let process_group = ProcessGroupGuard(
+    let mut process_group = ProcessGroupGuard(
         child
             .id()
             .and_then(|pid| i32::try_from(pid).ok())
@@ -146,13 +146,17 @@ pub(crate) async fn execute_cli_command(
 
     let execution = async {
         let wait = async {
-            let exit_status = child.wait().await.map_err(CliExecutionError::Wait);
+            process_group
+                .wait_for_exit()
+                .await
+                .map_err(CliExecutionError::Wait)?;
             // Descendants can keep stdout/stderr open after the parent exits.
             // Terminate them before waiting for stream EOFs, then drain the
-            // pipes.
+            // pipes. Keep the leader unreaped until group cleanup so its
+            // numeric PID/PGID cannot be reused by an unrelated process.
             drop(process_group);
 
-            exit_status
+            child.wait().await.map_err(CliExecutionError::Wait)
         };
         let stdout_capture = capture_stdout(tokio::io::BufReader::new(stdout), observer);
         let stderr_capture = capture_stderr(stderr);
@@ -186,6 +190,36 @@ pub(crate) async fn execute_cli_command(
 /// exit. Cancellation, timeout, errors, and normal completion all terminate
 /// stragglers.
 struct ProcessGroupGuard(Option<Pid>);
+
+impl ProcessGroupGuard {
+    /// Observes exit without reaping the leader. Nonblocking checks keep
+    /// cancellation responsive without leaving a detached blocking waiter.
+    async fn wait_for_exit(&mut self) -> io::Result<()> {
+        let Some(leader) = self.0 else {
+            return Ok(());
+        };
+
+        loop {
+            let status = rustix::io::retry_on_intr(|| {
+                process::waitid(
+                    WaitId::Pid(leader),
+                    WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG,
+                )
+            });
+            match status {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => tokio::time::sleep(Duration::from_millis(10)).await,
+                Err(error) => {
+                    // Ownership can no longer be established (for example,
+                    // another waiter reaped the leader). Never signal its ID.
+                    self.0 = None;
+
+                    return Err(error.into());
+                }
+            }
+        }
+    }
+}
 
 impl Drop for ProcessGroupGuard {
     fn drop(&mut self) {

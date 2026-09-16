@@ -35,6 +35,7 @@ async fn heartbeats_and_terminal_tracking_preserve_operation_result() {
                 tokio::time::sleep(Duration::from_secs(31)).await;
                 if fail { Err("publish failed") } else { Ok(()) }
             },
+            |_| false,
             |error| errors.lock().expect("test operation succeeds").push(error),
         )
         .await;
@@ -43,6 +44,44 @@ async fn heartbeats_and_terminal_tracking_preserve_operation_result() {
         assert_eq!(
             errors.lock().expect("test operation succeeds").len(),
             if fail { 2 } else { 1 }
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancellation_is_terminal_and_preserves_the_original_error() {
+    for tracking_fails in [false, true] {
+        // Arrange
+        let mut store = MockOperationRepository::<String>::new();
+        store
+            .expect_mark_session_operation_canceled()
+            .withf(|id, reason| id == "operation" && reason == "stopped by user")
+            .once()
+            .returning(move |_, _| {
+                if tracking_fails {
+                    Err("tracking unavailable".into())
+                } else {
+                    Ok(())
+                }
+            });
+        let errors = Mutex::new(Vec::new());
+
+        // Act
+        let result = execute(
+            &store,
+            &HeartbeatClock,
+            "operation",
+            async { Err("stopped by user") },
+            |error| *error == "stopped by user",
+            |error| errors.lock().expect("error lock").push(error),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, Err("stopped by user"));
+        assert_eq!(
+            errors.into_inner().expect("error lock").len(),
+            usize::from(tracking_fails)
         );
     }
 }

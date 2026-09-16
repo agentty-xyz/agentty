@@ -1,6 +1,6 @@
 //! Public execution contract exercised without Agentty or provider binaries.
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ag_protocol::{AgentResponse, TurnPrompt};
 use ag_runtime::{
@@ -148,7 +148,7 @@ async fn host_submits_observes_cancels_and_recovers_without_a_frontend() {
         receiver,
     )
     .await;
-    let store = RecoveryStore(AtomicBool::new(false));
+    let store = RecoveryStore(AtomicBool::new(false), Mutex::new(None));
     let recovery: Result<(), String> =
         ag_worker::recover(&store, "restart", |operations| async move {
             assert_eq!(operations[0].id, "abandoned");
@@ -175,7 +175,44 @@ async fn host_submits_observes_cancels_and_recovers_without_a_frontend() {
     assert!(store.0.load(Ordering::SeqCst));
 }
 
-struct RecoveryStore(AtomicBool);
+#[tokio::test]
+async fn public_lifecycle_records_typed_cancellation_without_changing_the_result() {
+    // Arrange
+    let store = RecoveryStore(AtomicBool::new(false), Mutex::new(None));
+    let errors = Mutex::new(Vec::new());
+
+    // Act
+    let result = ag_worker::execute(
+        &store,
+        &ag_worker::HeartbeatClock,
+        "active-turn",
+        async {
+            Err(AgentError::InterruptedByUser(
+                "user stopped the turn".into(),
+            ))
+        },
+        |error| matches!(error, AgentError::InterruptedByUser(_)),
+        |error| errors.lock().expect("tracking error lock").push(error),
+    )
+    .await;
+
+    // Assert
+    let error = result.expect_err("canceled");
+    assert!(
+        matches!(&error, AgentError::InterruptedByUser(reason) if reason == "user stopped the turn")
+    );
+    assert_eq!(
+        *store.1.lock().expect("canceled operation lock"),
+        Some(("active-turn".into(), error.to_string()))
+    );
+    assert!(!store.0.load(Ordering::SeqCst));
+    assert_eq!(
+        errors.into_inner().expect("tracking error lock"),
+        Vec::<String>::new()
+    );
+}
+
+struct RecoveryStore(AtomicBool, Mutex<Option<(String, String)>>);
 
 #[async_trait]
 impl ag_worker::OperationRepository<String> for RecoveryStore {
@@ -207,12 +244,9 @@ impl ag_worker::OperationRepository<String> for RecoveryStore {
         Err("unexpected call".into())
     }
 
-    async fn mark_session_operation_canceled(
-        &self,
-        _id: &str,
-        _reason: &str,
-    ) -> Result<(), String> {
-        Err("unexpected call".into())
+    async fn mark_session_operation_canceled(&self, id: &str, reason: &str) -> Result<(), String> {
+        *self.1.lock().map_err(|error| error.to_string())? = Some((id.into(), reason.into()));
+        Ok(())
     }
 
     async fn mark_session_operation_done(&self, _id: &str) -> Result<(), String> {
