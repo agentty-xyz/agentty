@@ -453,21 +453,66 @@ impl RebaseAssistLoopInput {
         .await
     }
 
-    /// Runs the effective pre-commit hook against the staged conflict
-    /// resolution.
+    /// Runs the effective pre-commit hook, repairing and restaging rejected
+    /// resolutions before retrying while the rebase remains paused.
     ///
     /// # Errors
-    /// Returns an error when the hook rejects the staged changes or cannot be
-    /// executed.
+    /// Returns the latest hook error after the repair budget is exhausted,
+    /// or an error when assistance or staging fails.
     async fn run_pre_commit_hook(&self) -> Result<(), SessionError> {
-        self.git_client()
-            .run_pre_commit_hook(self.folder().to_path_buf())
-            .await
-            .map_err(|error| {
-                SessionError::Workflow(format!(
-                    "Pre-commit hook rejected resolved rebase conflicts: {error}"
-                ))
-            })
+        let mut repair_attempt = 0;
+        loop {
+            let Err(error) = self
+                .git_client()
+                .run_pre_commit_hook(self.folder().to_path_buf())
+                .await
+            else {
+                return Ok(());
+            };
+            let detail = format!("Pre-commit hook rejected resolved rebase conflicts: {error}");
+            if repair_attempt == REBASE_ASSIST_POLICY.max_attempts {
+                return Err(SessionError::Workflow(detail));
+            }
+
+            repair_attempt += 1;
+            self.repair_pre_commit_failure(&detail, repair_attempt)
+                .await?;
+            self.git_client()
+                .stage_all(self.folder().to_path_buf())
+                .await?;
+        }
+    }
+
+    /// Sends hook diagnostics through the same worker-owned assistance path
+    /// as conflict resolution, preserving the active session conversation.
+    async fn repair_pre_commit_failure(
+        &self,
+        detail: &str,
+        repair_attempt: usize,
+    ) -> Result<(), SessionError> {
+        let prompt = format!(
+            "{}\n{detail}",
+            include_str!("../../template/rebase_hook_repair_prompt.md")
+        );
+        match self {
+            Self::Session(input) => {
+                append_assist_header(
+                    &SessionManager::assist_context(input),
+                    TranscriptNotice::RebaseAssist,
+                    repair_attempt,
+                    REBASE_ASSIST_POLICY.max_attempts,
+                    "Repairing pre-commit hook failure:",
+                    detail,
+                )
+                .await;
+                SessionManager::run_rebase_assist_prompt(input, prompt).await
+            }
+            Self::Project(input) => input
+                .sync_assist_client
+                .resolve_rebase_conflicts(input.folder.clone(), prompt, input.session_agent)
+                .await
+                .map_err(|error| error.with_context("Sync rebase hook repair failed")),
+        }
     }
 
     /// Continues in-progress rebase for the active workflow.
@@ -2813,6 +2858,16 @@ impl SessionManager {
             conflicted_files,
             RebaseAssistWorkspace::SessionWorktree,
         )?;
+
+        Self::run_rebase_assist_prompt(input, prompt).await
+    }
+
+    /// Runs a conflict or hook repair prompt through the active assistance
+    /// mode.
+    async fn run_rebase_assist_prompt(
+        input: &RebaseAssistInput,
+        prompt: String,
+    ) -> Result<(), SessionError> {
         match &input.assist_mode {
             RebaseAssistMode::ExistingSession(assist_client) => assist_client
                 .resolve_rebase_conflicts(prompt)
