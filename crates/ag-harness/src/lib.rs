@@ -5,6 +5,13 @@
 //! inspection and patch tools. Provider and local filesystem implementations
 //! remain behind injectable boundaries.
 
+#[cfg(test)]
+extern crate self as ag_harness;
+
+#[cfg(test)]
+#[path = "../tests/support/store_conformance.rs"]
+mod store_conformance_test;
+
 mod chat_completion;
 mod comparison;
 mod engine;
@@ -20,6 +27,7 @@ mod repository;
 mod schema_contract;
 mod session;
 mod store;
+mod store_coordinator;
 mod telemetry;
 mod tool;
 mod trace;
@@ -49,7 +57,11 @@ pub use provider::{
 pub use read::{ReadError, ReadOutput};
 pub use repository::{Repository, RepositoryError};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
-pub use session::{SessionError, SessionInfo};
+pub use session::{
+    AcquiredTurn, Database as SqliteStore, LoadedSession, NewSession, SessionError, SessionInfo,
+    StoreIdentity, TurnOwner,
+};
+pub use store::SessionStore;
 pub use telemetry::LifecycleMetrics;
 pub use tool::{
     ReadAction, ReadArguments, ReadSide, Tool, ToolCall, ToolCallArguments, ToolDefinition,
@@ -59,5 +71,6 @@ pub use trace::LifecycleTraceObserver;
 pub use turn::{
     ModelRequestActivity, ToolActivity, TurnError, TurnLimits, TurnOptions, TurnOutcome, TurnReport,
 };
+pub use turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 pub use write::{WriteError, WriteOutput};
 pub use write_journal::{WriteRecord, WriteStatus};

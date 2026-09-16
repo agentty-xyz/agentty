@@ -303,13 +303,16 @@ async fn recovered_lease_cancels_the_original_model_request() {
         wait_for_fixture(&first_started, "the original model request").await;
         let original_expiry = stored_lease_expiry(&database).await;
         now.store(original_expiry.saturating_add(1), Ordering::SeqCst);
-        let result = second.send("retry").await;
+        assert!(matches!(
+            second.send("retry").await,
+            Err(SessionError::Busy { .. })
+        ));
         tokio::time::pause();
         tokio::time::advance(Duration::from_secs(TURN_LEASE_RENEWAL_INTERVAL_SECONDS)).await;
         tokio::time::resume();
         wait_for_fixture(&first_dropped, "the original model request cancellation").await;
 
-        result
+        second.send("retry").await
     });
 
     // Assert

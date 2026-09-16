@@ -1,7 +1,7 @@
 # `ag-harness`
 
 `ag-harness` runs structured LLM turns with explicit repository permissions and durable
-SQLite sessions.
+SQLite sessions or host-provided session stores.
 
 ## Durable sessions
 
@@ -42,10 +42,10 @@ let mut session = harness.resume("review-42").await?;
 let result = session.send_with_options("Now focus on error handling", options).await?;
 ```
 
-SQLite is the source of truth. A completed turn retains the user prompt, assistant
-messages, tool calls, and tool results. Failed and interrupted turns remain visible in
-the database but are not replayed. Different sessions can run concurrently; one session
-accepts only one active turn at a time.
+The selected store is the source of truth. A completed turn retains the user prompt,
+assistant messages, tool calls, and tool results. Failed and interrupted turns remain
+visible in the database but are not replayed. Different sessions can run concurrently;
+one session accepts only one active turn at a time.
 
 Write intents and outcomes remain available through `session.writes().await?` after
 failure, reopen, or history eviction. These records describe past operations, not the
@@ -54,6 +54,35 @@ current filesystem. `run_once` does not create a durable write journal.
 The library does not choose a database location. Configure it once with
 `Harness::database()`. The companion CLI defaults to `~/.ag-harness/db/harness.db`;
 override that with `AG_HARNESS_ROOT` or `--database`.
+
+## Custom session stores
+
+Implement `SessionStore` and pass a shared instance to `Harness::store`. SQLite remains
+available through `Harness::database` or an explicitly opened `SqliteStore`:
+
+```rust
+use std::{path::Path, sync::Arc};
+use ag_harness::{Harness, SessionStore, SqliteStore};
+
+let store: Arc<dyn SessionStore> = Arc::new(SqliteStore::open(Path::new("harness.db")).await?);
+let harness = Harness::new(model).store(store);
+```
+
+The latest `store` or `database` selection applies to new handles; existing builders and
+sessions retain their captured store. One-shot execution never accesses storage.
+
+Independent handles for one backing store must share a `StoreIdentity`. The harness
+coordinates local admission; each backend must atomically enforce ownership and leases
+across processes. Build an `AcquiredTurn` before committing its reservation, retain it
+through acknowledgment, then activate it. Forward the supplied store handle unchanged so
+decorators and admission remain attached to renewal, journals, and cleanup. Failed
+cleanup retains admission until owner-scoped recovery succeeds. Keep the Tokio runtime
+driven until cleanup settles; this does not establish completion of filesystem effects.
+
+Use `StoredTurnOptions` for historical encoding and continuation compatibility, and
+`ModelMessage::retained_bytes` for bounded whole-turn history. `SessionError::Store`
+retains backend errors without requiring SQL types. The external test implementation and
+shared conformance cases are in `tests/support/store_conformance.rs`.
 
 ## One turn
 
@@ -77,7 +106,7 @@ a trusted Git executable outside the containing worktree.
 External providers implement the single `Model` trait and return `ModelCompletion`. They
 receive the complete ordered history in `ModelRequest::messages()`. A provider may also
 return an opaque continuation identifier; if native resume is unavailable, the harness
-retries once using the SQLite history and retains any replacement continuation returned
+retries once using the stored history and retains any replacement continuation returned
 by that replay.
 
 Attach `Harness::with_lifecycle_observer()` for content-free turn, model, and tool

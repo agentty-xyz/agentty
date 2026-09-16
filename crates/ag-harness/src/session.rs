@@ -1,8 +1,9 @@
 //! Durable session ownership and SQLite transactional persistence.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,7 +18,7 @@ use sqlx::{SqliteConnection, SqlitePool, Transaction};
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, MissedTickBehavior};
+use tokio::time::Instant;
 
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::store::SessionStore;
@@ -161,7 +162,7 @@ impl SessionInfo {
 
 /// Configuration stored when creating a persistent chat session.
 #[derive(Clone, Debug)]
-pub(crate) struct NewSession {
+pub struct NewSession {
     id: String,
     schema: OutputSchema,
     system_prompt: Option<String>,
@@ -169,7 +170,7 @@ pub(crate) struct NewSession {
 
 impl NewSession {
     /// Creates a persistent-session configuration.
-    pub(crate) fn new(id: impl Into<String>, schema: OutputSchema) -> Self {
+    pub fn new(id: impl Into<String>, schema: OutputSchema) -> Self {
         Self {
             id: id.into(),
             schema,
@@ -177,24 +178,26 @@ impl NewSession {
         }
     }
 
-    pub(crate) fn with_optional_system_prompt(mut self, system_prompt: Option<String>) -> Self {
+    /// Sets the system prompt retained across future resumes.
+    #[must_use]
+    pub fn with_optional_system_prompt(mut self, system_prompt: Option<String>) -> Self {
         self.system_prompt = system_prompt;
 
         self
     }
 
     /// Returns the stable application-provided session identifier.
-    pub(crate) fn id(&self) -> &str {
+    pub fn id(&self) -> &str {
         &self.id
     }
 
     /// Returns the structured-output schema retained by the session.
-    pub(crate) fn schema(&self) -> &OutputSchema {
+    pub fn schema(&self) -> &OutputSchema {
         &self.schema
     }
 
     /// Returns the optional session system prompt.
-    pub(crate) fn system_prompt(&self) -> Option<&str> {
+    pub fn system_prompt(&self) -> Option<&str> {
         self.system_prompt.as_deref()
     }
 }
@@ -214,25 +217,46 @@ where
     }
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
-pub(crate) enum StoreIdentity {
+/// Stable backing-store identity for process-local admission and cleanup.
+/// Independent handles for the same backing store must use equal identities.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct StoreIdentity(StoreIdentityKind);
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum StoreIdentityKind {
     File(PathBuf),
+    Host(String, String),
     Temporary(u64),
 }
 
 impl StoreIdentity {
+    /// Creates a host identity. Use a globally distinct backend namespace and
+    /// a stable backing-store key, never a handle address or credentials.
+    pub fn new(namespace: impl Into<String>, key: impl Into<String>) -> Self {
+        Self(StoreIdentityKind::Host(namespace.into(), key.into()))
+    }
+
+    /// Creates an isolated process-local identity; clone it for shared handles.
+    pub fn unique() -> Self {
+        Self::temporary()
+    }
+
     async fn for_path(path: &Path) -> Result<Self, std::io::Error> {
         if path.as_os_str().is_empty() || path == Path::new(":memory:") {
             return Ok(Self::temporary());
         }
 
-        tokio::fs::canonicalize(path).await.map(Self::File)
+        tokio::fs::canonicalize(path)
+            .await
+            .map(|path| Self(StoreIdentityKind::File(path)))
     }
 
     fn temporary() -> Self {
         static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(0);
 
-        Self::Temporary(NEXT_IDENTITY.fetch_add(1, Ordering::Relaxed))
+        Self(StoreIdentityKind::Temporary(
+            NEXT_IDENTITY.fetch_add(1, Ordering::Relaxed),
+        ))
     }
 }
 
@@ -250,7 +274,7 @@ impl ReservationObserver for () {
 
 /// SQLite database used by persistent harness sessions.
 #[derive(Clone)]
-pub(crate) struct Database {
+pub struct Database {
     abandoned_turns: Arc<AbandonedTurnRegistry>,
     identity: StoreIdentity,
     pool: SqlitePool,
@@ -265,7 +289,7 @@ impl Database {
     ///
     /// Returns an error when the parent directory cannot be created, the
     /// database cannot be opened, or a migration fails.
-    pub(crate) async fn open(path: &Path) -> Result<Self, SessionError> {
+    pub async fn open(path: &Path) -> Result<Self, SessionError> {
         Self::open_with_timestamp_source(path, system_timestamp_source()).await
     }
 
@@ -284,8 +308,19 @@ impl Database {
         }
 
         let options = connect_options(path);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(DB_POOL_MAX_CONNECTIONS)
+        // SQLite temporary databases belong to one connection. Additional
+        // pooled connections or eviction would lose their schema and history.
+        let pool_options = SqlitePoolOptions::new();
+        let pool_options = if path.as_os_str().is_empty() || path == Path::new(":memory:") {
+            pool_options
+                .max_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None)
+                .test_before_acquire(false)
+        } else {
+            pool_options.max_connections(DB_POOL_MAX_CONNECTIONS)
+        };
+        let pool = pool_options
             .connect_with(options)
             .await
             .session_context("open persistent session database")?;
@@ -924,6 +959,15 @@ WHERE id = ? AND session_id = ? AND turn_position = ?
 /// Error returned by persistent session operations.
 #[derive(Debug, Error)]
 pub enum SessionError {
+    /// A host-provided store failed without requiring a SQLite error type.
+    #[error("session store operation `{operation}` failed: {source}")]
+    Store {
+        /// Stable semantic operation name, excluding request contents.
+        operation: &'static str,
+        /// Original backend error.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     /// A session with the requested identifier already exists.
     #[error("persistent session `{id}` already exists")]
     AlreadyExists {
@@ -991,8 +1035,8 @@ pub enum SessionError {
     /// A persisted output schema is no longer valid.
     #[error(transparent)]
     Schema(#[from] OutputSchemaError),
-    /// Durable session operations require a configured SQLite database.
-    #[error("durable sessions require Harness::database(path)")]
+    /// Session operations require a configured store.
+    #[error("durable sessions require Harness::database(path) or Harness::store(store)")]
     StorageRequired,
     /// The model turn failed; durable write records remain available through
     /// [`crate::Session::writes`].
@@ -1019,20 +1063,89 @@ impl From<StoredTurnOptionsError> for SessionError {
     }
 }
 
-pub(crate) struct AcquiredTurn {
+/// A reserved turn that retains cleanup ownership through commit
+/// acknowledgment. Dropping it interrupts only its owner. The Tokio runtime
+/// must remain driven until cleanup completes; persistence settlement does not
+/// settle filesystem effects.
+pub struct AcquiredTurn {
     pub(crate) guard: TurnGuard,
     pub(crate) provider_session_id: Option<String>,
     pub(crate) turns: Vec<Vec<ModelMessage>>,
 }
 
-pub(crate) struct LoadedSession {
-    pub(crate) max_history_bytes: usize,
-    pub(crate) model: Option<String>,
-    pub(crate) provider: Option<String>,
-    pub(crate) provider_session_id: Option<String>,
-    pub(crate) schema: OutputSchema,
-    pub(crate) system_prompt: Option<String>,
-    pub(crate) turns: Vec<Vec<ModelMessage>>,
+impl AcquiredTurn {
+    /// Returns the reservation identity used for backend lifecycle operations.
+    pub fn owner(&self) -> &TurnOwner {
+        &self.guard.owner
+    }
+
+    /// Arms owner-scoped cleanup before submitting the reservation commit.
+    /// `store` must be the unchanged handle supplied to `begin_turn`.
+    ///
+    /// # Errors
+    /// Returns an error if the owner identifies another store.
+    pub fn new(
+        store: Arc<dyn SessionStore>,
+        owner: TurnOwner,
+        deadline: Instant,
+        turns: Vec<Vec<ModelMessage>>,
+        provider_session_id: Option<String>,
+    ) -> Result<Self, SessionError> {
+        if store.identity() != &owner.database {
+            return Err(owner.lost());
+        }
+
+        Ok(Self {
+            guard: TurnGuard::new(store, owner, deadline),
+            provider_session_id,
+            turns,
+        })
+    }
+
+    /// Starts ownership monitoring after the reservation is acknowledged.
+    /// Renewal is scheduled halfway through the remaining confirmed lease,
+    /// capped at 100 seconds, and recalculated after every acknowledgment.
+    /// Return this activated value from `begin_turn`.
+    ///
+    /// # Errors
+    /// An expired acknowledgment is interrupted rather than made executable.
+    pub fn activate(mut self) -> Result<Self, SessionError> {
+        if Instant::now()
+            >= *self
+                .guard
+                .deadline
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            return Err(self.guard.owner.lost());
+        }
+        if self.guard.renewal_task.is_none() {
+            self.guard.activate();
+        }
+
+        Ok(self)
+    }
+}
+
+/// Session configuration and bounded completed turns returned by a store.
+#[derive(Clone)]
+pub struct LoadedSession {
+    /// Maximum history payload bytes, counted with
+    /// `ModelMessage::retained_bytes`.
+    pub max_history_bytes: usize,
+    /// Stable model name, paired with `provider`, or both absent.
+    pub model: Option<String>,
+    /// Provider paired with the stored model name.
+    pub provider: Option<String>,
+    /// Optional provider continuation, cleared on failure or interruption.
+    pub provider_session_id: Option<String>,
+    /// Session's default output schema.
+    pub schema: OutputSchema,
+    /// Session's retained system prompt.
+    pub system_prompt: Option<String>,
+    /// Recent complete turns, oldest first; never split tool-call/result
+    /// groups.
+    pub turns: Vec<Vec<ModelMessage>>,
 }
 
 struct TurnAcquisition {
@@ -1042,8 +1155,11 @@ struct TurnAcquisition {
     turns: Vec<Vec<ModelMessage>>,
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
-pub(crate) struct TurnOwner {
+/// Owner token identifying one reservation, independent of a storage engine.
+/// Equality and hashing use only the store, session, position, and token; the
+/// interruption diagnostic can change without changing reservation identity.
+#[derive(Clone, Debug)]
+pub struct TurnOwner {
     pub(crate) database: StoreIdentity,
     pub(crate) interruption_error_type: &'static str,
     pub(crate) session_id: String,
@@ -1052,11 +1168,76 @@ pub(crate) struct TurnOwner {
 }
 
 impl TurnOwner {
+    /// Identifies a reservation with a backend-generated, non-reused owner
+    /// token.
+    pub fn new(
+        database: StoreIdentity,
+        session_id: String,
+        turn_position: i64,
+        token: Vec<u8>,
+    ) -> Self {
+        Self {
+            database,
+            session_id,
+            turn_position,
+            token,
+            interruption_error_type: "interrupted",
+        }
+    }
+
+    /// Backing store to which this reservation belongs.
+    pub fn store_identity(&self) -> &StoreIdentity {
+        &self.database
+    }
+
+    /// Session whose admission and mutations are fenced by this owner.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// Persistent turn position within the session.
+    pub fn turn_position(&self) -> i64 {
+        self.turn_position
+    }
+
+    /// Opaque backend token to validate atomically with each mutation.
+    pub fn token(&self) -> &[u8] {
+        &self.token
+    }
+
+    /// Content-free diagnostic for an interrupted reservation.
+    pub fn interruption_error_type(&self) -> &'static str {
+        self.interruption_error_type
+    }
+
     fn lost(&self) -> SessionError {
         SessionError::OwnershipLost {
             id: self.session_id.clone(),
             turn_position: self.turn_position,
         }
+    }
+
+    fn identity(&self) -> (&StoreIdentity, &str, i64, &[u8]) {
+        (
+            &self.database,
+            &self.session_id,
+            self.turn_position,
+            &self.token,
+        )
+    }
+}
+
+impl PartialEq for TurnOwner {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity() == other.identity()
+    }
+}
+
+impl Eq for TurnOwner {}
+
+impl Hash for TurnOwner {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.identity().hash(state);
     }
 }
 
@@ -1068,7 +1249,7 @@ fn lease_deadline() -> Instant {
 
 #[derive(Default)]
 struct AbandonedTurnRegistry {
-    owners: Mutex<HashSet<TurnOwner>>,
+    owners: Mutex<HashMap<TurnOwner, Option<Arc<dyn SessionStore>>>>,
 }
 
 impl AbandonedTurnRegistry {
@@ -1076,17 +1257,17 @@ impl AbandonedTurnRegistry {
         self.owners
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
+            .keys()
             .filter(|owner| &owner.database == database && owner.session_id == session_id)
             .cloned()
             .collect()
     }
 
-    fn register(&self, owner: TurnOwner) {
+    fn retain(&self, owner: TurnOwner, store: Arc<dyn SessionStore>) {
         self.owners
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(owner);
+            .insert(owner, Some(store));
     }
 
     fn remove(&self, owners: &[TurnOwner]) {
@@ -1104,6 +1285,26 @@ fn shared_abandoned_turn_registry() -> Arc<AbandonedTurnRegistry> {
     static REGISTRY: OnceLock<Arc<AbandonedTurnRegistry>> = OnceLock::new();
 
     Arc::clone(REGISTRY.get_or_init(Arc::default))
+}
+
+pub(crate) async fn recover_abandoned(
+    store: &Arc<dyn SessionStore>,
+    session_id: &str,
+) -> Result<(), SessionError> {
+    let registry = shared_abandoned_turn_registry();
+    for owner in registry.for_session(store.identity(), session_id) {
+        let retained = registry
+            .owners
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&owner)
+            .and_then(Clone::clone)
+            .unwrap_or_else(|| Arc::clone(store));
+        retained.interrupt(&owner).await?;
+        registry.remove(std::slice::from_ref(&owner));
+    }
+
+    Ok(())
 }
 
 /// Owned journal access scoped to the turn that acquired it.
@@ -1175,7 +1376,7 @@ impl TurnGuard {
         self.owner.interruption_error_type = "cancelled";
         let owner = self.owner.clone();
         let interval = Duration::from_secs(TURN_LEASE_RENEWAL_INTERVAL_SECONDS);
-        let first_renewal = Instant::now() + interval;
+        let mut confirmed_at = Instant::now();
         let database = Arc::clone(&self.database);
         let deadline = Arc::clone(&self.deadline);
         let finalization = Arc::clone(&self.finalization);
@@ -1185,19 +1386,20 @@ impl TurnGuard {
         self.ownership_failure = Some(ownership_failure);
         self.renewal_task = Some(self.runtime.spawn(async move {
             let monitor = async {
-                let mut ticker = tokio::time::interval_at(first_renewal, interval);
-                ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
                 loop {
                     let confirmed = *deadline
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let renew_at = confirmed_at
+                        + interval.min(confirmed.saturating_duration_since(confirmed_at) / 2);
                     let renewal = async {
-                        ticker.tick().await;
+                        tokio::time::sleep_until(renew_at).await;
                         let _exclusive = finalization.lock().await;
                         let renewed = database.renew(&owner).await?;
                         *deadline
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner) = renewed;
+                        confirmed_at = Instant::now();
 
                         Ok::<_, SessionError>(())
                     };
@@ -1307,7 +1509,7 @@ impl Drop for TurnGuard {
         }
         let owner = self.owner.clone();
         let registry = shared_abandoned_turn_registry();
-        registry.register(owner.clone());
+        registry.retain(owner.clone(), Arc::clone(&self.database));
         let database = Arc::clone(&self.database);
         std::mem::drop(self.runtime.spawn(async move {
             if database.interrupt(&owner).await.is_ok() {

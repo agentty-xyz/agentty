@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 use crate::comparison::{ComparisonBase, ComparisonIdentity};
 use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnOptions};
@@ -12,7 +13,7 @@ use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnOptions};
 /// Versioned durable metadata, independent of live repository validation.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct StoredTurnOptions {
+pub struct StoredTurnOptions {
     #[serde(default)]
     comparison_base: Option<ComparisonIdentity>,
     #[serde(default)]
@@ -24,7 +25,8 @@ pub(crate) struct StoredTurnOptions {
 }
 
 impl StoredTurnOptions {
-    pub(crate) fn encode(options: &TurnOptions) -> String {
+    /// Encodes effective options with the current version and fingerprint.
+    pub fn encode(options: &TurnOptions) -> String {
         let stored = Self {
             comparison_base: options
                 .comparison_base()
@@ -41,7 +43,12 @@ impl StoredTurnOptions {
         snapshot.to_string()
     }
 
-    pub(crate) fn decode(snapshot: &str) -> Result<Self, StoredTurnOptionsError> {
+    /// Validates a historical snapshot without accessing Git or a repository.
+    ///
+    /// # Errors
+    /// Returns an error for unsupported versions, malformed data, or invalid
+    /// schemas, comparison identities, or fingerprints.
+    pub fn decode(snapshot: &str) -> Result<Self, StoredTurnOptionsError> {
         let stored: Self = serde_json::from_str(snapshot).map_err(StoredTurnOptionsError::Json)?;
         if !matches!(stored.version, 1..=3) {
             return Err(StoredTurnOptionsError::InvalidData {
@@ -67,7 +74,10 @@ impl StoredTurnOptions {
         Ok(stored)
     }
 
-    pub(crate) fn continuation_compatible(&self, options: &TurnOptions) -> bool {
+    /// Whether native continuation can reuse this snapshot's context policy.
+    /// Legacy v1 snapshots cannot establish compatibility; budget alone does
+    /// not invalidate a continuation. This is not a host-request fingerprint.
+    pub fn continuation_compatible(&self, options: &TurnOptions) -> bool {
         matches!(self.version, 2 | 3)
             && self.output_schema == *options.schema().value()
             && self.tool_policy == options.tool_policy()
@@ -96,10 +106,19 @@ impl StoredTurnOptions {
 }
 
 /// Invalid historical options, before a persistence backend adds its context.
-#[derive(Debug)]
-pub(crate) enum StoredTurnOptionsError {
-    InvalidData { reason: String },
+#[derive(Debug, Error)]
+pub enum StoredTurnOptionsError {
+    /// The snapshot violates its versioned contract.
+    #[error("invalid stored options: {reason}")]
+    InvalidData {
+        /// Validation failure without repository contents.
+        reason: String,
+    },
+    /// The snapshot could not be decoded.
+    #[error(transparent)]
     Json(serde_json::Error),
+    /// The stored output schema is invalid.
+    #[error(transparent)]
     Schema(OutputSchemaError),
 }
 
