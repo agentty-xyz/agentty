@@ -45,12 +45,15 @@ async fn oversized_review_batches_original_diff_and_discloses_summarized_history
     // Act
     let result = TaskService::review_assist_text_with_client(
         Path::new("."),
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
-        ReasoningLevel::Medium,
-        crate::domain::agent::SpeedMode::Normal,
+        (
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            ReasoningLevel::Medium,
+            crate::domain::agent::SpeedMode::Normal,
+        ),
         &"+change\n".repeat(160_000),
         Some(&"decision\n".repeat(20_000)),
         &client,
+        |_| {},
     )
     .await
     .expect("operation should succeed");
@@ -770,6 +773,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
                 stats: agent::SessionStats::default(),
             })
         });
+    one_shot_client.expect_close().once().return_const(());
     let input = ReviewAssistTaskInput {
         app_event_tx,
         diff_hash: 42,
@@ -784,10 +788,33 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
 
     // Act
     TaskService::spawn_review_assist_task_with_client(input, Arc::new(one_shot_client));
-    let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
-        .await
-        .expect("timed out waiting for review-assist event")
-        .expect("review-assist task should emit one event");
+    let app_event = tokio::time::timeout(Duration::from_secs(1), async {
+        let initial = app_event_rx.recv().await.expect("initial progress");
+        assert!(matches!(
+            initial,
+            AppEvent::ReviewProgressUpdated {
+                progress: crate::app::review::ReviewProgress::Batches {
+                    completed: 0,
+                    total: 1
+                },
+                ..
+            }
+        ));
+        let completed = app_event_rx.recv().await.expect("completed progress");
+        assert!(matches!(
+            completed,
+            AppEvent::ReviewProgressUpdated {
+                progress: crate::app::review::ReviewProgress::Batches {
+                    completed: 1,
+                    total: 1
+                },
+                ..
+            }
+        ));
+        app_event_rx.recv().await.expect("completed review")
+    })
+    .await
+    .expect("timed out waiting for review-assist event");
 
     // Assert
     assert_eq!(
@@ -835,12 +862,15 @@ async fn review_assist_text_with_client_returns_one_shot_error_on_submit_failure
     // Act
     let result = TaskService::review_assist_text_with_client(
         session_folder,
-        review_selection,
-        ReasoningLevel::XHigh,
-        crate::domain::agent::SpeedMode::Normal,
+        (
+            review_selection,
+            ReasoningLevel::XHigh,
+            crate::domain::agent::SpeedMode::Normal,
+        ),
         review_diff,
         None,
         &one_shot_client,
+        |_| {},
     )
     .await;
 
@@ -883,12 +913,15 @@ async fn review_assist_text_with_client_preserves_review_selection_provider() {
     // Act
     let result = TaskService::review_assist_text_with_client(
         session_folder,
-        review_selection,
-        ReasoningLevel::Low,
-        crate::domain::agent::SpeedMode::Fast,
+        (
+            review_selection,
+            ReasoningLevel::Low,
+            crate::domain::agent::SpeedMode::Fast,
+        ),
         review_diff,
         None,
         &one_shot_client,
+        |_| {},
     )
     .await;
 

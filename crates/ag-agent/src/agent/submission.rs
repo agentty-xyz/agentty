@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use super::backend::{AgentBackend, BuildCommandRequest};
 use super::cli::error;
 use super::cli::execution::{self, CliExecutionError, CliExecutionObserver, CliExitStatus};
+use super::submission_pool::SubmissionPool;
 use super::{ParsedResponse, create_app_server_client, create_backend, parse_response};
 use crate::app_server::{AppServerClient, AppServerTurnRequest};
 use crate::model::agent::AgentKind;
@@ -28,6 +29,7 @@ use crate::model::session::{SessionDiffState, SessionStats};
 /// Production [`OneShotClient`] that routes through the selected provider.
 pub struct RealOneShotClient {
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
+    pool: Option<SubmissionPool>,
 }
 
 impl RealOneShotClient {
@@ -38,6 +40,17 @@ impl RealOneShotClient {
     pub fn new(app_server_client_override: Option<Arc<dyn AppServerClient>>) -> Self {
         Self {
             app_server_client_override,
+            pool: None,
+        }
+    }
+
+    /// Creates a scoped client that reuses idle app-server processes while
+    /// starting fresh conversation context for every submission. Call
+    /// [`OneShotClient::close`] after submissions finish or are canceled.
+    pub fn pooled(app_server_client_override: Option<Arc<dyn AppServerClient>>) -> Self {
+        Self {
+            app_server_client_override,
+            pool: Some(SubmissionPool::default()),
         }
     }
 }
@@ -47,9 +60,32 @@ impl OneShotClient for RealOneShotClient {
     async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
         let app_server_client_override = self.app_server_client_override.as_ref().map(Arc::clone);
 
+        if let Some(pool) = &self.pool {
+            let kind = request
+                .harness
+                .parse::<AgentKind>()
+                .map_err(OneShotError::new)?;
+            if let Some(lease) = pool.acquire(kind, app_server_client_override.clone()) {
+                return submit_app_server_session(
+                    lease.0.client.as_ref(),
+                    request,
+                    lease.0.session_id.clone(),
+                    true,
+                )
+                .await
+                .map_err(OneShotError::new);
+            }
+        }
+
         submit_one_shot_with_stats_and_app_server_client(request, app_server_client_override)
             .await
             .map_err(OneShotError::new)
+    }
+
+    async fn close(&self) {
+        if let Some(pool) = &self.pool {
+            pool.close().await;
+        }
     }
 }
 
@@ -89,9 +125,19 @@ async fn submit_one_shot_with_app_server_client(
     app_server_client: &dyn AppServerClient,
     request: OneShotRequest,
 ) -> Result<OneShotSubmission, String> {
-    clear_child_pid_slot(request.child_pid.as_deref());
-
     let session_id = format!("one-shot-{}", uuid::Uuid::new_v4());
+
+    submit_app_server_session(app_server_client, request, session_id, false).await
+}
+
+/// Submits an isolated conversation and retains only a pooled runtime.
+async fn submit_app_server_session(
+    app_server_client: &dyn AppServerClient,
+    request: OneShotRequest,
+    session_id: String,
+    pooled: bool,
+) -> Result<OneShotSubmission, String> {
+    clear_child_pid_slot(request.child_pid.as_deref());
     let protocol_profile = request.request_kind.protocol_profile();
     let (stream_tx, _stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let turn_request = AppServerTurnRequest {
@@ -112,7 +158,13 @@ async fn submit_one_shot_with_app_server_client(
         speed_mode: request.speed_mode,
     };
 
-    let turn_result = app_server_client.run_turn(turn_request, stream_tx).await;
+    let turn_result = if pooled {
+        app_server_client
+            .run_isolated_turn(turn_request, stream_tx)
+            .await
+    } else {
+        app_server_client.run_turn(turn_request, stream_tx).await
+    };
 
     let child_pid = request.child_pid.as_ref().map(Arc::clone);
 
@@ -139,12 +191,15 @@ async fn submit_one_shot_with_app_server_client(
                     request,
                     &session_id,
                     turn_result.provider_conversation_id.as_deref(),
+                    pooled,
                 )
                 .await
             }
         };
 
-    app_server_client.shutdown_session(session_id).await;
+    if !pooled || parse_result.is_err() {
+        app_server_client.shutdown_session(session_id).await;
+    }
     clear_child_pid_slot(child_pid.as_deref());
 
     let (response, repair_input_tokens, repair_output_tokens) = parse_result?;
@@ -242,6 +297,7 @@ fn parse_one_shot_response(
 /// agent retains the original conversation context. The initial turn's
 /// `provider_conversation_id` is threaded through so providers that depend
 /// on conversation state can continue the same thread.
+/// Pooled repairs retain the runtime without resetting that context.
 ///
 /// Returns the parsed response together with the repair turn's token usage
 /// so the caller can aggregate stats across both attempts.
@@ -255,6 +311,7 @@ async fn attempt_one_shot_app_server_repair(
     request: OneShotRequest,
     session_id: &str,
     provider_conversation_id: Option<&str>,
+    pooled: bool,
 ) -> Result<(AgentResponse, u64, u64), String> {
     let protocol_profile = request.request_kind.protocol_profile();
     let repair_prompt = build_protocol_repair_prompt(parse_error, malformed_response)?;
@@ -277,10 +334,13 @@ async fn attempt_one_shot_app_server_repair(
         session_id: session_id.to_string(),
         speed_mode: request.speed_mode,
     };
-    let repair_result = app_server_client
-        .run_turn(repair_turn_request, repair_stream_tx)
-        .await
-        .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
+    let repair_result = if pooled {
+        app_server_client.run_retained_turn(repair_turn_request, repair_stream_tx)
+    } else {
+        app_server_client.run_turn(repair_turn_request, repair_stream_tx)
+    }
+    .await
+    .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
 
     let response = parse_one_shot_response(&repair_result.assistant_message, protocol_profile)
         .map_err(|error| {

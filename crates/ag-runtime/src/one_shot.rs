@@ -75,4 +75,8 @@ pub trait OneShotClient: Send + Sync {
     /// Implementations must enforce `provider_call_budget` for every underlying
     /// provider attempt, including protocol repairs and transport retries.
     async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError>;
+
+    /// Releases retained provider resources after all submissions have finished
+    /// or been canceled. Stateless adapters need no cleanup.
+    async fn close(&self) {}
 }

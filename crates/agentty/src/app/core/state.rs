@@ -918,9 +918,14 @@ impl App {
     /// session view is reopened.
     pub(crate) fn review_view_state(&self, session_id: &str) -> (Option<String>, Option<&str>) {
         let status_message = match self.review_cache.get(session_id) {
-            Some(ReviewCacheEntry::Loading { review_agent, .. }) => {
-                Some(review_loading_message(*review_agent))
-            }
+            Some(ReviewCacheEntry::Loading {
+                review_agent,
+                progress,
+                ..
+            }) => Some(app::review::review_progress_message(
+                *review_agent,
+                *progress,
+            )),
             Some(ReviewCacheEntry::Failed { error, .. }) => Some(review_failure_message(error)),
             Some(ReviewCacheEntry::Ready { .. } | ReviewCacheEntry::Suppressed) | None => None,
         };
@@ -1722,6 +1727,7 @@ impl App {
         self.review_cache.insert(
             SessionId::from(session_id),
             ReviewCacheEntry::Loading {
+                progress: None,
                 diff_hash,
                 review_agent,
             },

@@ -762,6 +762,7 @@ impl App {
             self.review_cache.insert(
                 session_id.clone(),
                 ReviewCacheEntry::Loading {
+                    progress: None,
                     diff_hash: review::diff_content_hash(""),
                     review_agent,
                 },

@@ -53,6 +53,7 @@ async fn oversized_one_shot_responses_do_not_launch_repair() {
         request,
         "repair-limit",
         None,
+        false,
     )
     .await
     .expect_err("oversized native response");

@@ -1,14 +1,20 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ag_agent::{
-    AgentKind, AgentModel, AgentRequestKind, MockOneShotClient, OneShotError, OneShotRequest,
-    OneShotSubmission, PermissionMode, ReasoningLevel, SessionStats, SpeedMode, diff_fence,
+    AgentKind, AgentModel, AgentRequestKind, MockOneShotClient, OneShotClient, OneShotError,
+    OneShotRequest, OneShotSubmission, PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
+    diff_fence,
 };
 use ag_protocol::{AgentResponse, FocusedReview, FocusedReviewSeverity, FocusedReviewSuggestion};
+use async_trait::async_trait;
+use tokio::sync::{mpsc, oneshot};
 
-use super::{file_headers, merge, submit};
+use super::{REVIEW_CONCURRENCY, file_headers, merge, submit};
 use crate::app::diff_prompt::{MAX_PROVIDER_CALLS, PROMPT_BUDGET};
+use crate::app::review::ReviewProgress;
+use crate::infra::review_deadline::ReviewDeadlineClient;
 
 fn request() -> OneShotRequest {
     OneShotRequest {
@@ -37,6 +43,259 @@ fn response() -> OneShotSubmission {
 fn render(diff: &str, context: &str) -> String {
     let fence = diff_fence(diff);
     format!("{context}\n{fence}diff\n{diff}\n{fence}")
+}
+
+/// Holds a provider call open until the test explicitly completes it.
+struct PendingReview {
+    request: OneShotRequest,
+    reply: oneshot::Sender<Result<OneShotSubmission, OneShotError>>,
+}
+
+struct ControlledReviewClient {
+    requests: mpsc::UnboundedSender<PendingReview>,
+}
+
+#[async_trait]
+impl OneShotClient for ControlledReviewClient {
+    async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
+        request
+            .provider_call_budget
+            .as_ref()
+            .expect("budget")
+            .consume()?;
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(PendingReview { request, reply })
+            .expect("test observer");
+
+        response.await.expect("test completes every provider call")
+    }
+}
+
+#[tokio::test]
+async fn deadline_keeps_finished_findings_and_reports_unreviewed_fragments() {
+    // Arrange
+    let (requests, mut pending) = mpsc::unbounded_channel();
+    let client = ControlledReviewClient { requests };
+    let client = ReviewDeadlineClient::new(&client, Duration::from_millis(250));
+    let diff = "x".repeat(250_000);
+
+    // Act
+    let review = submit(
+        &client,
+        request(),
+        &diff,
+        "",
+        |diff, context| Ok(render(diff, context)),
+        |_| {},
+    );
+    let observe = async {
+        let first = pending.recv().await.expect("first batch");
+        let second = pending.recv().await.expect("second batch");
+        let third = pending.recv().await.expect("third batch");
+        first.reply.send(Ok(response())).expect("first result");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(second.reply.is_closed());
+        assert!(third.reply.is_closed());
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(review, observe)
+    })
+    .await
+    .expect("review finishes within the total deadline");
+
+    // Assert
+    let text = result.expect("partial review");
+    assert!(text.contains("Preserved finding."));
+    assert!(text.contains("Partial review: 1 batches completed; 5 fragments remain unreviewed"));
+    assert!(text.contains("deadline exceeded"));
+    assert!(pending.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn reviews_three_batches_concurrently_and_merges_in_input_order() {
+    // Arrange
+    let (requests, mut pending) = mpsc::unbounded_channel();
+    let client = ControlledReviewClient { requests };
+    let diff = "x".repeat(250_000);
+
+    // Act
+    let review = submit(
+        &client,
+        request(),
+        &diff,
+        "",
+        |diff, context| Ok(render(diff, context)),
+        |_| {},
+    );
+    let observe = async {
+        for wave in 0..2 {
+            let mut calls = Vec::new();
+            for _ in 0..REVIEW_CONCURRENCY {
+                calls.push(pending.recv().await.expect("concurrent batch"));
+            }
+            assert!(pending.try_recv().is_err(), "concurrency is bounded");
+            for (index, call) in calls.into_iter().enumerate().rev() {
+                assert!(!call.request.prompt.starts_with("Cross-file review:"));
+                call.reply.send(Ok(OneShotSubmission {
+                    response: AgentResponse::plain(serde_json::json!({
+                        "project_impact": [],
+                        "suggestions": [{"severity": "high", "details": format!("Finding {}.", wave * REVIEW_CONCURRENCY + index)}],
+                    }).to_string()),
+                    stats: SessionStats::default(),
+                })).expect("batch remains active");
+                if index > 0 {
+                    tokio::task::yield_now().await;
+                    assert!(pending.try_recv().is_err(), "wait for the entire wave");
+                }
+            }
+        }
+        let cross_file = pending.recv().await.expect("cross-file pass");
+        assert!(cross_file.request.prompt.starts_with("Cross-file review:"));
+        for index in 0..6 {
+            assert!(
+                cross_file
+                    .request
+                    .prompt
+                    .contains(&format!("Finding {index}."))
+            );
+        }
+        cross_file
+            .reply
+            .send(Ok(response()))
+            .expect("cross-file reply");
+    };
+    let (text, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(review, observe)
+    })
+    .await
+    .expect("concurrent calls must not deadlock");
+
+    // Assert
+    let text = text.expect("complete review");
+    let positions: Vec<_> = (0..6)
+        .map(|index| {
+            text.find(&format!("Finding {index}."))
+                .expect("finding preserved")
+        })
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(!text.contains("Partial review"));
+    assert!(pending.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn failed_batch_drains_running_peers_and_stops_queued_work() {
+    // Arrange
+    let (requests, mut pending) = mpsc::unbounded_channel();
+    let client = ControlledReviewClient { requests };
+    let diff = "x".repeat(250_000);
+
+    // Act
+    let review = submit(
+        &client,
+        request(),
+        &diff,
+        "",
+        |diff, context| Ok(render(diff, context)),
+        |_| {},
+    );
+    let observe = async {
+        let first = pending.recv().await.expect("first batch");
+        let second = pending.recv().await.expect("second batch");
+        let third = pending.recv().await.expect("third batch");
+        first
+            .reply
+            .send(Err(OneShotError::new("network timeout")))
+            .expect("failure reply");
+        tokio::task::yield_now().await;
+        assert!(!second.reply.is_closed(), "failure must not cancel peers");
+        second.reply.send(Ok(response())).expect("second reply");
+        third.reply.send(Ok(response())).expect("third reply");
+    };
+    let (text, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(review, observe)
+    })
+    .await
+    .expect("running peers must finish");
+
+    // Assert
+    let text = text.expect("partial review");
+    assert!(text.contains("Partial review: 2 batches completed; 4 fragments remain unreviewed"));
+    assert!(text.contains("network timeout"));
+    assert!(text.contains("Preserved finding."));
+    assert!(
+        pending.try_recv().is_err(),
+        "queued batches and cross-file pass must not start"
+    );
+}
+
+#[tokio::test]
+async fn nested_size_retries_keep_source_order_in_complete_and_partial_reviews() {
+    for fail_last_retry in [false, true] {
+        // Arrange
+        let diff = ['a', 'b', 'c', 'd', 'e', 'f']
+            .into_iter()
+            .map(|marker| {
+                marker
+                    .to_string()
+                    .repeat(if marker < 'e' { 12_000 } else { 48_000 })
+            })
+            .collect::<String>();
+        let mut client = MockOneShotClient::new();
+        client.expect_submit().returning(move |request| {
+            request.provider_call_budget.as_ref().expect("budget").consume()?;
+            if request.prompt.starts_with("Cross-file review:") {
+                let positions: Vec<_> = ['a', 'b', 'c', 'd', 'e', 'f']
+                    .map(|marker| request.prompt.find(&format!("Finding {marker}."))
+                        .expect("cross-file overview retains every finding"))
+                    .into_iter().collect();
+                assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+                return Ok(OneShotSubmission {
+                    response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
+                    stats: SessionStats::default(),
+                });
+            }
+            let marker = request.prompt.chars().next().expect("source fragment");
+            if marker < 'e' && request.prompt.len() > 12_000 {
+                return Err(OneShotError::new("contextWindowExceeded"));
+            }
+            if fail_last_retry && marker == 'd' {
+                return Err(OneShotError::new("provider unavailable"));
+            }
+            Ok(OneShotSubmission {
+                response: AgentResponse::plain(serde_json::json!({
+                    "project_impact": [],
+                    "suggestions": [{"severity": "medium", "details": format!("Finding {marker}.")}],
+                }).to_string()),
+                stats: SessionStats::default(),
+            })
+        });
+
+        // Act
+        let text = submit(
+            &client,
+            request(),
+            &diff,
+            "",
+            |diff, _| Ok(diff.into()),
+            |_| {},
+        )
+        .await
+        .expect("retain completed findings");
+
+        // Assert
+        let positions: Vec<_> = ['a', 'b', 'c', 'd', 'e', 'f']
+            .into_iter()
+            .filter(|marker| !fail_last_retry || *marker != 'd')
+            .map(|marker| {
+                text.find(&format!("Finding {marker}."))
+                    .expect("finding preserved")
+            })
+            .collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(text.contains("Partial review"), fail_last_retry);
+    }
 }
 
 #[tokio::test]
@@ -71,6 +330,7 @@ async fn batches_original_unicode_diff_then_checks_cross_file_interactions() {
         &diff,
         "Accepted decision",
         |diff, context| Ok(render(diff, context)),
+        |_| {},
     )
     .await
     .expect("review");
@@ -126,6 +386,7 @@ async fn splits_fencing_overhead_and_provider_size_rejections_without_summaries(
         &"`".repeat(25_000),
         "",
         |diff, context| Ok(render(diff, context)),
+        |_| {},
     )
     .await
     .expect("review");
@@ -140,7 +401,7 @@ async fn failed_later_batch_retains_findings_and_identifies_unreviewed_files() {
     // Arrange
     let mut calls = 0;
     let mut client = MockOneShotClient::new();
-    client.expect_submit().times(2).returning(move |_| {
+    client.expect_submit().times(3).returning(move |_| {
         calls += 1;
         if calls == 2 {
             return Err(OneShotError::new("network timeout"));
@@ -154,15 +415,20 @@ async fn failed_later_batch_retains_findings_and_identifies_unreviewed_files() {
     );
 
     // Act
-    let text = submit(&client, request(), &diff, "", |diff, context| {
-        Ok(render(diff, context))
-    })
+    let text = submit(
+        &client,
+        request(),
+        &diff,
+        "",
+        |diff, context| Ok(render(diff, context)),
+        |_| {},
+    )
     .await
     .expect("partial review");
 
     // Assert
     assert!(text.contains("Preserved finding."));
-    assert!(text.contains("Partial review: 1 batches completed"));
+    assert!(text.contains("Partial review: 2 batches completed"));
     assert!(text.contains("diff --git a/last b/last"));
     assert!(text.contains("network timeout"));
     assert!(text.contains("Press `f` to retry"));
@@ -188,6 +454,7 @@ async fn failed_cross_file_pass_preserves_all_batch_findings() {
         &"x".repeat(90_000),
         "",
         |diff, context| Ok(render(diff, context)),
+        |_| {},
     )
     .await
     .expect("partial review");
@@ -220,6 +487,7 @@ async fn exhausted_shared_budget_preserves_completed_batches() {
         &"x".repeat(4_000_000),
         "",
         |diff, context| Ok(render(diff, context)),
+        |_| {},
     )
     .await
     .expect("partial review");
@@ -241,9 +509,14 @@ async fn errors_before_any_completed_review_propagate() {
             .returning(move |_| Err(OneShotError::new(diagnostic)));
 
         // Act
-        let error = submit(&client, request(), "tiny", "", |diff, context| {
-            Ok(render(diff, context))
-        })
+        let error = submit(
+            &client,
+            request(),
+            "tiny",
+            "",
+            |diff, context| Ok(render(diff, context)),
+            |_| {},
+        )
         .await
         .expect_err("no review");
 
@@ -264,14 +537,24 @@ async fn render_and_invalid_response_errors_propagate() {
     });
 
     // Act
-    let invalid = submit(&client, request(), "tiny", "", |diff, context| {
-        Ok(render(diff, context))
-    })
+    let invalid = submit(
+        &client,
+        request(),
+        "tiny",
+        "",
+        |diff, context| Ok(render(diff, context)),
+        |_| {},
+    )
     .await
     .expect_err("invalid review");
-    let render_error = submit(&client, request(), "tiny", "", |_, _| {
-        Err(OneShotError::new("render"))
-    })
+    let render_error = submit(
+        &client,
+        request(),
+        "tiny",
+        "",
+        |_, _| Err(OneShotError::new("render")),
+        |_| {},
+    )
     .await
     .expect_err("invalid template");
 
@@ -358,6 +641,7 @@ async fn smaller_provider_limit_reduces_history_without_summarizing_diff() {
         "ORIGINAL DIFF",
         &"Accepted decision\n".repeat(200),
         |diff, context| Ok(render(diff, context)),
+        |_| {},
     )
     .await
     .expect("review");
@@ -409,6 +693,7 @@ async fn cross_file_overview_is_bounded_without_discarding_batch_findings() {
         &"x".repeat(90_000),
         "",
         |diff, context| Ok(render(diff, context)),
+        |_| {},
     )
     .await
     .expect("review");
@@ -417,4 +702,50 @@ async fn cross_file_overview_is_bounded_without_discarding_batch_findings() {
     assert!(text.contains("Original batch finding."));
     assert!(text.contains("Preserved finding."));
     assert_eq!(text.matches("Large batch impact.").count(), 1000);
+}
+
+#[tokio::test]
+async fn large_history_reports_preparation_and_keeps_review_reasoning() {
+    // Arrange
+    let mut client = MockOneShotClient::new();
+    client.expect_submit().returning(|request| {
+        request
+            .provider_call_budget
+            .as_ref()
+            .expect("budget")
+            .consume()?;
+        if request.request_kind == AgentRequestKind::UtilityPrompt {
+            assert_eq!(request.reasoning_level, ReasoningLevel::Low);
+            return Ok(OneShotSubmission {
+                response: AgentResponse::plain("Accepted decisions retained."),
+                stats: SessionStats::default(),
+            });
+        }
+        assert_eq!(request.reasoning_level, ReasoningLevel::Medium);
+        Ok(response())
+    });
+    let progress = Mutex::new(Vec::new());
+    // Act
+    let result = submit(
+        &client,
+        request(),
+        "original changes",
+        &"history ".repeat(10_000),
+        |diff, context| Ok(render(diff, context)),
+        |update| progress.lock().expect("progress").push(update),
+    )
+    .await
+    .expect("review");
+    // Assert
+    let progress = progress.lock().expect("progress");
+    assert_eq!(progress.first(), Some(&ReviewProgress::SummarizingHistory));
+    assert_eq!(
+        progress.last(),
+        Some(&ReviewProgress::Batches {
+            completed: 1,
+            total: 1
+        })
+    );
+    assert!(result.contains("Preserved finding."));
+    assert!(result.contains("session history was summarized"));
 }

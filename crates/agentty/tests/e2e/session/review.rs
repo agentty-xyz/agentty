@@ -37,10 +37,12 @@ if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 state_dir=${0%/*}
 count_file="$state_dir/batch-review-count"
+while ! mkdir "$count_file.lock" 2>/dev/null; do sleep 0.01; done
 count=0
 if [ -f "$count_file" ]; then read count < "$count_file"; fi
 count=$((count + 1))
 printf '%s\n' "$count" > "$count_file"
+rmdir "$count_file.lock"
 prompt=$(cat)
 if [ "$count" -eq 2 ]; then printf 'batch temporarily unavailable\n' >&2; exit 1; fi
 case "$prompt" in
@@ -1049,5 +1051,68 @@ async fn auto_address_review_lifecycle() -> E2eResult {
         )
         .await?;
 
+    Ok(())
+}
+
+/// Seeds several review fragments with time to observe each progress phase.
+async fn seed_focused_review_progress(env: &BuilderEnv) -> E2eResult {
+    seed_large_review_with_partial_retry(env).await?;
+    let path = env.stub_bin.join("claude");
+    let script = std::fs::read_to_string(&path)?.replace(
+        "if [ \"$count\" -eq 2 ]; then printf 'batch temporarily unavailable\\n' >&2; exit 1; fi",
+        "sleep 2",
+    );
+    std::fs::write(path, script)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_focused_review_progress() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("focused_review_progress")
+        .with_git()
+        .zola(
+            "Focused review progress",
+            "Follow large reviews through batch and cross-file checks.",
+            55,
+        )
+        .setup(|env| Box::pin(async move { seed_focused_review_progress(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .press_key("f")
+                    .wait_for_text("0/3 batches complete", 30000)
+                    .capture_labeled("batch_progress", "Original diff batches in progress")
+                    .wait_for_text("Checking cross-file interactions", 30000)
+                    .capture_labeled("cross_file_progress", "Cross-file check in progress")
+                    .wait_for_text("Cross-file check completed.", 30000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    for (capture, expected) in report
+                        .captures
+                        .iter()
+                        .zip(["0/3 batches complete", "Checking cross-file interactions"])
+                    {
+                        let frame = common::frame_from_capture(capture);
+                        assertion::assert_text_in_region(
+                            &frame,
+                            expected,
+                            &Region::full(frame.cols(), frame.rows()),
+                        );
+                    }
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Cross-file check completed.",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                    assertion::assert_not_visible(frame, "Partial review:");
+                })
+            },
+        )
+        .await?;
     Ok(())
 }

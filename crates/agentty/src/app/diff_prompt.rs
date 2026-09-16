@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use ag_agent::{
     AgentRequestKind, OneShotClient, OneShotError, OneShotRequest, OneShotSubmission,
-    PermissionMode, diff_fence, is_input_size_error,
+    PermissionMode, ReasoningLevel, diff_fence, is_input_size_error,
 };
 
 /// Conservative byte budget, also bounding characters and byte-tokenizer input.
@@ -125,6 +125,7 @@ async fn summarize_round(
         let mut request = request.clone();
         request.permission_mode = PermissionMode::ReadOnly;
         request.request_kind = AgentRequestKind::UtilityPrompt;
+        request.reasoning_level = ReasoningLevel::Low;
         let fence = diff_fence(&chunk);
         request.prompt = format!(
             "Summarize this fragment of a Git diff, session decisions, or earlier summaries. \

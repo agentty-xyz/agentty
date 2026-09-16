@@ -308,6 +308,7 @@ impl AppServices {
             AppEvent::SessionQueuedSyncResolved { .. } => "SessionQueuedSyncResolved",
             AppEvent::SessionTurnStarted { .. } => "SessionTurnStarted",
             AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
+            AppEvent::ReviewProgressUpdated { .. } => "ReviewProgressUpdated",
             AppEvent::ReviewPreparationFailed { .. } => "ReviewPreparationFailed",
             AppEvent::DeferredAutoReviewPersistenceRetry { .. } => {
                 "DeferredAutoReviewPersistenceRetry"
