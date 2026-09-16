@@ -6,6 +6,7 @@ use tempfile::tempdir;
 use super::support::{schema, turn};
 use crate::model::ModelMessage;
 use crate::session::{Database, NewSession, SessionError, TimestampSource, load_turn_size_page};
+use crate::store::SessionStore as _;
 
 #[tokio::test]
 async fn database_loads_only_newest_complete_turns_within_budget() {

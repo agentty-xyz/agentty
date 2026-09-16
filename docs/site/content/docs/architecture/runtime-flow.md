@@ -1054,10 +1054,12 @@ The standalone `ag-harness` library resolves immutable options before each engin
 Durable acquisition commits those options with the prompt and revalidates native
 continuation against the last completed turn's schema, permissions, and comparison
 identity. A host-validated comparison OID stays fixed throughout execution; worktree and
-`HEAD` reads remain live. Its session emits completion only after persisting the result;
-one-shot execution uses the same engine without opening SQLite. These are library
-boundaries for the planned Agentty adapters, not a replacement for the current Agentty
-runtime.
+`HEAD` reads remain live. The internal transactional store fences mutations by owner.
+Finalization excludes renewal and enforces the last confirmed lease deadline; abandoned
+reservation commits retain cleanup ownership through acknowledgement. The session emits
+completion only after persisting the result; one-shot execution uses the same engine
+without opening SQLite. These are library boundaries for the planned Agentty adapters,
+not a replacement for the current Agentty runtime.
 
 Private `ag-harness` supervision runs independently of its caller on a host-owned
 runtime. Retained control observes bounded cleanup, including after cancellation or

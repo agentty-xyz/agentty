@@ -38,8 +38,9 @@ For file-level detail, read the module docstrings directly.
   durable sessions and one-shot calls. Immutable `TurnOptions` define output schemas,
   permissions, budgets, and optional comparison bases. Owned sessions and builders
   capture harness configuration and share lazy SQLite initialization. The library owns
-  SQLite history and write journals through its internal concrete `Database`, including
-  pool access and row decoding. Bounded tools use validated `Repository` and injectable
+  history, leases, terminal transitions, and write journals through an internal
+  transactional `SessionStore`. Its SQLite `Database` implementation encapsulates pool
+  access and row decoding. Bounded tools use validated `Repository` and injectable
   `FileSystem` boundaries. Hosts own prompts, comparison-base selection, permissions,
   and telemetry setup; the engine enforces a validated, pinned commit for comparisons.
   Private execution contracts and platform-independent supervision own bounded

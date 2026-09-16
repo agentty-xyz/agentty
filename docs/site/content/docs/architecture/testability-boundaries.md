@@ -95,15 +95,19 @@ tests also exercise grants, shared output budgets, and independent result fields
 is no production backend; filesystem isolation and actual descendant cleanup require
 future backend enforcement and are not established by these tests.
 
-Persistent `ag-harness` sessions inject a timestamp source and a reservation observer.
-The observer marks the boundary after SQLite commits a turn reservation, allowing tests
-to exercise cancellation at that point without conditional production control flow. Unit
-suites and their fixtures live in separate test files. Shared-engine tests compare
-provider requests across durable and ephemeral execution. Persistence tests cover
-options snapshots, legacy reads without live repository validation, and continuation
-invalidation against canonical configuration. Host comparison validation shares the
-bounded repository command runner; real-Git fixtures cover pinned OIDs and nested
-scopes; terminal lifecycle tests retain the persistence-before-completion boundary.
+Persistent `ag-harness` execution uses an internal object-safe transactional store.
+Barrier-controlled store fixtures exercise stalled renewal and terminal persistence,
+acknowledgement loss, and finalization races. SQLite tests verify owner fencing, expired
+leases, journal settlement, and reopen behavior. The backend also injects a timestamp
+source and a reservation observer. The observer marks the boundary after SQLite commits
+a turn reservation, allowing tests to exercise cancellation at that point without
+conditional production control flow. Unit suites and their fixtures live in separate
+test files. Shared-engine tests compare provider requests across durable and ephemeral
+execution. Persistence tests cover options snapshots, legacy reads without live
+repository validation, and continuation invalidation against canonical configuration.
+Host comparison validation shares the bounded repository command runner; real-Git
+fixtures cover pinned OIDs and nested scopes; terminal lifecycle tests retain the
+persistence-before-completion boundary.
 
 The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
 private. Application workflows that submit isolated utility prompts inject

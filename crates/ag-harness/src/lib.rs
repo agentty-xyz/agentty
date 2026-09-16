@@ -19,6 +19,7 @@ mod read;
 mod repository;
 mod schema_contract;
 mod session;
+mod store;
 mod telemetry;
 mod tool;
 mod trace;

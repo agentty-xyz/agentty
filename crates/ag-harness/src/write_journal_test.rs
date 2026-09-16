@@ -12,6 +12,7 @@ use tokio::io::AsyncRead;
 
 use crate::file_system::{FileSystem, LocalFileSystem, MockFileSystem};
 use crate::session::{Database, NewSession, SessionError, TurnGuard, WriteRecordRow};
+use crate::store::SessionStore as _;
 use crate::tool::WriteArguments;
 use crate::write::WriteTool;
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
@@ -26,7 +27,7 @@ async fn fixture() -> (Database, TurnGuard) {
         .await
         .expect("session");
     let acquired = database
-        .begin_turn("session", "write", &options)
+        .begin_turn(Arc::new(database.clone()), "session", "write", &options)
         .await
         .expect("turn");
 

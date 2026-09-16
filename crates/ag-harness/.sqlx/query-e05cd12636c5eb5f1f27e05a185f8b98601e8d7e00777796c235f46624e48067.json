@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_turn\nSET lease_expires_at = ?, updated_at = ?\nWHERE session_id = ?\n  AND turn_position = ?\n  AND owner_token = ?\n  AND status = 'running'\n  AND lease_expires_at > ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "e05cd12636c5eb5f1f27e05a185f8b98601e8d7e00777796c235f46624e48067"
+}

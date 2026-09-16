@@ -98,10 +98,14 @@ fail before a model call. A new invocation resolves its explicit selection again
 ## Session lifecycle
 
 SQLite is canonical. Provider-native continuation is an optional optimization, never the
-only copy of conversation state. The internal concrete `Database` owns SQLite queries,
-transactions, row decoding, and write-journal persistence. Runtime and tools use owned
-session and journal handles; connection-pool access stays inside the backend. Durable
-option snapshots use the separate backend-neutral codec.
+only copy of conversation state. Durable execution uses an internal object-safe
+`SessionStore` contract for atomic acquisition, ownership, terminal transitions, bounded
+history, and write journals. Its SQLite `Database` implementation owns queries,
+transactions, and row decoding. Owned handles retain shared storage initialization and
+temporary-database lifetime. Acquisition binds the guard to the active store handle
+before commit, so store decorators also observe renewal, journal settlement, terminal
+transitions, and abandoned-acquisition cleanup. Durable option snapshots retain their
+separate codec.
 
 ```mermaid
 flowchart TD
@@ -129,14 +133,19 @@ bounded, completed history enters model context.
 Turn ownership and renewable leases prevent concurrent execution within one session.
 Acquisition revalidates persisted history so stale handles cannot replay an outdated
 conversation. Cancellation interrupts the abandoned turn; loss of ownership stops
-in-flight work. Cleanup cannot interrupt a newer turn. If recording a failure also
-fails, `SessionError` retains both errors.
+in-flight work. Reservation commits retain their owner through acknowledgement even when
+the caller disappears. Renewal and terminal persistence share an exclusion gate and
+remain bounded by the last confirmed lease deadline. A successful terminal
+acknowledgement stops renewal before completion is reported. Cleanup cannot interrupt a
+newer turn. If recording a failure also fails, `SessionError` retains both errors.
 
-Durable writes persist an intent before changing files and an outcome before returning
-to the model. Intent persistence failure prevents the write; outcome persistence failure
-stops the turn and leaves the result unknown. `Session::writes()` exposes these records
-after errors, reopening, and history eviction. They describe past attempts, not current
-file contents. Stateless `run_once` calls have no durable journal.
+Durable writes require live ownership to persist an intent before changing files, and
+persist an outcome before returning to the model. Existing intents can settle after
+lease expiry or turn termination, scoped to their original owner. Intent persistence
+failure prevents the write; outcome persistence failure stops the turn and leaves the
+result unknown. `Session::writes()` exposes these records after errors, reopening, and
+history eviction. They describe past attempts, not current file contents. Stateless
+`run_once` calls have no durable journal.
 
 ## Resume and provider fallback
 

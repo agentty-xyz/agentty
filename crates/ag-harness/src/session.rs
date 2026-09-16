@@ -1,4 +1,4 @@
-//! Concrete SQLite persistence for resumable harness chats and write journals.
+//! Durable session ownership and SQLite transactional persistence.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -20,6 +20,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::model::{ModelMessage, ModelMetadata};
+use crate::store::SessionStore;
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
@@ -214,12 +215,12 @@ where
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
-enum DatabaseIdentity {
+pub(crate) enum StoreIdentity {
     File(PathBuf),
     Temporary(u64),
 }
 
-impl DatabaseIdentity {
+impl StoreIdentity {
     async fn for_path(path: &Path) -> Result<Self, std::io::Error> {
         if path.as_os_str().is_empty() || path == Path::new(":memory:") {
             return Ok(Self::temporary());
@@ -235,9 +236,10 @@ impl DatabaseIdentity {
     }
 }
 
-/// Observes the cancellation boundary after a turn reservation is durable.
+/// Observes reservation commit submission and acknowledgement boundaries.
 #[async_trait]
 trait ReservationObserver: Send + Sync {
+    async fn committing(&self) {}
     async fn committed(&self);
 }
 
@@ -250,7 +252,7 @@ impl ReservationObserver for () {
 #[derive(Clone)]
 pub(crate) struct Database {
     abandoned_turns: Arc<AbandonedTurnRegistry>,
-    identity: DatabaseIdentity,
+    identity: StoreIdentity,
     pool: SqlitePool,
     reservation_observer: Arc<dyn ReservationObserver>,
     timestamp_source: Arc<dyn TimestampSource>,
@@ -289,7 +291,7 @@ impl Database {
             .session_context("open persistent session database")?;
 
         sqlx::migrate!("./migrations").run(&pool).await?;
-        let identity = DatabaseIdentity::for_path(path).await?;
+        let identity = StoreIdentity::for_path(path).await?;
 
         Ok(Self {
             abandoned_turns: shared_abandoned_turn_registry(),
@@ -300,7 +302,209 @@ impl Database {
         })
     }
 
-    pub(crate) async fn create_session(
+    async fn load_model_identity(
+        &self,
+        id: &str,
+    ) -> Result<(Option<String>, Option<String>), SessionError> {
+        let row = sqlx::query_as!(
+            ModelIdentityRow,
+            "SELECT provider, model FROM session WHERE id = ?",
+            id
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .session_context("load persistent session model identity")?
+        .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
+
+        Ok((row.provider, row.model))
+    }
+
+    async fn load_turn_acquisition(
+        &self,
+        session_id: &str,
+    ) -> Result<TurnAcquisition, SessionError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .session_context("load persistent session turn acquisition")?;
+        let configuration = load_turn_configuration(&mut transaction, session_id).await?;
+        let max_history_bytes =
+            decode_max_history_bytes(session_id, configuration.max_history_bytes)?;
+        let turn_position = next_turn_position(&mut transaction, session_id).await?;
+        let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
+        let turns = load_turns_from(&mut transaction, session_id, max_history_bytes).await?;
+        transaction
+            .commit()
+            .await
+            .session_context("load persistent session turn acquisition")?;
+
+        Ok(TurnAcquisition {
+            configuration,
+            latest_completed_turn,
+            turn_position,
+            turns,
+        })
+    }
+
+    async fn reserve_turn(
+        &self,
+        store: Arc<dyn SessionStore>,
+        session_id: &str,
+        message: &EncodedMessage,
+        acquisition: &TurnAcquisition,
+        options: &TurnOptions,
+        continuation_compatible: bool,
+    ) -> Result<Option<TurnGuard>, SessionError> {
+        let operation = "reserve persistent session turn";
+        let recovery_now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self.pool.begin().await.session_context(operation)?;
+        recover_stale_turns(&mut transaction, session_id, recovery_now).await?;
+        let abandoned_turns = self.abandoned_turns.for_session(&self.identity, session_id);
+        for owner in &abandoned_turns {
+            interrupt_owned_turn(&mut transaction, owner, recovery_now)
+                .await
+                .session_context("recover abandoned persistent session turn")?;
+        }
+        let configuration = load_turn_configuration(&mut transaction, session_id).await?;
+        let turn_position = next_turn_position(&mut transaction, session_id).await?;
+        let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
+        if configuration != acquisition.configuration
+            || turn_position != acquisition.turn_position
+            || latest_completed_turn != acquisition.latest_completed_turn
+        {
+            transaction.commit().await.session_context(operation)?;
+
+            return Ok(None);
+        }
+        let deadline = lease_deadline();
+        let reservation_now = self.timestamp_source.now_timestamp_seconds();
+        let lease_expires_at = reservation_now.saturating_add(TURN_LEASE_SECONDS);
+        let snapshot = StoredTurnOptions::encode(options);
+        let result = sqlx::query_scalar!(
+            r#"
+INSERT INTO session_turn (
+    session_id, turn_position, status, error_type, lease_expires_at, created_at, updated_at,
+    owner_token, turn_options
+)
+VALUES (?, ?, 'running', NULL, ?, ?, ?, randomblob(16), ?)
+RETURNING owner_token AS "owner_token!: Vec<u8>"
+"#,
+            session_id,
+            acquisition.turn_position,
+            lease_expires_at,
+            reservation_now,
+            reservation_now,
+            snapshot
+        )
+        .fetch_one(&mut *transaction)
+        .await;
+        let owner_token = result.map_err(|error| {
+            if is_unique_violation(&error) {
+                SessionError::Busy {
+                    id: session_id.to_string(),
+                }
+            } else {
+                SessionError::QueryContext {
+                    operation: "begin persistent session turn",
+                    source: error,
+                }
+            }
+        })?;
+        let owner = TurnOwner {
+            database: self.identity.clone(),
+            interruption_error_type: "interrupted",
+            session_id: session_id.to_string(),
+            token: owner_token,
+            turn_position: acquisition.turn_position,
+        };
+        let guard = TurnGuard::new(store, owner, deadline);
+        insert_message(
+            &mut transaction,
+            session_id,
+            acquisition.turn_position,
+            0,
+            message,
+            reservation_now,
+            operation,
+        )
+        .await?;
+        if !continuation_compatible {
+            sqlx::query!(
+                "UPDATE session SET provider_session_id = NULL WHERE id = ?",
+                session_id
+            )
+            .execute(&mut *transaction)
+            .await
+            .session_context(operation)?;
+        }
+        let observer = Arc::clone(&self.reservation_observer);
+        let mut guard = tokio::spawn(async move {
+            observer.committing().await;
+            transaction.commit().await.session_context(operation)?;
+
+            Ok::<_, SessionError>(guard)
+        })
+        .await
+        .map_err(|error| SessionError::InvalidData {
+            reason: format!("reservation task failed: {error}"),
+        })??;
+        self.reservation_observer.committed().await;
+        if Instant::now() >= deadline {
+            return Err(guard.owner.lost());
+        }
+        self.abandoned_turns.remove(&abandoned_turns);
+        guard.activate();
+
+        Ok(Some(guard))
+    }
+
+    async fn recover_stale_turns(&self, session_id: &str) -> Result<(), SessionError> {
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .session_context("recover stale persistent session turns")?;
+        recover_stale_turns(&mut transaction, session_id, now).await?;
+        transaction
+            .commit()
+            .await
+            .session_context("recover stale persistent session turns")?;
+
+        Ok(())
+    }
+
+    async fn load_turns(
+        &self,
+        session_id: &str,
+        max_history_bytes: usize,
+    ) -> Result<Vec<Vec<ModelMessage>>, SessionError> {
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .session_context("load persistent session history")?;
+
+        load_turns_from(&mut connection, session_id, max_history_bytes).await
+    }
+
+    fn validate_owner(&self, owner: &TurnOwner) -> Result<(), SessionError> {
+        if &owner.database != self.identity() {
+            return Err(owner.lost());
+        }
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl SessionStore for Database {
+    fn identity(&self) -> &StoreIdentity {
+        &self.identity
+    }
+
+    async fn create_session(
         &self,
         config: &NewSession,
         metadata: Option<ModelMetadata>,
@@ -351,7 +555,7 @@ ON CONFLICT(id) DO NOTHING
         Ok(())
     }
 
-    pub(crate) async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError> {
+    async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError> {
         self.recover_stale_turns(id).await?;
         let row = sqlx::query_as!(
             SessionRow,
@@ -396,29 +600,18 @@ WHERE id = ?
         })
     }
 
-    async fn load_model_identity(
+    async fn begin_turn(
         &self,
-        id: &str,
-    ) -> Result<(Option<String>, Option<String>), SessionError> {
-        let row = sqlx::query_as!(
-            ModelIdentityRow,
-            "SELECT provider, model FROM session WHERE id = ?",
-            id
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .session_context("load persistent session model identity")?
-        .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
-
-        Ok((row.provider, row.model))
-    }
-
-    pub(crate) async fn begin_turn(
-        &self,
+        store: Arc<dyn SessionStore>,
         session_id: &str,
         prompt: &str,
         options: &TurnOptions,
     ) -> Result<AcquiredTurn, SessionError> {
+        if store.identity() != self.identity() {
+            return Err(SessionError::InvalidData {
+                reason: "acquisition store has a different backing identity".to_string(),
+            });
+        }
         let message = EncodedMessage::from_message(&ModelMessage::User(prompt.to_string()))?;
 
         loop {
@@ -433,7 +626,14 @@ WHERE id = ?
                 .as_ref()
                 .is_some_and(|previous| previous.continuation_compatible(options));
             if let Some(guard) = self
-                .reserve_turn(session_id, &message, &acquisition, options, compatible)
+                .reserve_turn(
+                    Arc::clone(&store),
+                    session_id,
+                    &message,
+                    &acquisition,
+                    options,
+                    compatible,
+                )
                 .await?
             {
                 return Ok(AcquiredTurn {
@@ -442,142 +642,15 @@ WHERE id = ?
                         .configuration
                         .provider_session_id
                         .filter(|_| compatible),
-                    turn_position: acquisition.turn_position,
                     turns: acquisition.turns,
                 });
             }
         }
     }
 
-    async fn load_turn_acquisition(
+    async fn complete_turn(
         &self,
-        session_id: &str,
-    ) -> Result<TurnAcquisition, SessionError> {
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .session_context("load persistent session turn acquisition")?;
-        let configuration = load_turn_configuration(&mut transaction, session_id).await?;
-        let max_history_bytes =
-            decode_max_history_bytes(session_id, configuration.max_history_bytes)?;
-        let turn_position = next_turn_position(&mut transaction, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
-        let turns = load_turns_from(&mut transaction, session_id, max_history_bytes).await?;
-        transaction
-            .commit()
-            .await
-            .session_context("load persistent session turn acquisition")?;
-
-        Ok(TurnAcquisition {
-            configuration,
-            latest_completed_turn,
-            turn_position,
-            turns,
-        })
-    }
-
-    async fn reserve_turn(
-        &self,
-        session_id: &str,
-        message: &EncodedMessage,
-        acquisition: &TurnAcquisition,
-        options: &TurnOptions,
-        continuation_compatible: bool,
-    ) -> Result<Option<TurnGuard>, SessionError> {
-        let operation = "reserve persistent session turn";
-        let recovery_now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await.session_context(operation)?;
-        recover_stale_turns(&mut transaction, session_id, recovery_now).await?;
-        let abandoned_turns = self.abandoned_turns.for_session(&self.identity, session_id);
-        for owner in &abandoned_turns {
-            interrupt_owned_turn(&mut transaction, owner, recovery_now)
-                .await
-                .session_context("recover abandoned persistent session turn")?;
-        }
-        let configuration = load_turn_configuration(&mut transaction, session_id).await?;
-        let turn_position = next_turn_position(&mut transaction, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
-        if configuration != acquisition.configuration
-            || turn_position != acquisition.turn_position
-            || latest_completed_turn != acquisition.latest_completed_turn
-        {
-            transaction.commit().await.session_context(operation)?;
-
-            return Ok(None);
-        }
-        let reservation_now = self.timestamp_source.now_timestamp_seconds();
-        let lease_expires_at = reservation_now.saturating_add(TURN_LEASE_SECONDS);
-        let snapshot = StoredTurnOptions::encode(options);
-        let result = sqlx::query_scalar!(
-            r#"
-INSERT INTO session_turn (
-    session_id, turn_position, status, error_type, lease_expires_at, created_at, updated_at,
-    owner_token, turn_options
-)
-VALUES (?, ?, 'running', NULL, ?, ?, ?, randomblob(16), ?)
-RETURNING owner_token AS "owner_token!: Vec<u8>"
-"#,
-            session_id,
-            acquisition.turn_position,
-            lease_expires_at,
-            reservation_now,
-            reservation_now,
-            snapshot
-        )
-        .fetch_one(&mut *transaction)
-        .await;
-        let owner_token = result.map_err(|error| {
-            if is_unique_violation(&error) {
-                SessionError::Busy {
-                    id: session_id.to_string(),
-                }
-            } else {
-                SessionError::QueryContext {
-                    operation: "begin persistent session turn",
-                    source: error,
-                }
-            }
-        })?;
-        let owner = TurnOwner {
-            database: self.identity.clone(),
-            interruption_error_type: "interrupted",
-            session_id: session_id.to_string(),
-            token: owner_token,
-            turn_position: acquisition.turn_position,
-        };
-        let mut guard = TurnGuard::new(self, owner);
-        insert_message(
-            &mut transaction,
-            session_id,
-            acquisition.turn_position,
-            0,
-            message,
-            reservation_now,
-            operation,
-        )
-        .await?;
-        if !continuation_compatible {
-            sqlx::query!(
-                "UPDATE session SET provider_session_id = NULL WHERE id = ?",
-                session_id
-            )
-            .execute(&mut *transaction)
-            .await
-            .session_context(operation)?;
-        }
-        transaction.commit().await.session_context(operation)?;
-        self.reservation_observer.committed().await;
-        self.abandoned_turns.remove(&abandoned_turns);
-        guard.activate();
-
-        Ok(Some(guard))
-    }
-
-    pub(crate) async fn complete_turn(
-        &self,
-        session_id: &str,
-        turn_position: i64,
+        owner: &TurnOwner,
         messages: &[ModelMessage],
         provider_session_id: Option<&str>,
     ) -> Result<(), SessionError> {
@@ -585,12 +658,34 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
             .iter()
             .map(EncodedMessage::from_message)
             .collect::<Result<Vec<_>, _>>()?;
-        let now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = self
             .pool
-            .begin()
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .session_context("complete persistent session turn")?;
+        self.validate_owner(owner)?;
+        let session_id = &owner.session_id;
+        let turn_position = owner.turn_position;
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let result = sqlx::query!(
+            r"
+UPDATE session_turn
+SET status = 'completed', error_type = NULL, lease_expires_at = NULL, updated_at = ?
+WHERE session_id = ? AND turn_position = ? AND status = 'running'
+  AND owner_token = ? AND lease_expires_at > ?
+",
+            now,
+            session_id,
+            turn_position,
+            owner.token,
+            now
+        )
+        .execute(&mut *transaction)
+        .await
+        .session_context("complete persistent session turn")?;
+        if result.rows_affected() == 0 {
+            return Err(owner.lost());
+        }
         for (index, message) in encoded_messages.iter().enumerate() {
             let message_position = i64::try_from(index).unwrap_or(i64::MAX).saturating_add(1);
             insert_message(
@@ -603,24 +698,6 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
                 "complete persistent session turn",
             )
             .await?;
-        }
-        let result = sqlx::query(
-            r"
-UPDATE session_turn
-SET status = 'completed', error_type = NULL, lease_expires_at = NULL, updated_at = ?
-WHERE session_id = ? AND turn_position = ? AND status = 'running'
-",
-        )
-        .bind(now)
-        .bind(session_id)
-        .bind(turn_position)
-        .execute(&mut *transaction)
-        .await
-        .session_context("complete persistent session turn")?;
-        if result.rows_affected() == 0 {
-            return Err(SessionError::InvalidData {
-                reason: format!("session `{session_id}` turn {turn_position} is not running"),
-            });
         }
         sqlx::query(
             r"
@@ -643,37 +720,36 @@ WHERE id = ?
         Ok(())
     }
 
-    pub(crate) async fn fail_turn(
-        &self,
-        session_id: &str,
-        turn_position: i64,
-        error: &TurnError,
-    ) -> Result<(), SessionError> {
-        let now = self.timestamp_source.now_timestamp_seconds();
+    async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
         let error_type = format!("{:?}", error.error_type());
         let mut transaction = self
             .pool
-            .begin()
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .session_context("fail persistent session turn")?;
-        let result = sqlx::query(
+        self.validate_owner(owner)?;
+        let session_id = &owner.session_id;
+        let turn_position = owner.turn_position;
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let result = sqlx::query!(
             r"
 UPDATE session_turn
 SET status = 'failed', error_type = ?, lease_expires_at = NULL, updated_at = ?
 WHERE session_id = ? AND turn_position = ? AND status = 'running'
+  AND owner_token = ? AND lease_expires_at > ?
 ",
+            error_type,
+            now,
+            session_id,
+            turn_position,
+            owner.token,
+            now
         )
-        .bind(error_type)
-        .bind(now)
-        .bind(session_id)
-        .bind(turn_position)
         .execute(&mut *transaction)
         .await
         .session_context("fail persistent session turn")?;
         if result.rows_affected() == 0 {
-            return Err(SessionError::InvalidData {
-                reason: format!("session `{session_id}` turn {turn_position} is not running"),
-            });
+            return Err(owner.lost());
         }
         sqlx::query(
             r"
@@ -695,10 +771,7 @@ WHERE id = ?
         Ok(())
     }
 
-    pub(crate) async fn load_writes(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<WriteRecord>, SessionError> {
+    async fn load_writes(&self, session_id: &str) -> Result<Vec<WriteRecord>, SessionError> {
         WriteRecordRow::load(&self.pool, session_id).await
     }
 
@@ -711,17 +784,18 @@ WHERE id = ?
         expected: Option<&[u8]>,
         resulting: &[u8],
     ) -> Result<i64, SessionError> {
+        self.validate_owner(owner)?;
         let root = root.as_os_str().as_bytes();
         let expected_hash = expected.map(content_hash);
         let resulting_hash = content_hash(resulting);
-        let mut transaction =
-            self.pool
-                .begin()
-                .await
-                .map_err(|source| SessionError::QueryContext {
-                    operation: "begin write intent",
-                    source,
-                })?;
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|source| SessionError::QueryContext {
+                operation: "begin write intent",
+                source,
+            })?;
         let now = self.timestamp_source.now_timestamp_seconds();
         let row = sqlx::query!(
             r#"
@@ -770,55 +844,80 @@ RETURNING id AS "id!"
 
     async fn finish_write(
         &self,
-        session_id: &str,
+        owner: &TurnOwner,
         id: i64,
         applied: bool,
     ) -> Result<(), SessionError> {
+        self.validate_owner(owner)?;
         let status = if applied { "applied" } else { "failed" };
-        sqlx::query!(
-            "UPDATE session_write SET status = ? WHERE id = ? AND session_id = ?",
+        let result = sqlx::query!(
+            r"
+UPDATE session_write SET status = ?
+WHERE id = ? AND session_id = ? AND turn_position = ?
+  AND EXISTS (
+    SELECT 1 FROM session_turn
+    WHERE session_id = ? AND turn_position = ? AND owner_token = ?
+  )
+",
             status,
             id,
-            session_id
+            owner.session_id,
+            owner.turn_position,
+            owner.session_id,
+            owner.turn_position,
+            owner.token
         )
         .execute(&self.pool)
         .await
-        .map_err(|source| SessionError::QueryContext {
-            operation: "persist write outcome",
-            source,
-        })?;
+        .session_context("persist write outcome")?;
+        if result.rows_affected() != 1 {
+            return Err(owner.lost());
+        }
 
         Ok(())
     }
 
-    async fn recover_stale_turns(&self, session_id: &str) -> Result<(), SessionError> {
+    async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
+        self.validate_owner(owner)?;
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .session_context("renew persistent session turn lease")?;
+        let deadline = lease_deadline();
         let now = self.timestamp_source.now_timestamp_seconds();
+        if !renew_owned_turn(&mut transaction, owner, now)
+            .await
+            .session_context("renew persistent session turn lease")?
+        {
+            return Err(owner.lost());
+        }
+        transaction
+            .commit()
+            .await
+            .session_context("renew persistent session turn lease")?;
+
+        Ok(deadline)
+    }
+
+    async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError> {
+        self.validate_owner(owner)?;
         let mut transaction = self
             .pool
             .begin()
             .await
-            .session_context("recover stale persistent session turns")?;
-        recover_stale_turns(&mut transaction, session_id, now).await?;
+            .session_context("interrupt persistent session turn")?;
+        interrupt_owned_turn(
+            &mut transaction,
+            owner,
+            self.timestamp_source.now_timestamp_seconds(),
+        )
+        .await
+        .session_context("interrupt persistent session turn")?;
         transaction
             .commit()
             .await
-            .session_context("recover stale persistent session turns")?;
-
-        Ok(())
-    }
-
-    async fn load_turns(
-        &self,
-        session_id: &str,
-        max_history_bytes: usize,
-    ) -> Result<Vec<Vec<ModelMessage>>, SessionError> {
-        let mut connection = self
-            .pool
-            .acquire()
-            .await
-            .session_context("load persistent session history")?;
-
-        load_turns_from(&mut connection, session_id, max_history_bytes).await
+            .session_context("interrupt persistent session turn")
     }
 }
 
@@ -872,7 +971,7 @@ pub enum SessionError {
         /// Missing session identifier.
         id: String,
     },
-    /// The active turn's lease was recovered by another owner.
+    /// The turn's owner token or lease is no longer valid for this store.
     #[error("persistent session `{id}` lost ownership of turn {turn_position}")]
     OwnershipLost {
         /// Session identifier whose turn lost ownership.
@@ -923,7 +1022,6 @@ impl From<StoredTurnOptionsError> for SessionError {
 pub(crate) struct AcquiredTurn {
     pub(crate) guard: TurnGuard,
     pub(crate) provider_session_id: Option<String>,
-    pub(crate) turn_position: i64,
     pub(crate) turns: Vec<Vec<ModelMessage>>,
 }
 
@@ -945,12 +1043,27 @@ struct TurnAcquisition {
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
-struct TurnOwner {
-    database: DatabaseIdentity,
-    interruption_error_type: &'static str,
-    session_id: String,
-    token: Vec<u8>,
-    turn_position: i64,
+pub(crate) struct TurnOwner {
+    pub(crate) database: StoreIdentity,
+    pub(crate) interruption_error_type: &'static str,
+    pub(crate) session_id: String,
+    pub(crate) token: Vec<u8>,
+    pub(crate) turn_position: i64,
+}
+
+impl TurnOwner {
+    fn lost(&self) -> SessionError {
+        SessionError::OwnershipLost {
+            id: self.session_id.clone(),
+            turn_position: self.turn_position,
+        }
+    }
+}
+
+fn lease_deadline() -> Instant {
+    // Stored timestamps round down to seconds; never promise the fractional
+    // second.
+    Instant::now() + Duration::from_secs(TURN_LEASE_SECONDS.unsigned_abs() - 1)
 }
 
 #[derive(Default)]
@@ -959,7 +1072,7 @@ struct AbandonedTurnRegistry {
 }
 
 impl AbandonedTurnRegistry {
-    fn for_session(&self, database: &DatabaseIdentity, session_id: &str) -> Vec<TurnOwner> {
+    fn for_session(&self, database: &StoreIdentity, session_id: &str) -> Vec<TurnOwner> {
         self.owners
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -995,36 +1108,34 @@ fn shared_abandoned_turn_registry() -> Arc<AbandonedTurnRegistry> {
 
 /// Owned journal access scoped to the turn that acquired it.
 pub(crate) struct WriteJournal {
-    database: Database,
+    database: Arc<dyn SessionStore>,
     owner: TurnOwner,
 }
 
 impl WriteJournal {
-    pub(crate) fn intent(
+    pub(crate) async fn intent(
         &self,
         call_id: &str,
         root: &Path,
         path: &str,
         expected: Option<&[u8]>,
         resulting: &[u8],
-    ) -> impl Future<Output = Result<i64, SessionError>> + Send {
+    ) -> Result<i64, SessionError> {
         self.database
             .write_intent(&self.owner, call_id, root, path, expected, resulting)
+            .await
     }
 
-    pub(crate) fn finish(
-        &self,
-        id: i64,
-        applied: bool,
-    ) -> impl Future<Output = Result<(), SessionError>> + Send {
-        self.database
-            .finish_write(&self.owner.session_id, id, applied)
+    pub(crate) async fn finish(&self, id: i64, applied: bool) -> Result<(), SessionError> {
+        self.database.finish_write(&self.owner, id, applied).await
     }
 }
 
 pub(crate) struct TurnGuard {
     armed: bool,
-    database: Database,
+    database: Arc<dyn SessionStore>,
+    deadline: Arc<Mutex<Instant>>,
+    finalization: Arc<tokio::sync::Mutex<()>>,
     owner: TurnOwner,
     ownership_failure: Option<oneshot::Receiver<SessionError>>,
     renewal_stop: Option<oneshot::Sender<()>>,
@@ -1035,15 +1146,23 @@ pub(crate) struct TurnGuard {
 impl TurnGuard {
     pub(crate) fn write_journal(&self) -> WriteJournal {
         WriteJournal {
-            database: self.database.clone(),
+            database: Arc::clone(&self.database),
             owner: self.owner.clone(),
         }
     }
 
-    fn new(database: &Database, owner: TurnOwner) -> Self {
+    /// Retain cleanup responsibility before committing a reservation. Activate
+    /// only after the commit is acknowledged within the confirmed deadline.
+    pub(crate) fn new(
+        database: Arc<dyn SessionStore>,
+        owner: TurnOwner,
+        deadline: Instant,
+    ) -> Self {
         Self {
             armed: true,
-            database: database.clone(),
+            database,
+            deadline: Arc::new(Mutex::new(deadline)),
+            finalization: Arc::new(tokio::sync::Mutex::new(())),
             owner,
             ownership_failure: None,
             renewal_stop: None,
@@ -1052,59 +1171,113 @@ impl TurnGuard {
         }
     }
 
-    fn activate(&mut self) {
+    pub(crate) fn activate(&mut self) {
         self.owner.interruption_error_type = "cancelled";
         let owner = self.owner.clone();
         let interval = Duration::from_secs(TURN_LEASE_RENEWAL_INTERVAL_SECONDS);
         let first_renewal = Instant::now() + interval;
-        let pool = self.database.pool.clone();
-        let timestamp_source = Arc::clone(&self.database.timestamp_source);
+        let database = Arc::clone(&self.database);
+        let deadline = Arc::clone(&self.deadline);
+        let finalization = Arc::clone(&self.finalization);
         let (renewal_stop, mut stop_requested) = oneshot::channel();
         let (ownership_failed, ownership_failure) = oneshot::channel();
         self.renewal_stop = Some(renewal_stop);
         self.ownership_failure = Some(ownership_failure);
         self.renewal_task = Some(self.runtime.spawn(async move {
-            let mut ticker = tokio::time::interval_at(first_renewal, interval);
-            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        let now = timestamp_source.now_timestamp_seconds();
-                        let failure = match renew_owned_turn(&pool, &owner, now).await {
-                            Ok(true) => continue,
-                            Ok(false) => SessionError::OwnershipLost {
-                                id: owner.session_id.clone(),
-                                turn_position: owner.turn_position,
-                            },
-                            Err(source) => SessionError::QueryContext {
-                                operation: "renew persistent session turn lease",
-                                source,
-                            },
-                        };
-                        let _ = ownership_failed.send(failure);
+            let monitor = async {
+                let mut ticker = tokio::time::interval_at(first_renewal, interval);
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                loop {
+                    let confirmed = *deadline
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let renewal = async {
+                        ticker.tick().await;
+                        let _exclusive = finalization.lock().await;
+                        let renewed = database.renew(&owner).await?;
+                        *deadline
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = renewed;
 
-                        break;
+                        Ok::<_, SessionError>(())
+                    };
+                    tokio::select! {
+                        biased;
+                        () = tokio::time::sleep_until(confirmed) => return owner.lost(),
+                        result = renewal => if let Err(error) = result { return error; },
                     }
-                    _ = &mut stop_requested => break,
                 }
+            };
+            tokio::select! {
+                error = monitor => { let _ = ownership_failed.send(error); }
+                _ = &mut stop_requested => {}
             }
         }));
     }
 
     pub(crate) async fn ownership_failure(&mut self) -> SessionError {
-        let Some(failure) = self.ownership_failure.take() else {
-            return SessionError::OwnershipLost {
-                id: self.owner.session_id.clone(),
-                turn_position: self.owner.turn_position,
-            };
+        if Instant::now()
+            >= *self
+                .deadline
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            return self.owner.lost();
+        }
+        let Some(failure) = self.ownership_failure.as_mut() else {
+            return self.owner.lost();
         };
+        let result = failure.await.unwrap_or_else(|_| self.owner.lost());
+        self.ownership_failure = None;
 
-        failure
+        result
+    }
+
+    /// Renewal and finalization cannot race their acknowledgements. Waiting
+    /// for a stalled renewal remains bounded by its last confirmed deadline.
+    pub(crate) async fn complete(
+        &mut self,
+        messages: &[ModelMessage],
+        provider_session_id: Option<&str>,
+    ) -> Result<(), SessionError> {
+        let database = Arc::clone(&self.database);
+        let owner = self.owner.clone();
+        self.finalize(database.complete_turn(&owner, messages, provider_session_id))
             .await
-            .unwrap_or_else(|_| SessionError::OwnershipLost {
-                id: self.owner.session_id.clone(),
-                turn_position: self.owner.turn_position,
-            })
+    }
+
+    pub(crate) async fn fail(&mut self, error: &TurnError) -> Result<(), SessionError> {
+        let database = Arc::clone(&self.database);
+        let owner = self.owner.clone();
+        self.finalize(database.fail_turn(&owner, error)).await
+    }
+
+    async fn finalize(
+        &mut self,
+        persistence: impl Future<Output = Result<(), SessionError>>,
+    ) -> Result<(), SessionError> {
+        let finalization = Arc::clone(&self.finalization);
+        let _exclusive = tokio::select! {
+            biased;
+            error = self.ownership_failure() => return Err(error),
+            exclusive = finalization.lock() => exclusive,
+        };
+        self.stop_renewal();
+        let deadline = *self
+            .deadline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if Instant::now() >= deadline {
+            return Err(self.owner.lost());
+        }
+        let result = tokio::time::timeout_at(deadline, persistence)
+            .await
+            .unwrap_or_else(|_| Err(self.owner.lost()));
+        if result.is_ok() {
+            self.disarm();
+        }
+
+        result
     }
 
     pub(crate) fn disarm(&mut self) {
@@ -1120,7 +1293,9 @@ impl TurnGuard {
         if let Some(stop) = self.renewal_stop.take() {
             let _ = stop.send(());
         }
-        self.renewal_task.take();
+        if let Some(task) = self.renewal_task.take() {
+            task.abort();
+        }
     }
 }
 
@@ -1131,24 +1306,11 @@ impl Drop for TurnGuard {
             return;
         }
         let owner = self.owner.clone();
-        self.database.abandoned_turns.register(owner.clone());
-
-        let pool = self.database.pool.clone();
-        let registry = Arc::clone(&self.database.abandoned_turns);
-        let timestamp_source = Arc::clone(&self.database.timestamp_source);
+        let registry = shared_abandoned_turn_registry();
+        registry.register(owner.clone());
+        let database = Arc::clone(&self.database);
         std::mem::drop(self.runtime.spawn(async move {
-            let result = async {
-                let mut transaction = pool.begin().await?;
-                interrupt_owned_turn(
-                    &mut transaction,
-                    &owner,
-                    timestamp_source.now_timestamp_seconds(),
-                )
-                .await?;
-                transaction.commit().await
-            }
-            .await;
-            if result.is_ok() {
+            if database.interrupt(&owner).await.is_ok() {
                 registry.remove(std::slice::from_ref(&owner));
             }
         }));
@@ -1596,12 +1758,12 @@ WHERE id = ?
 }
 
 async fn renew_owned_turn(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     owner: &TurnOwner,
     now: i64,
 ) -> Result<bool, sqlx::Error> {
     let lease_expires_at = now.saturating_add(TURN_LEASE_SECONDS);
-    let result = sqlx::query(
+    let result = sqlx::query!(
         r"
 UPDATE session_turn
 SET lease_expires_at = ?, updated_at = ?
@@ -1609,14 +1771,16 @@ WHERE session_id = ?
   AND turn_position = ?
   AND owner_token = ?
   AND status = 'running'
+  AND lease_expires_at > ?
 ",
+        lease_expires_at,
+        now,
+        owner.session_id,
+        owner.turn_position,
+        owner.token,
+        now
     )
-    .bind(lease_expires_at)
-    .bind(now)
-    .bind(&owner.session_id)
-    .bind(owner.turn_position)
-    .bind(&owner.token)
-    .execute(pool)
+    .execute(connection)
     .await?;
 
     Ok(result.rows_affected() == 1)
