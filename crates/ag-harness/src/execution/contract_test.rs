@@ -607,3 +607,37 @@ impl ExecutionControl for FakeControl {
         Ok(())
     }
 }
+
+#[test]
+fn exact_external_entries_do_not_grant_descendant_reads() {
+    // Arrange
+    let policy = policy(Grants {
+        external_entries: vec!["/".into(), "/entry".into()],
+        ..Grants::default()
+    });
+
+    // Act
+    let root = policy.requested_access(Path::new("/"));
+    let entry = policy.requested_access(Path::new("/entry"));
+    let descendant = policy.requested_access(Path::new("/entry/secret"));
+
+    // Assert
+    assert_eq!(root, Ok(Access::ReadOnly));
+    assert_eq!(entry, Ok(Access::ReadOnly));
+    assert_eq!(descendant, Ok(Access::Denied));
+    assert_eq!(
+        policy.external_entries(),
+        &[PathBuf::from("/"), PathBuf::from("/entry")]
+    );
+    assert!(
+        Policy::new(
+            "/workspace".into(),
+            vec!["/git".into()],
+            Grants {
+                external_entries: vec!["relative".into()],
+                ..Grants::default()
+            }
+        )
+        .is_err()
+    );
+}
