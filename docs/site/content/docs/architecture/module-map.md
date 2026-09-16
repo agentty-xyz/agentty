@@ -174,3 +174,12 @@ for session chat.
 - `module.rs` files paired with a `module/` directory stay router-only.
 - Change-path guidance for common scenarios lives in
   [Change Recipes](@/docs/architecture/change-recipes.md).
+
+## Worker-owned model execution
+
+Application workflows submit isolated model work through `ag-worker::RunClient`.
+`ag-worker` owns admission, concurrency, cancellation, and lifecycle records;
+`ag-runtime` defines execution contracts and `ag-agent` implements harness transports.
+`ag-store` persists utility runs independently of session-only workflow operations.
+
+See [Execution](@/docs/core-components/execution.md) for the execution contract.

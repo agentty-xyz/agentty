@@ -18,6 +18,9 @@ Headless serial scheduling, cancellation, heartbeat coordination, and restart re
   abandoned work and notify its callers before releasing resources.
 - Inject `Clock` for heartbeat timing. Before recovery, ensure the previous worker has
   stopped; reconcile host state before marking unfinished operations failed.
+- Close session utility admission durably before reclaiming canceled session tracking.
+  Hosts finish canceled utilities before deleting resources; session IDs are never
+  reused.
 
 ## Documentation
 

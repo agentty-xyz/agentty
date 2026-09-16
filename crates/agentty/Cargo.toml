@@ -52,6 +52,7 @@ unicode-width.workspace = true
 libproc.workspace = true
 
 [dev-dependencies]
+ag-worker = { workspace = true, features = ["test-utils"] }
 ag-agent = { workspace = true, features = ["test-utils"] }
 ag-forge = { workspace = true, features = ["test-utils"] }
 ag-git = { workspace = true, features = ["test-utils"] }

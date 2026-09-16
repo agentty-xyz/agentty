@@ -2,9 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ag_agent as agent;
-use ag_agent::{AgentRequestKind, MockOneShotClient, OneShotClient};
+use ag_agent::AgentRequestKind;
 use ag_git as git;
 use ag_protocol::AgentResponse;
+use ag_worker::{MockRunClient, RunClient};
 use tokio::sync::{Notify, mpsc};
 
 use super::super::{
@@ -32,13 +33,9 @@ async fn test_spawn_session_title_generation_task_handles_claim_failure() {
         .expect("db should open");
     pool.close().await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let one_shot_client: Arc<dyn OneShotClient> = Arc::new(MockOneShotClient::new());
-    let mut input = title_generation_task_input(
-        app_event_tx,
-        database,
-        one_shot_client,
-        "review the project",
-    );
+    let run_client: Arc<dyn RunClient> = Arc::new(MockRunClient::new());
+    let mut input =
+        title_generation_task_input(app_event_tx, database, run_client, "review the project");
     input.tracked_generation = Some(7);
 
     // Act
@@ -411,13 +408,13 @@ async fn test_title_generation_ignores_candidate_invalidated_while_running() {
     let (database, _pool) = provisional_title_database("Background context only.").await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let one_shot_client: Arc<dyn OneShotClient> = Arc::new(DelayedTitleClient {
+    let run_client: Arc<dyn RunClient> = Arc::new(DelayedTitleClient {
         release: Arc::clone(&release),
     });
     let input = title_generation_task_input(
         app_event_tx,
         database.clone(),
-        one_shot_client,
+        run_client,
         "review the project",
     );
     let title_generation_task = SessionManager::spawn_session_title_generation_task(input)
@@ -509,14 +506,14 @@ async fn test_claimed_title_generation_finishes_when_session_context_is_missing(
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client.expect_submit().times(0);
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(0);
     let input = ClaimedSessionTitleGenerationTaskInput {
         app_event_tx,
         db: database,
         folder: PathBuf::from("/tmp/session"),
         latest_request: "Latest request".to_string(),
-        one_shot_client: Arc::new(one_shot_client),
+        run_client: Arc::new(run_client),
         reasoning_level: ReasoningLevel::Low,
         session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
         session_id: SessionId::from("missing-session"),
@@ -549,14 +546,14 @@ async fn test_empty_candidate_preserves_delayed_title_generation() {
     let (database, _pool) = provisional_title_database("Background context only.").await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let one_shot_client: Arc<dyn OneShotClient> = Arc::new(DelayedTitleClient {
+    let run_client: Arc<dyn RunClient> = Arc::new(DelayedTitleClient {
         release: Arc::clone(&release),
     });
     let delayed_task =
         SessionManager::spawn_session_title_generation_task(title_generation_task_input(
             app_event_tx.clone(),
             database.clone(),
-            one_shot_client,
+            run_client,
             "review the project",
         ))
         .await
@@ -615,8 +612,8 @@ async fn test_run_title_generation_command_returns_answer_text() {
     // Arrange
     let folder = PathBuf::from("/tmp/title-generation");
     let expected_folder = folder.clone();
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
+    let mut run_client = MockRunClient::new();
+    run_client
         .expect_submit()
         .times(1)
         .returning(move |request| {
@@ -649,7 +646,7 @@ async fn test_run_title_generation_command_returns_answer_text() {
         ReasoningLevel::Low,
         "session-id",
         SpeedMode::Fast,
-        &one_shot_client,
+        &run_client,
     )
     .await;
 
@@ -662,9 +659,9 @@ async fn test_run_title_generation_command_returns_answer_text() {
 /// the usable title response.
 async fn test_run_title_generation_command_retries_provider_failure() {
     // Arrange
-    let mut one_shot_client = MockOneShotClient::new();
+    let mut run_client = MockRunClient::new();
     let mut attempt = 0;
-    one_shot_client
+    run_client
         .expect_submit()
         .times(SESSION_TITLE_GENERATION_MAX_ATTEMPTS)
         .returning(move |_| {
@@ -693,7 +690,7 @@ async fn test_run_title_generation_command_retries_provider_failure() {
         ReasoningLevel::Low,
         "session-id",
         SpeedMode::Normal,
-        &one_shot_client,
+        &run_client,
     )
     .await;
 
@@ -706,8 +703,8 @@ async fn test_run_title_generation_command_retries_provider_failure() {
 /// available for a later turn.
 async fn test_run_title_generation_command_returns_none_after_retry_exhaustion() {
     // Arrange
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
+    let mut run_client = MockRunClient::new();
+    run_client
         .expect_submit()
         .times(SESSION_TITLE_GENERATION_MAX_ATTEMPTS)
         .returning(|_| Err(agent::OneShotError::new("provider unavailable")));
@@ -720,7 +717,7 @@ async fn test_run_title_generation_command_returns_none_after_retry_exhaustion()
         ReasoningLevel::Low,
         "session-id",
         SpeedMode::Normal,
-        &one_shot_client,
+        &run_client,
     )
     .await;
 

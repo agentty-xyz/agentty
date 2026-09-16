@@ -15,6 +15,7 @@ ag-protocol.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]

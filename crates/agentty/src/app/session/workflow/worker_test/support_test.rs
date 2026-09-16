@@ -4,15 +4,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_agent as agent;
-use ag_agent::{
-    AgentError, AgentRequestKind, MockAgentChannel, MockOneShotClient, OneShotClient,
-    PermissionMode, TurnResult,
-};
+use ag_agent::{AgentError, AgentRequestKind, MockAgentChannel, PermissionMode, TurnResult};
 use ag_forge as forge;
 use ag_git::{MockGitClient, RebaseStepResult};
 use ag_protocol::{
     AgentResponse, ReviewCommentOutcome, ReviewCommentResolution, TurnPromptAttachment,
 };
+use ag_worker::{MockRunClient, RunClient};
 use mockall::Sequence;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -227,8 +225,8 @@ pub(super) fn transcript_text(transcript: &Arc<Mutex<SessionTranscript>>) -> Str
 
 /// Builds a title-generation boundary that verifies temporary research
 /// sessions use an isolated read-only utility request.
-pub(super) fn research_title_one_shot_client() -> Arc<dyn OneShotClient> {
-    let mut title_client = MockOneShotClient::new();
+pub(super) fn research_title_run_client() -> Arc<dyn RunClient> {
+    let mut title_client = MockRunClient::new();
     title_client
         .expect_submit()
         .once()
@@ -255,9 +253,9 @@ pub(super) fn research_title_one_shot_client() -> Arc<dyn OneShotClient> {
 /// Builds a deterministic post-turn one-shot boundary. Tests whose
 /// worktrees are clean never submit; auto-commit tests receive the
 /// canonical message they already expect.
-pub(super) fn auto_commit_one_shot_client() -> Arc<dyn OneShotClient> {
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client.expect_submit().times(0..).returning(|request| {
+pub(super) fn auto_commit_run_client() -> Arc<dyn RunClient> {
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(0..).returning(|request| {
             let answer = if request
                 .prompt
                 .contains("Reconcile the current review-request title")
@@ -279,7 +277,7 @@ pub(super) fn auto_commit_one_shot_client() -> Arc<dyn OneShotClient> {
             })
         });
 
-    Arc::new(one_shot_client)
+    Arc::new(run_client)
 }
 
 /// Applies one turn result through the narrowed post-turn dependency set
@@ -289,7 +287,7 @@ pub(super) async fn apply_worker_turn_result(
     turn_metadata: TurnMetadata,
     turn_result: Result<TurnResult, AgentError>,
 ) -> Result<Status, SessionError> {
-    let post_turn_context = PostTurnContext::from_worker(context, auto_commit_one_shot_client());
+    let post_turn_context = PostTurnContext::from_worker(context, auto_commit_run_client());
 
     apply_turn_result(
         &post_turn_context,

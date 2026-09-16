@@ -55,10 +55,10 @@ through the correct modules without crossing layer boundaries.
 
 ## Add or Change a Utility Agent Prompt
 
-1. Submit an owned `OneShotRequest` through `OneShotClient`; do not select a CLI,
+1. Submit an owned `OneShotRequest` through the worker `RunClient`; do not select a CLI,
    app-server, backend, or protocol-repair helper from application orchestration.
-1. Inject `&dyn OneShotClient` into the smallest workflow helper that needs
-   deterministic coverage and test it with `MockOneShotClient`.
+1. Inject `&dyn RunClient` into the smallest workflow helper that needs deterministic
+   coverage and test it with `MockRunClient`.
 1. Keep provider routing, protocol repair, usage aggregation, and runtime cleanup in
    `crates/ag-agent/src/agent/submission.rs`.
 
@@ -135,3 +135,13 @@ through the correct modules without crossing layer boundaries.
    product-specific question, Git, forge, and UI policy in the host adapter.
 1. Extend headless contract tests and the affected Agentty workflow tests. Changes to
    operation persistence also need `ag-store` adapter tests.
+
+## Adding model-assisted work
+
+Inject `ag-worker::RunClient` and submit with the existing request permissions and
+provider-call budget. Capture session/project ownership and a purpose with
+`ag-worker::scoped_client` when spawning background work. Nested operations must retain
+parent scope and await worker-owned utilities directly, rather than enqueueing behind
+the waiting session command. Construct runtime adapters only at application composition.
+
+See [Execution](@/docs/core-components/execution.md) for the execution contract.

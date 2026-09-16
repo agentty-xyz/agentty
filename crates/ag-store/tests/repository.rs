@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use ag_store::Database;
+use ag_worker::RunInfo;
 
 #[tokio::test]
 async fn worker_settlement_preserves_in_flight_cancellation_for_workflow_commands() {
@@ -140,4 +141,34 @@ async fn maintenance_operations_use_the_same_public_repository_contract() {
     assert_eq!(sessions[0].created_at, 100);
     assert_eq!(sessions[0].updated_at, 200);
     assert_eq!(activity, vec![100]);
+}
+
+#[tokio::test]
+async fn utility_admission_closure_survives_reopening_the_repository() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("database directory");
+    let path = directory.path().join("agentty.db");
+    let database = Database::open(&path).await.expect("database");
+    database
+        .runs()
+        .close_session("retired")
+        .await
+        .expect("close admission");
+    database.pool().close().await;
+    // Act
+    let reopened = Database::open(&path).await.expect("reopen database");
+    let error = reopened
+        .runs()
+        .create(&RunInfo {
+            folder: "repository".into(),
+            id: "late".into(),
+            parent_id: None,
+            project_id: None,
+            purpose: "title".into(),
+            session_id: Some("retired".into()),
+        })
+        .await
+        .expect_err("late submission must remain closed");
+    // Assert
+    assert!(error.to_string().contains("closed"));
 }

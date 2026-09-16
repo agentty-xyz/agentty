@@ -13,7 +13,7 @@ use super::super::super::post_turn::status_update_after_turn_result;
 use super::super::super::turn::{consume_turn_events, run_channel_turn};
 use super::super::{SessionWorkerContext, SessionWorkerService};
 use super::support::{
-    auto_commit_one_shot_client, default_turn_metadata, empty_transcript,
+    auto_commit_run_client, default_turn_metadata, empty_transcript,
     insert_in_progress_test_session, mock_fs_client_with_existing_directories,
     mock_git_client_detecting_main_repo, seed_recovery_test_operation, transcript_text,
 };
@@ -209,7 +209,7 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
     // Act
     let result = run_channel_turn(
         &context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         default_turn_metadata(),
         AgentRequestKind::SessionStart,
         None,

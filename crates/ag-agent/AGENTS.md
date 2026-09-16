@@ -17,6 +17,8 @@ External-agent discovery and transport adapters implementing `ag-runtime` contra
   `OneShotClient` into workflows. Callers must not select transport-specific helpers.
 - Preserve cancellation cleanup and charge every provider attempt, including retries and
   protocol repairs, against the supplied `ProviderCallBudget`.
+- Await session cleanup after provider-turn panics. Adapters that detach cleanup work
+  must implement forced shutdown so the host deadline can release their owned runtimes.
 - Use the `test-utils` mocks and factories for deterministic host tests.
 
 ## Documentation

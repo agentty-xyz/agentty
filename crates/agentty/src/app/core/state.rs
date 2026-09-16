@@ -1740,7 +1740,7 @@ impl App {
         }
 
         spawn_review_assist(
-            self.services.event_sender(),
+            &self.services,
             review_agent,
             session_id,
             session_folder,
@@ -1863,6 +1863,7 @@ impl App {
         sessions: &SessionManager,
     ) -> sync::SyncContext {
         sync::SyncContext {
+            run_client: services.run_client(),
             generation: 0,
             git_client: services.git_client(),
             project_branch_name: projects.git_branch().map(str::to_string),

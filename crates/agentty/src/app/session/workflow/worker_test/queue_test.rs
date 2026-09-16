@@ -15,7 +15,7 @@ use super::super::{
     SessionWorkerService, TurnMetadata,
 };
 use super::support::{
-    apply_worker_turn_result, auto_commit_one_shot_client, empty_transcript,
+    apply_worker_turn_result, auto_commit_run_client, empty_transcript,
     preparation_test_worker_context, queue_helper_context, queue_saved_stacked_prompt,
     queue_test_context, queued_message, resume_command,
 };
@@ -56,12 +56,12 @@ async fn test_process_queued_message_clears_queue_when_user_stops_running_turn()
         queue_test_context(mock_channel, queued, Status::InProgress).await;
 
     // Act
-    let one_shot_client = auto_commit_one_shot_client();
+    let run_client = auto_commit_run_client();
     let message = context
         .pop_queued_message()
         .expect("queued message should be available");
     let turn_result =
-        SessionWorkerService::process_queued_message(&context, &one_shot_client, message).await;
+        SessionWorkerService::process_queued_message(&context, &run_client, message).await;
     SessionWorkerService::clear_queued_messages_after_stop(&context, turn_result.as_ref());
 
     // Assert — first prompt was dispatched, the stopped result propagated,
@@ -400,7 +400,7 @@ async fn test_queued_saved_child_reserves_stack_until_worker_rejects_acceptance(
     .expect("reject acceptance");
     SessionWorkerService::spawn_session_worker(
         preparation_test_worker_context(&app, &child_id),
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         Arc::default(),
         receiver,
     );

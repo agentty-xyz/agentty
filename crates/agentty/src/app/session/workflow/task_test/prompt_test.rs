@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_agent as agent;
-use ag_agent::MockOneShotClient;
 use ag_git::MockGitClient;
+use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 
 use super::super::{
@@ -42,21 +42,18 @@ async fn test_handle_auto_commit_stops_on_input_size() {
         .expect_diff_changed_files()
         .times(1)
         .returning(|_, _| Box::pin(async { Ok(vec!["pending.rs".to_string()]) }));
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
-        .expect_submit()
-        .times(2)
-        .returning(|request| {
-            assert!(
-                request
-                    .prompt
-                    .contains("Generate the canonical session commit message")
-            );
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(2).returning(|request| {
+        assert!(
+            request
+                .prompt
+                .contains("Generate the canonical session commit message")
+        );
 
-            Err(agent::OneShotError::new(
-                "Input exceeds the maximum length of 1048576 characters.",
-            ))
-        });
+        Err(agent::OneShotError::new(
+            "Input exceeds the maximum length of 1048576 characters.",
+        ))
+    });
     let database = AppRepositories::in_memory().await.expect("db should open");
     insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
@@ -68,7 +65,7 @@ async fn test_handle_auto_commit_stops_on_input_size() {
         folder: PathBuf::from("project"),
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
-        one_shot_client: Arc::new(one_shot_client),
+        run_client: Arc::new(run_client),
         session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),

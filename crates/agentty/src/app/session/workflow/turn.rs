@@ -4,14 +4,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_agent::{
-    AgentError, AgentRequestKind, LiveTranscript, OneShotClient, PersonalityPrompt,
-    TurnContinuation, TurnEvent, TurnRequest, TurnResult,
+    AgentError, AgentRequestKind, LiveTranscript, PersonalityPrompt, TurnContinuation, TurnEvent,
+    TurnRequest, TurnResult,
 };
+use ag_worker::RunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::lifecycle::SessionTitleGenerationTaskInput;
+use super::post_turn::PostTurnContext;
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::session::SessionError;
@@ -149,7 +151,7 @@ impl MainCheckoutSnapshot {
 /// in [`run_turn_with_cancellation`].
 pub(super) async fn run_channel_turn(
     context: &SessionWorkerContext,
-    one_shot_client: Arc<dyn OneShotClient>,
+    run_client: Arc<dyn RunClient>,
     turn_metadata: TurnMetadata,
     request_kind: AgentRequestKind,
     replay_transcript: Option<String>,
@@ -157,11 +159,15 @@ pub(super) async fn run_channel_turn(
 ) -> Result<(), SessionError> {
     // Discard stale cancellations, then keep the new token for this turn.
     let turn_cancel_token = fresh_turn_cancel_token(context)?;
+    let run_scope = ag_worker::RunScope {
+        cancellation: Some(turn_cancel_token.clone()),
+        ..ag_worker::RunScope::default()
+    };
+    let run_client = ag_worker::scoped_client(run_client, run_scope);
 
     prepare_session_turn(context, &request_kind).await;
 
-    let post_turn_context =
-        post_turn::PostTurnContext::from_worker(context, Arc::clone(&one_shot_client));
+    let post_turn_context = PostTurnContext::from_worker(context, Arc::clone(&run_client));
     let main_checkout_snapshot = match MainCheckoutSnapshot::capture(context).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -231,7 +237,7 @@ pub(super) async fn run_channel_turn(
 
     spawn_turn_title_generation(
         context,
-        Arc::clone(&one_shot_client),
+        Arc::clone(&run_client),
         session_project_id,
         &prompt.text,
         turn_metadata.session_agent,
@@ -719,7 +725,7 @@ async fn add_main_checkout_warning(
 
 /// Replaces the shared cancellation token for a new turn and returns the
 /// token used by the running channel future.
-fn fresh_turn_cancel_token(
+pub(super) fn fresh_turn_cancel_token(
     context: &SessionWorkerContext,
 ) -> Result<CancellationToken, SessionError> {
     // Sync critical section (assignment + clone, no `.await`);
@@ -751,7 +757,7 @@ async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: S
 /// provisional title.
 async fn spawn_turn_title_generation(
     context: &SessionWorkerContext,
-    one_shot_client: Arc<dyn OneShotClient>,
+    run_client: Arc<dyn RunClient>,
     session_project_id: Option<i64>,
     prompt: &str,
     session_agent: AgentSelection,
@@ -783,7 +789,7 @@ async fn spawn_turn_title_generation(
             db: context.db.clone(),
             folder: context.folder.clone(),
             latest_request: prompt.to_string(),
-            one_shot_client,
+            run_client,
             requires_provisional_title: true,
             reasoning_level: title_reasoning_level,
             session_agent: title_agent,

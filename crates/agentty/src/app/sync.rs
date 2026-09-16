@@ -201,6 +201,8 @@ impl SyncHandle {
 /// events carrying an older generation.
 #[derive(Clone)]
 pub(crate) struct SyncContext {
+    /// Worker submission handle captured with this project snapshot.
+    pub(crate) run_client: Arc<dyn ag_worker::RunClient>,
     /// Monotonic snapshot version used for stale-completion rejection.
     pub(crate) generation: u64,
     /// Git boundary used for fetch, ahead/behind, and merge-conflict queries.
@@ -642,6 +644,18 @@ impl SyncOrchestrator {
             }),
             Arc::clone(&sync_context.git_client),
             session_model,
+            ag_worker::scoped_client(
+                Arc::clone(&sync_context.run_client),
+                ag_worker::RunScope {
+                    project_id: Some(sync_context.project_id),
+                    parent_id: Some(format!(
+                        "sync-{}-{}",
+                        operation.project_id, operation.operation_id
+                    )),
+                    purpose: Some("sync conflict assistance".to_string()),
+                    ..ag_worker::RunScope::default()
+                },
+            ),
         )
         .await;
         let review_request_updates = result.is_ok().then(|| {

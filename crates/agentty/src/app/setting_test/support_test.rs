@@ -50,7 +50,7 @@ pub(super) async fn test_services_with_available_agent_kinds(
             clipboard_image_client_override: None,
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(git::MockGitClient::new()),
-            one_shot_client_override: None,
+            run_client_override: None,
             personality_catalog_client_override: None,
             repositories: database.clone(),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),

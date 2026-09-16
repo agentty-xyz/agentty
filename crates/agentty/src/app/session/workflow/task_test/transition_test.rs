@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_agent as agent;
-use ag_agent::MockOneShotClient;
 use ag_git::{GitError, MockGitClient};
+use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 
 use super::super::{
@@ -33,8 +33,8 @@ async fn test_handle_auto_commit_appends_commit_error_from_mock_git_client() {
     insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
+    let mut run_client = MockRunClient::new();
+    run_client
         .expect_submit()
         .once()
         .returning(|_| Err(agent::OneShotError::new("commit failed")));
@@ -45,7 +45,7 @@ async fn test_handle_auto_commit_appends_commit_error_from_mock_git_client() {
         folder: PathBuf::from("/tmp/project"),
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
-        one_shot_client: Arc::new(one_shot_client),
+        run_client: Arc::new(run_client),
         session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
@@ -95,19 +95,16 @@ async fn test_handle_auto_commit_stops_on_index_lock() {
                 })
             })
         });
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
-        .expect_submit()
-        .times(1)
-        .returning(|request| {
-            assert!(
-                request
-                    .prompt
-                    .contains("Generate the canonical session commit message")
-            );
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(1).returning(|request| {
+        assert!(
+            request
+                .prompt
+                .contains("Generate the canonical session commit message")
+        );
 
-            Ok(one_shot_submission("Preserve pending changes", 0, 0))
-        });
+        Ok(one_shot_submission("Preserve pending changes", 0, 0))
+    });
     let database = AppRepositories::in_memory().await.expect("db should open");
     insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
@@ -119,7 +116,7 @@ async fn test_handle_auto_commit_stops_on_index_lock() {
         folder: PathBuf::from("project"),
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
-        one_shot_client: Arc::new(one_shot_client),
+        run_client: Arc::new(run_client),
         session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
@@ -192,8 +189,8 @@ async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
     insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
+    let mut run_client = MockRunClient::new();
+    run_client
         .expect_submit()
         .times(1)
         .returning(|_| Ok(one_shot_submission("Update project", 0, 0)));
@@ -204,7 +201,7 @@ async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
         folder: PathBuf::from("/tmp/project"),
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
-        one_shot_client: Arc::new(one_shot_client),
+        run_client: Arc::new(run_client),
         session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
@@ -248,7 +245,7 @@ async fn test_handle_auto_commit_reports_when_no_changes_exist() {
         folder: PathBuf::from("/tmp/project"),
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
-        one_shot_client: Arc::new(MockOneShotClient::new()),
+        run_client: Arc::new(MockRunClient::new()),
         session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
@@ -287,7 +284,7 @@ async fn test_handle_auto_commit_reports_when_no_changes_exist() {
 #[tokio::test]
 async fn commit_generation_summarizes_oversized_diff_and_existing_message() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(|request| {
         assert!(request.prompt.len() <= 60_000);
         assert_eq!(request.permission_mode, agent::PermissionMode::ReadOnly);
@@ -336,8 +333,8 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
         insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let child_pid = Arc::new(Mutex::new(Some(4242)));
-        let mut one_shot_client = MockOneShotClient::new();
-        one_shot_client
+        let mut run_client = MockRunClient::new();
+        run_client
             .expect_submit()
             .times(1)
             .returning(move |request| {
@@ -360,7 +357,7 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
             folder: PathBuf::from("project"),
             git_client: Arc::new(MockGitClient::new()),
             id: "session-id".to_string(),
-            one_shot_client: Arc::new(one_shot_client),
+            run_client: Arc::new(run_client),
             session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
@@ -389,8 +386,8 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
 async fn test_generate_session_commit_message_with_client_rejects_submission_error() {
     // Arrange
     let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client.expect_submit().returning(|_| {
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().returning(|_| {
         Err(agent::OneShotError::new(
             "One-shot agent output did not match the required JSON schema\nresponse:\nRefactor \
              agent prompt and protocol handling",
@@ -407,7 +404,7 @@ async fn test_generate_session_commit_message_with_client_rejects_submission_err
         ),
         "diff --git a/a.rs b/a.rs",
         None,
-        &one_shot_client,
+        &run_client,
         false,
         false,
     )
@@ -433,8 +430,8 @@ async fn test_generate_session_commit_message_with_client_rejects_submission_err
 async fn test_generate_session_commit_message_with_client_falls_back_for_blank_answer() {
     // Arrange
     let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client.expect_submit().returning(|request| {
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().returning(|request| {
         assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
         assert_eq!(request.speed_mode, crate::domain::agent::SpeedMode::Fast);
 
@@ -451,7 +448,7 @@ async fn test_generate_session_commit_message_with_client_falls_back_for_blank_a
         ),
         "diff --git a/a.rs b/a.rs",
         Some("Keep session commit accurate\n\n- Preserve existing behavior"),
-        &one_shot_client,
+        &run_client,
         false,
         false,
     )
@@ -549,7 +546,7 @@ async fn test_commit_session_changes_falls_back_to_files_and_chat() {
             .expect_head_short_hash()
             .times(1)
             .returning(|_| Box::pin(async { Ok("abc123".into()) }));
-        let mut client = MockOneShotClient::new();
+        let mut client = MockRunClient::new();
         client
             .expect_submit()
             .times(if oversized_diff { 2..=64 } else { 1..=1 })
@@ -642,7 +639,7 @@ async fn test_append_pre_commit_hook_warning_ignores_duplicate_advisory() {
         folder: PathBuf::from("/tmp/project"),
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
-        one_shot_client: Arc::new(MockOneShotClient::new()),
+        run_client: Arc::new(MockRunClient::new()),
         session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
@@ -723,7 +720,7 @@ async fn test_commit_fallback_preserves_existing_message_continuity() {
         .expect_head_short_hash()
         .times(1)
         .returning(|_| Box::pin(async { Ok("abc123".into()) }));
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     let mut sequence = mockall::Sequence::new();
     client
         .expect_submit()

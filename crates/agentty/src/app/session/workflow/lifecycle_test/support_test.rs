@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ag_agent as agent;
-use ag_agent::{MockOneShotClient, OneShotClient};
 use ag_forge as forge;
 use ag_git as git;
 use ag_protocol::AgentResponse;
+use ag_worker::{MockRunClient, RunClient};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 use tokio::sync::{Notify, mpsc};
@@ -31,7 +31,7 @@ pub(super) struct DelayedTitleClient {
 }
 
 #[async_trait]
-impl OneShotClient for DelayedTitleClient {
+impl RunClient for DelayedTitleClient {
     async fn submit(
         &self,
         _request: agent::OneShotRequest,
@@ -53,33 +53,30 @@ impl OneShotClient for DelayedTitleClient {
 
 /// Builds a one-shot boundary that returns one deterministic title
 /// response.
-pub(super) fn mock_title_client(response: &str) -> Arc<dyn OneShotClient> {
+pub(super) fn mock_title_client(response: &str) -> Arc<dyn RunClient> {
     let response = response.to_string();
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
-        .expect_submit()
-        .times(1)
-        .returning(move |_| {
-            Ok(agent::OneShotSubmission {
-                response: AgentResponse::plain(response.clone()),
-                stats: agent::SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: agent::SessionDiffState::Unknown,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
-            })
-        });
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(1).returning(move |_| {
+        Ok(agent::OneShotSubmission {
+            response: AgentResponse::plain(response.clone()),
+            stats: agent::SessionStats {
+                added_lines: 0,
+                deleted_lines: 0,
+                diff_state: agent::SessionDiffState::Unknown,
+                input_tokens: 0,
+                output_tokens: 0,
+            },
+        })
+    });
 
-    Arc::new(one_shot_client)
+    Arc::new(run_client)
 }
 
 /// Builds one standard provisional-title generation request for tests.
 pub(super) fn title_generation_task_input(
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     database: AppRepositories,
-    one_shot_client: Arc<dyn OneShotClient>,
+    run_client: Arc<dyn RunClient>,
     prompt: &str,
 ) -> SessionTitleGenerationTaskInput {
     SessionTitleGenerationTaskInput {
@@ -87,7 +84,7 @@ pub(super) fn title_generation_task_input(
         db: database,
         folder: PathBuf::from("/tmp/session"),
         latest_request: prompt.to_string(),
-        one_shot_client,
+        run_client,
         requires_provisional_title: true,
         reasoning_level: ReasoningLevel::Low,
         session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
@@ -281,7 +278,7 @@ pub(super) fn test_services_with_fs_client(
             clipboard_image_client_override: None,
             fs_client,
             git_client,
-            one_shot_client_override: None,
+            run_client_override: None,
             personality_catalog_client_override: None,
             repositories: database.clone(),
             review_request_client,
@@ -323,7 +320,7 @@ pub(super) fn test_services_with_event_receiver(
             clipboard_image_client_override: None,
             fs_client: Arc::new(create_passthrough_mock_fs_client()),
             git_client,
-            one_shot_client_override: None,
+            run_client_override: None,
             personality_catalog_client_override: None,
             repositories: database.clone(),
             review_request_client,

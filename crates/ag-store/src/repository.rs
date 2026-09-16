@@ -15,6 +15,7 @@ pub struct AppRepositories {
     orchestration: Arc<dyn orchestration::OrchestrationRepository>,
     project: Arc<dyn project::ProjectRepository>,
     review: Arc<dyn review::ReviewRepository>,
+    run: Arc<dyn ag_worker::RunRepository>,
     session: Arc<dyn session::SessionRepository>,
     setting: Arc<dyn setting::SettingRepository>,
     usage: Arc<dyn usage::UsageRepository>,
@@ -52,6 +53,11 @@ impl AppRepositories {
         self.review.as_ref()
     }
 
+    /// Returns worker-owned utility run persistence.
+    pub fn runs(&self) -> Arc<dyn ag_worker::RunRepository> {
+        Arc::clone(&self.run)
+    }
+
     /// Returns the session repository.
     pub fn sessions(&self) -> &dyn session::SessionRepository {
         self.session.as_ref()
@@ -87,6 +93,10 @@ impl AppRepositories {
                 Arc::clone(&timestamp_source),
             )),
             review: Arc::new(review::SqliteReviewRepository::new(pool.clone())),
+            run: Arc::new(crate::run::SqliteRunRepository::new(
+                pool.clone(),
+                Arc::clone(&timestamp_source),
+            )),
             session: Arc::new(session::SqliteSessionRepository::new(
                 pool.clone(),
                 Arc::clone(&timestamp_source),

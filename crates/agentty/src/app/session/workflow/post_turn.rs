@@ -5,11 +5,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_agent as agent;
-use ag_agent::{AgentError, OneShotClient, TurnResult};
+use ag_agent::{AgentError, TurnResult};
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_orchestration as orchestration;
 use ag_protocol::{AgentResponse, ReviewCommentOutcome, ReviewCommentResolution};
+use ag_worker::RunClient;
 use serde_json;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -62,7 +63,7 @@ pub(super) struct PostTurnContext {
     /// Git boundary used by auto-commit and published-branch auto-push.
     pub(super) git_client: Arc<dyn GitClient>,
     /// Provider-neutral boundary used by post-turn auto-commit prompts.
-    pub(super) one_shot_client: Arc<dyn OneShotClient>,
+    pub(super) run_client: Arc<dyn RunClient>,
     /// In-memory queue checked before starting detached auto-push effects.
     pub(super) queued_messages: Arc<Mutex<VecDeque<QueuedMessage>>>,
     /// Forge boundary used for optional linked PR/MR metadata refresh.
@@ -79,7 +80,7 @@ impl PostTurnContext {
     /// Clones the worker fields required by post-turn result application.
     pub(super) fn from_worker(
         context: &SessionWorkerContext,
-        one_shot_client: Arc<dyn OneShotClient>,
+        run_client: Arc<dyn RunClient>,
     ) -> Self {
         Self {
             app_event_tx: context.app_event_tx.clone(),
@@ -89,7 +90,7 @@ impl PostTurnContext {
             db: context.db.clone(),
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
-            one_shot_client,
+            run_client,
             queued_messages: Arc::clone(&context.queued_messages),
             review_request_client: Arc::clone(&context.review_request_client),
             session_update_versions: context.session_update_versions.clone(),
@@ -642,7 +643,7 @@ async fn run_auto_commit(
         folder: context.folder.clone(),
         git_client: Arc::clone(&context.git_client),
         id: context.session_id.to_string(),
-        one_shot_client: Arc::clone(&context.one_shot_client),
+        run_client: Arc::clone(&context.run_client),
         session_agent,
         session_update_versions: context.session_update_versions.clone(),
         transcript: Arc::clone(&context.transcript),
@@ -856,7 +857,7 @@ async fn start_published_branch_auto_push(
             db: context.db.clone(),
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
-            one_shot_client: Arc::clone(&context.one_shot_client),
+            run_client: Arc::clone(&context.run_client),
             published_upstream_ref,
             review_request_client: Arc::clone(&context.review_request_client),
             review_request_commit_message,

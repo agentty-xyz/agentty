@@ -6,3 +6,6 @@ mod cli;
 mod repair;
 #[path = "submission_test/support_test.rs"]
 mod support;
+
+#[path = "submission_test/cancellation_test.rs"]
+mod cancellation;

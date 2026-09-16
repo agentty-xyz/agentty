@@ -4,12 +4,13 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use ag_agent::{AppServerClient, MockAgentBackend, MockOneShotClient};
+use ag_agent::{AppServerClient, MockAgentBackend};
 use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
 };
 use ag_git as git;
 use ag_protocol::AgentResponse;
+use ag_worker::MockRunClient;
 
 use super::super::{SessionDefaults, SessionManager, session_folder};
 use crate::app::{App, AppServices, ReviewCacheEntry, SessionState};
@@ -582,7 +583,7 @@ pub(super) fn install_mock_git_client(app: &mut App, mock_git_client: git::MockG
             clipboard_image_client_override: None,
             fs_client,
             git_client: Arc::clone(&mock_git_client),
-            one_shot_client_override: Some(auto_commit_one_shot_client()),
+            run_client_override: Some(auto_commit_run_client()),
             personality_catalog_client_override: None,
             repositories: db,
             review_request_client,
@@ -593,34 +594,31 @@ pub(super) fn install_mock_git_client(app: &mut App, mock_git_client: git::MockG
 }
 
 /// Builds a deterministic one-shot boundary for app-level auto-commit tests.
-pub(super) fn auto_commit_one_shot_client() -> Arc<dyn ag_agent::OneShotClient> {
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
-        .expect_submit()
-        .times(0..)
-        .returning(|request| {
-            if request
-                .prompt
-                .contains("Generate a concise, commit-style title")
-            {
-                return Err(ag_agent::OneShotError::new(
-                    "title generation is disabled in this fixture",
-                ));
-            }
+pub(super) fn auto_commit_run_client() -> Arc<dyn ag_worker::RunClient> {
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(0..).returning(|request| {
+        if request
+            .prompt
+            .contains("Generate a concise, commit-style title")
+        {
+            return Err(ag_agent::OneShotError::new(
+                "title generation is disabled in this fixture",
+            ));
+        }
 
-            Ok(ag_agent::OneShotSubmission {
-                response: AgentResponse::plain("Existing session commit"),
-                stats: ag_agent::SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: ag_agent::SessionDiffState::Unknown,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
-            })
-        });
+        Ok(ag_agent::OneShotSubmission {
+            response: AgentResponse::plain("Existing session commit"),
+            stats: ag_agent::SessionStats {
+                added_lines: 0,
+                deleted_lines: 0,
+                diff_state: ag_agent::SessionDiffState::Unknown,
+                input_tokens: 0,
+                output_tokens: 0,
+            },
+        })
+    });
 
-    Arc::new(one_shot_client)
+    Arc::new(run_client)
 }
 
 /// Builds a test app with a caller-provided database, git context, and

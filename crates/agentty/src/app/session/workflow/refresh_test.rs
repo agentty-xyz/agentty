@@ -103,7 +103,7 @@ fn test_services(
             clipboard_image_client_override: None,
             fs_client: Arc::new(create_passthrough_mock_fs_client()),
             git_client,
-            one_shot_client_override: None,
+            run_client_override: None,
             personality_catalog_client_override: None,
             repositories: database.clone(),
             review_request_client,

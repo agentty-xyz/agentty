@@ -15,7 +15,7 @@ use super::super::{
     ScheduledSessionCommand, SessionWorkerContext, SessionWorkerService, TurnMetadata,
 };
 use super::support::{
-    apply_worker_turn_result, auto_commit_one_shot_client, default_turn_metadata, empty_transcript,
+    apply_worker_turn_result, auto_commit_run_client, default_turn_metadata, empty_transcript,
     insert_in_progress_test_session, mock_git_client_detecting_main_repo, queue_test_context,
     resume_command, transcript_text,
 };
@@ -333,7 +333,7 @@ async fn test_run_channel_turn_persists_failure_when_main_checkout_snapshot_fail
     // Act
     let result = run_channel_turn(
         &context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         default_turn_metadata(),
         AgentRequestKind::SessionStart,
         None,

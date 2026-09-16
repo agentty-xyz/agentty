@@ -107,13 +107,14 @@ scopes; terminal lifecycle tests retain the persistence-before-completion bounda
 
 The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
 private. Application workflows that submit isolated utility prompts inject
-`OneShotClient`; provider and transport tests use the feature-gated crate-root mocks and
-helper factories rather than deep module paths. CLI-backed session turns, one-shot
-prompts, and protocol-repair retries share one crate-private raw subprocess executor for
-command construction, stdin delivery, PID lifetime, stream collection, and exit
-classification. Adapter-specific observers translate those raw events into session
-updates, while one-shot callers consume the collected raw output; response parsing and
-repair policy stay in the owning adapter.
+`ag-worker::RunClient`; worker tests inject `OneShotClient`. Provider and transport
+tests use the feature-gated crate-root mocks and helper factories rather than deep
+module paths. CLI-backed session turns, one-shot prompts, and protocol-repair retries
+share one crate-private raw subprocess executor for command construction, stdin
+delivery, PID lifetime, stream collection, and exit classification. Adapter-specific
+observers translate those raw events into session updates, while one-shot callers
+consume the collected raw output; response parsing and repair policy stay in the owning
+adapter.
 
 ## Typed Errors Across Layers
 
@@ -189,3 +190,20 @@ parent and long-lived child to verify process-group cleanup, including parent ex
 inherited output pipes still open. Closed-mailbox tests cover paused work, operation
 settlement, and caller notifications. Session models and storage depend on contracts
 without pulling in provider transports.
+
+## Worker submission boundary
+
+Workflow tests inject `ag-worker::MockRunClient`; worker tests inject runtime and
+persistence boundaries. Deterministic tests cover concurrency, inherited ownership,
+cancellation, heartbeat failures, and terminal persistence. Cancellation tests retain
+independent parent and child tokens, assert app-server shutdown during initial and
+repair turns, and verify session deletion and background cancellation cleanup wait for
+utilities. `RunRepository` atomically rejects admission for durably closed session IDs;
+SQLite tests verify closures survive session deletion, while worker tests cover tracker
+eviction, runtime panics, and closure-persistence failure. Adapter tests also cover
+provider panics during initial and repair turns through shutdown expectations. Deadline
+tests inject stuck turns and shutdown futures, verify runtime resources are dropped, and
+confirm unfinished run records remain recoverable. The source-boundary test rejects raw
+runtime execution from Agentty workflows.
+
+See [Execution](@/docs/core-components/execution.md) for the execution contract.

@@ -2,10 +2,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_agent::{
-    AgentKind, AgentModel, AgentRequestKind, MockOneShotClient, OneShotError, OneShotRequest,
-    OneShotSubmission, PermissionMode, ReasoningLevel, SessionStats, SpeedMode, diff_fence,
+    AgentKind, AgentModel, AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission,
+    PermissionMode, ReasoningLevel, SessionStats, SpeedMode, diff_fence,
 };
 use ag_protocol::{AgentResponse, FocusedReview, FocusedReviewSeverity, FocusedReviewSuggestion};
+use ag_worker::MockRunClient;
 
 use super::{file_headers, merge, submit};
 use crate::app::diff_prompt::{MAX_PROVIDER_CALLS, PROMPT_BUDGET};
@@ -48,7 +49,7 @@ async fn batches_original_unicode_diff_then_checks_cross_file_interactions() {
     );
     let seen = Arc::new(Mutex::new(Vec::new()));
     let prompts = Arc::clone(&seen);
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(move |request| {
         request
             .provider_call_budget
@@ -105,7 +106,7 @@ async fn batches_original_unicode_diff_then_checks_cross_file_interactions() {
 #[tokio::test]
 async fn splits_fencing_overhead_and_provider_size_rejections_without_summaries() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(|request| {
         request
             .provider_call_budget
@@ -139,7 +140,7 @@ async fn splits_fencing_overhead_and_provider_size_rejections_without_summaries(
 async fn failed_later_batch_retains_findings_and_identifies_unreviewed_files() {
     // Arrange
     let mut calls = 0;
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().times(2).returning(move |_| {
         calls += 1;
         if calls == 2 {
@@ -173,7 +174,7 @@ async fn failed_later_batch_retains_findings_and_identifies_unreviewed_files() {
 #[tokio::test]
 async fn failed_cross_file_pass_preserves_all_batch_findings() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(|request| {
         if request.prompt.starts_with("Cross-file review:") {
             return Err(OneShotError::new("network timeout"));
@@ -200,7 +201,7 @@ async fn failed_cross_file_pass_preserves_all_batch_findings() {
 #[tokio::test]
 async fn exhausted_shared_budget_preserves_completed_batches() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client
         .expect_submit()
         .times(MAX_PROVIDER_CALLS)
@@ -234,7 +235,7 @@ async fn exhausted_shared_budget_preserves_completed_batches() {
 async fn errors_before_any_completed_review_propagate() {
     // Arrange
     for diagnostic in ["network timeout", "contextWindowExceeded"] {
-        let mut client = MockOneShotClient::new();
+        let mut client = MockRunClient::new();
         client
             .expect_submit()
             .once()
@@ -255,7 +256,7 @@ async fn errors_before_any_completed_review_propagate() {
 #[tokio::test]
 async fn render_and_invalid_response_errors_propagate() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().once().returning(|_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain("invalid"),
@@ -327,7 +328,7 @@ fn headers_keep_renames_and_deduplicate_continuations() {
 #[tokio::test]
 async fn smaller_provider_limit_reduces_history_without_summarizing_diff() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().times(3).returning(|request| {
         request
             .provider_call_budget
@@ -370,7 +371,7 @@ async fn smaller_provider_limit_reduces_history_without_summarizing_diff() {
 #[tokio::test]
 async fn cross_file_overview_is_bounded_without_discarding_batch_findings() {
     // Arrange
-    let mut client = MockOneShotClient::new();
+    let mut client = MockRunClient::new();
     client.expect_submit().returning(|request| {
         request
             .provider_call_budget

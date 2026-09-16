@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::OneShotClient;
 use ag_git::GitClient;
+use ag_worker::RunClient;
 use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
@@ -39,7 +39,7 @@ pub(super) struct AssistContext {
     /// Session identifier receiving assist output updates.
     pub(super) id: String,
     /// Provider-neutral boundary for isolated structured assist prompts.
-    pub(super) one_shot_client: Arc<dyn OneShotClient>,
+    pub(super) run_client: Arc<dyn RunClient>,
     /// Agent/model selection used when invoking agent-assisted recovery.
     pub(super) session_agent: AgentSelection,
     /// Per-app session update versions shared with the main runtime.
@@ -136,7 +136,7 @@ pub(super) async fn run_agent_assist(
         db: context.db.clone(),
         folder: context.folder.clone(),
         id: context.id.clone(),
-        one_shot_client: Arc::clone(&context.one_shot_client),
+        run_client: Arc::clone(&context.run_client),
         prompt: prompt.to_string(),
         session_agent: context.session_agent,
         session_update_versions: context.session_update_versions.clone(),

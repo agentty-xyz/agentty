@@ -15,11 +15,12 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::{
     CREATE_REVIEW_REQUEST_OPERATION_KIND, REBASE_OPERATION_KIND, ScheduledSessionCommand,
-    SessionCommand, SessionWorkerContext, SessionWorkerService, TurnMetadata,
+    SessionCommand, SessionWorkerContext, SessionWorkerRebaseAssistClient, SessionWorkerService,
+    TurnMetadata,
 };
 use super::support::{
     apply_worker_turn_result, auto_commit_git_client, auto_commit_git_client_with_push_failure,
-    auto_commit_one_shot_client, blocking_stack_metadata_git_client, empty_transcript,
+    auto_commit_run_client, blocking_stack_metadata_git_client, empty_transcript,
     insert_in_progress_session_with_review_request, insert_in_progress_test_session,
     mock_successful_conflict_rebase_git_client, queue_helper_context, queue_test_context,
     queued_review_request_command, rebase_assist_worker_harness, review_metadata_sync_client,
@@ -315,7 +316,7 @@ async fn test_queued_rebase_validation_failure_persists_error_before_resolving_r
     // Act
     let error = SessionWorkerService::run_rebase_command(
         &context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         "main".to_string(),
     )
     .await
@@ -369,7 +370,7 @@ async fn test_run_rebase_command_uses_existing_session_channel_for_conflicts() {
     // Act
     SessionWorkerService::run_rebase_command(
         &harness.context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         "main".to_string(),
     )
     .await
@@ -423,12 +424,9 @@ async fn test_skipped_rebase_command_resolves_queued_sync() {
     };
 
     // Act
-    let command_result = SessionWorkerService::process_session_command(
-        &context,
-        &auto_commit_one_shot_client(),
-        command,
-    )
-    .await;
+    let command_result =
+        SessionWorkerService::process_session_command(&context, &auto_commit_run_client(), command)
+            .await;
     let app_event = app_event_rx
         .recv()
         .await
@@ -606,7 +604,7 @@ async fn test_queued_review_request_waits_for_full_rebase_finalization() {
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     SessionWorkerService::spawn_session_worker(
         harness.context,
-        auto_commit_one_shot_client(),
+        auto_commit_run_client(),
         Arc::new(Notify::new()),
         command_rx,
     );
@@ -692,7 +690,7 @@ async fn test_operation_tracking_failure_preserves_workflow_error() {
     // Act
     let result = SessionWorkerService::process_session_command(
         &context,
-        &auto_commit_one_shot_client(),
+        &auto_commit_run_client(),
         SessionCommand::Rebase {
             base_branch: "main".to_string(),
             operation_id: "rebase".to_string(),
@@ -717,4 +715,37 @@ async fn test_operation_tracking_failure_preserves_workflow_error() {
             .expect("unfinished tracking")
     );
     assert!(transcript_text(&context.transcript).contains("[Sync Error]"));
+}
+
+#[tokio::test]
+async fn canceled_rebase_does_not_start_another_assisted_turn() {
+    // Arrange
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().never();
+    channel
+        .expect_shutdown_session()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let (context, _db, _messages, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::Rebasing).await;
+    let assist = SessionWorkerRebaseAssistClient::from_context(&context, None);
+    context.cancel_token.lock().expect("cancel token").cancel();
+    // Act
+    let result = assist
+        .run_assist_turn("resolve another conflict".to_string())
+        .await;
+    // Assert
+    assert!(
+        result
+            .expect_err("canceled operation")
+            .to_string()
+            .contains("[Stopped]")
+    );
+    assert!(
+        context
+            .cancel_token
+            .lock()
+            .expect("cancel token")
+            .is_cancelled()
+    );
 }

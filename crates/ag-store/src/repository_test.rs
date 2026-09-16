@@ -207,6 +207,7 @@ async fn repository_parts_support_focused_adapter_injection() {
         .times(1)
         .returning(|_| Ok(true));
     let repositories = AppRepositories {
+        run: Arc::clone(&baseline.run),
         activity: Arc::clone(&baseline.activity),
         operation: Arc::new(operation),
         orchestration: Arc::clone(&baseline.orchestration),

@@ -5,7 +5,10 @@
 //! transport so one-shot callers enforce the same schema contract as normal
 //! session turns.
 
+use std::future::poll_fn;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, build_protocol_repair_prompt,
@@ -16,6 +19,7 @@ pub use ag_runtime::MockOneShotClient;
 use ag_runtime::PermissionMode;
 pub use ag_runtime::{OneShotClient, OneShotError, OneShotRequest, OneShotSubmission};
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use super::backend::{AgentBackend, BuildCommandRequest};
 use super::cli::error;
@@ -28,6 +32,7 @@ use crate::model::session::{SessionDiffState, SessionStats};
 /// Production [`OneShotClient`] that routes through the selected provider.
 pub struct RealOneShotClient {
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
+    force_shutdown: CancellationToken,
 }
 
 impl RealOneShotClient {
@@ -38,60 +43,122 @@ impl RealOneShotClient {
     pub fn new(app_server_client_override: Option<Arc<dyn AppServerClient>>) -> Self {
         Self {
             app_server_client_override,
+            force_shutdown: CancellationToken::new(),
         }
     }
 }
 
 #[async_trait]
 impl OneShotClient for RealOneShotClient {
+    fn force_shutdown(&self) {
+        self.force_shutdown.cancel();
+    }
+
     async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
-        let app_server_client_override = self.app_server_client_override.as_ref().map(Arc::clone);
-
-        submit_one_shot_with_stats_and_app_server_client(request, app_server_client_override)
+        self.submit_cancellable(request, CancellationToken::new())
             .await
-            .map_err(OneShotError::new)
+    }
+
+    async fn submit_cancellable(
+        &self,
+        request: OneShotRequest,
+        cancellation: CancellationToken,
+    ) -> Result<OneShotSubmission, OneShotError> {
+        let agent_kind = request
+            .harness
+            .parse::<AgentKind>()
+            .map_err(OneShotError::new)?;
+        let client = create_app_server_client(agent_kind, self.app_server_client_override.clone());
+        if let Some(client) = client {
+            return submit_one_shot_with_app_server_client(
+                client,
+                request,
+                cancellation,
+                self.force_shutdown.clone(),
+            )
+            .await
+            .map_err(OneShotError::new);
+        }
+        let backend = create_backend(agent_kind);
+        tokio::select! {
+            biased;
+            () = self.force_shutdown.cancelled() => Err(OneShotError::new("[Stopped] Agent runtime forced to shut down")),
+            () = cancellation.cancelled() => Err(OneShotError::new("[Stopped] Agent run canceled")),
+            result = submit_one_shot_with_backend(backend.as_ref(), request) => result.map_err(OneShotError::new),
+        }
     }
 }
 
-/// Executes one isolated prompt and returns the parsed response plus
-/// aggregated usage statistics, optionally overriding the backend-owned
-/// app-server client.
-///
-/// # Errors
-/// Returns an error when command construction fails, process execution fails,
-/// or the final output is empty or otherwise unusable.
-async fn submit_one_shot_with_stats_and_app_server_client(
-    request: OneShotRequest,
-    app_server_client_override: Option<Arc<dyn AppServerClient>>,
-) -> Result<OneShotSubmission, String> {
-    let agent_kind = request.harness.parse::<AgentKind>()?;
-    if let Some(app_server_client) =
-        create_app_server_client(agent_kind, app_server_client_override)
-    {
-        return submit_one_shot_with_app_server_client(app_server_client.as_ref(), request).await;
-    }
-
-    let backend = create_backend(agent_kind);
-
-    submit_one_shot_with_backend(backend.as_ref(), request).await
-}
-
-/// Executes one isolated prompt through the shared app-server transport.
-///
-/// The temporary app-server session is shut down after the utility prompt
-/// finishes so one-shot helpers do not keep a provider runtime alive after the
-/// result has been parsed.
-///
-/// # Errors
-/// Returns an error when app-server turn execution fails or the final output
-/// is empty or otherwise unusable.
+/// Executes an isolated app-server prompt in an owned cleanup task.
+/// Dropping the caller signals cancellation without dropping the provider turn;
+/// cooperative callers await this future until provider shutdown completes.
 async fn submit_one_shot_with_app_server_client(
-    app_server_client: &dyn AppServerClient,
+    app_server_client: Arc<dyn AppServerClient>,
     request: OneShotRequest,
+    cancellation: CancellationToken,
+    force_shutdown: CancellationToken,
+) -> Result<OneShotSubmission, String> {
+    let cancellation = cancellation.child_token();
+    let _cancel_on_drop = cancellation.clone().drop_guard();
+    tokio::spawn(async move {
+        let child_pid = request.child_pid.clone();
+        let result = tokio::select! {
+            biased;
+            () = force_shutdown.cancelled() => Err("[Stopped] Agent runtime forced to shut down".to_string()),
+            result = finish_one_shot_app_server_submission(app_server_client, request, cancellation) => result,
+        };
+        clear_child_pid_slot(child_pid.as_deref());
+        result
+    })
+    .await
+    .map_err(|error| format!("One-shot cleanup task failed: {error}"))?
+}
+
+/// Retains the provider future while shutdown signals its active runtime.
+async fn finish_one_shot_app_server_submission(
+    app_server_client: Arc<dyn AppServerClient>,
+    request: OneShotRequest,
+    cancellation: CancellationToken,
 ) -> Result<OneShotSubmission, String> {
     clear_child_pid_slot(request.child_pid.as_deref());
-
     let session_id = format!("one-shot-{}", uuid::Uuid::new_v4());
+    let work = execute_one_shot_app_server_turns(
+        app_server_client.as_ref(),
+        request,
+        &session_id,
+        &cancellation,
+    );
+    tokio::pin!(work);
+    let work = poll_fn(|context| {
+        catch_unwind(AssertUnwindSafe(|| work.as_mut().poll(context)))
+            .unwrap_or_else(|_| Poll::Ready(Err("One-shot provider turn panicked".to_string())))
+    });
+    tokio::pin!(work);
+    tokio::select! {
+        biased;
+        result = &mut work => {
+            app_server_client.shutdown_session(session_id.clone()).await;
+            result
+        }
+        () = cancellation.cancelled() => {
+            // Keep polling the turn so the adapter can observe shutdown and
+            // release the runtime it temporarily removed from its registry.
+            let _ = tokio::join!(app_server_client.shutdown_session(session_id.clone()), &mut work);
+            Err("[Stopped] Agent run canceled".to_string())
+        }
+    }
+}
+
+/// Executes the initial turn and optional protocol repair in the same session.
+async fn execute_one_shot_app_server_turns(
+    app_server_client: &dyn AppServerClient,
+    request: OneShotRequest,
+    session_id: &str,
+    cancellation: &CancellationToken,
+) -> Result<OneShotSubmission, String> {
+    if cancellation.is_cancelled() {
+        return Err("[Stopped] Agent run canceled".to_string());
+    }
     let protocol_profile = request.request_kind.protocol_profile();
     let (stream_tx, _stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let turn_request = AppServerTurnRequest {
@@ -108,25 +175,17 @@ async fn submit_one_shot_with_app_server_client(
         provider_conversation_id: None,
         persisted_instruction_conversation_id: None,
         reasoning_level: request.reasoning_level,
-        session_id: session_id.clone(),
+        session_id: session_id.to_string(),
         speed_mode: request.speed_mode,
     };
 
-    let turn_result = app_server_client.run_turn(turn_request, stream_tx).await;
-
-    let child_pid = request.child_pid.as_ref().map(Arc::clone);
-
-    let turn_result = match turn_result {
-        Ok(result) => result,
-        Err(error) => {
-            app_server_client.shutdown_session(session_id).await;
-            clear_child_pid_slot(child_pid.as_deref());
-
-            return Err(format!(
-                "Failed to execute one-shot app-server turn: {error}"
-            ));
-        }
-    };
+    let turn_result = app_server_client
+        .run_turn(turn_request, stream_tx)
+        .await
+        .map_err(|error| format!("Failed to execute one-shot app-server turn: {error}"))?;
+    if cancellation.is_cancelled() {
+        return Err("[Stopped] Agent run canceled".to_string());
+    }
 
     let parse_result =
         match parse_one_shot_response(&turn_result.assistant_message, protocol_profile) {
@@ -137,15 +196,12 @@ async fn submit_one_shot_with_app_server_client(
                     &parse_error,
                     &turn_result.assistant_message,
                     request,
-                    &session_id,
+                    session_id,
                     turn_result.provider_conversation_id.as_deref(),
                 )
                 .await
             }
         };
-
-    app_server_client.shutdown_session(session_id).await;
-    clear_child_pid_slot(child_pid.as_deref());
 
     let (response, repair_input_tokens, repair_output_tokens) = parse_result?;
 

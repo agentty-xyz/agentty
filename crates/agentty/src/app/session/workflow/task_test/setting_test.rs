@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{AgentSelectionMetadata, MockOneShotClient};
+use ag_agent::AgentSelectionMetadata;
+use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 
 use super::super::{
@@ -143,8 +144,8 @@ async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
     let child_pid = Arc::new(Mutex::new(None));
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let expected_child_pid = Arc::clone(&child_pid);
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
+    let mut run_client = MockRunClient::new();
+    run_client
         .expect_submit()
         .times(1)
         .returning(move |request| {
@@ -164,7 +165,7 @@ async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
         db: database.clone(),
         folder: temp_dir.path().to_path_buf(),
         id: "session-id".to_string(),
-        one_shot_client: Arc::new(one_shot_client),
+        run_client: Arc::new(run_client),
         prompt: "Resolve conflict".to_string(),
         session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
         session_update_versions: Arc::default(),

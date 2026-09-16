@@ -889,7 +889,7 @@ async fn load_default_smart_model_setting_falls_back_to_available_backend() {
             clipboard_image_client_override: None,
             fs_client: services.fs_client(),
             git_client: services.git_client(),
-            one_shot_client_override: Some(services.one_shot_client()),
+            run_client_override: Some(services.run_client()),
             personality_catalog_client_override: Some(services.personality_catalog_client()),
             repositories: services.db().clone(),
             review_request_client: services.review_request_client(),

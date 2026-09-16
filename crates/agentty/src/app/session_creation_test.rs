@@ -59,7 +59,7 @@ async fn delayed_creation_app_with_attempts(
             clipboard_image_client_override: Some(app.services.clipboard_image_client()),
             fs_client: app.services.fs_client(),
             git_client: Arc::new(git),
-            one_shot_client_override: Some(app.services.one_shot_client()),
+            run_client_override: Some(app.services.run_client()),
             personality_catalog_client_override: Some(app.services.personality_catalog_client()),
             repositories: app.services.db().clone(),
             review_request_client: app.services.review_request_client(),

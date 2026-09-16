@@ -6,10 +6,11 @@ use std::time::Duration;
 
 use ag_agent::{
     AgentRequestKind, AppServerClient, AppServerTurnResponse, MockAgentBackend, MockAgentChannel,
-    MockAppServerClient, MockOneShotClient, TurnResult,
+    MockAppServerClient, TurnResult,
 };
 use ag_git as git;
 use ag_protocol::AgentResponse;
+use ag_worker::MockRunClient;
 use tempfile::tempdir;
 
 use super::super::{
@@ -1011,24 +1012,21 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_| Box::pin(async { Ok("def5678".to_string()) }));
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
-        .expect_submit()
-        .times(1)
-        .returning(|request| {
-            assert!(request.prompt.contains("Refine session work"));
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(1).returning(|request| {
+        assert!(request.prompt.contains("Refine session work"));
 
-            Ok(ag_agent::OneShotSubmission {
-                response: AgentResponse::plain("Refine session work"),
-                stats: ag_agent::SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: ag_agent::SessionDiffState::Unknown,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
-            })
-        });
+        Ok(ag_agent::OneShotSubmission {
+            response: AgentResponse::plain("Refine session work"),
+            stats: ag_agent::SessionStats {
+                added_lines: 0,
+                deleted_lines: 0,
+                diff_state: ag_agent::SessionDiffState::Unknown,
+                input_tokens: 0,
+                output_tokens: 0,
+            },
+        })
+    });
 
     // Act
     let outcome = SessionTaskService::commit_session_changes(
@@ -1040,7 +1038,7 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
             ReasoningLevel::Low,
             SpeedMode::Normal,
         ),
-        &one_shot_client,
+        &run_client,
         false,
         &Mutex::new(SessionTranscript::default()),
     )

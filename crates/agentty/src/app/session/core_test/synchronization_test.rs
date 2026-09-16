@@ -1148,6 +1148,7 @@ async fn test_sync_main_uses_active_project_branch_from_context() {
         None,
         Arc::new(mock_git_client),
         AgentModel::Gemini38Flash,
+        Arc::new(ag_worker::MockRunClient::new()),
     )
     .await;
 
@@ -1186,6 +1187,7 @@ async fn test_sync_main_requires_clean_selected_project_branch() {
         None,
         Arc::new(mock_git_client),
         AgentModel::Gemini38Flash,
+        Arc::new(ag_worker::MockRunClient::new()),
     )
     .await;
 
@@ -1211,6 +1213,7 @@ async fn test_sync_main_returns_error_without_upstream_remote() {
         None,
         app.services.git_client(),
         AgentModel::Gemini38Flash,
+        Arc::new(ag_worker::MockRunClient::new()),
     )
     .await;
 
@@ -1274,6 +1277,7 @@ async fn test_sync_main_pushes_local_commits_to_remote() {
         None,
         Arc::new(mock_git_client),
         AgentModel::Gemini38Flash,
+        Arc::new(ag_worker::MockRunClient::new()),
     )
     .await;
 

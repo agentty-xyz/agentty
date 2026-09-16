@@ -3,9 +3,10 @@
 use std::collections::VecDeque;
 
 use ag_agent::{
-    AgentRequestKind, OneShotClient, OneShotError, OneShotRequest, OneShotSubmission,
-    PermissionMode, diff_fence, is_input_size_error,
+    AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode, diff_fence,
+    is_input_size_error,
 };
+use ag_worker::RunClient;
 
 /// Conservative byte budget, also bounding characters and byte-tokenizer input.
 /// Leaves room for provider instructions and output instead of approaching the
@@ -31,7 +32,7 @@ const SUMMARY_LIMIT: usize = 2_000;
 /// propagate. All summary, reduction, and final attempts share a fixed
 /// provider-call budget.
 pub(super) async fn submit(
-    client: &dyn OneShotClient,
+    client: &dyn RunClient,
     mut request: OneShotRequest,
     diff: &str,
     context: &str,
@@ -81,7 +82,7 @@ pub(super) async fn submit(
 /// Reduces all input chunks, then reduces their summaries again when necessary.
 /// Strict output bounds guarantee each reduction round makes progress.
 pub(super) async fn summarize(
-    client: &dyn OneShotClient,
+    client: &dyn RunClient,
     request: &OneShotRequest,
     input: &str,
     target: usize,
@@ -108,7 +109,7 @@ pub(super) async fn summarize(
 /// Retains small fragments verbatim and summarizes larger ones, repairing
 /// invalid output before splitting rejected fragments within the shared budget.
 async fn summarize_round(
-    client: &dyn OneShotClient,
+    client: &dyn RunClient,
     request: &OneShotRequest,
     input: &str,
     target: usize,
@@ -167,7 +168,7 @@ async fn summarize_round(
 /// the same provider-call budget; persistent invalid output can be split by
 /// the caller just like a provider input-size rejection.
 async fn summary_with_repair(
-    client: &dyn OneShotClient,
+    client: &dyn RunClient,
     request: &OneShotRequest,
     limit: usize,
     call_budget: &ag_agent::ProviderCallBudget,

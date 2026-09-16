@@ -2,6 +2,7 @@
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::sync::{Arc, Mutex};
 
 use agentty::db::{DB_DIR, DB_FILE};
 use agentty::domain::agent::ReasoningLevel;
@@ -231,10 +232,20 @@ async fn session_list_empty_state() -> E2eResult {
 /// instead of becoming the whole visible session title.
 #[tokio::test]
 async fn test_session_title_uses_stable_context() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
+    let database = Arc::new(Mutex::new(None));
+    let setup_database = Arc::clone(&database);
+    // Act
     FeatureTest::new("session_title_uses_stable_context")
         .with_git()
-        .setup(|env| Box::pin(async move { seed_session_title_candidate_project(env).await }))
+        .setup(move |env| {
+            Box::pin(async move {
+                seed_session_title_candidate_project(env).await?;
+                *setup_database.lock().expect("database slot") =
+                    Some(common::open_database(env).await?);
+                Ok(())
+            })
+        })
         .run(
             |scenario| {
                 scenario
@@ -263,8 +274,25 @@ async fn test_session_title_uses_stable_context() -> E2eResult {
                         "The session title preserves the durable overall goal",
                     )
             },
-            |frame, _report| {
+            move |frame, _report| {
                 Box::pin(async move {
+                    // Assert
+                    let db = database
+                        .lock()
+                        .expect("database slot")
+                        .clone()
+                        .expect("seeded database");
+                    let runs: Vec<(String, Option<String>)> = sqlx::query_as(
+                        "SELECT status, session_id FROM agent_run WHERE purpose = 'session title'",
+                    )
+                    .fetch_all(db.pool())
+                    .await
+                    .expect("worker title records");
+                    assert_ne!(runs.len(), 0, "expected worker title records");
+                    assert!(
+                        runs.iter()
+                            .all(|(state, session)| state == "completed" && session.is_some())
+                    );
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(
                         frame,

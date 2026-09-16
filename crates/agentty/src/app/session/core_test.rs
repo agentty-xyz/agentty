@@ -32,3 +32,6 @@ mod synchronization;
 
 #[path = "core_test/transition_test.rs"]
 mod transition;
+
+#[path = "core_test/deletion_test.rs"]
+mod deletion;

@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
-use ag_agent::MockOneShotClient;
 use ag_git::MockGitClient;
+use ag_worker::MockRunClient;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 
@@ -11,28 +11,25 @@ use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::AppRepositories;
 
 #[tokio::test]
-async fn test_run_agent_assist_uses_injected_one_shot_client() {
+async fn test_run_agent_assist_uses_injected_run_client() {
     // Arrange
     let temp_directory = tempdir().expect("failed to create temp dir");
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
-        .expect_submit()
-        .times(1)
-        .returning(|request| {
-            assert_eq!(request.prompt, "Resolve the conflict");
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(1).returning(|request| {
+        assert_eq!(request.prompt, "Resolve the conflict");
 
-            Ok(ag_agent::OneShotSubmission {
-                response: ag_protocol::AgentResponse::plain("Conflict resolved"),
-                stats: ag_agent::SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: ag_agent::SessionDiffState::Unknown,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
-            })
-        });
+        Ok(ag_agent::OneShotSubmission {
+            response: ag_protocol::AgentResponse::plain("Conflict resolved"),
+            stats: ag_agent::SessionStats {
+                added_lines: 0,
+                deleted_lines: 0,
+                diff_state: ag_agent::SessionDiffState::Unknown,
+                input_tokens: 0,
+                output_tokens: 0,
+            },
+        })
+    });
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let context = AssistContext {
         app_event_tx,
@@ -41,7 +38,7 @@ async fn test_run_agent_assist_uses_injected_one_shot_client() {
         folder: temp_directory.path().to_path_buf(),
         git_client: Arc::new(MockGitClient::new()),
         id: "session-id".to_string(),
-        one_shot_client: Arc::new(one_shot_client),
+        run_client: Arc::new(run_client),
         session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),

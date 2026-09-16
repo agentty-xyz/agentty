@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_protocol::AgentResponse;
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::{AgentRequestKind, PermissionMode, ReasoningLevel, SessionStats, SpeedMode};
 
@@ -71,8 +72,33 @@ impl OneShotError {
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait OneShotClient: Send + Sync {
+    /// Escalates application shutdown after its graceful deadline. This must
+    /// return immediately and permanently stop detached submission tasks.
+    /// The owner also drops in-flight submission futures; adapters whose
+    /// resources are owned entirely by those futures need no extra action.
+    fn force_shutdown(&self) {}
+
     /// Executes one isolated prompt and returns its parsed response and usage.
-    /// Implementations must enforce `provider_call_budget` for every underlying
-    /// provider attempt, including protocol repairs and transport retries.
+    /// Dropping this future must initiate cleanup of owned provider resources.
+    /// Use `submit_cancellable` to wait for asynchronous cleanup on
+    /// cancellation. Implementations must enforce `provider_call_budget`
+    /// for every underlying provider attempt, including protocol repairs
+    /// and transport retries.
     async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError>;
+
+    /// Cancels an isolated prompt and waits for adapter cleanup before
+    /// returning. The default drops `submit`, suitable for transports with
+    /// synchronous drop cleanup. Adapters requiring asynchronous shutdown
+    /// must override this method.
+    async fn submit_cancellable(
+        &self,
+        request: OneShotRequest,
+        cancellation: CancellationToken,
+    ) -> Result<OneShotSubmission, OneShotError> {
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => Err(OneShotError::new("[Stopped] Agent run canceled")),
+            result = self.submit(request) => result,
+        }
+    }
 }

@@ -8,6 +8,7 @@ mod orchestration;
 mod project;
 mod repository;
 mod review;
+mod run;
 mod session;
 mod session_message;
 mod session_preparation;

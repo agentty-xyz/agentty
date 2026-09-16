@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use ag_agent::MockOneShotClient;
 use ag_forge as forge;
+use ag_worker::MockRunClient;
 
 use super::super::SessionTaskService;
 use super::support::one_shot_submission;
@@ -43,8 +43,8 @@ fn test_review_request_metadata_prompt_preserves_payload_boundaries() {
 #[tokio::test]
 async fn review_request_metadata_preserves_user_details_from_semantic_evaluation() {
     // Arrange
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client.expect_submit().once().returning(|request| {
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().once().returning(|request| {
         assert!(
             request
                 .prompt
@@ -83,7 +83,7 @@ async fn review_request_metadata_preserves_user_details_from_semantic_evaluation
         Path::new("/tmp/project"),
         "Adds the release dashboard.",
         "Build release dashboard",
-        &one_shot_client,
+        &run_client,
         AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
     )
     .await
@@ -103,8 +103,8 @@ async fn review_request_metadata_preserves_user_details_from_semantic_evaluation
 #[tokio::test]
 async fn review_request_metadata_rejects_invalid_json() {
     // Arrange
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client
+    let mut run_client = MockRunClient::new();
+    run_client
         .expect_submit()
         .once()
         .returning(|_| Ok(one_shot_submission("not json", 0, 0)));
@@ -119,7 +119,7 @@ async fn review_request_metadata_rejects_invalid_json() {
         Path::new("/tmp/project"),
         "Generated body",
         "Generated title",
-        &one_shot_client,
+        &run_client,
         AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
     )
     .await
@@ -136,8 +136,8 @@ async fn review_request_metadata_rejects_invalid_json() {
 #[tokio::test]
 async fn review_request_metadata_rejects_invalid_title() {
     // Arrange
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client.expect_submit().once().returning(|_| {
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().once().returning(|_| {
         Ok(one_shot_submission(
             r#"{"title":"First line\nSecond line","description":"Body","is_title_change_significant":true}"#,
             0,
@@ -155,7 +155,7 @@ async fn review_request_metadata_rejects_invalid_title() {
         Path::new("/tmp/project"),
         "Generated body",
         "Generated title",
-        &one_shot_client,
+        &run_client,
         AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
     )
     .await
@@ -172,8 +172,8 @@ async fn review_request_metadata_rejects_invalid_title() {
 #[tokio::test]
 async fn review_request_metadata_rejects_dropped_current_reference() {
     // Arrange
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client.expect_submit().once().returning(|_| {
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().once().returning(|_| {
         Ok(one_shot_submission(
             r#"{"title":"Current title","description":"Updated body without references.","is_title_change_significant":false}"#,
             0,
@@ -191,7 +191,7 @@ async fn review_request_metadata_rejects_dropped_current_reference() {
         Path::new("/tmp/project"),
         "Generated body",
         "Generated title",
-        &one_shot_client,
+        &run_client,
         AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
     )
     .await
@@ -208,8 +208,8 @@ async fn review_request_metadata_rejects_dropped_current_reference() {
 #[tokio::test]
 async fn review_request_metadata_rejects_dropped_current_note_without_reference() {
     // Arrange
-    let mut one_shot_client = MockOneShotClient::new();
-    one_shot_client.expect_submit().once().returning(|_| {
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().once().returning(|_| {
         Ok(one_shot_submission(
             r#"{"title":"Current title","description":"Generated summary.\n\nUpdated generated details.","is_title_change_significant":false}"#,
             0,
@@ -228,7 +228,7 @@ async fn review_request_metadata_rejects_dropped_current_note_without_reference(
         Path::new("/tmp/project"),
         "Updated generated details.",
         "Generated title",
-        &one_shot_client,
+        &run_client,
         AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
     )
     .await
