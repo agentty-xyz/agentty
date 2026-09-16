@@ -901,23 +901,30 @@ their triggers:
   15-minute deadline, including transport retries and protocol repair. Completion,
   failure, and timeout close the pool. Progress events carry the session and diff hash;
   only the matching loading generation updates its transient display. The cross-file
-  pass starts after all batches finish. A failed batch stops new waves while its running
-  peers finish; successful findings survive and unreviewed fragments appear in a
+  pass starts after all batches finish. A final reduction then receives all merged batch
+  and cross-file findings, changed-file headers, and session context through the same
+  worker client. It reconciles duplicates and contradictions, reassesses severity, and
+  replaces the candidate review with its complete structured result. Candidates are
+  never summarized or truncated for reduction; input-size, budget, or provider failures
+  preserve the candidates with an explicit consolidation-failure notice. Single-batch
+  and incomplete reviews skip reduction. A failed batch stops new waves while its
+  running peers finish; successful findings survive and unreviewed fragments appear in a
   separate coverage section with retry guidance. Incomplete reviews reuse the existing
   `f` regeneration flow.
 
   Commit-message preparation and review history use the shared bounded summary reducer.
   Small fragments stay verbatim; empty or oversized summaries receive one corrective
-  retry before splitting their original input. Review history, batch submissions, and
-  the cross-file pass share a limit of 64 provider turns; commit-message preparation has
-  its own limit. Budgets include protocol repairs and transport restart retries. History
-  summaries explicitly disclose limited context coverage. Commit generation catches
-  input-size and reduction-budget failures and starts one separately bounded fallback
-  using cumulative changed filenames, the user/assistant conversation, and the existing
-  session commit message to retain earlier work. The fallback excludes the diff and
-  workflow notices, forbids retrieving diffs or file contents, and preserves read-only
-  utility permissions and commit validation. Both post-turn and pre-sync commits supply
-  the session transcript; fallback failure propagates normally.
+  retry before splitting their original input. Review history, batch submissions, the
+  cross-file pass, and final reduction share a limit of 64 provider turns;
+  commit-message preparation has its own limit. Budgets include protocol repairs and
+  transport restart retries. History summaries explicitly disclose limited context
+  coverage. Commit generation catches input-size and reduction-budget failures and
+  starts one separately bounded fallback using cumulative changed filenames, the
+  user/assistant conversation, and the existing session commit message to retain earlier
+  work. The fallback excludes the diff and workflow notices, forbids retrieving diffs or
+  file contents, and preserves read-only utility permissions and commit validation. Both
+  post-turn and pre-sync commits supply the session transcript; fallback failure
+  propagates normally.
 
 - **Sync-main workflow** (list-mode `s`): captures an immutable project ID, operation
   ID, path, branch, and review-target snapshot before queueing pull/rebase/push through

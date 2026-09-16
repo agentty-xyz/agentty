@@ -371,23 +371,24 @@ trigger this automatic review. Press `f` to append the cached review into the se
 output, or to see a loading message with the review agent, model, reasoning level, and
 speed while generation is still running. The loading state puts `Reviewing changes` on
 the primary row and the review profile on a subdued metadata row beneath it. A third row
-shows history preparation, completed batches, or the cross-file check. The appended
-review stays visible across diff mode, question mode, session switching, project
-switching, and background session metadata refreshes, and is cleared when you submit the
-next prompt. If a turn finishes while another project is active, its automatic focused
-review continues in the background without requiring you to switch back. Pending
-generation remains recoverable after Agentty restarts. Deleted sessions do not start or
-resume reviews from late completion events. Focused review includes the saved user and
-agent chat history for context. It uses inspection-only context: it may read files,
-search, inspect git history, and browse when needed, but it recommends verification
-commands instead of running checks itself. The review treats explicit decisions,
-accepted tradeoffs, and explanations in the chat as constraints, and only reopens a
-resolved suggestion when the current diff contradicts the resolution or inspection finds
-a new significant risk. `Project Impact` renders concise bullets directly beneath its
-heading. `Suggestions` uses the same compact spacing and formats its bullets as
-`[Severity]: Issue details`, using `[High]` or `[Medium]` when follow-up work is needed.
-Empty `Suggestions` output does not offer the `/apply` action. A turn stopped with
-`Ctrl+c` does not start a focused review automatically; press `f` for a manual one.
+shows history preparation, completed batches, the cross-file check, or final review
+consolidation. The appended review stays visible across diff mode, question mode,
+session switching, project switching, and background session metadata refreshes, and is
+cleared when you submit the next prompt. If a turn finishes while another project is
+active, its automatic focused review continues in the background without requiring you
+to switch back. Pending generation remains recoverable after Agentty restarts. Deleted
+sessions do not start or resume reviews from late completion events. Focused review
+includes the saved user and agent chat history for context. It uses inspection-only
+context: it may read files, search, inspect git history, and browse when needed, but it
+recommends verification commands instead of running checks itself. The review treats
+explicit decisions, accepted tradeoffs, and explanations in the chat as constraints, and
+only reopens a resolved suggestion when the current diff contradicts the resolution or
+inspection finds a new significant risk. `Project Impact` renders concise bullets
+directly beneath its heading. `Suggestions` uses the same compact spacing and formats
+its bullets as `[Severity]: Issue details`, using `[High]` or `[Medium]` when follow-up
+work is needed. Empty `Suggestions` output does not offer the `/apply` action. A turn
+stopped with `Ctrl+c` does not start a focused review automatically; press `f` for a
+manual one.
 
 ### Session Output Markdown
 
@@ -468,13 +469,17 @@ summaries get a bounded repair attempt before their source fragments are split a
 Small fragments are kept verbatim.
 
 Focused review checks large diffs in batches of original changes, then checks cross-file
-interactions. Session history may be summarized, with limited context coverage
-disclosed. If a later batch or the cross-file check fails, completed findings remain
-available under an explicit partial-review notice identifying the unfinished work. Press
-`f` and confirm regeneration to retry. The complete review has a 15-minute deadline
-shared by history preparation, all batches, and the cross-file check. Reaching that
-deadline or the provider-call limit stops further work and preserves completed findings.
-Summaries use low reasoning effort; review findings use your configured review profile.
+interactions. A final consolidation pass reconciles duplicate or conflicting findings,
+reassesses severity, and produces one review. Session history may be summarized, with
+limited context coverage disclosed. If a later batch, cross-file check, or consolidation
+fails, completed findings remain available under an explicit partial-review notice
+identifying the unfinished work. Consolidation receives all candidate findings; if they
+exceed the prompt limit, the original findings remain available with a notice that they
+have not been reconciled. Press `f` and confirm regeneration to retry. The complete
+review has a 15-minute deadline shared by history preparation, all batches, the
+cross-file check, and consolidation. Reaching that deadline or the provider-call limit
+stops further work and preserves completed findings. Summaries use low reasoning effort;
+review findings use your configured review profile.
 
 Auto-commit waits up to five seconds in total for a busy Git index to become available.
 If an index lock still blocks auto-commit, Agentty stops and records a `[Commit Error]`

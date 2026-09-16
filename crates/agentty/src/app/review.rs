@@ -158,6 +158,8 @@ pub(crate) enum ReviewProgress {
     Batches { completed: usize, total: usize },
     /// Checking interactions after every original-diff batch finished.
     CrossFile,
+    /// Reconciling all batch and cross-file findings into the final review.
+    Reducing,
 }
 
 /// Formats the stable review profile together with its latest phase.
@@ -173,6 +175,7 @@ pub(crate) fn review_progress_message(
             format!("{completed}/{total} batches complete")
         }
         Some(ReviewProgress::CrossFile) => "Checking cross-file interactions".to_string(),
+        Some(ReviewProgress::Reducing) => "Consolidating review findings".to_string(),
     };
 
     format!("{message}\n{detail}")

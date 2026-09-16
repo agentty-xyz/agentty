@@ -11,7 +11,9 @@ from summaries.
 Large diffs may arrive as separate batches of original diff text. A batch can continue a
 file or hunk; inspect the relevant source and diff headers before assigning line
 references. Scope findings to the supplied changes and keep project impact concise so a
-later cross-file pass can check interactions.
+later cross-file pass can check interactions and a final reduction can reconcile all
+findings. When asked to reduce candidate findings, return the complete consolidated
+review rather than treating those candidates as authoritative.
 
 Execution constraints (mandatory):
 

@@ -4,14 +4,14 @@ use std::time::Duration;
 
 use ag_agent::{
     AgentKind, AgentModel, AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission,
-    PermissionMode, ReasoningLevel, SessionStats, SpeedMode, diff_fence,
+    PermissionMode, ProviderCallBudget, ReasoningLevel, SessionStats, SpeedMode, diff_fence,
 };
 use ag_protocol::{AgentResponse, FocusedReview, FocusedReviewSeverity, FocusedReviewSuggestion};
 use ag_worker::{MockRunClient, RunClient};
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 
-use super::{REVIEW_CONCURRENCY, file_headers, merge, submit};
+use super::{REVIEW_CONCURRENCY, file_headers, merge, reduce_review, submit};
 use crate::app::diff_prompt::{MAX_PROVIDER_CALLS, PROMPT_BUDGET};
 use crate::app::review::ReviewProgress;
 use crate::infra::review_deadline::ReviewDeadlineClient;
@@ -181,6 +181,34 @@ async fn reviews_three_batches_concurrently_and_merges_in_input_order() {
             .reply
             .send(Ok(response()))
             .expect("cross-file reply");
+        let reduction = pending.recv().await.expect("final reduction");
+        assert!(reduction.request.prompt.starts_with("Reduce review:"));
+        let positions: Vec<_> = (0..6)
+            .map(|index| {
+                reduction
+                    .request
+                    .prompt
+                    .find(&format!("Finding {index}."))
+                    .expect("all batch findings reach reduction")
+            })
+            .collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(reduction.request.prompt.contains("Preserved finding."));
+        reduction
+            .reply
+            .send(Ok(OneShotSubmission {
+                response: AgentResponse::plain(
+                    serde_json::json!({
+                        "project_impact": [],
+                        "suggestions": (0..6).map(|index| serde_json::json!({
+                            "severity": "high", "details": format!("Finding {index}.")
+                        })).collect::<Vec<_>>()
+                    })
+                    .to_string(),
+                ),
+                stats: SessionStats::default(),
+            }))
+            .expect("reduction reply");
     };
     let (text, ()) = tokio::time::timeout(Duration::from_secs(5), async {
         tokio::join!(review, observe)
@@ -262,6 +290,17 @@ async fn nested_size_retries_keep_source_order_in_complete_and_partial_reviews()
         let mut client = MockRunClient::new();
         client.expect_submit().returning(move |request| {
             request.provider_call_budget.as_ref().expect("budget").consume()?;
+            if request.prompt.starts_with("Reduce review:") {
+                return Ok(OneShotSubmission {
+                    response: AgentResponse::plain(serde_json::json!({
+                        "project_impact": [],
+                        "suggestions": (['a', 'b', 'c', 'd', 'e', 'f'].map(|marker| serde_json::json!({
+                            "severity": "medium", "details": format!("Finding {marker}.")
+                        })))
+                    }).to_string()),
+                    stats: SessionStats::default(),
+                });
+            }
             if request.prompt.starts_with("Cross-file review:") {
                 let positions: Vec<_> = ['a', 'b', 'c', 'd', 'e', 'f']
                     .map(|marker| request.prompt.find(&format!("Finding {marker}."))
@@ -372,8 +411,8 @@ async fn batches_original_unicode_diff_then_checks_cross_file_interactions() {
     assert!(
         prompts
             .last()
-            .expect("cross-file pass")
-            .starts_with("Cross-file review:")
+            .expect("final reduction")
+            .starts_with("Reduce review:")
     );
     assert_eq!(text.matches("Preserved finding.").count(), 1);
     assert!(!text.contains("Partial review"));
@@ -479,6 +518,255 @@ async fn failed_cross_file_pass_preserves_all_batch_findings() {
     // Assert
     assert!(text.contains("Preserved finding."));
     assert!(text.contains("cross-file pass failed: network timeout"));
+}
+
+#[tokio::test]
+async fn final_reduction_replaces_candidates_and_normalizes_the_complete_review() {
+    // Arrange
+    for no_supported_findings in [false, true] {
+        let mut client = MockRunClient::new();
+        client.expect_submit().returning(move |request| {
+            request.provider_call_budget.as_ref().expect("shared budget").consume()?;
+            if request.prompt.starts_with("Reduce review:") {
+                assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
+                assert_eq!(request.request_kind, AgentRequestKind::FocusedReview);
+                assert_eq!(request.reasoning_level, ReasoningLevel::Medium);
+                assert_eq!(request.model, AgentModel::ClaudeSonnet5.as_str());
+                assert!(request.prompt.contains("Accepted decision"));
+                assert!(request.prompt.contains("diff --git a/source b/source"));
+                assert!(request.prompt.contains("Preserved finding."));
+                assert!(request.prompt.contains("Cross-file candidate."));
+                let suggestions = if no_supported_findings {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!([
+                        {"severity": "medium", "details": "Reassessed risk."},
+                        {"severity": "high", "details": "Consolidated risk."},
+                        {"severity": "high", "details": "Consolidated risk."}
+                    ])
+                };
+                return Ok(OneShotSubmission {
+                    response: AgentResponse::plain(serde_json::json!({
+                        "project_impact": ["Coherent impact."],
+                        "suggestions": suggestions
+                    }).to_string()),
+                    stats: SessionStats::default(),
+                });
+            }
+            if request.prompt.starts_with("Cross-file review:") {
+                return Ok(OneShotSubmission {
+                    response: AgentResponse::plain(
+                        r#"{"project_impact":[],"suggestions":[{"severity":"medium","details":"Cross-file candidate."}]}"#,
+                    ),
+                    stats: SessionStats::default(),
+                });
+            }
+            Ok(response())
+        });
+        let progress = Mutex::new(Vec::new());
+
+        // Act
+        let text = submit(
+            &client,
+            request(),
+            &format!("diff --git a/source b/source\n{}", "x".repeat(90_000)),
+            "Accepted decision",
+            |diff, context| Ok(render(diff, context)),
+            |update| progress.lock().expect("progress").push(update),
+        )
+        .await
+        .expect("consolidated review");
+
+        // Assert
+        assert!(text.contains("Coherent impact."));
+        assert!(!text.contains("Original changes reviewed."));
+        assert!(!text.contains("Preserved finding."));
+        assert!(!text.contains("Cross-file candidate."));
+        assert!(!text.contains("Partial review"));
+        if no_supported_findings {
+            assert!(ag_session::review_suggestions(&text).is_none());
+        } else {
+            assert_eq!(text.matches("Consolidated risk.").count(), 1);
+            assert!(
+                text.find("Consolidated risk.").expect("high finding")
+                    < text.find("Reassessed risk.").expect("medium finding")
+            );
+        }
+        assert!(
+            progress
+                .lock()
+                .expect("progress")
+                .ends_with(&[ReviewProgress::CrossFile, ReviewProgress::Reducing])
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_or_invalid_reduction_keeps_candidates_with_coverage_notice() {
+    // Arrange
+    for failure in ["network timeout", "contextWindowExceeded", "invalid", ""] {
+        let mut client = MockRunClient::new();
+        client.expect_submit().times(4).returning(move |request| {
+            if request.prompt.starts_with("Reduce review:") {
+                if failure == "invalid" || failure.is_empty() {
+                    return Ok(OneShotSubmission {
+                        response: AgentResponse::plain(failure),
+                        stats: SessionStats::default(),
+                    });
+                }
+                return Err(OneShotError::new(failure));
+            }
+            Ok(response())
+        });
+
+        // Act
+        let text = submit(
+            &client,
+            request(),
+            &"x".repeat(90_000),
+            "",
+            |diff, context| Ok(render(diff, context)),
+            |_| {},
+        )
+        .await
+        .expect("fallback review");
+
+        // Assert
+        assert!(text.contains("Preserved finding."));
+        assert!(text.contains("final consolidation failed:"));
+        assert!(text.contains("Retained findings have not been reconciled."));
+        assert!(text.contains("Press `f` to retry"));
+        let suggestions = ag_session::review_suggestions(&text).expect("actionable fallback");
+        assert!(!suggestions.contains("Partial review"));
+    }
+}
+
+#[tokio::test]
+async fn final_reduction_uses_the_existing_review_deadline() {
+    // Arrange
+    let (requests, mut pending) = mpsc::unbounded_channel();
+    let client = ControlledReviewClient { requests };
+    let client = ReviewDeadlineClient::new(&client, Duration::from_millis(250));
+    let diff = "x".repeat(90_000);
+
+    // Act
+    let review = submit(
+        &client,
+        request(),
+        &diff,
+        "",
+        |diff, context| Ok(render(diff, context)),
+        |_| {},
+    );
+    let observe = async {
+        for _ in 0..3 {
+            pending
+                .recv()
+                .await
+                .expect("batch or cross-file pass")
+                .reply
+                .send(Ok(response()))
+                .expect("completed candidate");
+        }
+        let reduction = pending.recv().await.expect("reduction");
+        assert!(reduction.request.prompt.starts_with("Reduce review:"));
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(reduction.reply.is_closed());
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(review, observe)
+    })
+    .await
+    .expect("deadline completes the review");
+
+    // Assert
+    let text = result.expect("fallback review");
+    assert!(text.contains("Preserved finding."));
+    assert!(text.contains("final consolidation failed:"));
+    assert!(text.contains("deadline exceeded"));
+    assert!(pending.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn reduction_respects_remaining_budget_and_never_summarizes_oversized_candidates() {
+    // Arrange
+    for oversized in [false, true] {
+        let mut client = MockRunClient::new();
+        client.expect_submit().returning(move |request| {
+            let budget = request.provider_call_budget.as_ref().expect("budget");
+            budget.consume()?;
+            assert!(!request.prompt.starts_with("Reduce review:"));
+            if request.request_kind == AgentRequestKind::UtilityPrompt {
+                return Ok(OneShotSubmission {
+                    response: AgentResponse::plain("Bounded cross-file overview."),
+                    stats: SessionStats::default(),
+                });
+            }
+            if request.prompt.starts_with("Cross-file review:") {
+                if !oversized {
+                    while budget.consume().is_ok() {}
+                }
+                return Ok(response());
+            }
+            Ok(OneShotSubmission {
+                response: AgentResponse::plain(serde_json::json!({
+                    "project_impact": [if oversized { "Impact. ".repeat(20_000) } else { "Impact.".into() }],
+                    "suggestions": [{"severity": "medium", "details": "Original batch finding."}]
+                }).to_string()),
+                stats: SessionStats::default(),
+            })
+        });
+
+        // Act
+        let text = submit(
+            &client,
+            request(),
+            &"x".repeat(90_000),
+            "",
+            |diff, context| Ok(render(diff, context)),
+            |_| {},
+        )
+        .await
+        .expect("fallback review");
+
+        // Assert
+        assert!(text.contains("Original batch finding."));
+        assert!(text.contains("Preserved finding."));
+        assert!(text.contains("final consolidation failed:"));
+        if oversized {
+            assert_eq!(text.matches("Impact.").count(), 20_000);
+            assert!(text.contains("review prompt budget"));
+        } else {
+            assert!(text.contains("provider call limit reached"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn reduction_render_failure_does_not_submit_a_worker_request() {
+    // Arrange
+    let mut client = MockRunClient::new();
+    client.expect_submit().never();
+    let review = FocusedReview {
+        project_impact: Vec::new(),
+        suggestions: Vec::new(),
+    };
+
+    // Act
+    let error = reduce_review(
+        &client,
+        &request(),
+        &review,
+        "original diff",
+        "",
+        &|_, _| Err(OneShotError::new("render failed")),
+        &ProviderCallBudget::new(1),
+    )
+    .await
+    .expect_err("render error");
+
+    // Assert
+    assert_eq!(error.to_string(), "render failed");
 }
 
 #[tokio::test]
@@ -687,6 +975,12 @@ async fn cross_file_overview_is_bounded_without_discarding_batch_findings() {
                 stats: SessionStats::default(),
             });
         }
+        if request.prompt.starts_with("Reduce review:") {
+            assert_eq!(request.prompt.matches("Large batch impact.").count(), 1000);
+            assert!(request.prompt.contains("Original batch finding."));
+            assert!(request.prompt.contains("Preserved finding."));
+            return Err(OneShotError::new("reduction unavailable"));
+        }
         if request.prompt.starts_with("Cross-file review:") {
             assert!(request.prompt.contains("Large batch impact retained"));
             return Ok(response());
@@ -719,6 +1013,7 @@ async fn cross_file_overview_is_bounded_without_discarding_batch_findings() {
     assert!(text.contains("Original batch finding."));
     assert!(text.contains("Preserved finding."));
     assert_eq!(text.matches("Large batch impact.").count(), 1000);
+    assert!(text.contains("final consolidation failed: reduction unavailable"));
 }
 
 #[tokio::test]

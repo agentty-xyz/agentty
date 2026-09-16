@@ -69,6 +69,10 @@ fn progress_formats_each_phase_and_survives_transient_hydration() {
             Some(ReviewProgress::CrossFile),
             "Checking cross-file interactions",
         ),
+        (
+            Some(ReviewProgress::Reducing),
+            "Consolidating review findings",
+        ),
     ] {
         let text = review_progress_message(test_review_agent(), progress);
         assert!(text.contains(expected));
