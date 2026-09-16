@@ -61,6 +61,8 @@ impl Command {
 #[derive(Default)]
 pub(super) struct Grants {
     pub(super) environment: Vec<(OsString, OsString)>,
+    /// Read only this entry, without authorizing directory descendants.
+    pub(super) external_entries: Vec<PathBuf>,
     pub(super) external_reads: Vec<PathBuf>,
     pub(super) host_information: bool,
     pub(super) network: bool,
@@ -75,6 +77,7 @@ pub(super) struct Grants {
 /// weaken it.
 pub(super) struct Policy {
     environment: BTreeMap<OsString, OsString>,
+    external_entries: Vec<PathBuf>,
     external_reads: Vec<PathBuf>,
     git_metadata: Vec<PathBuf>,
     host_information: bool,
@@ -108,7 +111,7 @@ impl Policy {
                 return Err(ValidationError::InvalidWorkspace);
             }
         }
-        for path in &grants.external_reads {
+        for path in grants.external_reads.iter().chain(&grants.external_entries) {
             validate_path(path, true)?;
         }
         for path in &grants.workspace_writes {
@@ -132,6 +135,7 @@ impl Policy {
 
         Ok(Self {
             environment,
+            external_entries: grants.external_entries,
             external_reads: grants.external_reads,
             git_metadata,
             host_information: grants.host_information,
@@ -156,6 +160,10 @@ impl Policy {
         &self.external_reads
     }
 
+    pub(super) fn external_entries(&self) -> &[PathBuf] {
+        &self.external_entries
+    }
+
     pub(super) fn workspace_writes(&self) -> &[PathBuf] {
         &self.workspace_writes
     }
@@ -171,6 +179,7 @@ impl Policy {
         validate_path(path, true)?;
         let in_workspace = path.starts_with(&self.workspace);
         if !in_workspace
+            && !self.external_entries.iter().any(|entry| path == entry)
             && !self
                 .external_reads
                 .iter()

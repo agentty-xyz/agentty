@@ -2,4 +2,6 @@
 #![allow(dead_code)]
 
 mod contract;
+#[cfg(target_os = "macos")]
+mod macos;
 mod supervisor;

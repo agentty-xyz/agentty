@@ -80,6 +80,23 @@ retained control survives dropped callers. Completion includes descendant cleanu
 cleanup failures remain separate from execution results. Production backends remain
 unavailable.
 
+### Private macOS construction
+
+Private macOS construction enforces filesystem grants, read-only Git metadata, and
+explicit environment and descriptor access. Network and IPC access are denied. Scratch
+resources remain owned through cleanup, and unsupported policies fail closed. The host
+remains trusted. Production execution stays unavailable until native descendant
+supervision is complete.
+
+This stage requires native arm64 macOS 26, APFS, the system `sandbox-exec` and `env`
+utilities, and a functioning Seatbelt runtime. Native validation used macOS 26.6.2. The
+deprecated sandbox interface requires revalidation after OS updates.
+
+An explicit host-information grant is required because native processes can observe host
+runtime state. It does not grant filesystem access. Validation rejects unsafe aliases,
+special nodes, overlapping scratch and workspace trees, and unsupported grants instead
+of broadening access.
+
 ## Repository comparisons
 
 Hosts supply a validated `ComparisonBase` through `TurnOptions`. It pins a full commit
