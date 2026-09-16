@@ -133,36 +133,8 @@ pub(super) fn install_mock_clipboard_image_client(
     app: &mut App,
     mock_clipboard_image_client: crate::infra::clipboard_image::MockClipboardImageClient,
 ) {
-    let clipboard_image_client: Arc<dyn crate::infra::clipboard_image::ClipboardImageClient> =
-        Arc::new(mock_clipboard_image_client);
-    let base_path = app.services.base_path().to_path_buf();
-    let db = app.services.db().clone();
-    let event_sender = app.services.event_sender();
-    let available_agent_kinds = app.services.available_agent_kinds();
-    let available_agent_clis =
-        crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
-    let app_server_client_override = app.services.app_server_client_override();
-    let fs_client = app.services.fs_client();
-    let git_client = app.services.git_client();
-    let review_request_client = app.services.review_request_client();
-
-    app.services = crate::app::AppServices::new_with_agent_clis(
-        base_path,
-        app.services.clock(),
-        event_sender,
-        crate::app::test_support::AppServiceDeps {
-            app_server_client_override,
-            available_agent_kinds,
-            clipboard_image_client_override: Some(clipboard_image_client),
-            fs_client,
-            git_client,
-            run_client_override: None,
-            personality_catalog_client_override: None,
-            repositories: db,
-            review_request_client,
-        },
-        available_agent_clis,
-    );
+    app.services
+        .set_clipboard_image_client(Arc::new(mock_clipboard_image_client));
 }
 
 /// Builds one minimal session snapshot for pure view-state tests.

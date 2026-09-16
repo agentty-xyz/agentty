@@ -8,10 +8,11 @@ use tempfile::tempdir;
 use super::super::{SessionManager, session_folder};
 use super::support::{
     new_test_app_with_db, new_test_app_with_db_and_app_server, new_test_app_with_git,
-    test_session_manager, wait_for_status, wait_for_status_with_retries,
+    register_session_backend, test_session_manager, wait_for_status, wait_for_status_with_retries,
 };
 use crate::app::session::SessionLoadInput;
 use crate::app::session::workflow::task::SessionTaskService;
+use crate::app::test_support::TestSessionChannelFactory;
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
 };
@@ -516,14 +517,10 @@ async fn test_reply_turn_completion_persists_session_size() {
     });
 
     // Act
+    let channels = TestSessionChannelFactory::install(&mut app.services);
+    register_session_backend(&app, &channels, &session_id, Arc::new(backend));
     app.sessions
-        .reply_with_backend(
-            &app.services,
-            &session_id,
-            "compute size after turn",
-            Arc::new(backend),
-            AgentModel::ClaudeOpus5,
-        )
+        .reply(&app.services, &session_id, "compute size after turn")
         .await;
     wait_for_status_with_retries(&mut app, &session_id, Status::AgentReview, 200, true).await;
     app.process_pending_app_events().await;

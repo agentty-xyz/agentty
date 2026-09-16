@@ -3987,9 +3987,5 @@ fn is_managed_prompt_attachment_directory(path: &Path, managed_tmp_root: &Path) 
 }
 
 #[cfg(test)]
-#[path = "lifecycle_test_support_test.rs"]
-mod test_support;
-
-#[cfg(test)]
 #[path = "lifecycle_test.rs"]
 mod tests;

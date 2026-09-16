@@ -18,7 +18,7 @@ use app::review::{
     FocusedReviewPersistence, ReviewCacheEntry, mark_session_agent_review, review_failure_message,
     review_loading_message, review_view_text, start_review_assist as spawn_review_assist,
 };
-use app::service::AppServices;
+use app::service::{AppServices, RealSessionChannelFactory, SessionChannelFactory};
 use app::session::SessionManager;
 use app::session_runtime::SessionRuntime;
 use app::setting::SettingsManager;
@@ -117,6 +117,7 @@ pub(crate) struct AppClients {
     pub(super) personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
     pub(super) review_request_client: Arc<dyn ReviewRequestClient>,
+    pub(super) session_channel_factory: Arc<dyn SessionChannelFactory>,
     pub(super) sync_main_runner: Option<Arc<dyn SyncMainRunner>>,
     pub(super) tmux_client: Arc<dyn TmuxClient>,
     pub(super) version_task_runner: Arc<dyn task::VersionTaskRunner>,
@@ -136,6 +137,7 @@ impl AppClients {
             personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             project_discovery_client: Arc::new(RealProjectDiscoveryClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
+            session_channel_factory: Arc::new(RealSessionChannelFactory::new(None)),
             sync_main_runner: None,
             tmux_client: Arc::new(RealTmuxClient),
             version_task_runner: Arc::new(task::RealVersionTaskRunner),

@@ -10,8 +10,7 @@ use tokio::sync::{Notify, oneshot};
 
 use super::PendingSessionCreation;
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
-use crate::app::test_support::AppServiceDeps;
-use crate::app::{App, AppServices, SessionManager, SessionRuntimeCommand};
+use crate::app::{App, SessionManager, SessionRuntimeCommand};
 use crate::domain::session::Status;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::SessionPreparationState;
@@ -49,23 +48,7 @@ async fn delayed_creation_app_with_attempts(
             })
         }
     });
-    app.services = AppServices::new_with_agent_clis(
-        app.services.base_path().to_path_buf(),
-        app.services.clock(),
-        app.services.event_sender(),
-        AppServiceDeps {
-            app_server_client_override: app.services.app_server_client_override(),
-            available_agent_kinds: app.services.available_agent_kinds(),
-            clipboard_image_client_override: Some(app.services.clipboard_image_client()),
-            fs_client: app.services.fs_client(),
-            git_client: Arc::new(git),
-            run_client_override: Some(app.services.run_client()),
-            personality_catalog_client_override: Some(app.services.personality_catalog_client()),
-            repositories: app.services.db().clone(),
-            review_request_client: app.services.review_request_client(),
-        },
-        app.services.available_agent_clis(),
-    );
+    app.services.set_git_client(Arc::new(git));
 
     (app, directory, release)
 }

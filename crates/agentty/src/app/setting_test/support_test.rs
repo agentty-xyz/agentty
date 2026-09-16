@@ -45,6 +45,9 @@ pub(super) async fn test_services_with_available_agent_kinds(
         Arc::new(crate::infra::clock::RealClock),
         event_tx,
         crate::app::service::AppServiceDeps {
+            session_channel_factory: Arc::new(
+                crate::app::service::test_support::TestSessionChannelFactory::default(),
+            ),
             app_server_client_override: Some(Arc::new(MockAppServerClient::new())),
             available_agent_kinds: available_agent_kinds.clone(),
             clipboard_image_client_override: None,

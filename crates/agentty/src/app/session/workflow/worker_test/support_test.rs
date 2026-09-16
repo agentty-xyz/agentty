@@ -27,6 +27,7 @@ use super::super::{
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
 use crate::app::session::SessionError;
+use crate::app::test_support::TestSessionChannelFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::session::{
     PublishedBranchSyncStatus, QueuedMessage, ReviewRequest, ReviewRequestState, SessionStats,
@@ -357,10 +358,8 @@ pub(super) async fn assert_preparation_publication_failure_is_retryable(trigger:
         .save_preparation_prompt(&session_id, &serde_json::to_string(&prompt).expect("JSON"))
         .await
         .expect("save");
-    app.sessions
-        .worker_service_mut()
-        .test_agent_channels
-        .insert(session_id.clone().into(), Arc::new(MockAgentChannel::new()));
+    let channels = TestSessionChannelFactory::install(&mut app.services);
+    channels.register(&session_id, Arc::new(MockAgentChannel::new()));
     sqlx::query(trigger).execute(&pool).await.expect("trigger");
 
     // Act

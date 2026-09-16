@@ -719,15 +719,8 @@ pub(super) struct SessionWorkerRuntime {
     transcript: Arc<Mutex<SessionTranscript>>,
 }
 
-/// Owns per-session worker queue senders and test channel overrides.
+/// Owns per-session worker queue senders and preparation reservations.
 pub(crate) struct SessionWorkerService {
-    /// Channels pre-registered for specific session workers in tests.
-    ///
-    /// Tests populate this map before enqueueing a command so that
-    /// `ensure_session_worker` uses the injected channel instead of the
-    /// default factory, enabling deterministic command execution without
-    /// spawning real provider processes.
-    pub(in crate::app::session) test_agent_channels: HashMap<SessionId, Arc<dyn AgentChannel>>,
     preparation_reservations: HashMap<SessionId, Weak<()>>,
     workers: HashMap<SessionId, SessionWorkerHandle>,
 }
@@ -737,7 +730,6 @@ impl SessionWorkerService {
     pub(in crate::app::session) fn new() -> Self {
         Self {
             preparation_reservations: HashMap::new(),
-            test_agent_channels: HashMap::new(),
             workers: HashMap::new(),
         }
     }
@@ -1027,12 +1019,7 @@ impl SessionWorkerService {
             return worker.clone();
         }
 
-        // When a pre-registered channel exists, reuse it; otherwise fall back
-        // to the production channel factory.
-        let channel = self
-            .test_agent_channels
-            .remove(&runtime.session_id)
-            .unwrap_or_else(|| services.agent_channel(runtime.session_agent.kind()));
+        let channel = services.agent_channel(&runtime.session_id, runtime.session_agent.kind());
 
         let context = SessionWorkerContext {
             app_event_tx: services.event_sender(),

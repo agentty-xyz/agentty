@@ -326,6 +326,9 @@ pub(crate) fn test_app_clients_with_available_agent_kinds(
 
     app::test_support::AppClients::new()
         .with_background_tasks_disabled()
+        .with_session_channel_factory(Arc::new(
+            app::test_support::TestSessionChannelFactory::default(),
+        ))
         .with_agent_availability_probe(Arc::new(StaticAgentAvailabilityProbe {
             available_agent_kinds,
         }))

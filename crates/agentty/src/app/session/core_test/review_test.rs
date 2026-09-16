@@ -12,13 +12,14 @@ use super::super::{SESSION_REFRESH_INTERVAL, session_folder};
 use super::support::{
     TestClock, create_and_start_session, create_mock_backend, new_test_app_with_db,
     new_test_app_with_git, new_test_app_with_git_and_db, prepare_review_comment_resolution_session,
-    review_comment_resolution_snapshot, review_message_body, session_replay_text,
-    test_session_manager, wait_for_output_contains, wait_for_status,
+    register_session_backend, review_comment_resolution_snapshot, review_message_body,
+    session_replay_text, test_session_manager, wait_for_output_contains, wait_for_status,
 };
 use crate::app::ReviewCacheEntry;
 use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
 use crate::app::review::{review_failure_message, review_loading_message};
 use crate::app::session::SessionError;
+use crate::app::test_support::TestSessionChannelFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::session::{SESSION_DATA_DIR, Status};
 use crate::domain::session_message::SessionMessageKind;
@@ -126,7 +127,7 @@ async fn test_append_session_to_stack_rejects_non_review_source() {
 /// Ensures resumed review sessions replay persisted transcript output on
 /// the first reply after app restart.
 #[tokio::test]
-async fn test_reply_with_backend_replays_history_after_app_restart_for_review_session() {
+async fn test_reply_replays_history_after_app_restart_for_review_session() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let db = AppRepositories::in_memory().await.expect("db should open");
@@ -137,15 +138,11 @@ async fn test_reply_with_backend_replays_history_after_app_restart_for_review_se
         .await
         .expect("failed to create session");
     let start_backend = create_mock_backend();
+    let channels = TestSessionChannelFactory::install(&mut first_app.services);
+    register_session_backend(&first_app, &channels, &session_id, Arc::new(start_backend));
     first_app
         .sessions
-        .reply_with_backend(
-            &first_app.services,
-            &session_id,
-            "Initial prompt",
-            Arc::new(start_backend),
-            AgentModel::ClaudeSonnet5,
-        )
+        .reply(&first_app.services, &session_id, "Initial prompt")
         .await;
     wait_for_status(&mut first_app, &session_id, Status::Review).await;
     first_app.sessions.sync_from_handles();
@@ -188,15 +185,16 @@ async fn test_reply_with_backend_replays_history_after_app_restart_for_review_se
             .stderr(Stdio::null());
         Ok(cmd)
     });
+    let channels = TestSessionChannelFactory::install(&mut resumed_app.services);
+    register_session_backend(
+        &resumed_app,
+        &channels,
+        &session_id,
+        Arc::new(resume_backend),
+    );
     resumed_app
         .sessions
-        .reply_with_backend(
-            &resumed_app.services,
-            &session_id,
-            "Restart reply",
-            Arc::new(resume_backend),
-            AgentModel::ClaudeSonnet5,
-        )
+        .reply(&resumed_app.services, &session_id, "Restart reply")
         .await;
 
     // Assert
@@ -373,10 +371,8 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
     mock_channel
         .expect_shutdown_session()
         .returning(|_| Box::pin(async { Ok(()) }));
-    app.sessions
-        .worker_service
-        .test_agent_channels
-        .insert(session_id.clone(), Arc::new(mock_channel));
+    let channels = TestSessionChannelFactory::install(&mut app.services);
+    channels.register(&session_id, Arc::new(mock_channel));
     let selected_comments = vec![ReviewCommentSelection {
         thread_id: "thread-42".to_string(),
     }];

@@ -8,9 +8,10 @@ use tempfile::tempdir;
 use super::super::{AT_MENTION_INDEX_TTL, TurnAppliedState, remote_branch_name_from_upstream_ref};
 use super::support::{
     TestClock, add_manual_session_with_status, create_mock_backend, new_test_app,
-    new_test_app_with_git, new_test_app_with_git_and_db, test_session_manager,
-    test_session_manager_with_clock, wait_for_status,
+    new_test_app_with_git, new_test_app_with_git_and_db, register_session_backend,
+    test_session_manager, test_session_manager_with_clock, wait_for_status,
 };
+use crate::app::test_support::TestSessionChannelFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::session::{SessionStats, Status};
@@ -100,7 +101,7 @@ fn test_set_and_get_at_mention_index_for_root_cache() {
 /// worker in `InProgress` and correctly polls until `Review`. Without this,
 /// `wait_for_status` would return immediately because the initial status
 /// is already `Review` before the worker runs.
-async fn test_reply_with_backend_replays_history_once_after_model_switch() {
+async fn test_reply_replays_history_once_after_model_switch() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let db = AppRepositories::in_memory().await.expect("db should open");
@@ -186,10 +187,8 @@ async fn test_reply_with_backend_replays_history_once_after_model_switch() {
     mock_channel
         .expect_shutdown_session()
         .returning(|_| Box::pin(async { Ok(()) }));
-    app.sessions
-        .worker_service
-        .test_agent_channels
-        .insert(session_id.clone().into(), Arc::new(mock_channel));
+    let channels = TestSessionChannelFactory::install(&mut app.services);
+    channels.register(&session_id, Arc::new(mock_channel));
 
     // Act — first reply after model switch: history should be replayed.
     app.sessions
@@ -306,15 +305,9 @@ async fn test_reply_first_message_uses_full_prompt_text_as_title() {
     let backend = create_mock_backend();
 
     // Act
-    app.sessions
-        .reply_with_backend(
-            &app.services,
-            &session_id,
-            prompt,
-            Arc::new(backend),
-            AgentModel::Gemini38Flash,
-        )
-        .await;
+    let channels = TestSessionChannelFactory::install(&mut app.services);
+    register_session_backend(&app, &channels, &session_id, Arc::new(backend));
+    app.sessions.reply(&app.services, &session_id, prompt).await;
 
     // Assert
     assert_eq!(app.sessions.sessions()[0].title, Some(prompt.to_string()));

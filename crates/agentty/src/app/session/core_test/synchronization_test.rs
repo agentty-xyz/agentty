@@ -20,7 +20,7 @@ use super::support::{
     wait_for_status_with_retries,
 };
 use crate::app::session::SessionError;
-use crate::app::test_support::SyncSessionStartError;
+use crate::app::test_support::{SyncSessionStartError, TestSessionChannelFactory};
 use crate::app::{App, AppEvent};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SESSION_DATA_DIR, SessionId, Status};
@@ -97,10 +97,8 @@ async fn test_running_turn_finishes_before_queued_sync_and_later_chat() {
         .create_session()
         .await
         .expect("failed to create session");
-    app.sessions
-        .worker_service
-        .test_agent_channels
-        .insert(session_id.clone().into(), Arc::new(mock_channel));
+    let channels = TestSessionChannelFactory::install(&mut app.services);
+    channels.register(&session_id, Arc::new(mock_channel));
     app.sessions
         .reply(&app.services, &session_id, "Initial running turn")
         .await;

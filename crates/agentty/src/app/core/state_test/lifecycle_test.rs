@@ -1,17 +1,120 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
+use ag_agent::{AppServerError, MockAppServerClient};
+use ag_forge::MockReviewRequestClient;
+use ag_git::MockGitClient;
+use ag_runtime::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
 use app::sync;
 use tempfile::tempdir;
+use tokio::sync::oneshot;
+use tokio::time;
 
 use super::super::App;
-use super::support::install_mock_git_client;
+use super::support::{install_mock_git_client, install_mock_review_request_client};
 use crate::app;
 use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
+
+#[tokio::test]
+async fn replacing_fixture_clients_preserves_utility_cancellation_and_deletion_cleanup() {
+    for deleting_session in [false, true] {
+        // Arrange
+        let (started_tx, started_rx) = oneshot::channel();
+        let (stopping_tx, stopping_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (turn_stopped_tx, turn_stopped_rx) = oneshot::channel();
+        let mut provider = MockAppServerClient::new();
+        provider.expect_run_turn().once().return_once(move |_, _| {
+            Box::pin(async move {
+                started_tx.send(()).expect("utility observer");
+                turn_stopped_rx.await.expect("provider stopped its turn");
+
+                Err(AppServerError::InterruptedByUser(
+                    "provider stopped".to_string(),
+                ))
+            })
+        });
+        provider
+            .expect_shutdown_session()
+            .once()
+            .return_once(move |_| {
+                Box::pin(async move {
+                    stopping_tx.send(()).expect("cleanup observer");
+                    release_rx.await.expect("cleanup release");
+                    turn_stopped_tx.send(()).expect("release provider turn");
+                })
+            });
+        let clients = crate::test_support::test_app_clients()
+            .with_app_server_client_override(Arc::new(provider));
+        let (mut app, directory) = crate::test_support::new_test_app_with_clients(clients).await;
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                "owned-session",
+                "model",
+                "main",
+                "InProgress",
+                app.active_project_id(),
+            )
+            .await
+            .expect("persist utility owner");
+        let client = app.services.session_run_client("owned-session");
+        let request = OneShotRequest {
+            child_pid: None,
+            folder: directory.path().into(),
+            harness: "codex".into(),
+            model: "model".into(),
+            permission_mode: PermissionMode::AutoEdit,
+            prompt: "utility".into(),
+            provider_call_budget: None,
+            reasoning_level: ReasoningLevel::default(),
+            request_kind: AgentRequestKind::UtilityPrompt,
+            speed_mode: SpeedMode::default(),
+        };
+        let caller = tokio::spawn(async move { client.submit(request).await });
+        time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .expect("utility started")
+            .expect("start notification");
+
+        // Act
+        install_mock_git_client(&mut app, MockGitClient::new());
+        install_mock_review_request_client(&mut app, MockReviewRequestClient::new());
+        let cleanup = tokio::spawn(async move {
+            if deleting_session {
+                app.services
+                    .finish_session_agent_runs("owned-session")
+                    .await;
+            } else {
+                app.services.cancel_agent_runs("owned-session");
+                app.services.wait_for_cleanup_tasks().await;
+            }
+        });
+        time::timeout(Duration::from_secs(5), stopping_rx)
+            .await
+            .expect("original worker canceled its run")
+            .expect("cleanup notification");
+
+        // Assert
+        assert!(
+            !cleanup.is_finished(),
+            "cleanup must await the active utility"
+        );
+        assert!(!caller.is_finished());
+        release_tx.send(()).expect("release provider cleanup");
+        time::timeout(Duration::from_secs(5), cleanup)
+            .await
+            .expect("cleanup completed")
+            .expect("cleanup task");
+        assert!(caller.await.expect("utility caller").is_err());
+    }
+}
 
 #[tokio::test]
 async fn session_git_status_targets_skip_unmaterialized_drafts() {

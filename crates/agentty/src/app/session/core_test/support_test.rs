@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use ag_agent::{AppServerClient, MockAgentBackend};
+use ag_agent::{AgentBackend, AppServerClient, MockAgentBackend};
 use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
 };
@@ -13,7 +13,8 @@ use ag_protocol::AgentResponse;
 use ag_worker::MockRunClient;
 
 use super::super::{SessionDefaults, SessionManager, session_folder};
-use crate::app::{App, AppServices, ReviewCacheEntry, SessionState};
+use crate::app::test_support::TestSessionChannelFactory;
+use crate::app::{App, ReviewCacheEntry, SessionState};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
@@ -564,33 +565,8 @@ pub(super) fn setup_mock_commit_and_branch_expectations(mock: &mut git::MockGitC
 /// Replaces app-level git dependencies with the provided mock client.
 pub(super) fn install_mock_git_client(app: &mut App, mock_git_client: git::MockGitClient) {
     let mock_git_client: Arc<dyn git::GitClient> = Arc::new(mock_git_client);
-    let base_path = app.services.base_path().to_path_buf();
-    let db = app.services.db().clone();
-    let event_sender = app.services.event_sender();
-    let available_agent_kinds = app.services.available_agent_kinds();
-    let available_agent_clis =
-        crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
-    let app_server_client_override = app.services.app_server_client_override();
-    let fs_client = app.services.fs_client();
-    let review_request_client = app.services.review_request_client();
-
-    app.services = AppServices::new_with_agent_clis(
-        base_path,
-        app.services.clock(),
-        event_sender,
-        crate::app::service::AppServiceDeps {
-            app_server_client_override,
-            available_agent_kinds,
-            clipboard_image_client_override: None,
-            fs_client,
-            git_client: Arc::clone(&mock_git_client),
-            run_client_override: Some(auto_commit_run_client()),
-            personality_catalog_client_override: None,
-            repositories: db,
-            review_request_client,
-        },
-        available_agent_clis,
-    );
+    app.services.set_git_client(Arc::clone(&mock_git_client));
+    app.services.set_run_client(auto_commit_run_client());
     app.sessions.git_client = mock_git_client;
 }
 
@@ -823,6 +799,23 @@ pub(super) fn test_session_manager_with_clock(
     )
 }
 
+/// Registers a CLI adapter for the ordinary reply path.
+pub(super) fn register_session_backend(
+    app: &App,
+    channels: &TestSessionChannelFactory,
+    session_id: &str,
+    backend: Arc<dyn AgentBackend>,
+) {
+    let kind = app
+        .sessions
+        .session_or_err(session_id)
+        .expect("session")
+        .agent
+        .kind();
+    let channel = ag_agent::create_cli_agent_channel_with_backend(backend, kind);
+    channels.register(session_id, channel);
+}
+
 /// Helper: creates a session and starts it with the given prompt (two-step
 /// flow).
 pub(super) async fn create_and_start_session(app: &mut App, prompt: &str) {
@@ -831,15 +824,9 @@ pub(super) async fn create_and_start_session(app: &mut App, prompt: &str) {
         .await
         .expect("failed to create session");
     let start_backend = create_mock_backend();
-    app.sessions
-        .reply_with_backend(
-            &app.services,
-            &session_id,
-            prompt,
-            Arc::new(start_backend),
-            AgentModel::ClaudeOpus5,
-        )
-        .await;
+    let channels = TestSessionChannelFactory::install(&mut app.services);
+    register_session_backend(app, &channels, &session_id, Arc::new(start_backend));
+    app.sessions.reply(&app.services, &session_id, prompt).await;
 }
 
 pub(super) async fn wait_for_status(app: &mut App, session_id: &str, expected: Status) {
