@@ -40,7 +40,7 @@ cargo install cargo-llvm-cov
 cargo install cargo-nextest --locked
 ```
 
-Coverage hooks also use `cargo-nextest`, so install both Cargo subcommands before
+The coverage hook also uses `cargo-nextest`, so install both Cargo subcommands before
 running the full manual hook suite locally.
 
 ## Website
@@ -61,6 +61,47 @@ Use `.pre-commit-config.yaml` as the source of truth for all formatting, linting
 coverage, migration, docs-site, and dependency hygiene checks. Run the hook IDs from
 that file through `prek`; hook descriptions explain what each check covers and whether
 it is a manual or default hook.
+
+During development, run focused tests for the behavior you are changing:
+
+```sh
+AGENTTY_TEST_FILTER='package(=ag-git) and test(worktree)' \
+  prek run test-focused --all-files --hook-stage manual
+```
+
+For affected-package validation, include dependencies and dependents without narrowing
+test names:
+
+```sh
+AGENTTY_TEST_FILTER='package(=ag-git) or deps(=ag-git) or rdeps(=ag-git)' \
+  prek run test-focused --all-files --hook-stage manual
+```
+
+`test-focused` requires a nonempty filter and fails when no tests match. Both it and
+`test-workspace` retain public integration tests, excluding only the integration targets
+selected by the separate `test-agentty-e2e` gate. The filter controls test execution,
+not a promise of reduced compilation. Use `test-workspace` when impact is uncertain.
+
+Before handoff, run the applicable final gates from `AGENTS.md`, including full E2E for
+Rust changes. Reuse a successful result only while its relevant inputs remain unchanged.
+Coverage and source-only test hooks do not replace public integration tests. Runner
+timeouts govern individual tests; inspect build and process activity before terminating
+a quiet command as stalled.
+
+```sh
+prek run coverage --all-files --hook-stage manual
+```
+
+`coverage` generates one fresh `coverage.lcov` and enforces the workspace line/function
+ratchets plus 100% coverage of changed coverable lines, including untracked files. It
+replaces the former separate `diff-coverage` hook. The comparison defaults to local
+`main`; set `AGENTTY_COVERAGE_BASE` for another existing base ref. CI selects the pull
+request or merge group's remote base branch, falling back to the repository's default
+branch for other events. A missing base or failed generation fails the gate; an old
+report cannot satisfy it.
+
+The default `test-validation-hooks` check exercises these hook contracts with stub
+commands, without compiling the workspace.
 
 ### SQLx Offline Query Metadata
 
