@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "ag-agent"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "ag-protocol",
  "ag-runtime",
@@ -33,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "ag-clipboard"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "image",
  "mockall",
@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "ag-forge"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "mockall",
  "serde",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "ag-git"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "mockall",
  "rustix",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "ag-harness"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "hex",
@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "ag-harness-cli"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "ag-harness",
  "assert_cmd",
@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "ag-orchestration"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "ag-agent",
  "ag-git",
@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "ag-protocol"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "askama",
  "schemars 1.2.2",
@@ -138,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "ag-runtime"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "ag-protocol",
  "async-trait",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "ag-session"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "ag-forge",
  "ag-protocol",
@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "ag-store"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "ag-runtime",
  "ag-session",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "ag-tui-text"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "ratatui",
  "rustc-hash",
@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "ag-worker"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "ag-protocol",
  "ag-runtime",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "ag-xtask"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "clap",
  "mockall",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "agentty"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "ag-agent",
  "ag-clipboard",
@@ -4686,7 +4686,7 @@ dependencies = [
 
 [[package]]
 name = "testty"
-version = "0.15.15"
+version = "0.16.0"
 dependencies = [
  "base64 0.23.1",
  "clap",

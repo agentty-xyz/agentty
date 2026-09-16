@@ -7,6 +7,41 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.16.0] - 2026-09-16
+
+### Added
+
+- `ag-runtime` and `ag-worker`: reusable execution contracts and durable run scheduling.
+- `ag-harness`: per-turn options, pinned repository comparisons, and durable write
+  journals.
+- `ag-harness`: internal execution contracts and process supervision.
+- `agentty`: focused-review progress reporting and automatic repair of pre-commit
+  failures during assisted rebases.
+
+### Changed
+
+- `agentty`: route model runs through worker-owned execution with bounded concurrency,
+  recovery, and cancellation.
+- `agentty`: pool focused-review runtimes, batch large diffs, and consolidate findings
+  across files while preserving partial results.
+- `ag-harness`: retain captured session configuration and fence persistence with owner
+  tokens and leases.
+- workspace: strengthen test coverage, instruction validation, and development guidance;
+  update the Rust toolchain, dependencies, and GitHub Actions.
+- release: bump workspace crate metadata and lockfile package versions to `0.16.0`.
+
+### Fixed
+
+- `agentty`: preserve operation ownership and process cleanup during cancellation.
+- workspace: preserve lowercase, zero-padded SHA-256 hash encoding across dependency
+  upgrades.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.15.15] - 2026-09-10
 
 ### Added
