@@ -11,8 +11,9 @@ Transport-independent contracts for session turns and isolated agent execution.
 
 ## Integration
 
-- Depend on `AgentChannel` for session turns and `OneShotClient` for isolated prompts;
-  implementation factories belong in `ag-agent`.
+- `AgentChannel` and `OneShotClient` define runtime adapter contracts; implementation
+  factories belong in `ag-agent`. Within Agentty, the worker invokes these adapters and
+  application workflows submit through `ag-worker::RunClient`.
 - Derive protocol profiles from `AgentRequestKind`. Preserve adapter ownership of
   cancellation, resource cleanup, usage aggregation, and per-attempt budget enforcement.
 - Use `test-utils` mocks when testing consumers without a provider process.

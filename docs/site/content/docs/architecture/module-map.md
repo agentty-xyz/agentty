@@ -78,8 +78,8 @@ For file-level detail, read the module docstrings directly.
 - `crates/testty/`: Rust-native TUI end-to-end testing framework with PTY-driven
   semantic assertions and VHS visual capture. Also ships the language-agnostic `testty`
   command-line binary for non-Rust projects.
-- `crates/ag-xtask/`: Workspace maintenance commands, including the SQL migration
-  numbering check.
+- `crates/ag-xtask/`: Workspace maintenance commands, including SQL migration numbering
+  and instruction integrity checks.
 
 ## Application Layers (`crates/agentty/src/`)
 

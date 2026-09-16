@@ -13,8 +13,10 @@ External-agent discovery and transport adapters implementing `ag-runtime` contra
 
 ## Integration
 
-- Compose adapters through the public factories, then inject `AgentChannel` or
-  `OneShotClient` into workflows. Callers must not select transport-specific helpers.
+- Compose adapters through the public factories at the host composition boundary.
+  Agentty passes `AgentChannel` and `OneShotClient` to the worker; its application
+  workflows submit through `ag-worker::RunClient` and must not execute raw runtime
+  clients. Callers must not select transport-specific helpers.
 - Preserve cancellation cleanup and charge every provider attempt, including retries and
   protocol repairs, against the supplied `ProviderCallBudget`.
 - Await session cleanup after provider-turn panics. Adapters that detach cleanup work

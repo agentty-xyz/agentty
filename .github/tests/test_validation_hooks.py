@@ -127,6 +127,15 @@ class ValidationHookTests(unittest.TestCase):
         self.assertEqual(args[args.index("--fail-under-functions") + 1], "91")
         for flag in ("--workspace", "--lib", "--bins", "--examples", "--locked"):
             self.assertIn(flag, args)
+        cli_targets = {
+            args[index + 1]
+            for index, argument in enumerate(args)
+            if argument == "--test"
+        }
+        utility_suites = {
+            path.stem for path in (ROOT / "crates/ag-xtask/tests").glob("*.rs")
+        }
+        self.assertTrue(utility_suites <= cli_targets)
         self.assertNotIn("-E", args)
         self.assertEqual(comparison["tool"], "diff-cover")
         self.assertEqual(comparison["report"], "fresh report")
