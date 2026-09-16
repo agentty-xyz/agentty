@@ -50,6 +50,7 @@ jobs:
       - name: Setup Rust and `prek`
         uses: $/.github/actions/setup-rust-prek
         with:
+          linux-isolation-tests: ${{ inputs['workspace-tests'] && 'true' || 'false' }}
           cargo-audit: ${{ inputs['cargo-audit'] && 'true' || 'false' }}
           cargo-machete: ${{ inputs['cargo-machete'] && 'true' || 'false' }}
           llvm-tools-preview: ${{ inputs['llvm-tools-preview'] && 'true' || 'false' }}

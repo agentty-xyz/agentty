@@ -63,6 +63,8 @@ jobs:
 
       - name: Setup Rust and `prek`
         uses: $/.github/actions/setup-rust-prek
+        with:
+          linux-isolation-tests: ${{ matrix.member == 'ag-harness' && 'true' || 'false' }}
 
       - name: Run source tests
         id: source-tests

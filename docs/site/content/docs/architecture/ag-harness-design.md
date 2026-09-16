@@ -71,14 +71,26 @@ retained cancellation and cleanup control survives a dropped execution future. R
 keep the main exit, execution error, termination reason, output truncation, and cleanup
 failure separate. Applied writes are not rolled back; aggregate memory, process-count,
 and disk quotas are excluded. These contracts have no production executor or public
-entry point. Future backends must enforce the policy against hostile commands,
-descendants, and repository contents before launching anything.
+entry point. Backends must enforce the policy against hostile commands, descendants, and
+repository contents before launching anything.
 
 Private platform-independent supervision uses injected backends to bound execution,
 output, and cleanup. Cancellation and deadlines apply throughout the lifecycle, and
 retained control survives dropped callers. Completion includes descendant cleanup;
 cleanup failures remain separate from execution results. Production backends remain
 unavailable.
+
+### Private Linux isolation construction
+
+Private Linux isolation enforces explicit resource permissions for commands and their
+descendants. Workspace access is read-only by default, Git metadata is protected, and
+network and keyring access are denied. Writes are limited to existing files, and native
+execution requires an explicit host-information grant. Unsupported policies are
+rejected.
+
+The host keeps source trees stable until isolation is established. Launch failures never
+retry outside the sandbox. The backend remains private until it is connected to
+supervision for production execution.
 
 ## Repository comparisons
 
