@@ -4,6 +4,10 @@
 #[path = "support/repository.rs"]
 mod repository;
 
+#[cfg(test)]
+#[path = "support/store_conformance.rs"]
+mod store_conformance;
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};

@@ -1074,7 +1074,10 @@ The standalone `ag-harness` library resolves immutable options before each engin
 Durable acquisition commits those options with the prompt and revalidates native
 continuation against the last completed turn's schema, permissions, and comparison
 identity. A host-validated comparison OID stays fixed throughout execution; worktree and
-`HEAD` reads remain live. The internal transactional store fences mutations by owner.
+`HEAD` reads remain live. The injectable transactional store fences mutations by owner.
+Independent handles share local admission by backing-store and session identity, held
+through acquisition and abandoned-owner cleanup. Failed cleanup retains admission until
+reconciliation succeeds; cross-process fencing remains the backend's responsibility.
 Finalization excludes renewal and enforces the last confirmed lease deadline; abandoned
 reservation commits retain cleanup ownership through acknowledgement. The session emits
 completion only after persisting the result; one-shot execution uses the same engine

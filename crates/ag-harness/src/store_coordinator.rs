@@ -1,0 +1,173 @@
+//! Process-local admission retained across acquisition and owner cleanup.
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+use async_trait::async_trait;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::time::Instant;
+
+use crate::session::{
+    AcquiredTurn, LoadedSession, NewSession, StoreIdentity, TurnOwner, recover_abandoned,
+};
+use crate::{
+    ModelMessage, ModelMetadata, SessionError, SessionStore, TurnError, TurnOptions, WriteRecord,
+};
+
+type Admissions = HashMap<(StoreIdentity, String), Weak<AsyncMutex<()>>>;
+
+pub(crate) async fn acquire(
+    store: Arc<dyn SessionStore>,
+    session_id: String,
+    prompt: String,
+    options: TurnOptions,
+) -> Result<AcquiredTurn, SessionError> {
+    recover_abandoned(&store, &session_id).await?;
+    let admission = admission(store.identity(), &session_id)?;
+    let store: Arc<dyn SessionStore> = Arc::new(AdmittedStore {
+        store,
+        admission: Mutex::new(Some(admission)),
+    });
+    // The backend finishes acquisition even when the caller disappears. Its
+    // returned guard then interrupts the abandoned owner without running a
+    // model.
+    tokio::spawn(async move {
+        store
+            .begin_turn(Arc::clone(&store), &session_id, &prompt, &options)
+            .await
+    })
+    .await
+    .map_err(|source| SessionError::Store {
+        operation: "acquire session turn",
+        source: Box::new(source),
+    })?
+}
+
+fn admission(
+    identity: &StoreIdentity,
+    session_id: &str,
+) -> Result<OwnedMutexGuard<()>, SessionError> {
+    static ADMISSIONS: OnceLock<Mutex<Admissions>> = OnceLock::new();
+    let mut admissions = ADMISSIONS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    admissions.retain(|_, admission| admission.strong_count() != 0);
+    let key = (identity.clone(), session_id.to_string());
+    let mutex = admissions
+        .get(&key)
+        .and_then(Weak::upgrade)
+        .unwrap_or_default();
+    admissions.insert(key, Arc::downgrade(&mutex));
+
+    mutex.try_lock_owned().map_err(|_| SessionError::Busy {
+        id: session_id.to_string(),
+    })
+}
+
+// Acquisition must bind the guard to this decorator, so admission survives
+// delayed commit acknowledgment, dropped callers, and failed cleanup.
+struct AdmittedStore {
+    admission: Mutex<Option<OwnedMutexGuard<()>>>,
+    store: Arc<dyn SessionStore>,
+}
+
+impl AdmittedStore {
+    fn settled(&self, result: Result<(), SessionError>) -> Result<(), SessionError> {
+        if result.is_ok() {
+            self.admission
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+        }
+
+        result
+    }
+}
+
+#[async_trait]
+impl SessionStore for AdmittedStore {
+    fn identity(&self) -> &StoreIdentity {
+        self.store.identity()
+    }
+
+    async fn create_session(
+        &self,
+        config: &NewSession,
+        metadata: Option<ModelMetadata>,
+        budget: usize,
+    ) -> Result<(), SessionError> {
+        self.store.create_session(config, metadata, budget).await
+    }
+
+    async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError> {
+        self.store.load_session(id).await
+    }
+
+    async fn begin_turn(
+        &self,
+        store: Arc<dyn SessionStore>,
+        id: &str,
+        prompt: &str,
+        options: &TurnOptions,
+    ) -> Result<AcquiredTurn, SessionError> {
+        self.store.begin_turn(store, id, prompt, options).await
+    }
+
+    async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
+        self.store.renew(owner).await
+    }
+
+    async fn complete_turn(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+        continuation: Option<&str>,
+    ) -> Result<(), SessionError> {
+        self.settled(
+            self.store
+                .complete_turn(owner, messages, continuation)
+                .await,
+        )
+    }
+
+    async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
+        self.settled(self.store.fail_turn(owner, error).await)
+    }
+
+    async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError> {
+        self.settled(self.store.interrupt(owner).await)
+    }
+
+    async fn load_writes(&self, id: &str) -> Result<Vec<WriteRecord>, SessionError> {
+        self.store.load_writes(id).await
+    }
+
+    async fn write_intent(
+        &self,
+        owner: &TurnOwner,
+        call: &str,
+        root: &Path,
+        path: &str,
+        expected: Option<&[u8]>,
+        resulting: &[u8],
+    ) -> Result<i64, SessionError> {
+        self.store
+            .write_intent(owner, call, root, path, expected, resulting)
+            .await
+    }
+
+    async fn finish_write(
+        &self,
+        owner: &TurnOwner,
+        id: i64,
+        applied: bool,
+    ) -> Result<(), SessionError> {
+        self.store.finish_write(owner, id, applied).await
+    }
+}
+
+#[cfg(test)]
+#[path = "store_coordinator_test.rs"]
+mod tests;

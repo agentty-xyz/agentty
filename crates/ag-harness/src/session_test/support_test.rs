@@ -10,9 +10,9 @@ use sqlx::{SqlSafeStr as _, SqlitePool};
 use crate::model::{MockModel, ModelMessage, ModelMetadata};
 use crate::schema_contract::OutputSchema;
 use crate::session::{
-    Database, DbResultExt as _, EncodedMessage, NewSession, ReservationObserver, SessionError,
-    StoreIdentity, TimestampSource, TurnOwner, connect_options, next_turn_position,
-    shared_abandoned_turn_registry, system_timestamp_source,
+    AbandonedTurnRegistry, Database, DbResultExt as _, EncodedMessage, NewSession,
+    ReservationObserver, SessionError, StoreIdentity, TimestampSource, TurnOwner, connect_options,
+    next_turn_position, shared_abandoned_turn_registry, system_timestamp_source,
 };
 use crate::store::SessionStore as _;
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
@@ -427,4 +427,10 @@ pub(super) fn turn_options() -> crate::TurnOptions {
         crate::ToolPolicy::default(),
         crate::TurnLimits::default(),
     )
+}
+
+impl AbandonedTurnRegistry {
+    pub(crate) fn register(&self, owner: crate::session::TurnOwner) {
+        self.owners.lock().expect("registry").insert(owner, None);
+    }
 }

@@ -159,6 +159,9 @@ comparisons require `--comparison-base <REV>` on `run` or `resume`; the selected
 stays fixed for that invocation. Without the flag, ordinary repository reads remain
 available. Harness is not yet an Agentty backend.
 
+Library hosts can inject a transactional `SessionStore` with `Harness::store`; SQLite
+remains the default backend selected through `Harness::database`.
+
 ## Documentation
 
 Documentation for installation and workflows is available at

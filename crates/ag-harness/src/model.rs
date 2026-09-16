@@ -502,7 +502,9 @@ pub enum ModelMessage {
 }
 
 impl ModelMessage {
-    pub(crate) fn retained_bytes(&self) -> usize {
+    /// Payload bytes used by bounded session history, independent of storage
+    /// encoding.
+    pub fn retained_bytes(&self) -> usize {
         match self {
             Self::Assistant(content) | Self::System(content) | Self::User(content) => content.len(),
             Self::AssistantReasoning {

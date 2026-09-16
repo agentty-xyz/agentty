@@ -95,7 +95,10 @@ tests also exercise grants, shared output budgets, and independent result fields
 is no production backend; filesystem isolation and actual descendant cleanup require
 future backend enforcement and are not established by these tests.
 
-Persistent `ag-harness` execution uses an internal object-safe transactional store.
+Persistent `ag-harness` execution uses a public object-safe transactional store. An
+independent external test implementation exercises public construction, reservation,
+options compatibility, and actual turns. Shared conformance cases run against it and
+SQLite, covering admission, bounded history, terminal states, and journal ownership.
 Barrier-controlled store fixtures exercise stalled renewal and terminal persistence,
 acknowledgement loss, and finalization races. SQLite tests verify owner fencing, expired
 leases, journal settlement, and reopen behavior. The backend also injects a timestamp

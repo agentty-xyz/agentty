@@ -96,7 +96,7 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
     let loaded = reopened.load_session("session").await.expect("history");
 
     // Assert
-    assert!(database.identity() == reopened.identity());
+    assert_eq!(database.identity(), reopened.identity());
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].status, WriteStatus::Applied);
     assert_eq!(loaded.turns, Vec::<Vec<ModelMessage>>::new());
@@ -137,4 +137,36 @@ async fn failed_drop_cleanup_remains_registered_for_owner_scoped_recovery() {
         replacement.guard.owner.turn_position,
         owner.turn_position + 1
     );
+}
+
+#[tokio::test]
+async fn recovery_without_a_retained_handle_uses_the_current_store() {
+    // Arrange
+    let (store, mut acquired) = GatedStore::fixture(PauseAt::Completion).await;
+    acquired.guard.disarm();
+    let owner = acquired.guard.owner.clone();
+    store.database.abandoned_turns.register(owner.clone());
+    let current: Arc<dyn SessionStore> = store.clone();
+
+    // Act
+    crate::session::recover_abandoned(&current, "session")
+        .await
+        .expect("recover through current store");
+
+    // Assert
+    assert!(matches!(
+        store.renew(&owner).await,
+        Err(SessionError::OwnershipLost { .. })
+    ));
+    assert_eq!(
+        store
+            .database
+            .abandoned_turns
+            .for_session(store.identity(), "session"),
+        Vec::<crate::TurnOwner>::new()
+    );
+    store
+        .begin_turn(store.clone(), "session", "successor", &turn_options())
+        .await
+        .expect("successor is admitted");
 }

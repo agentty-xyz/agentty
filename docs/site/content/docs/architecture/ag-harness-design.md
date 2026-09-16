@@ -7,21 +7,20 @@ weight = 6
 # `ag-harness`
 
 `ag-harness` is a Rust library for structured model turns. Applications select a model,
-per-turn output schemas and tool permissions, and a SQLite database for durable
-sessions.
+per-turn output schemas and tool permissions, and a session store for durable sessions.
 
 ```mermaid
 flowchart LR
     App["Application"] --> Harness["Harness"]
     Harness --> Model["Model provider"]
     Harness --> Tools["Repository tools"]
-    Harness --> SQLite["SQLite history"]
+    Harness --> Store["Session store"]
 ```
 
 ## Public boundary
 
 - `Harness` owns the model, validated repository, configured defaults, lifecycle
-  observers, and shared database pool.
+  observers, and selected session store with shared lazy SQLite initialization.
 - One internal engine prepares requests, runs provider attempts and tools, retries
   rejected native continuations, and validates output for both entry points.
 - Immutable `TurnOptions` fixes the required schema, effective `ToolPolicy`,
@@ -97,15 +96,23 @@ fail before a model call. A new invocation resolves its explicit selection again
 
 ## Session lifecycle
 
-SQLite is canonical. Provider-native continuation is an optional optimization, never the
-only copy of conversation state. Durable execution uses an internal object-safe
-`SessionStore` contract for atomic acquisition, ownership, terminal transitions, bounded
-history, and write journals. Its SQLite `Database` implementation owns queries,
-transactions, and row decoding. Owned handles retain shared storage initialization and
-temporary-database lifetime. Acquisition binds the guard to the active store handle
-before commit, so store decorators also observe renewal, journal settlement, terminal
-transitions, and abandoned-acquisition cleanup. Durable option snapshots retain their
-separate codec.
+The selected store is canonical; SQLite remains the default implementation.
+Provider-native continuation is an optional optimization, never the only copy of
+conversation state. Durable execution uses a public object-safe `SessionStore` contract
+for atomic acquisition, ownership, terminal transitions, bounded history, and write
+journals. Its `SqliteStore` implementation owns queries, transactions, and row decoding.
+Owned handles retain shared storage initialization and temporary-database lifetime.
+Acquisition binds the guard to the active store handle before commit, so store
+decorators also observe renewal, journal settlement, terminal transitions, and
+abandoned-acquisition cleanup. Durable option snapshots retain their separate codec.
+Hosts inject a shared implementation with `Harness::store`, or open `SqliteStore`
+explicitly. Custom backends use public reservation, identity, history, error, and
+options-compatibility types without accessing SQLite internals.
+
+Local admission is shared by backing-store and session identity and retained through
+acquisition acknowledgment and abandoned-owner cleanup. Failed cleanup keeps admission
+until owner-scoped recovery succeeds. Backend transactions remain authoritative across
+processes. This persistence boundary does not establish filesystem-effect completion.
 
 ```mermaid
 flowchart TD
@@ -154,7 +161,7 @@ history. A provider continuation is reusable only when the last completed turn's
 permissions, and comparison identity match the current options. Unknown legacy semantics
 force history replay; a tool-budget change alone does not invalidate continuation.
 
-`ModelError::ResumeUnavailable` triggers one retry using the same SQLite history without
+`ModelError::ResumeUnavailable` triggers one retry using the same stored history without
 the rejected identifier. Failed or cancelled turns and expired leases also invalidate
 continuation, because the remote conversation may have advanced. Delayed cleanup cannot
 clear a newer turn's continuation.
@@ -185,7 +192,7 @@ fails. Dropping either operation emits cancellation once.
 
 1. **Stores and recovery**
 
-   Add pluggable memory and SQLite stores and host turn IDs for idempotent recovery.
+   Add a production memory store and host turn IDs for idempotent recovery.
 
 1. **Model switching**
 

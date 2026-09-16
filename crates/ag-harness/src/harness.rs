@@ -17,6 +17,7 @@ use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
 use crate::session::{AcquiredTurn, Database, LoadedSession, NewSession, SessionError};
 use crate::store::SessionStore;
+use crate::store_coordinator;
 use crate::tool::Tool;
 use crate::turn::{TurnError, TurnLimits, TurnOptions, TurnOutcome};
 use crate::write_journal::WriteRecord;
@@ -120,10 +121,13 @@ impl Session {
             mut guard,
             provider_session_id,
             turns,
-        } = self
-            .database
-            .begin_turn(Arc::clone(&self.database), &self.id, &prompt, options)
-            .await?;
+        } = store_coordinator::acquire(
+            Arc::clone(&self.database),
+            self.id.clone(),
+            prompt.clone(),
+            options.clone(),
+        )
+        .await?;
         self.history.replace(turns);
         self.provider_session_id = provider_session_id;
         let mut messages = self.history.messages();
@@ -197,12 +201,12 @@ impl SessionBuilder {
         self
     }
 
-    /// Creates the session in the configured database.
+    /// Creates the session in the configured store.
     ///
     /// # Errors
     ///
     /// Returns [`SessionError`] when storage is not configured, the identifier
-    /// already exists, or SQLite cannot create the session.
+    /// already exists, or the store cannot create the session.
     pub async fn create(self) -> Result<Session, SessionError> {
         let database = self.harness.open_database().await?;
         let config =
@@ -296,6 +300,7 @@ pub struct Harness {
     model_reasoning_effort: Option<ReasoningEffort>,
     policy: ToolPolicy,
     repository: Option<Repository>,
+    store: Option<Arc<dyn SessionStore>>,
 }
 
 impl Harness {
@@ -312,6 +317,7 @@ impl Harness {
             model_reasoning_effort: None,
             policy: ToolPolicy::default(),
             repository: None,
+            store: None,
         }
     }
 
@@ -322,8 +328,23 @@ impl Harness {
     /// future handles; existing handles retain their shared database.
     #[must_use]
     pub fn database(mut self, path: impl Into<PathBuf>) -> Self {
+        self.store = None;
         self.database = Arc::new(OnceCell::new());
         self.database_path = Some(path.into());
+
+        self
+    }
+
+    /// Selects a host-provided session store, replacing SQLite configuration.
+    ///
+    /// Builders and sessions retain their selected store when this harness is
+    /// reconfigured. `run_once` never accesses the store. Implementations must
+    /// satisfy the atomic lifecycle contract of [`SessionStore`].
+    #[must_use]
+    pub fn store(mut self, store: Arc<dyn SessionStore>) -> Self {
+        self.store = Some(store);
+        self.database = Arc::new(OnceCell::new());
+        self.database_path = None;
 
         self
     }
@@ -457,7 +478,7 @@ impl Harness {
     /// # Errors
     ///
     /// Returns [`SessionError`] when storage is not configured, the session is
-    /// missing, its model differs, or SQLite cannot load it.
+    /// missing, its model differs, or the store cannot load it.
     pub async fn resume(&self, id: &str) -> Result<Session, SessionError> {
         let database = self.open_database().await?;
         let loaded = database.load_session(id).await?;
@@ -490,10 +511,14 @@ impl Harness {
             model_reasoning_effort: self.model_reasoning_effort,
             policy: self.policy,
             repository: self.repository.clone(),
+            store: self.store.clone(),
         }
     }
 
     async fn open_database(&self) -> Result<Arc<dyn SessionStore>, SessionError> {
+        if let Some(store) = &self.store {
+            return Ok(Arc::clone(store));
+        }
         let path = self
             .database_path
             .as_deref()
