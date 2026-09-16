@@ -15,8 +15,9 @@ steps here.
 
 1. **Version Selection**
 
-   - Always ask the user which version bump to apply: `major`, `minor`, or `patch`.
-   - Do not update versions until the user confirms one of these options.
+   - Use the version or bump already specified by the user, including an accepted
+     decision from earlier in the session. Ask for `major`, `minor`, or `patch` only
+     when no version or bump has been selected; wait for that decision before editing.
    - Use the current repository release pattern when advising:
      - Prefer `patch` by default for fixes, small UX improvements, refactors, docs
        updates, model/config changes, and other incremental work within the current

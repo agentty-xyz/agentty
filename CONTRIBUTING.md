@@ -1,163 +1,27 @@
 # Contributing
 
-Thanks for contributing to Agentty.
+Agentty encourages agent-assisted development. All contributions must follow the
+applicable repository instructions. Contributors remain responsible for correctness,
+review, and validation evidence, regardless of how a change was authored.
 
-## Quickstart
+## Start Here
 
-```sh
-git clone <repo-url>
-cd agentty
-cargo run # Builds and runs the 'agentty' binary
-```
+- Read [AGENTS.md](AGENTS.md) and each ancestor guide for the paths you change. These
+  files define development policy and required quality gates.
+- Use [skills/AGENTS.md](skills/AGENTS.md) to select the relevant task workflow. Read
+  detailed references only when needed.
+- Follow the [development setup](skills/development/references/setup.md) to prepare a
+  checkout. The [development skill](skills/development/SKILL.md) also routes test
+  selection and SQLx metadata work.
 
-## Tooling Setup
+## Preparing a Contribution
 
-### Install `uv`
+Keep changes focused, explain the resulting behavior, and report the checks run and any
+remaining verification gaps. Follow the required gates in `AGENTS.md`; executable check
+definitions live in [.pre-commit-config.yaml](.pre-commit-config.yaml).
 
-Install `uv` using the official instructions:
-https://docs.astral.sh/uv/getting-started/installation/
-
-```sh
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-### Install `prek`
-
-```sh
-uv tool install prek
-prek install -f
-```
-
-### Install `cargo-llvm-cov`
-
-```sh
-cargo install cargo-llvm-cov
-```
-
-### Install `cargo-nextest`
-
-```sh
-cargo install cargo-nextest --locked
-```
-
-The coverage hook also uses `cargo-nextest`, so install both Cargo subcommands before
-running the full manual hook suite locally.
-
-## Website
-
-`agentty.xyz` is a Zola site stored in `docs/site/` and deployed through GitHub Pages.
-
-```sh
-# Preview locally
-zola serve --root docs/site
-
-# Build static output
-zola build --root docs/site
-```
-
-## Development Checks
-
-Use `.pre-commit-config.yaml` as the source of truth for all formatting, linting, test,
-coverage, migration, docs-site, and dependency hygiene checks. Run the hook IDs from
-that file through `prek`; hook descriptions explain what each check covers and whether
-it is a manual or default hook.
-
-During development, run focused tests for the behavior you are changing:
-
-```sh
-AGENTTY_TEST_FILTER='package(=ag-git) and test(worktree)' \
-  prek run test-focused --all-files --hook-stage manual
-```
-
-For affected-package validation, include dependencies and dependents without narrowing
-test names:
-
-```sh
-AGENTTY_TEST_FILTER='package(=ag-git) or deps(=ag-git) or rdeps(=ag-git)' \
-  prek run test-focused --all-files --hook-stage manual
-```
-
-`test-focused` requires a nonempty filter and fails when no tests match. Both it and
-`test-workspace` retain public integration tests, excluding only the integration targets
-selected by the separate `test-agentty-e2e` gate. The filter controls test execution,
-not a promise of reduced compilation. Use `test-workspace` when impact is uncertain.
-
-Before handoff, run the applicable final gates from `AGENTS.md`, including full E2E for
-Rust changes. Reuse a successful result only while its relevant inputs remain unchanged.
-Coverage and source-only test hooks do not replace public integration tests. Runner
-timeouts govern individual tests; inspect build and process activity before terminating
-a quiet command as stalled.
-
-```sh
-prek run coverage --all-files --hook-stage manual
-```
-
-`coverage` generates one fresh `coverage.lcov` and enforces the workspace line/function
-ratchets plus 100% coverage of changed coverable lines, including untracked files. It
-replaces the former separate `diff-coverage` hook. The comparison defaults to local
-`main`; set `AGENTTY_COVERAGE_BASE` for another existing base ref. CI selects the pull
-request or merge group's remote base branch, falling back to the repository's default
-branch for other events. A missing base or failed generation fails the gate; an old
-report cannot satisfy it.
-
-The default `test-validation-hooks` check exercises these hook contracts with stub
-commands, without compiling the workspace.
-
-### SQLx Offline Query Metadata
-
-When changing SQLx checked queries, regenerate offline metadata in the crate that owns
-the query. Persistence queries normally live in `crates/ag-store/`:
-
-```sh
-(
-  cd crates/ag-store
-  DATABASE_URL=sqlite:///tmp/ag_store.sqlite cargo sqlx database reset -y
-  DATABASE_URL=sqlite:///tmp/ag_store.sqlite cargo sqlx prepare -- --all-targets --all-features
-)
-```
-
-Harness persistence uses its own migrations and metadata cache:
-
-```sh
-(
-  cd crates/ag-harness
-  DATABASE_URL=sqlite:///tmp/ag_harness.sqlite cargo sqlx database reset -y
-  DATABASE_URL=sqlite:///tmp/ag_harness.sqlite cargo sqlx prepare -- --all-targets
-)
-```
-
-This repository expects generated `.sqlx/` metadata in every crate containing SQLx
-checked queries. The `crates/ag-harness/.sqlx/`, `crates/ag-store/.sqlx/`, and
-`crates/agentty/.sqlx/` directories are committed so their macros compile in offline
-mode (for example, with `SQLX_OFFLINE=true`).
-
-## TUI E2E Tests
-
-TUI end-to-end tests use the `testty` framework to drive the real `agentty` binary in a
-PTY and assert terminal state semantically. Tests are written as Rust scenarios and can
-also be compiled into VHS tapes for visual screenshots.
-
-Run the `test-agentty-e2e` hook from `.pre-commit-config.yaml` with `prek` instead of
-invoking `cargo` directly. The hook uses `language: system`, so `prek` preserves
-parent-shell environment variables when it launches `cargo-nextest`; set
-`TUI_TEST_UPDATE=1` on the `prek run` invocation when intentionally updating snapshot
-baselines.
-
-### Authoring Tests
-
-Tests are written using the scenario DSL in Rust. Each scenario defines a user journey
-through steps (`write_text`, `press_key`, `wait_for_text`, `capture`). Use recipe
-helpers like `expect_selected_tab` and `expect_keybinding_hint` instead of rebuilding
-locator logic from scratch.
-
-VHS is generated by the framework — do not handwrite `.tape` files.
-
-## Architecture Documentation
-
-If your PR changes module boundaries, cross-layer control flow, trait-based external
-boundaries, or workspace crate ownership, update:
-
-- `docs/site/content/docs/contributing/design-architecture.md`
-
-See the [Design & Architecture](/docs/contributing/design-architecture/) page for the
-full architecture map and change-path recipes.
+For architecture changes, use the
+[change recipes](docs/site/content/docs/architecture/change-recipes.md) and the
+documentation routing in `AGENTS.md`. Use the
+[feature-test skill](skills/feature-test/SKILL.md) for visible TUI scenarios and the
+[git-commit skill](skills/git-commit/SKILL.md) when preparing commit or PR descriptions.

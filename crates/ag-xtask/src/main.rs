@@ -1,5 +1,6 @@
 //! Workspace maintenance command-line tasks.
 
+mod check_instruction;
 mod check_migration;
 
 use std::process::ExitCode;
@@ -17,6 +18,8 @@ struct Cli {
 /// Supported maintenance subcommands.
 #[derive(Subcommand)]
 enum Command {
+    /// Validates instruction references, aliases, and documented hook names.
+    CheckInstructions,
     /// Validates SQL migration numbering across workspace crates.
     CheckMigrations,
 }
@@ -27,6 +30,7 @@ fn main() -> ExitCode {
 
     let cli = Cli::parse();
     let result = match cli.command {
+        Some(Command::CheckInstructions) => check_instruction::run(),
         None | Some(Command::CheckMigrations) => check_migration::run(),
     };
 

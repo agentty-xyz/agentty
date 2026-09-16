@@ -4,8 +4,9 @@ Agentty is a Rust workspace for an agent-management TUI and reusable support cra
 
 ## Start Here
 
-- Treat this root guide as the baseline and the nearest nested `AGENTS.md` as the local
-  specialization.
+- Read this root guide and each ancestor `AGENTS.md` for the paths you will inspect or
+  change. Nested guides add local rules; they do not replace inherited requirements.
+  Load unrelated guides and skill references only when the task needs them.
 - Read `skills/AGENTS.md` and use the smallest matching skill set when a request names a
   skill or clearly matches one.
 - For external library, framework, SDK, API, CLI, or cloud-service details, query
@@ -59,13 +60,15 @@ and `crates/agentty/src/app/AGENTS.md` for workflow integration rules.
 
 `.pre-commit-config.yaml` is the executable source of truth for hook IDs and commands.
 Invoke cataloged checks through `prek`. The focused E2E validation and container
-recording commands in `skills/feature-test/SKILL.md` are explicit exceptions because the
-E2E hook runs the complete suite. Keep those commands in the skill; do not duplicate
-hook implementations elsewhere.
+recording commands in the `skills/feature-test/` workflow are explicit exceptions
+because the E2E hook runs the complete suite. Keep those commands in that skill and its
+references; do not duplicate hook implementations elsewhere.
 
 - While iterating, run the relevant formatter or fixer on touched paths and focused
   tests for the changed behavior. Use `test-focused` with an explicit
-  `AGENTTY_TEST_FILTER`; see `CONTRIBUTING.md` for package and dependency selection.
+  `AGENTTY_TEST_FILTER`; use `skills/development/SKILL.md` for selection recipes and
+  environment setup. Keep gate policy here and executable definitions in the hook
+  catalog.
 - Before handoff, run one impact-based validation rung covering every touched file and
   all affected dependencies and dependents:
   - Markdown: `mdformat` and the default hooks for the touched paths.
@@ -131,6 +134,9 @@ Follow the nearest documentation guide for exact routing and integrity rules.
 - Do not use parent-directory-relative paths in an `AGENTS.md`.
 - When creating an `AGENTS.md`, add same-directory `CLAUDE.md` and `GEMINI.md` symlinks
   targeting it.
+- The `check-instructions` hook checks literal repository paths, local Markdown links,
+  instruction aliases, and hook names in `prek run` examples. Keep its regression tests
+  aligned when changing the instruction format.
 
 ## Canonical References
 

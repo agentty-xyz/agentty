@@ -10,6 +10,11 @@ publish = false
 
 [dependencies]
 clap.workspace = true
+percent-encoding.workspace = true
+pulldown-cmark.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
