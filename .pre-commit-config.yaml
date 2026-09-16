@@ -117,6 +117,20 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      # Native isolation probes also run in the source suite and coverage.
+      - id: test-ag-harness-linux-native
+        name: cargo nextest ag-harness Linux isolation
+        description: Run real Linux namespace/seccomp probes; requires bubblewrap and musl-gcc.
+        entry: >-
+          python3 -c 'import os, sys;
+          (sys.platform == "linux" and os.uname().machine in ("aarch64", "x86_64"))
+          or sys.exit("native aarch64 or x86_64 Linux is required");
+          os.execvp("cargo", ["cargo", "nextest", "run", "--locked", "--profile", "ci",
+          "-p", "ag-harness", "--lib", "-E", "test(execution::linux)"])'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: test-ag-harness-cli-src
         name: cargo nextest ag-harness-cli src
         description: Source tests for `crates/ag-harness-cli/src`.

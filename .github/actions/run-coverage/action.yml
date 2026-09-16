@@ -16,6 +16,7 @@ runs:
     - name: Setup Rust and `prek`
       uses: $/.github/actions/setup-rust-prek
       with:
+        linux-isolation-tests: "true"
         cargo-llvm-cov: "true"
         llvm-tools-preview: "true"
 

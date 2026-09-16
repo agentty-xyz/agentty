@@ -42,9 +42,9 @@ For file-level detail, read the module docstrings directly.
   pool access and row decoding. Bounded tools use validated `Repository` and injectable
   `FileSystem` boundaries. Hosts own prompts, comparison-base selection, permissions,
   and telemetry setup; the engine enforces a validated, pinned commit for comparisons.
-  Private execution contracts and platform-independent supervision own bounded
-  preparation, process-tree completion, output draining, and retained cleanup through
-  injected boundaries, without a production backend or a public tool surface.
+  Private execution contracts define sandbox policy. Supervision owns bounded execution
+  and cleanup; Linux isolation enforces resource access. These components remain
+  internal and are not yet connected to a production executor.
 - `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
   process-level tests. It derives provider parsing and help from `ag-harness`, then owns
   command-line defaults, application prompts, bounded repository permission selection,

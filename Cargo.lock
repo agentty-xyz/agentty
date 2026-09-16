@@ -75,6 +75,7 @@ dependencies = [
  "async-trait",
  "hex",
  "jsonschema",
+ "libc",
  "mockall",
  "opentelemetry",
  "opentelemetry-otlp",

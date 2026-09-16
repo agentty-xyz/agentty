@@ -2,6 +2,10 @@ name: Setup Rust Prek Workspace
 description: Install the shared Rust and `prek` CI tooling after checkout.
 
 inputs:
+  linux-isolation-tests:
+    description: Install prerequisites and isolate temporary paths for native ag-harness tests.
+    required: false
+    default: "false"
   cargo-audit:
     description: Install `cargo-audit` for dependency advisory checks.
     required: false
@@ -22,6 +26,26 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Install native Linux isolation test requirements
+      if: runner.os == 'Linux' && inputs['linux-isolation-tests'] == 'true'
+      shell: sh
+      run: |
+        sudo apt-get update
+        sudo apt-get install --no-install-recommends -y bubblewrap musl-tools
+        # Ubuntu's AppArmor userns restriction blocks bubblewrap's network setup.
+        # Change only disposable hosted runners that opted into native tests.
+        if [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ] &&
+           [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+        timeout 10s bwrap --unshare-user --unshare-ipc --unshare-pid \
+          --unshare-net --unshare-uts --unshare-cgroup --die-with-parent \
+          --ro-bind / / -- /usr/bin/true
+        mkdir -p "$GITHUB_WORKSPACE/target/native-tmp"
+        echo "TMPDIR=$GITHUB_WORKSPACE/target/native-tmp" >> "$GITHUB_ENV"
+        echo "GIT_CEILING_DIRECTORIES=$GITHUB_WORKSPACE/target/native-tmp" >> "$GITHUB_ENV"
+        echo "AGENTTY_ROOT=$GITHUB_WORKSPACE/target/test-agentty" >> "$GITHUB_ENV"
+
     - name: Setup `uv`
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
