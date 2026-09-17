@@ -1307,6 +1307,22 @@ pub(crate) async fn recover_abandoned(
     Ok(())
 }
 
+pub(crate) async fn recover_abandoned_owner(owner: &TurnOwner) -> Result<(), SessionError> {
+    let registry = shared_abandoned_turn_registry();
+    let store = registry
+        .owners
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(owner)
+        .and_then(Clone::clone);
+    if let Some(store) = store {
+        store.interrupt(owner).await?;
+        registry.remove(std::slice::from_ref(owner));
+    }
+
+    Ok(())
+}
+
 /// Owned journal access scoped to the turn that acquired it.
 pub(crate) struct WriteJournal {
     database: Arc<dyn SessionStore>,

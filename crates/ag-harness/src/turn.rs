@@ -374,6 +374,9 @@ impl fmt::Display for ToolActivity {
 /// Failure returned by a complete harness turn.
 #[derive(Debug, Error)]
 pub enum TurnError {
+    /// Cancellation stopped the waiter; persistence may still be settling.
+    #[error("turn cancelled")]
+    Cancelled,
     /// Provider request, response decoding, or terminal validation failed.
     #[error(transparent)]
     Model(#[from] ModelError),
@@ -407,6 +410,7 @@ impl TurnError {
     /// Returns the stable lifecycle classification for this failure.
     pub fn error_type(&self) -> TurnErrorType {
         match self {
+            Self::Cancelled => TurnErrorType::Cancelled,
             Self::Model(error) => TurnErrorType::Model(error.error_type()),
             Self::ToolDenied { .. } => TurnErrorType::ToolDenied,
             Self::Read(_) | Self::Write(_) => TurnErrorType::Tool,

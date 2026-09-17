@@ -165,8 +165,17 @@ async fn recovery_without_a_retained_handle_uses_the_current_store() {
             .for_session(store.identity(), "session"),
         Vec::<crate::TurnOwner>::new()
     );
-    store
+    let successor = store
         .begin_turn(store.clone(), "session", "successor", &turn_options())
         .await
         .expect("successor is admitted");
+
+    // Act: another caller already recovered this owner before a retained
+    // control retries its cleanup.
+    crate::session::recover_abandoned_owner(&owner)
+        .await
+        .expect("already recovered owner is inert");
+
+    // Assert
+    assert!(store.renew(successor.owner()).await.is_ok());
 }

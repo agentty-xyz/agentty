@@ -11,6 +11,8 @@ async fn admission_decorator_forwards_the_complete_store_contract() {
         let admission = admission(store.identity(), "session").expect("admission");
         let decorated: Arc<dyn SessionStore> = Arc::new(AdmittedStore {
             admission: Mutex::new(Some(admission)),
+            lease: Mutex::new(None),
+            settlement: None,
             store,
         });
 

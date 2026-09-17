@@ -112,7 +112,14 @@ options-compatibility types without accessing SQLite internals.
 Local admission is shared by backing-store and session identity and retained through
 acquisition acknowledgment and abandoned-owner cleanup. Failed cleanup keeps admission
 until owner-scoped recovery succeeds. Backend transactions remain authoritative across
-processes. This persistence boundary does not establish filesystem-effect completion.
+processes. `Session::send_controlled` and storage-free `Harness::run_once_controlled`
+return lazy turn futures with separately retained `TurnControl` handles. Cancellation
+stops the waiter promptly; retained work finishes acquisition or terminal acknowledgment
+and owner cleanup. `settled()` observes that persistence settlement even after caller
+future drop; failed cleanup remains observable and can be retried for the same owner. A
+terminal commit already in progress can still succeed after cancellation. Hosts keep the
+Tokio runtime running until settlement. This persistence boundary does not establish
+filesystem-effect completion; an already-started replacement can finish afterward.
 
 ```mermaid
 flowchart TD

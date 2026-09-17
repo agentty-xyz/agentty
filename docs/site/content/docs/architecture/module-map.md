@@ -40,13 +40,15 @@ For file-level detail, read the module docstrings directly.
   capture harness configuration and share lazy SQLite initialization. The library owns
   history, leases, terminal transitions, and write journals through a public
   transactional `SessionStore`. Hosts can inject stores; shared local admission retains
-  acquisition and cleanup ownership. Its `SqliteStore` implementation encapsulates pool
-  access and row decoding. Bounded tools use validated `Repository` and injectable
-  `FileSystem` boundaries. Hosts own prompts, comparison-base selection, permissions,
-  and telemetry setup; the engine enforces a validated, pinned commit for comparisons.
-  Private execution contracts and platform-independent supervision own bounded
-  preparation, process-tree completion, output draining, and retained cleanup through
-  injected boundaries, without a production backend or a public tool surface.
+  acquisition and cleanup ownership. Controlled turn futures expose turn-scoped
+  cancellation and independently observable persistence settlement after caller drop.
+  Its `SqliteStore` implementation encapsulates pool access and row decoding. Bounded
+  tools use validated `Repository` and injectable `FileSystem` boundaries. Hosts own
+  prompts, comparison-base selection, permissions, and telemetry setup; the engine
+  enforces a validated, pinned commit for comparisons. Private execution contracts and
+  platform-independent supervision own bounded preparation, process-tree completion,
+  output draining, and retained cleanup through injected boundaries, without a
+  production backend or a public tool surface.
 - `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
   process-level tests. It derives provider parsing and help from `ag-harness`, then owns
   command-line defaults, application prompts, bounded repository permission selection,

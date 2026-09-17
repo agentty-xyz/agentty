@@ -20,7 +20,7 @@ use ag_harness::{
     WriteStatus,
 };
 use async_trait::async_trait;
-use backend::ExternalStore;
+pub(crate) use backend::ExternalStore;
 use gate::Gate;
 use serde_json::json;
 use tokio::sync::Notify;

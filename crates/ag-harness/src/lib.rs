@@ -12,6 +12,15 @@ extern crate self as ag_harness;
 #[path = "../tests/support/store_conformance.rs"]
 mod store_conformance_test;
 
+#[cfg(test)]
+#[path = "../tests/support/repository.rs"]
+mod repository_fixture;
+
+mod cancellation;
+#[cfg(test)]
+#[path = "../tests/support/cancellation.rs"]
+mod cancellation_test;
+
 mod chat_completion;
 mod comparison;
 mod engine;
@@ -36,6 +45,7 @@ mod turn_options_snapshot;
 mod write;
 mod write_journal;
 
+pub use cancellation::{ControlledTurn, SettlementError, TurnControl};
 pub use comparison::{ComparisonBase, ComparisonBaseError};
 pub use file_system::{FileSystem, LocalFileSystem};
 pub use harness::{Harness, Session, SessionBuilder};
