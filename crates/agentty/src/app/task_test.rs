@@ -746,6 +746,7 @@ fn version_availability_event_ignores_current_version_tag() {
 /// route and emits the completed review through the app event channel.
 async fn spawn_review_assist_task_with_client_emits_completed_review() {
     // Arrange
+    let request_id = uuid::Uuid::new_v4();
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let mut run_client = ag_worker::MockRunClient::new();
     run_client.expect_submit().times(1).returning(|request| {
@@ -771,6 +772,11 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
         })
     });
     let input = ReviewAssistTaskInput {
+        request_id,
+        repositories: crate::infra::db::Database::open_in_memory()
+            .await
+            .expect("database")
+            .into(),
         app_event_tx,
         diff_hash: 42,
         reasoning_level: ReasoningLevel::XHigh,
@@ -783,7 +789,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
     };
 
     // Act
-    TaskService::spawn_review_assist_task_with_client(input, Arc::new(run_client));
+    TaskService::spawn_review_assist_task_with_client(input, Arc::new(run_client)).await;
     let app_event = tokio::time::timeout(Duration::from_secs(1), async {
         let initial = app_event_rx.recv().await.expect("initial progress");
         assert!(matches!(
@@ -821,6 +827,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
                           Suggestions\n\n- None"
                 .to_string(),
             session_id: "session-42".into(),
+            request_id,
         }
     );
 }
@@ -937,7 +944,12 @@ fn review_app_event_maps_successful_review_output() {
     let session_id = "session-7".to_string();
 
     // Act
-    let app_event = TaskService::review_app_event(diff_hash, review_result, session_id.into());
+    let app_event = TaskService::review_app_event(
+        diff_hash,
+        uuid::Uuid::nil(),
+        review_result,
+        session_id.into(),
+    );
 
     // Assert
     assert_eq!(
@@ -946,6 +958,7 @@ fn review_app_event_maps_successful_review_output() {
             diff_hash: 7,
             review_text: "Flagged one missing error branch.".to_string(),
             session_id: "session-7".into(),
+            request_id: uuid::Uuid::nil(),
         }
     );
 }
@@ -960,7 +973,12 @@ fn review_app_event_maps_failure_output() {
     let session_id = "session-9".to_string();
 
     // Act
-    let app_event = TaskService::review_app_event(diff_hash, review_result, session_id.into());
+    let app_event = TaskService::review_app_event(
+        diff_hash,
+        uuid::Uuid::nil(),
+        review_result,
+        session_id.into(),
+    );
 
     // Assert
     assert_eq!(
@@ -969,6 +987,7 @@ fn review_app_event_maps_failure_output() {
             diff_hash: 9,
             error: "empty response".to_string(),
             session_id: "session-9".into(),
+            request_id: uuid::Uuid::nil(),
         }
     );
 }
@@ -1280,4 +1299,122 @@ pub(crate) fn mock_version_task_runner() -> Arc<dyn super::VersionTaskRunner> {
     runner.expect_latest_version_tag().returning(|| None);
 
     Arc::new(runner)
+}
+
+#[tokio::test]
+async fn completed_review_retains_checkpoints_until_persistence() {
+    // Arrange
+    let database = crate::infra::db::Database::open_in_memory()
+        .await
+        .expect("database");
+    let project = database
+        .projects()
+        .upsert_project("project", None)
+        .await
+        .expect("project");
+    database
+        .sessions()
+        .insert_session("cleanup", "model", "main", "Review", project)
+        .await
+        .expect("session");
+    let mut client = ag_worker::MockRunClient::new();
+    client.expect_submit().once().returning(|_| {
+        Ok(agent::OneShotSubmission {
+            response: AgentResponse::plain(
+                r#"{"project_impact":["Completed review retained"],"suggestions":[]}"#,
+            ),
+            stats: agent::SessionStats::default(),
+        })
+    });
+    let (app_event_tx, mut events) = mpsc::unbounded_channel();
+    let input = ReviewAssistTaskInput {
+        request_id: uuid::Uuid::nil(),
+        repositories: database.clone().into(),
+        app_event_tx,
+        diff_hash: 42,
+        reasoning_level: ReasoningLevel::Low,
+        review_diff: "+change".into(),
+        review_selection: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+        session_chat_history: None,
+        session_folder: PathBuf::from("."),
+        session_id: "cleanup".into(),
+        speed_mode: crate::domain::agent::SpeedMode::Normal,
+    };
+    // Act
+    TaskService::spawn_review_assist_task_with_client(input, Arc::new(client)).await;
+    let text = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let AppEvent::ReviewPrepared { review_text, .. } =
+                events.recv().await.expect("completion event")
+            {
+                break review_text;
+            }
+        }
+    })
+    .await
+    .expect("review finishes");
+    // Assert
+    assert!(text.contains("Completed review retained"));
+    let checkpoints: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_review_fragment")
+        .fetch_one(database.pool())
+        .await
+        .expect("retained checkpoints");
+    assert_eq!(
+        checkpoints, 1,
+        "publishing the event must not discard durable evidence"
+    );
+    database
+        .sessions()
+        .update_session_focused_review(
+            "cleanup",
+            Some(crate::domain::review::FocusedReviewStatus::Ready),
+            Some("42".into()),
+            Some(text),
+        )
+        .await
+        .expect("persist review");
+    let checkpoints: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_review_fragment")
+        .fetch_one(database.pool())
+        .await
+        .expect("settled checkpoints");
+    assert_eq!(checkpoints, 0);
+}
+
+#[tokio::test]
+async fn review_admission_failure_emits_failure_without_submitting_provider_work() {
+    // Arrange
+    let request_id = uuid::Uuid::new_v4();
+    let database = crate::infra::db::Database::open_in_memory()
+        .await
+        .expect("database");
+    database.pool().close().await;
+    let (app_event_tx, mut events) = mpsc::unbounded_channel();
+    let input = ReviewAssistTaskInput {
+        request_id,
+        repositories: database.into(),
+        app_event_tx,
+        diff_hash: 42,
+        reasoning_level: ReasoningLevel::Low,
+        review_diff: "+change".into(),
+        review_selection: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+        session_chat_history: None,
+        session_folder: PathBuf::from("."),
+        session_id: "admission".into(),
+        speed_mode: crate::domain::agent::SpeedMode::Normal,
+    };
+    let mut client = ag_worker::MockRunClient::new();
+    client.expect_submit().never();
+
+    // Act
+    TaskService::spawn_review_assist_task_with_client(input, Arc::new(client)).await;
+    let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+        .await
+        .expect("failure event")
+        .expect("open event channel");
+
+    // Assert
+    assert!(
+        matches!(event, AppEvent::ReviewPreparationFailed {diff_hash: 42, request_id: returned_id, session_id, ..}
+        if session_id.as_str() == "admission" && returned_id == request_id)
+    );
 }

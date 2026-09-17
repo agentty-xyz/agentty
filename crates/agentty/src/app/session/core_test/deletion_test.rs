@@ -123,7 +123,7 @@ fn blocking_provider(
     finish: &CancellationToken,
 ) -> MockAppServerClient {
     let mut provider = MockAppServerClient::new();
-    provider.expect_run_turn().once().returning({
+    provider.expect_run_isolated_turn().once().returning({
         let started = started.clone();
         let stopped = stopped.clone();
         let finish = finish.clone();
@@ -139,7 +139,7 @@ fn blocking_provider(
             })
         }
     });
-    provider.expect_shutdown_session().once().returning({
+    provider.expect_shutdown_session().times(2).returning({
         let stopped = stopped.clone();
         move |_| {
             stopped.cancel();

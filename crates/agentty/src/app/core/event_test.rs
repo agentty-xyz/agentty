@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
@@ -37,6 +36,7 @@ async fn review_progress_updates_only_the_loading_generation_and_never_replaces_
     app.review_cache.insert(
         id.clone(),
         app::review::ReviewCacheEntry::Loading {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 42,
             review_agent: app.review_agent(),
             progress: None,
@@ -52,6 +52,7 @@ async fn review_progress_updates_only_the_loading_generation_and_never_replaces_
         diff_hash: 42,
         progress,
         session_id: id.clone(),
+        request_id: uuid::Uuid::nil(),
     })
     .await;
 
@@ -66,6 +67,7 @@ async fn review_progress_updates_only_the_loading_generation_and_never_replaces_
         diff_hash: 41,
         progress: app::review::ReviewProgress::CrossFile,
         session_id: id.clone(),
+        request_id: uuid::Uuid::nil(),
     })
     .await;
     assert!(
@@ -77,6 +79,7 @@ async fn review_progress_updates_only_the_loading_generation_and_never_replaces_
     app.review_cache.insert(
         id.clone(),
         app::review::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 42,
             text: "completed".into(),
         },
@@ -85,6 +88,7 @@ async fn review_progress_updates_only_the_loading_generation_and_never_replaces_
         diff_hash: 42,
         progress,
         session_id: id.clone(),
+        request_id: uuid::Uuid::nil(),
     })
     .await;
     assert_eq!(
@@ -554,6 +558,7 @@ fn reduction_plan_orders_review_persistence_after_snapshot_updates() {
         diff_hash: 42,
         review_text: "review output".to_string(),
         session_id: "session-1".into(),
+        request_id: uuid::Uuid::nil(),
     });
 
     // Act
@@ -562,13 +567,14 @@ fn reduction_plan_orders_review_persistence_after_snapshot_updates() {
     // Assert
     assert_eq!(
         reduction_plan.after_snapshot_effects,
-        vec![AppEventEffect::ApplyReviewUpdates(HashMap::from([(
+        vec![AppEventEffect::ApplyReviewUpdates(vec![(
             "session-1".into(),
             ReviewUpdate {
+                request_id: uuid::Uuid::nil(),
                 diff_hash: 42,
                 result: Ok("review output".to_string()),
             },
-        )]))]
+        )])]
     );
     assert_eq!(
         reduction_plan.before_snapshot_effects,
@@ -695,7 +701,7 @@ async fn completed_turn_starts_auto_review_when_project_is_inactive() {
     progress: None,
                 diff_hash,
                 review_agent,
-            }) if *diff_hash == expected_hash
+             .. }) if *diff_hash == expected_hash
                 && *review_agent == (
                     crate::domain::agent::AgentSelection::new(
                         crate::domain::agent::AgentKind::Claude,
@@ -825,6 +831,7 @@ async fn completed_focused_review_persists_for_inactive_project() {
     app.review_cache.insert(
         session_id.clone(),
         app::review::ReviewCacheEntry::Loading {
+            request_id: uuid::Uuid::nil(),
             progress: None,
             diff_hash: 42,
             review_agent,
@@ -836,6 +843,7 @@ async fn completed_focused_review_persists_for_inactive_project() {
         diff_hash: 42,
         review_text: review_text.to_string(),
         session_id: session_id.clone(),
+        request_id: uuid::Uuid::nil(),
     })
     .await;
     let persisted_reviews = app
@@ -869,11 +877,13 @@ async fn failed_focused_review_persistence_retries_without_replaying_stale_state
     app.review_cache.insert(
         "session-1".into(),
         app::review::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 42,
             text: "review output".to_string(),
         },
     );
     let persistence_update = FocusedReviewPersistence {
+        request_id: uuid::Uuid::nil(),
         diff_hash: Some(42),
         session_id: "session-1".into(),
         status: crate::domain::review::FocusedReviewStatus::Ready,
@@ -1162,8 +1172,7 @@ impl App {
         session_id: &str,
         review_update: app::review::ReviewUpdate,
     ) {
-        let mut review_updates = HashMap::new();
-        review_updates.insert(SessionId::from(session_id), review_update);
+        let review_updates = vec![(SessionId::from(session_id), review_update)];
         apply_review_updates(
             &mut self.review_cache,
             self.sessions.state_mut(),
@@ -1174,3 +1183,218 @@ impl App {
 
 #[path = "event_boundary_test.rs"]
 mod boundary;
+
+#[tokio::test]
+async fn superseded_review_events_cannot_replace_same_diff_results_or_checkpoints() {
+    for old_result in [
+        Ok("stale output".to_string()),
+        Err("stale failure".to_string()),
+    ] {
+        // Arrange: history/profile changes can keep the same diff hash.
+        let (mut app, _directory) = crate::test_support::new_test_app().await;
+        let id = SessionId::from("same-diff");
+        let current = uuid::Uuid::new_v4();
+        let stale = uuid::Uuid::new_v4();
+        let repositories = app.services.db().clone();
+        let project = app.projects.active_project_id();
+        seed_current_review_checkpoint(&mut app, &id, current).await;
+        let stale_event = match old_result {
+            Ok(review_text) => AppEvent::ReviewPrepared {
+                diff_hash: 42,
+                request_id: stale,
+                review_text,
+                session_id: id.clone(),
+            },
+            Err(error) => AppEvent::ReviewPreparationFailed {
+                diff_hash: 42,
+                request_id: stale,
+                error,
+                session_id: id.clone(),
+            },
+        };
+
+        // Act: a stale completion and later stale progress must be ignored.
+        app.apply_app_events(stale_event.clone()).await;
+        app.services
+            .event_sender()
+            .send(AppEvent::ReviewProgressUpdated {
+                diff_hash: 42,
+                request_id: stale,
+                progress: app::review::ReviewProgress::Reducing,
+                session_id: id.clone(),
+            })
+            .expect("stale progress queued");
+        app.apply_app_events(AppEvent::ReviewProgressUpdated {
+            diff_hash: 42,
+            request_id: current,
+            progress: app::review::ReviewProgress::CrossFile,
+            session_id: id.clone(),
+        })
+        .await;
+
+        // Assert: the new review and its resumable evidence remain pending.
+        assert!(
+            matches!(app.review_cache.get(&id), Some(app::review::ReviewCacheEntry::Loading {
+            request_id, progress: Some(app::review::ReviewProgress::CrossFile), ..
+        }) if *request_id == current)
+        );
+        assert_eq!(
+            repositories
+                .sessions()
+                .load_review_fragment(&id, "generation", "batch")
+                .await
+                .expect("checkpoint"),
+            Some("evidence".into())
+        );
+        assert_eq!(
+            repositories
+                .sessions()
+                .load_session_focused_reviews_for_project(project)
+                .await
+                .expect("reviews"),
+            [] as [ag_store::SessionFocusedReviewRow; 0]
+        );
+
+        // Act: both completions share one batch; the stale one arrives last.
+        app.services
+            .event_sender()
+            .send(stale_event)
+            .expect("stale completion queued");
+        app.apply_app_events(AppEvent::ReviewPrepared {
+            diff_hash: 42,
+            request_id: current,
+            review_text: "current output".into(),
+            session_id: id.clone(),
+        })
+        .await;
+
+        // Assert: only the current result is persisted and clears checkpoints.
+        let saved = repositories
+            .sessions()
+            .load_session_focused_reviews_for_project(project)
+            .await
+            .expect("saved review");
+        assert_eq!(saved[0].text, "current output");
+        assert_eq!(
+            app.review_cache.get(&id).expect("ready cache").request_id(),
+            Some(current)
+        );
+        assert!(
+            repositories
+                .sessions()
+                .load_review_fragment(&id, "generation", "batch")
+                .await
+                .expect("cleared checkpoint")
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn same_diff_persistence_retry_requires_the_current_invocation() {
+    // Arrange: an older Ready write failed, then a newer review completed.
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    let id = SessionId::from("retry-fence");
+    let current = uuid::Uuid::new_v4();
+    let stale = uuid::Uuid::new_v4();
+    let repositories = app.services.db().clone();
+    let project = app.projects.active_project_id();
+    seed_current_review_checkpoint(&mut app, &id, current).await;
+    app.review_cache.insert(
+        id.clone(),
+        app::review::ReviewCacheEntry::Ready {
+            diff_hash: 42,
+            request_id: current,
+            text: "same text".into(),
+        },
+    );
+    let old_write = FocusedReviewPersistence {
+        diff_hash: Some(42),
+        request_id: stale,
+        session_id: id.clone(),
+        status: crate::domain::review::FocusedReviewStatus::Ready,
+        text: Some("same text".into()),
+    };
+    app.pending_focused_review_persistence
+        .insert(id.clone(), old_write.clone());
+
+    // Act
+    app.apply_app_events(AppEvent::FocusedReviewPersistenceRetry {
+        retry: FocusedReviewPersistenceRetry::initial(old_write),
+    })
+    .await;
+
+    // Assert: matching status, diff and text cannot authorize an old write.
+    assert_eq!(
+        repositories
+            .sessions()
+            .load_session_focused_reviews_for_project(project)
+            .await
+            .expect("reviews"),
+        [] as [ag_store::SessionFocusedReviewRow; 0]
+    );
+    assert_eq!(
+        repositories
+            .sessions()
+            .load_review_fragment(&id, "generation", "batch")
+            .await
+            .expect("checkpoint"),
+        Some("evidence".into())
+    );
+}
+
+/// Seeds a current invocation and its resumable evidence for reducer fences.
+async fn seed_current_review_checkpoint(app: &mut App, id: &SessionId, request_id: uuid::Uuid) {
+    let repositories = app.services.db().clone();
+    repositories
+        .sessions()
+        .insert_session(
+            id,
+            "model",
+            "main",
+            "Review",
+            app.projects.active_project_id(),
+        )
+        .await
+        .expect("session");
+    repositories
+        .sessions()
+        .update_session_focused_review(
+            id,
+            Some(crate::domain::review::FocusedReviewStatus::Pending),
+            Some("42".into()),
+            None,
+        )
+        .await
+        .expect("pending review");
+    repositories
+        .sessions()
+        .begin_review_generation(id, "generation", &request_id.to_string())
+        .await
+        .expect("current generation");
+    repositories
+        .sessions()
+        .save_review_fragment(
+            id,
+            "generation",
+            &request_id.to_string(),
+            "batch",
+            "evidence",
+        )
+        .await
+        .expect("checkpoint");
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id(id.as_str())
+            .build(),
+    );
+    app.review_cache.insert(
+        id.clone(),
+        app::review::ReviewCacheEntry::Loading {
+            diff_hash: 42,
+            request_id,
+            review_agent: app.review_agent(),
+            progress: None,
+        },
+    );
+}

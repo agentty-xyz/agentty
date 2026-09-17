@@ -275,6 +275,7 @@ async fn test_handle_ctrl_c_ends_turn_and_transitions_to_view() {
     app.review_cache.insert(
         "session-ctrl-c".into(),
         crate::app::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             text: "Focused review".to_string(),
             diff_hash: 42,
         },

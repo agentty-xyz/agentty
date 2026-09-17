@@ -124,6 +124,9 @@ pub(super) struct ReviewAssistTaskInput {
     /// completion event so the reducer can store it without re-reading cache.
     pub(super) diff_hash: u64,
     pub(super) reasoning_level: ReasoningLevel,
+    pub(super) repositories: crate::infra::db::AppRepositories,
+    /// Unique invocation token propagated to checkpoint writes and events.
+    pub(super) request_id: uuid::Uuid,
     pub(super) review_diff: String,
     pub(super) review_selection: AgentSelection,
     pub(super) session_chat_history: Option<String>,
@@ -516,12 +519,15 @@ impl TaskService {
         FOCUSED_REVIEW_PERSISTENCE_RETRY_BASE_DELAY.saturating_mul(1_u32 << exponent)
     }
 
-    /// Spawns review assist generation through the provided worker boundary.
-    pub(super) fn spawn_review_assist_task_with_client(
+    /// Admits the generation in foreground creation order before spawning
+    /// provider work. Callers must await admission on the serialized app path.
+    pub(super) async fn spawn_review_assist_task_with_client(
         input: ReviewAssistTaskInput,
         run_client: Arc<dyn RunClient>,
     ) {
         let ReviewAssistTaskInput {
+            request_id,
+            repositories,
             app_event_tx,
             diff_hash,
             reasoning_level,
@@ -533,24 +539,41 @@ impl TaskService {
             speed_mode,
         } = input;
 
-        tokio::spawn(async move {
-            let review_result = Self::review_assist_text_with_client(
-                &session_folder,
-                (review_selection, reasoning_level, speed_mode),
-                &review_diff,
-                session_chat_history.as_deref(),
-                run_client.as_ref(),
-                |progress| {
-                    let _ = app_event_tx.send(AppEvent::ReviewProgressUpdated {
-                        diff_hash,
-                        progress,
-                        session_id: session_id.clone(),
-                    });
-                },
-            )
-            .await;
+        let client = crate::app::review_resume::ReviewResumeClient::new(
+            run_client,
+            &repositories,
+            &session_id,
+            diff_hash,
+            session_chat_history.as_deref().unwrap_or_default(),
+            request_id,
+        )
+        .await;
 
-            let app_event = Self::review_app_event(diff_hash, review_result, session_id);
+        tokio::spawn(async move {
+            let review_result = match client {
+                Ok(client) => {
+                    Self::review_assist_text_with_client(
+                        &session_folder,
+                        (review_selection, reasoning_level, speed_mode),
+                        &review_diff,
+                        session_chat_history.as_deref(),
+                        &client,
+                        |progress| {
+                            let _ = app_event_tx.send(AppEvent::ReviewProgressUpdated {
+                                request_id,
+                                diff_hash,
+                                progress,
+                                session_id: session_id.clone(),
+                            });
+                        },
+                    )
+                    .await
+                }
+                Err(error) => Err(error.into()),
+            };
+
+            let app_event =
+                Self::review_app_event(diff_hash, request_id, review_result, session_id);
             // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = app_event_tx.send(app_event);
         });
@@ -613,16 +636,19 @@ impl TaskService {
     /// [`AppError`] cannot satisfy due to non-cloneable inner IO errors.
     fn review_app_event(
         diff_hash: u64,
+        request_id: uuid::Uuid,
         review_result: Result<String, AppError>,
         session_id: SessionId,
     ) -> AppEvent {
         match review_result {
             Ok(review_text) => AppEvent::ReviewPrepared {
+                request_id,
                 diff_hash,
                 review_text,
                 session_id,
             },
             Err(error) => AppEvent::ReviewPreparationFailed {
+                request_id,
                 diff_hash,
                 error: error.to_string(),
                 session_id,

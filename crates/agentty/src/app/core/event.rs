@@ -196,18 +196,21 @@ pub(crate) enum AppEvent {
     SessionTurnStarted { session_id: SessionId },
     /// Indicates review assist output became available for a session.
     ReviewPrepared {
+        request_id: uuid::Uuid,
         diff_hash: u64,
         review_text: String,
         session_id: SessionId,
     },
     /// Reports progress only for the still-loading review generation.
     ReviewProgressUpdated {
+        request_id: uuid::Uuid,
         diff_hash: u64,
         progress: app::review::ReviewProgress,
         session_id: SessionId,
     },
     /// Indicates review assist failed for a session.
     ReviewPreparationFailed {
+        request_id: uuid::Uuid,
         diff_hash: u64,
         error: String,
         session_id: SessionId,
@@ -276,7 +279,7 @@ enum AppEventEffect {
     ReloadSessions,
     ReloadProjects,
     RefreshGitStatus,
-    ApplyReviewUpdates(HashMap<SessionId, ReviewUpdate>),
+    ApplyReviewUpdates(Vec<(SessionId, ReviewUpdate)>),
     PersistDeferredAutoReviewTriggers(
         Vec<crate::app::session_diff::DeferredAutoReviewPersistenceRetry>,
     ),
@@ -356,9 +359,10 @@ pub(super) struct AppEventBatch {
     pub(super) git_status_update: Option<GitStatusBatchUpdate>,
     pub(super) latest_available_version_update: Option<LatestAvailableVersionUpdate>,
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
-    pub(super) review_progress_updates: HashMap<SessionId, (u64, app::review::ReviewProgress)>,
+    pub(super) review_progress_updates:
+        Vec<(SessionId, u64, uuid::Uuid, app::review::ReviewProgress)>,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
-    pub(super) review_updates: HashMap<SessionId, ReviewUpdate>,
+    pub(super) review_updates: Vec<(SessionId, ReviewUpdate)>,
     pub(super) session_creations: Vec<(String, Result<String, String>)>,
     pub(super) session_diff_stats_updates: HashMap<SessionId, SessionDiffStats>,
     pub(super) session_diff_updates: Vec<crate::app::SessionDiffUpdate>,
@@ -479,12 +483,13 @@ impl AppEventBatch {
     pub(super) fn collect_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::ReviewProgressUpdated {
+                request_id,
                 diff_hash,
                 progress,
                 session_id,
             } => {
                 self.review_progress_updates
-                    .insert(session_id, (diff_hash, progress));
+                    .push((session_id, diff_hash, request_id, progress));
             }
             AppEvent::SessionOrchestrationProgressUpdated {
                 progress,
@@ -688,15 +693,17 @@ impl AppEventBatch {
                 self.session_turn_started_ids.insert(session_id);
             }
             AppEvent::ReviewPrepared {
+                request_id,
                 diff_hash,
                 review_text,
                 session_id,
-            } => self.collect_review_prepared(diff_hash, review_text, session_id),
+            } => self.collect_review_prepared(diff_hash, request_id, review_text, session_id),
             AppEvent::ReviewPreparationFailed {
+                request_id,
                 diff_hash,
                 error,
                 session_id,
-            } => self.collect_review_preparation_failed(diff_hash, error, session_id),
+            } => self.collect_review_preparation_failed(diff_hash, request_id, error, session_id),
             AppEvent::DeferredAutoReviewPersistenceRetry { retry } => {
                 self.deferred_auto_review_persistence_retries.push(retry);
             }
@@ -853,32 +860,36 @@ impl AppEventBatch {
     fn collect_review_prepared(
         &mut self,
         diff_hash: u64,
+        request_id: uuid::Uuid,
         review_text: String,
         session_id: SessionId,
     ) {
-        self.review_updates.insert(
+        self.review_updates.push((
             session_id,
             ReviewUpdate {
+                request_id,
                 diff_hash,
                 result: Ok(review_text),
             },
-        );
+        ));
     }
 
     /// Stores a failed focused-review preparation result.
     fn collect_review_preparation_failed(
         &mut self,
         diff_hash: u64,
+        request_id: uuid::Uuid,
         error: String,
         session_id: SessionId,
     ) {
-        self.review_updates.insert(
+        self.review_updates.push((
             session_id,
             ReviewUpdate {
+                request_id,
                 diff_hash,
                 result: Err(error),
             },
-        );
+        ));
     }
 
     /// Queues one published-branch sync state transition for ordered
@@ -1469,15 +1480,17 @@ impl App {
         for diff_preview_update in std::mem::take(&mut event_batch.diff_preview_updates) {
             self.apply_diff_preview_update(&diff_preview_update);
         }
-        for (session_id, (diff_hash, progress)) in
+        for (session_id, diff_hash, request_id, progress) in
             std::mem::take(&mut event_batch.review_progress_updates)
         {
             if let Some(app::review::ReviewCacheEntry::Loading {
+                request_id: active_request,
                 diff_hash: active_hash,
                 progress: current,
                 ..
             }) = self.review_cache.get_mut(&session_id)
                 && *active_hash == diff_hash
+                && *active_request == request_id
             {
                 *current = Some(progress);
                 self.restore_review_output(&session_id);

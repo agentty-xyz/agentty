@@ -534,6 +534,7 @@ async fn session_cancellation_waits_for_runtime_cleanup_before_terminal_state() 
 async fn worker_task_failure_releases_session_tracking_and_reaches_the_caller() {
     // Arrange
     let mut runtime = ag_runtime::MockOneShotClient::new();
+    runtime.expect_close().once().return_const(());
     runtime
         .expect_submit_cancellable()
         .once()

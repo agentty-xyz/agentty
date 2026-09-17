@@ -1819,6 +1819,7 @@ async fn test_handle_prompt_slash_submit_ignores_apply_when_suggestions_are_empt
     app.review_cache.insert(
         session_id.clone(),
         crate::app::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 0,
             text: "## Review\n### Suggestions\n- None".to_string(),
         },

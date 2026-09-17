@@ -678,6 +678,9 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
     ) -> Result<(), DbError>;
 
     /// Updates or clears the persisted focused-review cache for a session.
+    /// A `Ready` result or explicit clear (`None`) atomically discards
+    /// checkpoints and closes their generation. Failed persistence leaves the
+    /// prior result and resumable evidence intact.
     async fn update_session_focused_review(
         &self,
         id: &str,
@@ -685,6 +688,41 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         diff_hash: Option<String>,
         text: Option<String>,
     ) -> Result<(), DbError>;
+
+    /// Activates one generation, preserving its checkpoints and atomically
+    /// pruning superseded generations. Late writes from older callers are
+    /// ignored. Hosts must serialize activation with review creation, before
+    /// spawning background work; provider submissions must not reactivate it.
+    /// Each invocation supplies a unique `request_id`, fencing old writers even
+    /// when identical inputs are activated again after invalidation.
+    async fn begin_review_generation(
+        &self,
+        id: &str,
+        generation: &str,
+        request_id: &str,
+    ) -> Result<(), DbError>;
+
+    /// Loads a successful call from an unchanged review generation.
+    async fn load_review_fragment(
+        &self,
+        id: &str,
+        generation: &str,
+        request: &str,
+    ) -> Result<Option<String>, DbError>;
+
+    /// Saves evidence only while both its input generation and invocation
+    /// remain active, including after an identical generation is restarted.
+    async fn save_review_fragment(
+        &self,
+        id: &str,
+        generation: &str,
+        request_id: &str,
+        request: &str,
+        answer: &str,
+    ) -> Result<(), DbError>;
+
+    /// Explicitly discards resumable evidence for one generation.
+    async fn clear_review_fragments(&self, id: &str, generation: &str) -> Result<(), DbError>;
 
     /// Loads the prior diff baseline independently of focused-review output.
     /// An unfinished generated review returns no baseline so restart recovery
@@ -2386,6 +2424,7 @@ WHERE id = ?
         text: Option<String>,
     ) -> Result<(), DbError> {
         let now = self.now();
+        let mut transaction = self.0.begin().await?;
 
         sqlx::query!(
             r"
@@ -2402,9 +2441,98 @@ WHERE id = ?
             now,
             id
         )
-        .execute(&self.0)
+        .execute(&mut *transaction)
         .await?;
 
+        if status.is_none() || status == Some(FocusedReviewStatus::Ready) {
+            sqlx::query("DELETE FROM session_review_fragment WHERE session_id = ?")
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query("DELETE FROM session_review_generation WHERE session_id = ?")
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn begin_review_generation(
+        &self,
+        id: &str,
+        generation: &str,
+        request_id: &str,
+    ) -> Result<(), DbError> {
+        let mut transaction = self.0.begin().await?;
+        sqlx::query(
+            "INSERT INTO session_review_generation (session_id, generation, request_id) SELECT \
+             id, ?, ? FROM session WHERE id = ? ON CONFLICT(session_id) DO UPDATE SET generation \
+             = excluded.generation, request_id = excluded.request_id",
+        )
+        .bind(generation)
+        .bind(request_id)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query("DELETE FROM session_review_fragment WHERE session_id = ? AND generation != ?")
+            .bind(id)
+            .bind(generation)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn load_review_fragment(
+        &self,
+        id: &str,
+        generation: &str,
+        request: &str,
+    ) -> Result<Option<String>, DbError> {
+        Ok(sqlx::query_scalar::<_, String>(
+            "SELECT answer FROM session_review_fragment WHERE session_id = ? AND generation = ? \
+             AND request = ?",
+        )
+        .bind(id)
+        .bind(generation)
+        .bind(request)
+        .fetch_optional(&self.0)
+        .await?)
+    }
+
+    async fn save_review_fragment(
+        &self,
+        id: &str,
+        generation: &str,
+        request_id: &str,
+        request: &str,
+        answer: &str,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO session_review_fragment (session_id, generation, request, answer) SELECT \
+             session_id, generation, ?, ? FROM session_review_generation WHERE session_id = ? AND \
+             generation = ? AND request_id = ? ON CONFLICT(session_id, generation, request) DO \
+             UPDATE SET answer = excluded.answer",
+        )
+        .bind(request)
+        .bind(answer)
+        .bind(id)
+        .bind(generation)
+        .bind(request_id)
+        .execute(&self.0)
+        .await?;
+        Ok(())
+    }
+
+    async fn clear_review_fragments(&self, id: &str, generation: &str) -> Result<(), DbError> {
+        sqlx::query("DELETE FROM session_review_fragment WHERE session_id = ? AND generation = ?")
+            .bind(id)
+            .bind(generation)
+            .execute(&self.0)
+            .await?;
         Ok(())
     }
 

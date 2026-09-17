@@ -591,12 +591,35 @@ async fn test_rebase_session_cancels_pending_focused_review() {
     app.review_cache
         .insert(session_id.clone().into(), test_loading_review(777));
 
+    db.sessions()
+        .begin_review_generation(&session_id, "777:history", "before-rebase")
+        .await
+        .expect("review generation");
+    db.sessions()
+        .save_review_fragment(
+            &session_id,
+            "777:history",
+            "before-rebase",
+            "batch",
+            "pre-rebase answer",
+        )
+        .await
+        .expect("checkpoint");
+
     // Act
     let result = app.rebase_session(&session_id).await;
 
     // Assert
     assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
     assert!(!app.review_cache.contains_key(session_id.as_str()));
+    wait_for_output_contains(&mut app, &session_id, "[Sync] Successfully synced", 200).await;
+    assert!(
+        db.sessions()
+            .load_review_fragment(&session_id, "777:history", "batch")
+            .await
+            .expect("invalidated checkpoint")
+            .is_none()
+    );
     assert!(matches!(app.mode, AppMode::View { .. }));
 
     // Act
@@ -604,6 +627,7 @@ async fn test_rebase_session_cancels_pending_focused_review() {
         diff_hash: 777,
         review_text: "stale focused review".to_string(),
         session_id: session_id.clone().into(),
+        request_id: uuid::Uuid::nil(),
     })
     .await;
 
@@ -628,10 +652,10 @@ async fn test_rebase_session_cancels_pending_focused_review() {
     assert!(!restarted_app.review_cache.contains_key(session_id.as_str()));
 }
 
-/// Verifies focused-review cleanup failure rejects sync before rebase
-/// starts.
+/// Verifies unavailable persistence rejects admission without clearing the
+/// displayed review.
 #[tokio::test]
-async fn test_rebase_session_cleanup_failure_does_not_start_sync() {
+async fn test_rebase_session_admission_failure_does_not_clear_review() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let (db, pool) = AppRepositories::in_memory_with_pool()
@@ -667,7 +691,7 @@ async fn test_rebase_session_cleanup_failure_does_not_start_sync() {
     let result = app.rebase_session(&session_id).await;
 
     // Assert
-    assert!(result.is_err(), "cleanup failure should reject sync");
+    assert!(result.is_err(), "persistence failure should reject sync");
     assert!(app.review_cache.contains_key(session_id.as_str()));
     assert!(matches!(app.mode, AppMode::View { .. }));
     assert_eq!(

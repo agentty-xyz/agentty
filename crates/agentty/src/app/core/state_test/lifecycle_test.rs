@@ -29,16 +29,19 @@ async fn replacing_fixture_clients_preserves_utility_cancellation_and_deletion_c
         let (release_tx, release_rx) = oneshot::channel();
         let (turn_stopped_tx, turn_stopped_rx) = oneshot::channel();
         let mut provider = MockAppServerClient::new();
-        provider.expect_run_turn().once().return_once(move |_, _| {
-            Box::pin(async move {
-                started_tx.send(()).expect("utility observer");
-                turn_stopped_rx.await.expect("provider stopped its turn");
+        provider
+            .expect_run_isolated_turn()
+            .once()
+            .return_once(move |_, _| {
+                Box::pin(async move {
+                    started_tx.send(()).expect("utility observer");
+                    turn_stopped_rx.await.expect("provider stopped its turn");
 
-                Err(AppServerError::InterruptedByUser(
-                    "provider stopped".to_string(),
-                ))
-            })
-        });
+                    Err(AppServerError::InterruptedByUser(
+                        "provider stopped".to_string(),
+                    ))
+                })
+            });
         provider
             .expect_shutdown_session()
             .once()
@@ -49,6 +52,11 @@ async fn replacing_fixture_clients_preserves_utility_cancellation_and_deletion_c
                     turn_stopped_tx.send(()).expect("release provider turn");
                 })
             });
+        // Closing the worker also releases its retained pool slot.
+        provider
+            .expect_shutdown_session()
+            .once()
+            .returning(|_| Box::pin(async {}));
         let clients = crate::test_support::test_app_clients()
             .with_app_server_client_override(Arc::new(provider));
         let (mut app, directory) = crate::test_support::new_test_app_with_clients(clients).await;

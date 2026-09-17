@@ -12,8 +12,28 @@ pub enum FocusedReviewStatus {
     Pending,
     /// Review generation completed and persisted its markdown.
     Ready,
+    /// Some batches or final checks remain incomplete; retained findings are
+    /// provisional.
+    Partial,
     /// Review generation completed without usable markdown.
     Failed,
+}
+
+impl FocusedReviewStatus {
+    /// Classifies generated and legacy review markdown at the persistence
+    /// boundary. A history-only caveat does not mean original diff batches
+    /// were skipped.
+    #[must_use]
+    pub fn for_text(text: &str) -> Self {
+        if text
+            .rsplit_once("\n### Coverage\n")
+            .is_some_and(|(_, coverage)| coverage.trim_start().starts_with("Partial review:"))
+        {
+            Self::Partial
+        } else {
+            Self::Ready
+        }
+    }
 }
 
 impl fmt::Display for FocusedReviewStatus {
@@ -21,6 +41,7 @@ impl fmt::Display for FocusedReviewStatus {
         formatter.write_str(match self {
             Self::Pending => "Pending",
             Self::Ready => "Ready",
+            Self::Partial => "Partial",
             Self::Failed => "Failed",
         })
     }
@@ -33,6 +54,7 @@ impl FromStr for FocusedReviewStatus {
         match value {
             "Pending" => Ok(Self::Pending),
             "Ready" => Ok(Self::Ready),
+            "Partial" => Ok(Self::Partial),
             "Failed" => Ok(Self::Failed),
             _ => Err(format!("Unknown focused review status: {value}")),
         }

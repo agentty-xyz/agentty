@@ -3,6 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use uuid::Uuid;
+
 use super::task;
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, SpeedMode};
@@ -19,6 +21,8 @@ use crate::infra::db::SessionFocusedReviewRow;
 pub(crate) enum ReviewCacheEntry {
     /// Review generation is in progress.
     Loading {
+        /// Unique invocation token, independent of reusable input hashes.
+        request_id: Uuid,
         /// Hash of the diff text that triggered this review generation.
         diff_hash: u64,
         /// Normalized agent profile selected for this review generation.
@@ -28,6 +32,8 @@ pub(crate) enum ReviewCacheEntry {
     },
     /// Review text was successfully generated.
     Ready {
+        /// Unique invocation token, independent of reusable input hashes.
+        request_id: Uuid,
         /// Hash of the diff text that was reviewed.
         diff_hash: u64,
         /// Generated review text.
@@ -35,6 +41,8 @@ pub(crate) enum ReviewCacheEntry {
     },
     /// Review generation failed with an error description.
     Failed {
+        /// Unique invocation token, independent of reusable input hashes.
+        request_id: Uuid,
         /// Hash of the diff text that triggered the failed review.
         diff_hash: u64,
         /// Human-readable error description.
@@ -58,27 +66,45 @@ impl ReviewCacheEntry {
         }
     }
 
+    /// Returns the invocation token for generated review states.
+    pub(crate) fn request_id(&self) -> Option<Uuid> {
+        match self {
+            Self::Loading { request_id, .. }
+            | Self::Ready { request_id, .. }
+            | Self::Failed { request_id, .. } => Some(*request_id),
+            Self::Suppressed => None,
+        }
+    }
+
     /// Returns whether one persistence update still represents this cache
     /// generation and lifecycle state.
     pub(crate) fn matches_persistence(&self, update: &FocusedReviewPersistence) -> bool {
         let status = match self {
             Self::Loading { .. } => FocusedReviewStatus::Pending,
-            Self::Ready { .. } => FocusedReviewStatus::Ready,
+            Self::Ready { text, .. } => FocusedReviewStatus::for_text(text),
             Self::Failed { .. } => FocusedReviewStatus::Failed,
             Self::Suppressed => return false,
         };
 
-        status == update.status && self.diff_hash() == update.diff_hash
+        status == update.status
+            && self.diff_hash() == update.diff_hash
+            && self.request_id() == Some(update.request_id)
     }
 
     /// Builds one cache entry from a completed focused-review result.
-    pub(crate) fn from_result(diff_hash: u64, result: &Result<String, String>) -> Self {
+    pub(crate) fn from_result(
+        diff_hash: u64,
+        request_id: Uuid,
+        result: &Result<String, String>,
+    ) -> Self {
         match result {
             Ok(review_text) => Self::Ready {
+                request_id,
                 diff_hash,
                 text: review_text.clone(),
             },
             Err(error) => Self::Failed {
+                request_id,
                 diff_hash,
                 error: error.clone(),
             },
@@ -91,6 +117,8 @@ impl ReviewCacheEntry {
 pub(crate) struct ReviewUpdate {
     /// Hash of the diff that triggered this review, carried from the task.
     pub(crate) diff_hash: u64,
+    /// Invocation token required for accepting and persisting this result.
+    pub(crate) request_id: Uuid,
     /// Completed review assist result for the matching session.
     pub(crate) result: Result<String, String>,
 }
@@ -101,6 +129,8 @@ pub(crate) struct FocusedReviewPersistence {
     /// Hash of the diff that the persisted text applies to, or `None` when
     /// clearing a stale persisted review.
     pub(crate) diff_hash: Option<u64>,
+    /// Invocation token required for accepting and persisting this result.
+    pub(crate) request_id: Uuid,
     /// Stable session identifier for the focused-review cache row.
     pub(crate) session_id: SessionId,
     /// Durable generation state consumed by managed-worker orchestration.
@@ -378,6 +408,7 @@ pub(crate) fn review_cache_from_rows(
             Some((
                 SessionId::from(row.session_id),
                 ReviewCacheEntry::Ready {
+                    request_id: Uuid::new_v4(),
                     diff_hash,
                     text: row.text,
                 },
@@ -386,8 +417,9 @@ pub(crate) fn review_cache_from_rows(
         .collect()
 }
 
-/// Spawns one focused review-assist task for the provided session diff.
-pub(crate) fn start_review_assist(
+/// Spawns focused review and returns its unique invocation token before the
+/// foreground owner can process any emitted events.
+pub(crate) async fn start_review_assist(
     services: &crate::app::AppServices,
     review_agent: ReviewAgent,
     session_id: &str,
@@ -395,7 +427,8 @@ pub(crate) fn start_review_assist(
     diff_hash: u64,
     review_diff: &str,
     session_chat_history: Option<&str>,
-) {
+) -> Uuid {
+    let request_id = Uuid::new_v4();
     let (review_selection, reasoning_level, speed_mode) = normalize_review_agent(review_agent);
 
     let run_client = ag_worker::scoped_client(
@@ -408,6 +441,8 @@ pub(crate) fn start_review_assist(
     );
     task::TaskService::spawn_review_assist_task_with_client(
         task::ReviewAssistTaskInput {
+            request_id,
+            repositories: services.db().clone(),
             app_event_tx: services.event_sender(),
             diff_hash,
             reasoning_level,
@@ -419,7 +454,10 @@ pub(crate) fn start_review_assist(
             speed_mode,
         },
         run_client,
-    );
+    )
+    .await;
+
+    request_id
 }
 
 pub(crate) fn normalize_review_agent(review_agent: ReviewAgent) -> ReviewAgent {
@@ -449,7 +487,7 @@ pub(crate) fn mark_session_agent_review(session_state: &mut SessionState, sessio
 pub(crate) fn apply_review_updates(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
     session_state: &mut SessionState,
-    review_updates: HashMap<SessionId, ReviewUpdate>,
+    review_updates: Vec<(SessionId, ReviewUpdate)>,
 ) -> Vec<FocusedReviewPersistence> {
     let mut persistence_updates = Vec::new();
 
@@ -473,13 +511,19 @@ pub(crate) fn fail_review_preparation(
     error: String,
 ) -> FocusedReviewPersistence {
     let diff_hash = diff_content_hash("");
+    let request_id = Uuid::new_v4();
     review_cache.insert(
         session_id.clone(),
-        ReviewCacheEntry::Failed { diff_hash, error },
+        ReviewCacheEntry::Failed {
+            diff_hash,
+            request_id,
+            error,
+        },
     );
     hydrate_review_transient(review_cache, session_state, session_id);
 
     FocusedReviewPersistence {
+        request_id,
         diff_hash: Some(diff_hash),
         session_id: session_id.clone(),
         status: FocusedReviewStatus::Failed,
@@ -494,28 +538,32 @@ fn apply_review_update(
     session_id: &str,
     review_update: ReviewUpdate,
 ) -> Option<FocusedReviewPersistence> {
-    let ReviewUpdate { diff_hash, result } = review_update;
+    let ReviewUpdate {
+        diff_hash,
+        request_id,
+        result,
+    } = review_update;
     let cache_entry = review_cache.get(session_id)?;
 
     if !matches!(cache_entry, ReviewCacheEntry::Loading { .. })
         || cache_entry.diff_hash() != Some(diff_hash)
+        || cache_entry.request_id() != Some(request_id)
     {
         return None;
     }
 
     let persistence_update = FocusedReviewPersistence {
+        request_id,
         diff_hash: Some(diff_hash),
         session_id: SessionId::from(session_id),
-        status: if result.is_ok() {
-            FocusedReviewStatus::Ready
-        } else {
-            FocusedReviewStatus::Failed
-        },
+        status: result.as_ref().map_or(FocusedReviewStatus::Failed, |text| {
+            FocusedReviewStatus::for_text(text)
+        }),
         text: result.as_ref().ok().cloned(),
     };
     review_cache.insert(
         SessionId::from(session_id),
-        ReviewCacheEntry::from_result(diff_hash, &result),
+        ReviewCacheEntry::from_result(diff_hash, request_id, &result),
     );
     if let Some(session) = session_state
         .sessions_mut()

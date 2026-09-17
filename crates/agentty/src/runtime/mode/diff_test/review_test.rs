@@ -392,6 +392,7 @@ async fn test_handle_quit_key_restores_cached_review_output() {
     app.review_cache.insert(
         "session-id".into(),
         crate::app::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             text: "Focused review".to_string(),
             diff_hash: 7,
         },

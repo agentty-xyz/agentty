@@ -366,3 +366,43 @@ async fn review_application_restart_reconciles_through_task_dispatch() {
     );
     assert_eq!(backend.calls(), [] as [std::string::String; 0]);
 }
+
+#[tokio::test]
+async fn incomplete_reviews_keep_controller_evidence_and_skip_automatic_remediation() {
+    // Arrange
+    let mut repository = MockOrchestrationRepository::new();
+    repository
+        .expect_update_orchestration_task_status()
+        .returning(|_, _, _| Ok(()));
+    repository
+        .expect_update_orchestration_task_result_summary()
+        .returning(|_, _| Ok(()));
+    let backend = TestSessionBackend::default();
+    let (sender, _receiver) = mpsc::unbounded_channel();
+    let coordinator =
+        OrchestrationCoordinator::new(Arc::new(sender), Arc::new(repository), backend.service());
+    // Act / Assert
+    for status in [FocusedReviewStatus::Partial, FocusedReviewStatus::Ready] {
+        let mut review = focused_review_task(
+            1,
+            "partial",
+            "child",
+            status,
+            Some("### Suggestions\n- None\n### Coverage\n\nPartial review: two batches unreviewed"),
+        );
+        coordinator
+            .reconcile_focused_review(&mut review)
+            .await
+            .expect("controller verification");
+        let evidence = crate::coordinator::rollup_review_evidence(&review);
+        assert!(evidence.contains("incomplete; controller verification is required"));
+        assert!(evidence.contains("two batches unreviewed"));
+        if status == FocusedReviewStatus::Partial {
+            assert!(
+                crate::coordinator::campaign_task_evidence(&review)
+                    .contains("focused review incomplete")
+            );
+        }
+    }
+    assert_eq!(backend.calls(), [] as [String; 0]);
+}

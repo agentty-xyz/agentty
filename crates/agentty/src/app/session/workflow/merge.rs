@@ -1929,6 +1929,11 @@ impl SessionManager {
         });
 
         let rebase_result: Result<String, SessionError> = async {
+            // Admission has succeeded and this worker owns the branch. Fail
+            // closed before any Git mutation if evidence cannot be invalidated.
+            db.sessions()
+                .update_session_focused_review(&id, None, None, None)
+                .await?;
             let rebase_plan = Self::resolve_session_rebase_plan(
                 &db,
                 git_client.as_ref(),

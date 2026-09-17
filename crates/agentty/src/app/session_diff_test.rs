@@ -317,6 +317,7 @@ async fn clearing_review_output_discards_pending_apply_request() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 1,
             text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
         },
@@ -918,6 +919,7 @@ async fn automatic_empty_review_diff_preserves_cached_output() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: cached_diff_hash,
             text: "## Review\nExisting finding.".to_string(),
         },
@@ -936,7 +938,7 @@ async fn automatic_empty_review_diff_preserves_cached_output() {
     // Assert
     assert!(matches!(
         app.review_cache.get(&session_id),
-        Some(ReviewCacheEntry::Ready { diff_hash, text })
+        Some(ReviewCacheEntry::Ready { diff_hash, text , .. })
             if *diff_hash == cached_diff_hash && text.contains("Existing finding")
     ));
     assert_eq!(app.sessions.sessions()[0].status, Status::Review);
@@ -1013,6 +1015,7 @@ async fn apply_completion_ignores_replaced_review_generation() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash,
             text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
         },
@@ -1031,6 +1034,7 @@ async fn apply_completion_ignores_replaced_review_generation() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Loading {
+            request_id: uuid::Uuid::nil(),
             progress: None,
             diff_hash,
             review_agent,
@@ -1068,6 +1072,7 @@ async fn apply_completion_ignores_session_that_left_review() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash,
             text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
         },
@@ -1114,6 +1119,7 @@ async fn manual_apply_completion_enqueues_remediation_turn() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash,
             text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
         },
@@ -1155,6 +1161,7 @@ async fn automatic_apply_completion_counts_enqueued_remediation_turn() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash,
             text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
         },
@@ -1200,6 +1207,7 @@ async fn automatic_apply_completion_does_not_count_failed_remediation_enqueue() 
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash,
             text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
         },
@@ -1233,7 +1241,7 @@ async fn automatic_apply_completion_does_not_count_failed_remediation_enqueue() 
     assert_eq!(app.sessions.sessions()[0].status, Status::Review);
     assert!(matches!(
         app.review_cache.get(&session_id),
-        Some(ReviewCacheEntry::Ready { diff_hash: cached_diff_hash, text })
+        Some(ReviewCacheEntry::Ready { diff_hash: cached_diff_hash, text , .. })
             if *cached_diff_hash == diff_hash && text.contains("Fix the issue")
     ));
     let visible_review_text = app.sessions.sessions()[0]
@@ -1275,6 +1283,7 @@ async fn automatic_apply_completion_revalidates_mode_and_iteration_limit() {
         app.review_cache.insert(
             session_id.clone(),
             ReviewCacheEntry::Ready {
+                request_id: uuid::Uuid::nil(),
                 diff_hash,
                 text: "## Review\n### Suggestions\n- Fix the issue.".to_string(),
             },

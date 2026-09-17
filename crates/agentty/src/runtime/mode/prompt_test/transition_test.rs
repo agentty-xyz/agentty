@@ -28,6 +28,7 @@ async fn test_handle_apply_command_invalidates_cache_when_diff_hash_mismatches()
     app.review_cache.insert(
         session_id.clone(),
         crate::app::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: u64::MAX,
             text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
         },
@@ -67,6 +68,7 @@ async fn test_handle_apply_command_submits_suggestions_when_diff_hash_matches() 
     app.review_cache.insert(
         session_id.clone(),
         crate::app::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: current_hash,
             text: "## Review\n### Suggestions\n- Fix the typo in `README.md`.".to_string(),
         },
@@ -121,6 +123,7 @@ async fn test_handle_apply_command_preserves_cache_on_git_diff_error() {
     app.review_cache.insert(
         session_id.clone(),
         crate::app::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 42,
             text: "## Review\n### Suggestions\n- Fix the typo in `README.md`.".to_string(),
         },

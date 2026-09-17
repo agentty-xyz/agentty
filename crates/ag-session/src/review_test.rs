@@ -51,6 +51,7 @@ fn focused_review_status_round_trips_persisted_values() {
     let statuses = [
         FocusedReviewStatus::Pending,
         FocusedReviewStatus::Ready,
+        FocusedReviewStatus::Partial,
         FocusedReviewStatus::Failed,
     ];
 
@@ -187,4 +188,35 @@ fn test_has_actionable_review_suggestions_detects_suggestions_section() {
     assert!(with_suggestions);
     assert!(!without_suggestions);
     assert!(!missing_header);
+}
+
+#[test]
+fn coverage_status_distinguishes_incomplete_reviews_from_history_caveats() {
+    // Arrange
+    let examples = [
+        ("### Suggestions\n- None", FocusedReviewStatus::Ready),
+        (
+            "## Review\n### Coverage\n\nPartial review: cross-file pass failed",
+            FocusedReviewStatus::Partial,
+        ),
+        (
+            "## Review\n### Coverage\nReview coverage is limited: session history was summarized",
+            FocusedReviewStatus::Ready,
+        ),
+    ];
+    // Act / Assert
+    for (text, status) in examples {
+        assert_eq!(FocusedReviewStatus::for_text(text), status);
+    }
+}
+
+#[test]
+fn authoritative_coverage_suffix_overrides_headings_inside_model_findings() {
+    // Arrange
+    let text = "## Review\n### Coverage\nmodel text\n### Suggestions\n- None\n### \
+                Coverage\n\nPartial review: final check failed";
+    // Act
+    let status = FocusedReviewStatus::for_text(text);
+    // Assert
+    assert_eq!(status, FocusedReviewStatus::Partial);
 }

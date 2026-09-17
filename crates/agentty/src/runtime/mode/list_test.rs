@@ -356,6 +356,7 @@ async fn test_handle_enter_key_restores_cached_review_output() {
     app.review_cache.insert(
         expected_session_id.clone().into(),
         crate::app::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 7,
             text: "Focused review".to_string(),
         },
@@ -418,6 +419,7 @@ async fn test_handle_enter_key_opens_selected_question_session_in_question_mode(
     app.review_cache.insert(
         expected_session_id.clone().into(),
         crate::app::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             text: "Focused review".to_string(),
             diff_hash: 42,
         },

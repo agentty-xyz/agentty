@@ -33,6 +33,7 @@ use crate::infra::fs::FsClient;
 /// Builds one loading focused-review entry with a stable test profile.
 pub(super) fn test_loading_review(diff_hash: u64) -> ReviewCacheEntry {
     ReviewCacheEntry::Loading {
+        request_id: uuid::Uuid::nil(),
         progress: None,
         diff_hash,
         review_agent: (
@@ -1104,6 +1105,7 @@ pub(super) async fn prepare_review_comment_resolution_session(app: &mut App) -> 
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 42,
             text: "Focused review".to_string(),
         },

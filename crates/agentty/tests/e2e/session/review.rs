@@ -46,6 +46,15 @@ rmdir "$count_file.lock"
 prompt=$(cat)
 if [ "$count" -eq 2 ]; then printf 'batch temporarily unavailable\n' >&2; exit 1; fi
 case "$prompt" in
+  *"+fn main()"*)
+    if [ -f "$state_dir/first-batch-reviewed" ]; then
+      printf 'completed batch was repeated instead of resumed\n' >&2
+      exit 1
+    fi
+    touch "$state_dir/first-batch-reviewed"
+    ;;
+esac
+case "$prompt" in
   *"Reduce review:"*) impact='Original batch reviewed.\",\"Cross-file check completed.' ;;
   *"Cross-file review:"*) impact='Cross-file check completed.' ;;
   *) impact='Original batch reviewed.' ;;
@@ -427,6 +436,57 @@ async fn seed_cross_project_focused_review(
 ) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session_with_persisted_focused_review(env).await?;
     common::seed_mru_first_second_project(env).await
+}
+
+/// Keeps a completed review available while operation persistence rejects sync.
+async fn seed_review_with_rejected_sync(env: &BuilderEnv) -> E2eResult {
+    seed_review_ready_session_with_persisted_focused_review(env).await?;
+    let database = common::open_database(env).await?;
+    sqlx::query(
+        "CREATE TRIGGER reject_rebase_operation BEFORE INSERT ON session_operation BEGIN SELECT \
+         RAISE(ABORT, 'operation admission failed'); END",
+    )
+    .execute(database.pool())
+    .await?;
+
+    Ok(())
+}
+
+/// A rejected sync retains the completed review in the session output panel.
+#[tokio::test]
+async fn focused_review_survives_rejected_sync() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("focused_review_survives_rejected_sync")
+        .with_terminal_size(100, 40)
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_review_with_rejected_sync(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Persisted focused review finding.", 5000)
+                    .press_key("r")
+                    .wait_for_text("operation admission failed", 5000)
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Persisted focused review finding.",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "operation admission failed", &full);
+                    assertion::assert_not_visible(frame, "Rebasing...");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
 }
 
 /// Seeds two review-ready sessions with distinct persisted focused reviews so

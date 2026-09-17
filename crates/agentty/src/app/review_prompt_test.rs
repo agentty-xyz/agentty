@@ -11,7 +11,10 @@ use ag_worker::{MockRunClient, RunClient};
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 
-use super::{REVIEW_CONCURRENCY, file_headers, merge, reduce_review, submit};
+use super::{
+    REVIEW_CONCURRENCY, cross_file_review, file_headers, merge, reduce_review, split_candidates,
+    submit,
+};
 use crate::app::diff_prompt::{MAX_PROVIDER_CALLS, PROMPT_BUDGET};
 use crate::app::review::ReviewProgress;
 use crate::infra::review_deadline::ReviewDeadlineClient;
@@ -606,7 +609,7 @@ async fn failed_or_invalid_reduction_keeps_candidates_with_coverage_notice() {
     // Arrange
     for failure in ["network timeout", "contextWindowExceeded", "invalid", ""] {
         let mut client = MockRunClient::new();
-        client.expect_submit().times(4).returning(move |request| {
+        client.expect_submit().returning(move |request| {
             if request.prompt.starts_with("Reduce review:") {
                 if failure == "invalid" || failure.is_empty() {
                     return Ok(OneShotSubmission {
@@ -758,7 +761,7 @@ async fn reduction_render_failure_does_not_submit_a_worker_request() {
         &request(),
         &review,
         "original diff",
-        "",
+        &mut String::new(),
         &|_, _| Err(OneShotError::new("render failed")),
         &ProviderCallBudget::new(1),
     )
@@ -1060,4 +1063,235 @@ async fn large_history_reports_preparation_and_keeps_review_reasoning() {
     );
     assert!(result.contains("Preserved finding."));
     assert!(result.contains("session history was summarized"));
+}
+
+#[tokio::test]
+async fn cross_file_retries_smaller_overviews_after_provider_size_rejection() {
+    // Arrange
+    let mut client = MockRunClient::new();
+    client.expect_submit().returning(|request| {
+        request
+            .provider_call_budget
+            .as_ref()
+            .expect("budget")
+            .consume()?;
+        if request.request_kind == AgentRequestKind::UtilityPrompt {
+            return Ok(OneShotSubmission {
+                response: AgentResponse::plain("Short evidence"),
+                stats: SessionStats::default(),
+            });
+        }
+        if request.prompt.len() > 2000 {
+            return Err(OneShotError::new("contextWindowExceeded"));
+        }
+        Ok(response())
+    });
+    let mut request = request();
+    let budget = ProviderCallBudget::new(64);
+    request.provider_call_budget = Some(budget.clone());
+    let review = FocusedReview {
+        project_impact: vec!["impact ".repeat(1000)],
+        suggestions: Vec::new(),
+    };
+    let mut context = "Accepted decision ".repeat(100);
+    // Act
+    let result = cross_file_review(
+        &client,
+        &request,
+        &review,
+        "diff",
+        &mut context,
+        &|diff, context| Ok(render(diff, context)),
+        &budget,
+    )
+    .await
+    .expect("adaptive cross-file review");
+    // Assert
+    assert_eq!(result.suggestions[0].details, "Preserved finding.");
+    assert!(context.contains("[Summarized input;"));
+}
+
+#[tokio::test]
+async fn hierarchical_reduction_reconciles_all_whole_candidates() {
+    // Arrange
+    let mut client = MockRunClient::new();
+    client.expect_submit().returning(|request| {
+        request
+            .provider_call_budget
+            .as_ref()
+            .expect("budget")
+            .consume()?;
+        if request.prompt.len() > 4000 {
+            return Err(OneShotError::new("contextWindowExceeded"));
+        }
+        let suggestions: Vec<_> = (0..4)
+            .filter(|id| request.prompt.contains(&format!("risk-{id}")))
+            .map(|id| serde_json::json!({"severity":"high","details": format!("risk-{id}")}))
+            .collect();
+        Ok(OneShotSubmission {
+            response: AgentResponse::plain(
+                serde_json::json!({"project_impact":[],"suggestions": suggestions}).to_string(),
+            ),
+            stats: SessionStats::default(),
+        })
+    });
+    let mut request = request();
+    let budget = ProviderCallBudget::new(64);
+    request.provider_call_budget = Some(budget.clone());
+    let review = FocusedReview {
+        project_impact: Vec::new(),
+        suggestions: (0..4)
+            .map(|id| FocusedReviewSuggestion {
+                severity: FocusedReviewSeverity::High,
+                details: format!("risk-{id} {}", "evidence ".repeat(180)),
+            })
+            .collect(),
+    };
+    // Act
+    let result = reduce_review(
+        &client,
+        &request,
+        &review,
+        "diff",
+        &mut String::new(),
+        &|diff, context| Ok(render(diff, context)),
+        &budget,
+    )
+    .await
+    .expect("hierarchical review");
+    // Assert
+    assert_eq!(result.suggestions.len(), 4);
+    for (id, suggestion) in result.suggestions.iter().enumerate() {
+        assert_eq!(suggestion.details, format!("risk-{id}"));
+    }
+}
+
+#[test]
+fn candidate_splits_preserve_both_impact_and_finding_boundaries() {
+    // Arrange
+    for impact_count in [0, 1, 5] {
+        let review = FocusedReview {
+            project_impact: (0..impact_count).map(|id| format!("impact-{id}")).collect(),
+            suggestions: vec![
+                FocusedReviewSuggestion {
+                    severity: FocusedReviewSeverity::High,
+                    details: "risk".into()
+                };
+                3
+            ],
+        };
+        // Act
+        let (mut first, second) = split_candidates(review.clone());
+        first.project_impact.extend(second.project_impact);
+        first.suggestions.extend(second.suggestions);
+        // Assert
+        assert_eq!(first, review);
+    }
+}
+
+#[tokio::test]
+async fn irreducible_final_passes_stop_without_discarding_distinct_evidence() {
+    // Arrange
+    let mut client = MockRunClient::new();
+    client.expect_submit().returning(|request| {
+        request.provider_call_budget.as_ref().expect("budget").consume()?;
+        if request.prompt.len() > 4000 || request.prompt.starts_with("Cross-file review:") {
+            return Err(OneShotError::new("contextWindowExceeded"));
+        }
+        let suggestions: Vec<_> = (0..4).filter(|id| request.prompt.contains(&format!("risk-{id}")))
+            .map(|id| serde_json::json!({"severity":"high","details": format!("risk-{id} {}", "evidence ".repeat(180))})).collect();
+        Ok(OneShotSubmission { response: AgentResponse::plain(serde_json::json!({"project_impact":[],"suggestions":suggestions}).to_string()), stats: SessionStats::default() })
+    });
+    let mut request = request();
+    let budget = ProviderCallBudget::new(64);
+    request.provider_call_budget = Some(budget.clone());
+    let review = FocusedReview {
+        project_impact: Vec::new(),
+        suggestions: (0..4)
+            .map(|id| FocusedReviewSuggestion {
+                severity: FocusedReviewSeverity::High,
+                details: format!("risk-{id} {}", "evidence ".repeat(180)),
+            })
+            .collect(),
+    };
+    // Act
+    let reduction = reduce_review(
+        &client,
+        &request,
+        &review,
+        "diff",
+        &mut String::new(),
+        &|diff, context| Ok(render(diff, context)),
+        &budget,
+    )
+    .await
+    .expect_err("no information loss");
+    let cross_file = cross_file_review(
+        &client,
+        &request,
+        &FocusedReview {
+            project_impact: Vec::new(),
+            suggestions: Vec::new(),
+        },
+        "diff",
+        &mut String::new(),
+        &|diff, context| Ok(render(diff, context)),
+        &budget,
+    )
+    .await
+    .expect_err("minimum input still rejected");
+    // Assert
+    assert!(
+        reduction
+            .to_string()
+            .contains("without discarding evidence")
+    );
+    assert!(cross_file.to_string().contains("contextWindowExceeded"));
+}
+
+#[tokio::test]
+async fn reduction_adapts_shared_context_and_headers_to_provider_limits() {
+    // Arrange
+    let mut client = MockRunClient::new();
+    client.expect_submit().returning(|request| {
+        request
+            .provider_call_budget
+            .as_ref()
+            .expect("budget")
+            .consume()?;
+        if request.request_kind == AgentRequestKind::UtilityPrompt {
+            return Ok(OneShotSubmission {
+                response: AgentResponse::plain("Short evidence"),
+                stats: SessionStats::default(),
+            });
+        }
+        if request.prompt.len() > 1800 {
+            return Err(OneShotError::new("contextWindowExceeded"));
+        }
+        Ok(response())
+    });
+    let mut request = request();
+    let budget = ProviderCallBudget::new(64);
+    request.provider_call_budget = Some(budget.clone());
+    let review = FocusedReview {
+        project_impact: vec!["Impact".into()],
+        suggestions: Vec::new(),
+    };
+    let diff = format!("diff --git a/{} b/file", "long-name".repeat(250));
+    let mut context = "Accepted decision ".repeat(180);
+    // Act
+    let result = reduce_review(
+        &client,
+        &request,
+        &review,
+        &diff,
+        &mut context,
+        &|diff, context| Ok(render(diff, context)),
+        &budget,
+    )
+    .await
+    .expect("adaptive reduction");
+    // Assert
+    assert_eq!(result.suggestions[0].details, "Preserved finding.");
+    assert!(context.contains("[Summarized input;"));
 }

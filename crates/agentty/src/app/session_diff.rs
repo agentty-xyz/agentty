@@ -534,11 +534,9 @@ impl App {
             self.review_cache
                 .get(session_id)
                 .and_then(|entry| match entry {
-                    ReviewCacheEntry::Ready { diff_hash, text }
-                        if *diff_hash == cached_diff_hash =>
-                    {
-                        Some(text.clone())
-                    }
+                    ReviewCacheEntry::Ready {
+                        diff_hash, text, ..
+                    } if *diff_hash == cached_diff_hash => Some(text.clone()),
                     _ => None,
                 })
         else {
@@ -609,12 +607,13 @@ impl App {
         let prompt = ag_session::build_apply_review_prompt(suggestions);
         if let Some(completed_iterations) = completed_auto_address_iterations {
             if !self.reply(session_id, prompt).await {
-                self.set_review_ready_output(
+                let request_id = self.set_review_ready_output(
                     session_id,
                     cached_diff_hash,
                     current_review_text.clone(),
                 );
                 self.persist_focused_review_updates(vec![FocusedReviewPersistence {
+                    request_id,
                     diff_hash: Some(cached_diff_hash),
                     session_id: session_id.clone(),
                     status: FocusedReviewStatus::Ready,
@@ -762,6 +761,7 @@ impl App {
             self.review_cache.insert(
                 session_id.clone(),
                 ReviewCacheEntry::Loading {
+                    request_id: uuid::Uuid::new_v4(),
                     progress: None,
                     diff_hash: review::diff_content_hash(""),
                     review_agent,

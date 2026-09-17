@@ -129,7 +129,19 @@ done
 async fn seed_rebase_transcript_session(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_rebase_transcript_session_with_delay(env, 5).await
+    seed_rebase_transcript_session_with_delay(env, 5).await?;
+    let database = common::open_database(env).await?;
+    database
+        .sessions()
+        .update_session_focused_review(
+            "review-shortcut-0001",
+            Some(agentty::domain::review::FocusedReviewStatus::Partial),
+            Some("42".to_string()),
+            Some("Pre-rebase finding.\n\nPartial review: interrupted".to_string()),
+        )
+        .await?;
+
+    Ok(())
 }
 
 /// Seeds one synced published session whose next completed turn appends a
@@ -361,6 +373,7 @@ async fn session_rebase_keeps_completed_transcript_stable() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
                     .wait_for_text("Completed answer before rebase.", 5000)
+                    .wait_for_text("Pre-rebase finding.", 5000)
                     .press_key("r")
                     .wait_for_text("Rebasing...", 5000)
                     .capture_labeled(
@@ -377,6 +390,7 @@ async fn session_rebase_keeps_completed_transcript_stable() -> E2eResult {
                         &full,
                     );
                     assertion::assert_not_visible(frame, "Change Summary");
+                    assertion::assert_not_visible(frame, "Pre-rebase finding.");
                     assertion::assert_text_in_region(frame, "Rebasing...", &full);
                 })
             },
