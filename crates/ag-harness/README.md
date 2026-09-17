@@ -145,6 +145,48 @@ Use `StoredTurnOptions` for historical encoding and continuation compatibility, 
 retains backend errors without requiring SQL types. The external test implementation and
 shared conformance cases are in `tests/support/store_conformance.rs`.
 
+## Host turn recovery
+
+Configure a stable execution identity before submitting host-assigned turn IDs:
+
+```rust
+use ag_harness::ExecutionIdentity;
+
+let harness = harness.execution_identity(ExecutionIdentity::new("my-model-config", "v1")?);
+let mut session = harness.resume("task").await?;
+let result = session.submit("request-42", "Summarize the task", options).await?;
+let recorded = session.recover("request-42").await?;
+```
+
+The identity is a host assertion covering model configuration and injected execution
+behavior, including custom filesystems. Revise it when endpoints, credential scopes,
+model configuration, or injected implementations change; never embed secrets. Input,
+schema, permissions, limits, comparison identity, repository scope, system prompt,
+reasoning settings, and the stored history budget are fingerprinted separately from
+`StoredTurnOptions` compatibility. Conversation history and remote continuation IDs do
+not change a retry's identity.
+
+Host IDs are unique within a session. Matching completed retries return the original
+`TurnOutcome`, including its recorded activity report. Active retries return
+`SessionError::HostTurnInProgress`; failed or interrupted retries return
+`SessionError::HostTurnStopped`. Both contain the recorded state and known writes. A
+changed effective request returns `SessionError::HostTurnConflict`. Retries never
+execute a provider or tool, including when a terminal acknowledgment was lost. SQLite
+retains these records across reopen and history projection; memory storage retains them
+only for its lifetime. Calls without host IDs remain supported.
+
+Use `submit_controlled` for a retained cancellation control. After cancellation settles,
+`recover` reports the canonical outcome, which may be completed if cancellation raced
+its commit. Pending write intents remain unknown. A deliberate new attempt needs a new
+ID; neither a new ID nor persistence settlement proves earlier effects stopped or
+provides exactly-once external effects.
+
+External `SessionStore` implementations must implement atomic `begin_request`,
+`complete_request`, and `load_request`. Duplicate classification precedes busy
+detection; terminal output and messages commit together. Decorators forward the
+reservation's original store handle. Host-turn activity duration is the engine duration
+recorded before the terminal commit, so recovery returns the identical report.
+
 ## One turn
 
 Use `run_once` when no resumable history is needed:
@@ -172,4 +214,5 @@ by that replay.
 
 Attach `Harness::with_lifecycle_observer()` for content-free turn, model, and tool
 events. The rejected resume and replay are separate model attempts in lifecycle events
-and `TurnOutcome::report()`.
+and `TurnOutcome::report()`. Host-ID submissions begin execution observation only after
+acquiring a new turn; recorded retries and recovery lookups emit no execution events.

@@ -8,11 +8,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ag_harness::{
-    AcquiredTurn, FileSystem, Harness, LoadedSession, LocalFileSystem, MemoryStore, Model,
-    ModelCompletion, ModelError, ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
-    NewSession, OutputSchema, SessionError, SessionStore, SqliteStore, StoreIdentity, Tool,
-    ToolCall, ToolPolicy, TurnControl, TurnError, TurnErrorType, TurnLimits, TurnOptions,
-    TurnOwner, WriteRecord, WriteStatus,
+    AcquiredTurn, FileSystem, Harness, HostRequest, HostTurnAcquisition, HostTurnRecord,
+    LoadedSession, LocalFileSystem, MemoryStore, Model, ModelCompletion, ModelError, ModelMessage,
+    ModelMetadata, ModelRequest, ModelResponse, NewSession, OutputSchema, SessionError,
+    SessionStore, SqliteStore, StoreIdentity, Tool, ToolCall, ToolPolicy, TurnControl, TurnError,
+    TurnErrorType, TurnLimits, TurnOptions, TurnOutcome, TurnOwner, WriteRecord, WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -105,6 +105,7 @@ enum Phase {
     None,
     Acquire,
     AcquireAck,
+    AcquirePanic,
     Complete,
     CompleteAck,
     Fail,
@@ -118,6 +119,7 @@ struct Gate {
     entered: Notify,
     fail_cleanup: AtomicBool,
     fail_outcome: AtomicBool,
+    lookup: Notify,
     phase: Phase,
     release: Notify,
     store: Arc<dyn SessionStore>,
@@ -129,6 +131,7 @@ impl Gate {
             entered: Notify::new(),
             fail_cleanup: AtomicBool::new(false),
             fail_outcome: AtomicBool::new(false),
+            lookup: Notify::new(),
             phase,
             release: Notify::new(),
             store,
@@ -173,6 +176,54 @@ impl SessionStore for Gate {
         let turn = self.store.begin_turn(store, id, prompt, options).await?;
         self.pause(Phase::AcquireAck).await;
         Ok(turn)
+    }
+
+    async fn begin_request(
+        &self,
+        store: Arc<dyn SessionStore>,
+        id: &str,
+        prompt: &str,
+        options: &TurnOptions,
+        request: &HostRequest,
+    ) -> Result<HostTurnAcquisition, SessionError> {
+        if self.phase == Phase::AcquirePanic {
+            std::panic::resume_unwind(Box::new("injected host acquisition panic"));
+        }
+        self.pause(Phase::Acquire).await;
+        let turn = self
+            .store
+            .begin_request(store, id, prompt, options, request)
+            .await?;
+        self.pause(Phase::AcquireAck).await;
+
+        Ok(turn)
+    }
+
+    async fn load_request(
+        &self,
+        id: &str,
+        host_id: &str,
+    ) -> Result<Option<HostTurnRecord>, SessionError> {
+        let result = self.store.load_request(id, host_id).await;
+        self.lookup.notify_one();
+
+        result
+    }
+
+    async fn complete_request(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+        continuation: Option<&str>,
+        outcome: &TurnOutcome,
+    ) -> Result<(), SessionError> {
+        self.pause(Phase::Complete).await;
+        self.store
+            .complete_request(owner, messages, continuation, outcome)
+            .await?;
+        self.pause(Phase::CompleteAck).await;
+
+        Ok(())
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
@@ -670,6 +721,86 @@ async fn persistence_settlement_does_not_prove_filesystem_effect_completion() {
 }
 
 #[tokio::test]
+async fn host_request_cancellation_retains_effect_and_outcome_admission() {
+    // Arrange
+    for store in stores().await {
+        let root = tempfile::tempdir().expect("repository");
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let gate = Arc::new(Gate::new(store, Phase::Outcome));
+        let probe = Arc::new(Probe::default());
+        let harness = Harness::new(TestModel(Arc::clone(&probe)))
+            .store(gate.clone())
+            .execution_identity(ag_harness::ExecutionIdentity::new("model", "1").expect("identity"))
+            .repository(repository_with_host_git(root.path()))
+            .file_system(DeferredReplacement {
+                entered: entered.clone(),
+                finished: Arc::new(Notify::new()),
+                release: release.clone(),
+            });
+        let mut session = harness
+            .session("host-write", schema())
+            .create()
+            .await
+            .expect("session");
+        let mut turn = Box::pin(
+            session
+                .submit_controlled("write-id", "write", write_options())
+                .expect("turn"),
+        );
+        let control = turn.control();
+        tokio::select! {
+            result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
+            () = bounded(entered.notified()) => {},
+        }
+
+        // Act
+        control.cancel();
+        assert!(matches!(
+            bounded(turn).await,
+            Err(SessionError::Turn(TurnError::Cancelled))
+        ));
+        bounded(control.settled())
+            .await
+            .expect("persistence settled");
+        effects_pending(&control).await;
+
+        // Assert
+        assert!(matches!(
+            session.submit("write-id", "write", write_options()).await,
+            Err(SessionError::HostTurnStopped(_))
+        ));
+        assert!(matches!(
+            session.submit("successor", "ok", options()).await,
+            Err(SessionError::Busy { .. })
+        ));
+        release.notify_one();
+        bounded(gate.entered.notified()).await;
+        effects_pending(&control).await;
+        assert!(matches!(
+            session.submit("successor", "ok", options()).await,
+            Err(SessionError::Busy { .. })
+        ));
+        gate.release.notify_one();
+        bounded(control.effects_settled())
+            .await
+            .expect("effects settled");
+        let record = session
+            .recover("write-id")
+            .await
+            .expect("lookup")
+            .expect("record");
+        assert_eq!(record.writes[0].status, WriteStatus::Applied);
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+        session
+            .submit("successor", "ok", options())
+            .await
+            .expect("successor after effect settlement");
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+    }
+}
+
+#[tokio::test]
 async fn cancelled_intent_does_not_start_replacement() {
     // Arrange
     for store in stores().await {
@@ -1119,5 +1250,184 @@ async fn successful_controlled_writes_acknowledge_both_boundaries() {
             WriteStatus::Applied
         );
         session.send("ok").await.expect("successor");
+    }
+}
+
+#[tokio::test]
+async fn host_recovery_survives_cancelled_acquisition_and_terminal_acknowledgments() {
+    // Arrange
+    for store in crate::store_conformance_test::stores().await {
+        for (index, phase) in [
+            Phase::Acquire,
+            Phase::AcquireAck,
+            Phase::Complete,
+            Phase::CompleteAck,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let gate = Arc::new(Gate::new(Arc::clone(&store), phase));
+            let probe = Arc::new(Probe::default());
+            let harness = Harness::new(TestModel(Arc::clone(&probe)))
+                .store(gate.clone())
+                .execution_identity(
+                    ag_harness::ExecutionIdentity::new("model", "1").expect("identity"),
+                );
+            let mut session = harness
+                .session(format!("host-ack-{index}"), schema())
+                .create()
+                .await
+                .expect("session");
+            let mut retry = harness.resume(session.id()).await.expect("retry");
+            let mut turn = Box::pin(
+                session
+                    .submit_controlled("host-id", "ok", options())
+                    .expect("controlled"),
+            );
+            let control = turn.control();
+
+            // Act
+            tokio::select! {
+                result = &mut turn => std::panic::resume_unwind(Box::new(format!("completed before barrier: {result:?}"))),
+                () = bounded(gate.entered.notified()) => {},
+            }
+            if phase != Phase::Acquire {
+                let duplicate = retry.submit("host-id", "ok", options()).await;
+                if phase == Phase::CompleteAck {
+                    assert!(duplicate.is_ok());
+                } else {
+                    assert!(matches!(
+                        duplicate,
+                        Err(SessionError::HostTurnInProgress(_))
+                    ));
+                }
+            }
+            control.cancel();
+            assert!(matches!(
+                bounded(turn).await,
+                Err(SessionError::Turn(TurnError::Cancelled))
+            ));
+            unsettled(&control).await;
+            gate.release.notify_one();
+            bounded(control.settled()).await.expect("settled");
+            let record = retry
+                .recover("host-id")
+                .await
+                .expect("recover")
+                .expect("record");
+            let repeated = retry.submit("host-id", "ok", options()).await;
+
+            // Assert
+            if matches!(phase, Phase::Complete | Phase::CompleteAck) {
+                assert!(matches!(
+                    record.status,
+                    ag_harness::HostTurnStatus::Completed(_)
+                ));
+                assert!(repeated.is_ok());
+                assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+            } else {
+                assert!(matches!(
+                    record.status,
+                    ag_harness::HostTurnStatus::Interrupted { .. }
+                ));
+                assert!(matches!(repeated, Err(SessionError::HostTurnStopped(_))));
+                assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn host_retry_waiting_before_reservation_gets_recorded_classification() {
+    // Arrange
+    for store in crate::store_conformance_test::stores().await {
+        let gate = Arc::new(Gate::new(store, Phase::Acquire));
+        let probe = Arc::new(Probe::default());
+        let harness = Harness::new(TestModel(Arc::clone(&probe)))
+            .store(gate.clone())
+            .execution_identity(
+                ag_harness::ExecutionIdentity::new("model", "1").expect("identity"),
+            );
+        let mut first = harness
+            .session("queued-host", schema())
+            .create()
+            .await
+            .expect("session");
+        let mut retry = harness.resume(first.id()).await.expect("retry");
+        let mut turn = Box::pin(
+            first
+                .submit_controlled("id", "wait", options())
+                .expect("turn"),
+        );
+        let control = turn.control();
+
+        // Act
+        tokio::select! {
+            result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
+            () = bounded(gate.entered.notified()) => {},
+        }
+        bounded(gate.lookup.notified()).await;
+        let mut duplicate = Box::pin(
+            retry
+                .submit_controlled("id", "wait", options())
+                .expect("retry"),
+        );
+        tokio::select! {
+            result = &mut duplicate => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
+            () = bounded(gate.lookup.notified()) => {},
+        }
+        gate.release.notify_one();
+        let result = bounded(duplicate).await;
+        bounded(probe.entered.notified()).await;
+        control.cancel();
+        let original = bounded(turn).await;
+        bounded(control.settled()).await.expect("settled");
+
+        // Assert
+        assert!(matches!(result, Err(SessionError::HostTurnInProgress(_))));
+        assert!(matches!(
+            original,
+            Err(SessionError::Turn(TurnError::Cancelled))
+        ));
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn host_acquisition_panic_releases_admission_without_execution() {
+    // Arrange
+    for store in crate::store_conformance_test::stores().await {
+        let gate = Arc::new(Gate::new(store, Phase::AcquirePanic));
+        let probe = Arc::new(Probe::default());
+        let harness = Harness::new(TestModel(Arc::clone(&probe)))
+            .store(gate)
+            .execution_identity(
+                ag_harness::ExecutionIdentity::new("model", "1").expect("identity"),
+            );
+        let mut session = harness
+            .session("panic-host", schema())
+            .create()
+            .await
+            .expect("session");
+        let turn = session
+            .submit_controlled("id", "ok", options())
+            .expect("turn");
+        let control = turn.control();
+
+        // Act
+        let result = bounded(turn).await;
+        bounded(control.settled()).await.expect("settled");
+        let recovered = session.recover("id").await.expect("lookup");
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(SessionError::Store {
+                operation: "acquire host request",
+                ..
+            })
+        ));
+        assert!(recovered.is_none());
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
     }
 }

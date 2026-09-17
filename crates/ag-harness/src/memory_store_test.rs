@@ -10,8 +10,9 @@ use super::Status;
 use crate::session::Database;
 use crate::store_conformance_test::{harness, options, schema};
 use crate::{
-    ComparisonBase, MemoryStore, ModelError, ModelMessage, ModelMetadata, NewSession, SessionError,
-    SessionStore, StoreIdentity, TurnError, TurnOwner, WriteRecord, WriteStatus,
+    ComparisonBase, HostRequest, HostTurnAcquisition, HostTurnStatus, MemoryStore, ModelError,
+    ModelMessage, ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity, TurnError,
+    TurnOwner, WriteRecord, WriteStatus,
 };
 
 #[tokio::test]
@@ -528,4 +529,35 @@ async fn expiring_stores() -> Vec<ExpiringStore> {
             }),
         },
     ]
+}
+
+#[tokio::test]
+async fn host_recovery_requires_atomic_terminal_output() {
+    // Arrange
+    let store = Arc::new(MemoryStore::new());
+    store
+        .create_session(&NewSession::new("host", schema()), None, 1024)
+        .await
+        .expect("session");
+    let request =
+        HostRequest::from_configuration("id".into(), serde_json::json!({})).expect("request");
+    let HostTurnAcquisition::Acquired(turn) = store
+        .begin_request(store.clone(), "host", "prompt", &options(), &request)
+        .await
+        .expect("acquire")
+    else {
+        std::panic::resume_unwind(Box::new("expected acquisition"));
+    };
+
+    // Act
+    let result = store.complete_turn(turn.owner(), &[], None).await;
+    let record = store
+        .load_request("host", "id")
+        .await
+        .expect("lookup")
+        .expect("record");
+
+    // Assert
+    assert!(matches!(result, Err(SessionError::InvalidData { .. })));
+    assert!(matches!(record.status, HostTurnStatus::InProgress));
 }

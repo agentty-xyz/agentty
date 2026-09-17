@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use ag_harness::{HostRequest, HostTurnAcquisition, HostTurnRecord, TurnOutcome};
 use async_trait::async_trait;
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -103,6 +104,39 @@ impl SessionStore for GatedStore {
         options: &TurnOptions,
     ) -> Result<AcquiredTurn, SessionError> {
         self.database.begin_turn(store, id, prompt, options).await
+    }
+
+    async fn begin_request(
+        &self,
+        store: Arc<dyn SessionStore>,
+        id: &str,
+        prompt: &str,
+        options: &TurnOptions,
+        request: &HostRequest,
+    ) -> Result<HostTurnAcquisition, SessionError> {
+        self.database
+            .begin_request(store, id, prompt, options, request)
+            .await
+    }
+
+    async fn load_request(
+        &self,
+        id: &str,
+        host_id: &str,
+    ) -> Result<Option<HostTurnRecord>, SessionError> {
+        self.database.load_request(id, host_id).await
+    }
+
+    async fn complete_request(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+        continuation: Option<&str>,
+        outcome: &TurnOutcome,
+    ) -> Result<(), SessionError> {
+        self.database
+            .complete_request(owner, messages, continuation, outcome)
+            .await
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {

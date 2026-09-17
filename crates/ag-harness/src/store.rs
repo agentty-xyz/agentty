@@ -10,7 +10,10 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{
     AcquiredTurn, LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner,
 };
-use crate::{TurnError, TurnOptions, WriteRecord};
+use crate::{
+    HostRequest, HostTurnAcquisition, HostTurnRecord, TurnError, TurnOptions, TurnOutcome,
+    WriteRecord,
+};
 
 /// Owner-scoped mutations validate ownership in the transaction applying their
 /// effects. Acquisition must settle its commit before reporting failure;
@@ -51,6 +54,39 @@ pub trait SessionStore: Send + Sync {
         prompt: &str,
         options: &TurnOptions,
     ) -> Result<AcquiredTurn, SessionError>;
+
+    /// Atomically classify `request` before checking session busy state, or
+    /// bind it to a new reservation. Compare fingerprints before status. Use
+    /// the same retained acquisition/cleanup rules as `begin_turn`; a separate
+    /// lookup followed by insertion is insufficient across independent handles.
+    async fn begin_request(
+        &self,
+        store: Arc<dyn SessionStore>,
+        session_id: &str,
+        prompt: &str,
+        options: &TurnOptions,
+        request: &HostRequest,
+    ) -> Result<HostTurnAcquisition, SessionError>;
+
+    /// Recover expired reservations and return the canonical request outcome
+    /// plus its current journal. Never execute a model or tool. Missing host
+    /// IDs return `None`; missing sessions return `NotFound`.
+    async fn load_request(
+        &self,
+        session_id: &str,
+        host_id: &str,
+    ) -> Result<Option<HostTurnRecord>, SessionError>;
+
+    /// Commit the complete result together with messages and terminal state
+    /// under live ownership. An acknowledgment failure must not overwrite a
+    /// committed result during subsequent interrupt/cleanup.
+    async fn complete_request(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+        provider_session_id: Option<&str>,
+        outcome: &TurnOutcome,
+    ) -> Result<(), SessionError>;
 
     /// Renew only an unexpired owner; return a conservative confirmed deadline.
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError>;

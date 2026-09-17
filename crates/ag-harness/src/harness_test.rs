@@ -12,3 +12,6 @@ mod session;
 mod support;
 #[path = "harness_test/write_journal_test.rs"]
 mod write_journal;
+
+#[path = "harness_test/recovery_test.rs"]
+mod recovery;

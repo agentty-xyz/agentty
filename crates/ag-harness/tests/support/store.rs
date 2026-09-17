@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_harness::{
-    AcquiredTurn, LoadedSession, ModelMessage, ModelMetadata, NewSession, SessionError,
-    SessionStore, StoreIdentity, StoredTurnOptions, TurnError, TurnOptions, TurnOwner, WriteRecord,
-    WriteStatus,
+    AcquiredTurn, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus, LoadedSession,
+    ModelMessage, ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity,
+    StoredTurnOptions, TurnError, TurnOptions, TurnOutcome, TurnOwner, WriteRecord, WriteStatus,
 };
 use async_trait::async_trait;
 use sha2::{Digest as _, Sha256};
@@ -30,11 +30,38 @@ struct Record {
     next_turn: i64,
     owner: Option<(TurnOwner, Instant)>,
     pending: Vec<ModelMessage>,
+    requests: Vec<HostTurnRecord>,
     snapshot: Option<String>,
     writes: Vec<(Vec<u8>, WriteRecord)>,
 }
 
 impl Record {
+    fn set_status(&mut self, owner: &TurnOwner, status: HostTurnStatus) {
+        if let Some(record) = self
+            .requests
+            .iter_mut()
+            .find(|record| record.turn_position == owner.turn_position())
+        {
+            record.status = status;
+        }
+    }
+
+    fn request(&self, id: &str) -> Option<HostTurnRecord> {
+        let mut record = self
+            .requests
+            .iter()
+            .find(|record| record.request.id() == id)?
+            .clone();
+        record.writes = self
+            .writes
+            .iter()
+            .filter(|(_, write)| write.turn_position == record.turn_position)
+            .map(|(_, write)| write.clone())
+            .collect();
+
+        Some(record)
+    }
+
     fn bounded(&self) -> LoadedSession {
         let mut loaded = self.loaded.clone();
         while loaded
@@ -57,6 +84,14 @@ impl Record {
             .as_ref()
             .is_some_and(|(_, deadline)| *deadline <= Instant::now())
         {
+            if let Some((owner, _)) = self.owner.clone() {
+                self.set_status(
+                    &owner,
+                    HostTurnStatus::Interrupted {
+                        error_type: "interrupted".into(),
+                    },
+                );
+            }
             self.owner = None;
             self.loaded.provider_session_id = None;
         }
@@ -79,6 +114,96 @@ impl Record {
 }
 
 impl ExternalStore {
+    fn acquire(
+        &self,
+        store: Arc<dyn SessionStore>,
+        id: &str,
+        prompt: &str,
+        options: &TurnOptions,
+        request: Option<&HostRequest>,
+    ) -> Result<HostTurnAcquisition, SessionError> {
+        let mut sessions = self.sessions.lock().expect("sessions");
+        let session = sessions
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
+        session.recover();
+        if let Some(request) = request
+            && let Some(record) = session.request(request.id())
+        {
+            record.check_request(request)?;
+
+            return Ok(HostTurnAcquisition::Recorded(record));
+        }
+        if session.owner.is_some() {
+            return Err(SessionError::Busy { id: id.to_string() });
+        }
+        let compatible = session
+            .snapshot
+            .as_deref()
+            .map(StoredTurnOptions::decode)
+            .transpose()?
+            .is_some_and(|previous| previous.continuation_compatible(options));
+        let continuation = session
+            .loaded
+            .provider_session_id
+            .clone()
+            .filter(|_| compatible);
+        let position = session.next_turn;
+        let owner = TurnOwner::new(
+            self.identity.clone(),
+            id.to_string(),
+            position,
+            position.to_le_bytes().to_vec(),
+        );
+        let deadline = Instant::now() + self.initial_lease;
+        let acquired = AcquiredTurn::new(
+            store,
+            owner.clone(),
+            deadline,
+            session.bounded().turns,
+            continuation.clone(),
+        )?;
+        if let Some(request) = request {
+            session.requests.push(HostTurnRecord {
+                request: request.clone(),
+                status: HostTurnStatus::InProgress,
+                turn_position: position,
+                writes: Vec::new(),
+            });
+        }
+        session.next_turn += 1;
+        session.owner = Some((owner, deadline));
+        session.pending = vec![ModelMessage::User(prompt.to_string())];
+        session.snapshot = Some(StoredTurnOptions::encode(options));
+        session.loaded.provider_session_id = continuation;
+
+        acquired.activate().map(HostTurnAcquisition::Acquired)
+    }
+
+    fn complete(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+        continuation: Option<&str>,
+        outcome: Option<&TurnOutcome>,
+    ) -> Result<(), SessionError> {
+        let mut sessions = self.sessions.lock().expect("sessions");
+        let session = sessions.get_mut(owner.session_id()).expect("session");
+        session.validate(owner)?;
+        session.pending.extend_from_slice(messages);
+        session
+            .loaded
+            .turns
+            .push(std::mem::take(&mut session.pending));
+        if let Some(outcome) = outcome {
+            session.set_status(owner, HostTurnStatus::Completed(outcome.clone()));
+        }
+        session.owner = None;
+        session.loaded.provider_session_id = continuation.map(str::to_string);
+
+        Ok(())
+    }
+
     pub(crate) fn new() -> Self {
         Self::with_leases(Duration::from_secs(300), Duration::from_secs(300))
     }
@@ -128,6 +253,7 @@ impl SessionStore for ExternalStore {
                 next_turn: 0,
                 owner: None,
                 pending: Vec::new(),
+                requests: Vec::new(),
                 snapshot: None,
                 writes: Vec::new(),
             },
@@ -153,47 +279,47 @@ impl SessionStore for ExternalStore {
         prompt: &str,
         options: &TurnOptions,
     ) -> Result<AcquiredTurn, SessionError> {
+        let HostTurnAcquisition::Acquired(turn) = self.acquire(store, id, prompt, options, None)?
+        else {
+            std::panic::resume_unwind(Box::new("legacy acquisition"))
+        };
+
+        Ok(turn)
+    }
+
+    async fn begin_request(
+        &self,
+        store: Arc<dyn SessionStore>,
+        id: &str,
+        prompt: &str,
+        options: &TurnOptions,
+        request: &HostRequest,
+    ) -> Result<HostTurnAcquisition, SessionError> {
+        self.acquire(store, id, prompt, options, Some(request))
+    }
+
+    async fn load_request(
+        &self,
+        id: &str,
+        host_id: &str,
+    ) -> Result<Option<HostTurnRecord>, SessionError> {
         let mut sessions = self.sessions.lock().expect("sessions");
         let session = sessions
             .get_mut(id)
-            .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
+            .ok_or_else(|| SessionError::NotFound { id: id.into() })?;
         session.recover();
-        if session.owner.is_some() {
-            return Err(SessionError::Busy { id: id.to_string() });
-        }
-        let compatible = session
-            .snapshot
-            .as_deref()
-            .map(StoredTurnOptions::decode)
-            .transpose()?
-            .is_some_and(|previous| previous.continuation_compatible(options));
-        let continuation = session
-            .loaded
-            .provider_session_id
-            .clone()
-            .filter(|_| compatible);
-        let position = session.next_turn;
-        let owner = TurnOwner::new(
-            self.identity.clone(),
-            id.to_string(),
-            position,
-            position.to_le_bytes().to_vec(),
-        );
-        let deadline = Instant::now() + self.initial_lease;
-        let acquired = AcquiredTurn::new(
-            store,
-            owner.clone(),
-            deadline,
-            session.bounded().turns,
-            continuation.clone(),
-        )?;
-        session.next_turn += 1;
-        session.owner = Some((owner, deadline));
-        session.pending = vec![ModelMessage::User(prompt.to_string())];
-        session.snapshot = Some(StoredTurnOptions::encode(options));
-        session.loaded.provider_session_id = continuation;
 
-        acquired.activate()
+        Ok(session.request(host_id))
+    }
+
+    async fn complete_request(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+        continuation: Option<&str>,
+        outcome: &TurnOutcome,
+    ) -> Result<(), SessionError> {
+        self.complete(owner, messages, continuation, Some(outcome))
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
@@ -214,24 +340,19 @@ impl SessionStore for ExternalStore {
         messages: &[ModelMessage],
         continuation: Option<&str>,
     ) -> Result<(), SessionError> {
-        let mut sessions = self.sessions.lock().expect("sessions");
-        let session = sessions.get_mut(owner.session_id()).expect("session");
-        session.validate(owner)?;
-        session.pending.extend_from_slice(messages);
-        session
-            .loaded
-            .turns
-            .push(std::mem::take(&mut session.pending));
-        session.owner = None;
-        session.loaded.provider_session_id = continuation.map(str::to_string);
-
-        Ok(())
+        self.complete(owner, messages, continuation, None)
     }
 
-    async fn fail_turn(&self, owner: &TurnOwner, _: &TurnError) -> Result<(), SessionError> {
+    async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
         let mut sessions = self.sessions.lock().expect("sessions");
         let session = sessions.get_mut(owner.session_id()).expect("session");
         session.validate(owner)?;
+        session.set_status(
+            owner,
+            HostTurnStatus::Failed {
+                error_type: format!("{:?}", error.error_type()),
+            },
+        );
         session.owner = None;
         session.loaded.provider_session_id = None;
 
@@ -246,6 +367,12 @@ impl SessionStore for ExternalStore {
                 .as_ref()
                 .is_some_and(|(active, _)| active == owner)
         {
+            session.set_status(
+                owner,
+                HostTurnStatus::Interrupted {
+                    error_type: owner.interruption_error_type().into(),
+                },
+            );
             session.owner = None;
             session.loaded.provider_session_id = None;
         }
